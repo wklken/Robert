@@ -73,6 +73,6 @@ jobs:
           args: >-
             --no-progress
             README.md
-            README_ZH.md
+            README_EN.md
             COMMUNITY.md
             docs

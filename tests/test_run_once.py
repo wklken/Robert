@@ -5908,7 +5908,8 @@ raise SystemExit(0 if record["ok"] else 1)
 
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
-        for _ in range(100):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
                 result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
@@ -5918,12 +5919,29 @@ raise SystemExit(0 if record["ok"] else 1)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
-            attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
+            attempt_status, metadata_json = conn.execute(
+                "SELECT status, metadata_json FROM attempts"
+            ).fetchone()
             result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
             notification_count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
+        metadata = json.loads(metadata_json or "{}")
+        dispatch_metadata = metadata.get("dispatch") or {}
+        worker_logs = {}
+        for key in ["stdout_path", "stderr_path"]:
+            path = dispatch_metadata.get(key)
+            if path:
+                worker_logs[key] = Path(path).read_text(encoding="utf-8", errors="replace")
         self.assertEqual(task_lifecycle, "queued")
-        self.assertEqual(attempt_status, "completed")
-        self.assertEqual(result_count, 1)
+        self.assertEqual(
+            attempt_status,
+            "completed",
+            {
+                "result_count": result_count,
+                "dispatch": dispatch_metadata,
+                "worker_logs": worker_logs,
+            },
+        )
+        self.assertEqual(result_count, 1, {"dispatch": dispatch_metadata, "worker_logs": worker_logs})
         self.assertEqual(notification_count, 0)
 
         original_publish = run_once.publish.publish_ready_actions

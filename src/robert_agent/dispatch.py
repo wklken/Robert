@@ -152,6 +152,22 @@ def dispatch_worker(
         time.sleep(startup_probe_seconds)
     returncode = proc.poll()
     if returncode is not None:
+        if returncode == 0:
+            return {
+                "ok": True,
+                "status": "running",
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "pid": proc.pid,
+                "returncode": returncode,
+                "process_exited": True,
+                "command": command,
+                "prompt_path": str(prompt_path),
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+                "worker_agent": launch.agent,
+                "worker_launch": launch.metadata(),
+            }
         return {
             "ok": False,
             "status": "failed_dispatch",
