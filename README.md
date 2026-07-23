@@ -85,6 +85,18 @@ robert service start
 The configuration is written to `~/.config/robert/config.yml`. Runtime data is
 stored under `~/.local/share/robert/`.
 
+## Install with a Coding Agent
+
+Copy this prompt into Codex, Claude Code, or another terminal coding agent:
+
+```text
+Install and fully configure Robert on this machine by following:
+https://github.com/wklken/Robert/blob/main/docs/agent-install.md
+
+Read the entire guide before executing. Ask me for required values and for
+confirmation wherever the guide requires it.
+```
+
 ## Configuration
 
 Robert uses versioned YAML. Configure the GitHub account, worker definitions,
