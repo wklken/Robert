@@ -80,6 +80,18 @@ robert service start
 配置路径为 `~/.config/robert/config.yml`，运行数据默认位于
 `~/.local/share/robert/`。
 
+## 使用编码 Agent 安装
+
+把下面的提示词复制给 Codex、Claude Code 或其他终端编码 Agent：
+
+```text
+Install and fully configure Robert on this machine by following:
+https://github.com/wklken/Robert/blob/main/docs/agent-install.md
+
+Read the entire guide before executing. Ask me for required values and for
+confirmation wherever the guide requires it.
+```
+
 ## 配置
 
 Robert 使用带版本号的 YAML。配置包括 GitHub 账号、Worker、Skill 搜索路径、
