@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Robert Config",
+  "type": "object",
+  "$defs": {
+    "routeOverride": {
+      "type": "object",
+      "properties": {
+        "worker": {"type": "string", "minLength": 1},
+        "required_skills": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "recommended_skills": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["version", "github", "workers", "repos"],
+  "properties": {
+    "version": {"const": 1},
+    "data_dir": {"type": "string", "minLength": 1},
+    "database": {"type": "string", "minLength": 1},
+    "github": {
+      "type": "object",
+      "required": ["account"],
+      "properties": {
+        "account": {"type": "string", "minLength": 1},
+        "poll_seconds": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "skills": {
+      "type": "object",
+      "properties": {
+        "search_paths": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "workers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["adapter", "command", "model", "effort"],
+        "properties": {
+          "adapter": {"type": "string", "minLength": 1},
+          "command": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1}
+              }
+            ]
+          },
+          "model": {"type": "string", "minLength": 1},
+          "effort": {"type": "string", "minLength": 1},
+          "prompt_transport": {
+            "type": "string",
+            "enum": ["stdin"]
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "environment_allowlist": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "routes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/routeOverride"
+      }
+    },
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "full_name",
+          "checkout",
+          "worktrees",
+          "default_branch",
+          "trusted_actors"
+        ],
+        "properties": {
+          "full_name": {"type": "string", "minLength": 1},
+          "github_account": {"type": "string", "minLength": 1},
+          "checkout": {"type": "string", "minLength": 1},
+          "worktrees": {"type": "string", "minLength": 1},
+          "default_branch": {"type": "string", "minLength": 1},
+          "trusted_actors": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "max_concurrency": {"type": "integer", "minimum": 1},
+          "routes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/routeOverride"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

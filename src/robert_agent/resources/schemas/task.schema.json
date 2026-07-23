@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Robert Task",
+  "type": "object",
+  "required": ["task_id", "workstream_id", "lifecycle"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "workstream_id": {"type": "string"},
+    "parent_task_id": {"type": "string"},
+    "lifecycle": {"type": "string"},
+    "priority": {"type": "string"},
+    "event_fingerprints": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

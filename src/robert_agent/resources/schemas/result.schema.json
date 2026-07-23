@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Robert Worker Result",
+  "type": "object",
+  "required": ["task_id", "attempt_id", "output_type", "planned_github_actions", "consumed_event_fingerprints", "used_skills"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "attempt_id": {"type": "string"},
+    "output_type": {
+      "type": "string",
+      "enum": ["comment_analysis", "new_pr", "update_existing_pr", "review_comment", "pr_review_comment", "classification_result", "waiting_for_user", "local_result"]
+    },
+    "planned_github_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    },
+    "consumed_event_fingerprints": {"type": "array", "items": {"type": "string"}},
+    "consumed_work_item_event_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "operator_question": {
+      "type": "object",
+      "required": ["kind", "summary"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["clarification", "scope_decision", "completion_acceptance"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "choices": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "required": ["id", "label"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "label": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "used_skills": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "status", "purpose", "required"],
+        "properties": {
+          "command": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1
+              }
+            ]
+          },
+          "status": {"type": "string", "enum": ["passed", "failed", "skipped"]},
+          "purpose": {"type": "string", "minLength": 1},
+          "exit_code": {"type": "integer"},
+          "required": {"type": "boolean"},
+          "skipped_reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    },
+    "handoff": {"type": "string"},
+    "recommended_route": {
+      "type": "string",
+      "enum": ["", "local-result", "comment-analysis", "new-pr", "update-existing-pr", "review-comment", "review-pr", "waiting-for-user"]
+    },
+    "branch_slug": {
+      "type": "string",
+      "maxLength": 60,
+      "pattern": "^$|^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "memory_delta": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "entries": {"type": "array", "items": {"type": "object"}},
+        "reason": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "used_memory_ids": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "additionalProperties": true
+}

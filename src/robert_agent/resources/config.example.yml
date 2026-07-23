@@ -1,0 +1,20 @@
+version: 1
+data_dir: ~/.local/share/robert
+database: robert.sqlite3
+
+github:
+  account: robert-bot
+  poll_seconds: 300
+
+skills:
+  search_paths: []
+
+workers:
+  default:
+    adapter: codex
+    command: codex
+    model: default
+    effort: default
+
+routes: {}
+repos: []

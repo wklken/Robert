@@ -1,0 +1,82 @@
+routes:
+  - id: local-result
+    workspace_mode: none
+    expected_output: local_result
+    allowed_github_actions: []
+    needs_worktree: false
+    verification_policy:
+      mode: optional
+      required_statuses: [passed]
+      allow_skipped: true
+    recommended_skills: [fast-code-path, fast-zoom-out]
+  - id: comment-analysis
+    workspace_mode: analysis
+    expected_output: comment_analysis
+    allowed_github_actions: [comment]
+    needs_worktree: false
+    verification_policy:
+      mode: optional
+      required_statuses: [passed]
+      allow_skipped: true
+    recommended_skills: [fast-code-path, fast-zoom-out, fast-verify-review-point]
+  - id: new-pr
+    workspace_mode: new_branch
+    expected_output: new_pr
+    allowed_github_actions: [push_existing_pr, open_pr, comment]
+    needs_worktree: true
+    verification_policy:
+      mode: required
+      required_statuses: [passed]
+      allow_skipped: false
+    recommended_skills: [fast-small-pr, fast-code-path, fast-add-tests, fast-test-fix, fast-preflight]
+  - id: update-existing-pr
+    workspace_mode: existing_pr
+    expected_output: update_existing_pr
+    allowed_github_actions: [push_existing_pr, comment]
+    needs_worktree: true
+    verification_policy:
+      mode: required_for_push
+      required_statuses: [passed]
+      allow_skipped: false
+    recommended_skills: [fast-small-pr, fast-verify-review-point, fast-code-path, fast-add-tests, fast-test-fix, fast-code-simplify, fast-preflight]
+  - id: review-comment
+    workspace_mode: analysis
+    expected_output: review_comment
+    allowed_github_actions: [comment]
+    needs_worktree: false
+    verification_policy:
+      mode: optional
+      required_statuses: [passed]
+      allow_skipped: true
+    recommended_skills: [fast-review-github-pr, fast-verify-review-point, fast-code-path]
+  - id: review-pr
+    workspace_mode: review_pr
+    expected_output: pr_review_comment
+    allowed_github_actions: [comment]
+    needs_worktree: true
+    worktree_mode: review_pr
+    verification_policy:
+      mode: optional
+      required_statuses: [passed]
+      allow_skipped: true
+    recommended_skills: [fast-review-github-pr, fast-code-path]
+  - id: classification-result
+    workspace_mode: none
+    expected_output: classification_result
+    allowed_github_actions: []
+    needs_worktree: false
+    verification_policy:
+      mode: none
+      required_statuses: []
+      allow_skipped: false
+    recommended_skills: []
+  - id: waiting-for-user
+    workspace_mode: none
+    expected_output: waiting_for_user
+    allowed_github_actions: [comment]
+    needs_worktree: false
+    verification_policy:
+      mode: none
+      required_statuses: []
+      allow_skipped: false
+    recommended_skills: []

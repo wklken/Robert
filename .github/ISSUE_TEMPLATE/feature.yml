@@ -1,0 +1,48 @@
+name: Feature request
+description: Propose a focused Robert capability
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Robert version
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Host OS and Python version
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Redacted doctor output
+      description: Include `robert doctor --output json` when relevant.
+      render: json
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and reproduction or workflow
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current result
+    validations:
+      required: true
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction confirmation
+      options:
+        - label: I removed secrets, credentials, private repository content, and sensitive local paths.
+          required: true

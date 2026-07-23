@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/wklken/robert/security/advisories/new
+    about: Report security issues privately.
+  - name: Usage discussion
+    url: https://github.com/wklken/robert/discussions
+    about: Ask setup and usage questions when Discussions is enabled.
