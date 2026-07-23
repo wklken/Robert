@@ -123,3 +123,63 @@ class CliTests(unittest.TestCase):
         self.assertFalse(text_output.getvalue().lstrip().startswith("{"))
         self.assertEqual(json_code, 0)
         self.assertTrue(json.loads(json_output.getvalue())["ok"])
+
+    def test_openclaw_install_stops_before_write_when_cli_missing(self):
+        output = io.StringIO()
+        missing = {
+            "ok": False,
+            "status": "missing",
+            "safe_error": "OpenClaw CLI is not available on PATH.",
+        }
+        with mock.patch(
+            "robert_agent.cli.main.openclaw.preflight_openclaw",
+            return_value=missing,
+        ), mock.patch(
+            "robert_agent.cli.main.openclaw.write_plugin",
+        ) as write_plugin, redirect_stdout(output):
+            code = main(["openclaw", "install", "--output", "json"])
+
+        self.assertNotEqual(code, 0)
+        write_plugin.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()), missing)
+
+    def test_openclaw_install_verifies_live_gateway_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_dir = str(Path(tmp) / "robert-openclaw")
+            output = io.StringIO()
+            with mock.patch(
+                "robert_agent.cli.main.openclaw.preflight_openclaw",
+                return_value={"ok": True, "status": "ready"},
+            ), mock.patch(
+                "robert_agent.cli.main.openclaw.write_plugin",
+                return_value={"ok": True, "status": "written"},
+            ), mock.patch(
+                "robert_agent.cli.main.openclaw.install_plugin",
+                return_value={"ok": True, "status": "installed"},
+            ), mock.patch(
+                "robert_agent.cli.main.openclaw.restart_gateway",
+                return_value={"ok": True, "status": "restarted"},
+            ), mock.patch(
+                "robert_agent.cli.main.openclaw.verify_gateway_commands",
+                return_value={"ok": True, "status": "verified"},
+            ) as verify, redirect_stdout(output):
+                code = main(
+                    [
+                        "openclaw",
+                        "install",
+                        "--plugin-dir",
+                        plugin_dir,
+                        "--output",
+                        "json",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        verify.assert_called_once_with(dry_run=False)
+        result = json.loads(output.getvalue())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "installed")
+        self.assertEqual(
+            [step["status"] for step in result["steps"]],
+            ["ready", "written", "installed", "restarted", "verified"],
+        )
