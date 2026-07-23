@@ -35,6 +35,19 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("robert doctor", text)
         self.assertIn("robert service start", text)
 
+    def test_docs_use_public_config_and_skill_examples(self):
+        text = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
+        self.assertIn("daemon:", text)
+        self.assertNotIn("daemon_", text)
+        public_docs = [
+            ROOT / "docs" / "concepts.md",
+            ROOT / "docs" / "guides.md",
+            ROOT / "docs" / "reference.md",
+        ]
+        for path in public_docs:
+            with self.subTest(path=path.name):
+                self.assertNotIn("fast-", path.read_text(encoding="utf-8"))
+
     def test_governance_files_exist(self):
         for name in [
             "LICENSE",

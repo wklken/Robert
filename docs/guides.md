@@ -108,7 +108,7 @@ skills:
 routes:
   new-pr:
     required_skills: []
-    recommended_skills: [fast-add-tests]
+    recommended_skills: []
 ```
 
 Missing required skills block before workspace creation. Missing recommended

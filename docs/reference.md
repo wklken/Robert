@@ -14,23 +14,24 @@ stale_after_minutes: 20
 hard_timeout_minutes: 90
 worker_startup_grace_seconds: 300
 lease_ttl_minutes: 9
-daemon_enabled: true
-daemon_local_poll_seconds: 5
-daemon_github_poll_seconds: 300
-daemon_github_poll_when_full_seconds: 600
-daemon_rate_limit_cache_seconds: 300
-daemon_min_search_remaining: 10
-daemon_min_core_remaining: 500
-daemon_live_run_timeout_seconds: 300
-daemon_local_drain_timeout_seconds: 180
-daemon_event_retention_days: 7
-daemon_run_on_start: false
 github:
   account: robert-bot
   poll_seconds: 300
 skills:
   search_paths:
     - ~/.agents/skills
+daemon:
+  enabled: true
+  local_poll_seconds: 5
+  github_poll_seconds: 300
+  github_poll_when_full_seconds: 600
+  rate_limit_cache_seconds: 300
+  min_search_remaining: 10
+  min_core_remaining: 500
+  live_run_timeout_seconds: 300
+  local_drain_timeout_seconds: 180
+  event_retention_days: 7
+  run_on_start: false
 workers:
   default:
     adapter: codex
@@ -57,15 +58,12 @@ route_worker_models:
 routes:
   new-pr:
     worker: default
-    required_skills:
-      - fast-add-tests
-    recommended_skills:
-      - fast-preflight
+    required_skills: []
+    recommended_skills: []
   review-pr:
     worker: reviewer
     required_skills: []
-    recommended_skills:
-      - fast-review-github-pr
+    recommended_skills: []
 repos:
   - full_name: example/backend
     checkout: /srv/repos/backend
@@ -78,10 +76,8 @@ repos:
     routes:
       new-pr:
         worker: default
-        required_skills:
-          - fast-add-tests
-        recommended_skills:
-          - fast-test-fix
+        required_skills: []
+        recommended_skills: []
   - full_name: example/frontend
     checkout: /srv/repos/frontend
     worktrees: /srv/repos/frontend/.worktrees
@@ -112,13 +108,11 @@ routes:
       - superpowers:verification-before-completion
     recommended_skills:
       - superpowers:test-driven-development
-      - fast-small-pr
   update-existing-pr:
     required_skills:
       - superpowers:verification-before-completion
     recommended_skills:
       - superpowers:receiving-code-review
-      - fast-verify-review-point
 ```
 
 ## CLI

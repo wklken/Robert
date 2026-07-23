@@ -9,6 +9,19 @@ github:
 skills:
   search_paths: []
 
+daemon:
+  enabled: true
+  local_poll_seconds: 5
+  github_poll_seconds: 300
+  github_poll_when_full_seconds: 600
+  rate_limit_cache_seconds: 300
+  min_search_remaining: 10
+  min_core_remaining: 500
+  live_run_timeout_seconds: 300
+  local_drain_timeout_seconds: 180
+  event_retention_days: 7
+  run_on_start: false
+
 workers:
   default:
     adapter: codex

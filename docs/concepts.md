@@ -98,8 +98,7 @@ routes:
   new-pr:
     worker: default
     required_skills: []
-    recommended_skills:
-      - fast-add-tests
+    recommended_skills: []
 ```
 
 Repository overrides replace only the fields they explicitly provide.

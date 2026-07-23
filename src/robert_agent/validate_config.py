@@ -231,27 +231,54 @@ DAEMON_DEFAULTS = {
     "event_retention_days": 7,
     "run_on_start": False,
 }
+DAEMON_FIELDS = set(DAEMON_DEFAULTS)
+DAEMON_LEGACY_FIELDS = {
+    f"daemon_{key}": key
+    for key in DAEMON_FIELDS
+}
+DAEMON_BOOLEAN_FIELDS = {"enabled", "run_on_start"}
 
 
 def _normalize_daemon_config(config):
-    daemon = {
-        "enabled": bool(config.get("daemon_enabled", DAEMON_DEFAULTS["enabled"])),
-        "local_poll_seconds": int(config.get("daemon_local_poll_seconds", DAEMON_DEFAULTS["local_poll_seconds"])),
-        "github_poll_seconds": int(config.get("daemon_github_poll_seconds", DAEMON_DEFAULTS["github_poll_seconds"])),
-        "github_poll_when_full_seconds": int(config.get("daemon_github_poll_when_full_seconds", DAEMON_DEFAULTS["github_poll_when_full_seconds"])),
-        "rate_limit_cache_seconds": int(config.get("daemon_rate_limit_cache_seconds", DAEMON_DEFAULTS["rate_limit_cache_seconds"])),
-        "min_search_remaining": int(config.get("daemon_min_search_remaining", DAEMON_DEFAULTS["min_search_remaining"])),
-        "min_core_remaining": int(config.get("daemon_min_core_remaining", DAEMON_DEFAULTS["min_core_remaining"])),
-        "live_run_timeout_seconds": int(config.get("daemon_live_run_timeout_seconds", DAEMON_DEFAULTS["live_run_timeout_seconds"])),
-        "local_drain_timeout_seconds": int(config.get("daemon_local_drain_timeout_seconds", DAEMON_DEFAULTS["local_drain_timeout_seconds"])),
-        "event_retention_days": int(config.get("daemon_event_retention_days", DAEMON_DEFAULTS["event_retention_days"])),
-        "run_on_start": bool(config.get("daemon_run_on_start", DAEMON_DEFAULTS["run_on_start"])),
-    }
-    for key, value in daemon.items():
-        if isinstance(value, bool):
-            continue
-        if value < 1:
-            raise ValueError(f"daemon_{key} must be at least 1")
+    raw_daemon = config.get("daemon")
+    legacy_fields = sorted(set(config) & set(DAEMON_LEGACY_FIELDS))
+    if raw_daemon not in (None, ""):
+        if legacy_fields:
+            raise ValueError(
+                "daemon cannot be combined with legacy fields: "
+                f"{', '.join(legacy_fields)}"
+            )
+        if not isinstance(raw_daemon, dict):
+            raise ValueError("daemon must be a mapping")
+        unsupported_fields = sorted(set(raw_daemon) - DAEMON_FIELDS)
+        if unsupported_fields:
+            raise ValueError(
+                "daemon contains unsupported fields: "
+                + ", ".join(f"daemon.{name}" for name in unsupported_fields)
+            )
+        daemon_source = raw_daemon
+        field_labels = {key: f"daemon.{key}" for key in DAEMON_FIELDS}
+    else:
+        daemon_source = {
+            DAEMON_LEGACY_FIELDS[field]: config[field]
+            for field in legacy_fields
+        }
+        field_labels = {
+            DAEMON_LEGACY_FIELDS[field]: field
+            for field in legacy_fields
+        }
+
+    daemon = {}
+    for key, default in DAEMON_DEFAULTS.items():
+        raw_value = daemon_source.get(key, default)
+        if key in DAEMON_BOOLEAN_FIELDS:
+            daemon[key] = bool(raw_value)
+        else:
+            value = int(raw_value)
+            if value < 1:
+                label = field_labels.get(key, f"daemon.{key}")
+                raise ValueError(f"{label} must be at least 1")
+            daemon[key] = value
     return daemon
 
 

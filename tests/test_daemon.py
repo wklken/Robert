@@ -470,7 +470,8 @@ class DaemonSchedulingTests(DaemonStateTests):
             f"""data_dir: {self.root}
 database: dd.sqlite3
 max_concurrency: 3
-daemon_run_on_start: false
+daemon:
+  run_on_start: false
 repos:
   - full_name: example/repo
     github_account: robot
@@ -526,7 +527,7 @@ repos:
 
     def test_run_once_decision_only_uses_run_on_start_once_before_next_poll(self):
         from robert_agent import daemon
-        config_path = self._write_config("daemon_run_on_start: true\n")
+        config_path = self._write_config("daemon:\n  run_on_start: true\n")
         now = "2026-07-03T00:00:00+00:00"
         calls = []
         self._init_db()
@@ -618,7 +619,7 @@ repos:
         from robert_agent import daemon
         config_path = self._write_config(
             "max_concurrency: 3\n"
-            "daemon_github_poll_seconds: 300\n"
+            "daemon:\n  github_poll_seconds: 300\n"
         )
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -693,8 +694,7 @@ repos:
         from robert_agent import daemon
         config_path = self._write_config(
             "max_concurrency: 1\n"
-            "daemon_run_on_start: true\n"
-            "daemon_github_poll_when_full_seconds: 300\n"
+            "daemon:\n  run_on_start: true\n  github_poll_when_full_seconds: 300\n"
         )
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -770,7 +770,7 @@ repos:
         from robert_agent import daemon
         config_path = self._write_config(
             "max_concurrency: 1\n"
-            "daemon_github_poll_when_full_seconds: 300\n"
+            "daemon:\n  github_poll_when_full_seconds: 300\n"
         )
         now = "2026-07-03T00:05:00+00:00"
         calls = []
@@ -929,7 +929,7 @@ repos:
         from robert_agent import daemon
         from robert_agent import storage
 
-        config_path = self._write_config("daemon_run_on_start: true\n")
+        config_path = self._write_config("daemon:\n  run_on_start: true\n")
         storage.init_database(self.db_path)
         calls = []
 
@@ -964,7 +964,7 @@ repos:
         from robert_agent import daemon
         from robert_agent import storage
 
-        config_path = self._write_config("daemon_run_on_start: true\n")
+        config_path = self._write_config("daemon:\n  run_on_start: true\n")
         storage.init_database(self.db_path)
         calls = []
 
@@ -1036,7 +1036,7 @@ repos:
 
     def test_daemon_disabled_exits_before_acquiring_lease(self):
         from robert_agent import daemon
-        config_path = self._write_config("daemon_enabled: false\n")
+        config_path = self._write_config("daemon:\n  enabled: false\n")
 
         result = daemon.run_daemon(
             config_path,

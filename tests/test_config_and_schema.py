@@ -118,6 +118,9 @@ class NewSkillSkeletonTests(unittest.TestCase):
             worker_config["required"],
             ["adapter", "command", "model", "effort"],
         )
+        daemon_config = schema["properties"]["daemon"]
+        self.assertIn("local_poll_seconds", daemon_config["properties"])
+        self.assertFalse(daemon_config["additionalProperties"])
         repo_config = schema["properties"]["repos"]["items"]
         self.assertEqual(
             repo_config["required"],
@@ -728,13 +731,28 @@ repos:
                 self.assertEqual(result["status"], "failed_config")
                 self.assertEqual(result["safe_error"], f"{field} must be at least 1")
 
+    def test_config_accepts_nested_daemon_settings(self):
+        from robert_agent import validate_config
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "\ndaemon:\n  local_poll_seconds: 9\n  run_on_start: true\n",
+            encoding="utf-8",
+        )
+
+        result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["daemon"]["local_poll_seconds"], 9)
+        self.assertTrue(result["daemon"]["run_on_start"])
+
     def test_config_rejects_nonpositive_daemon_setting(self):
         from robert_agent import validate_config
         good_config_path = self.write_config()
         config_path = self.root / "bad-daemon-config.yml"
         text = good_config_path.read_text(encoding="utf-8")
         config_path.write_text(
-            text + "\ndaemon_local_poll_seconds: 0\n",
+            text + "\ndaemon:\n  local_poll_seconds: 0\n",
             encoding="utf-8",
         )
 
@@ -742,7 +760,7 @@ repos:
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
-        self.assertIn("daemon_local_poll_seconds must be at least 1", result["safe_error"])
+        self.assertIn("daemon.local_poll_seconds must be at least 1", result["safe_error"])
 
     def test_config_without_trusted_actors_fails(self):
         from robert_agent import validate_config
