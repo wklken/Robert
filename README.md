@@ -89,6 +89,8 @@ robert service status
 
 ## 本地 Web UI
 
+![Robert Web UI 任务看板](docs/imgs/webui-task-board.png)
+
 ```bash
 robert web run
 ```
@@ -102,6 +104,8 @@ robert web run --writable --operator "$USER"
 非回环地址还必须使用 `--allow-remote`，并部署经过认证的反向代理。
 
 ## OpenClaw 集成
+
+![OpenClaw 中的 Robert 状态](docs/imgs/openclaw-robert-status.png)
 
 ```bash
 robert openclaw install

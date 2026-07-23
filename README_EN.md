@@ -134,6 +134,8 @@ Robert runs in the foreground under systemd user services or launchd. Use
 
 ## Local Web UI
 
+![Robert Web UI task board](docs/imgs/webui-task-board.png)
+
 ```bash
 robert web run
 ```
@@ -148,6 +150,8 @@ Non-loopback binding also requires `--allow-remote` and an authenticated reverse
 proxy.
 
 ## OpenClaw
+
+![Robert status in OpenClaw](docs/imgs/openclaw-robert-status.png)
 
 ```bash
 robert openclaw install
