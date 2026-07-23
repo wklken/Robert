@@ -113,9 +113,10 @@ and explicit publication approval are complete.
 - Version: `0.1.0b1`
 - Evidence date: `2026-07-23`
 - Repository root: sanitized local checkout
-- Public history policy: one sanitized root commit
-- Publication status: not authorized and not started
-- GitHub writes performed by these gates: none
+- Public history policy: one sanitized release root plus evidence updates
+- Publication status: completed
+- GitHub writes performed by these gates: dedicated canary issue/comment,
+  sanitized repository publication, release tag, and release evidence
 
 ## Environment
 
@@ -176,9 +177,9 @@ documentation, migration implementation, and migration tests.
 | Artifact | SHA-256 |
 | --- | --- |
 | `robert_github_agent-0.1.0b1-py3-none-any.whl` | `1f502103f682b3430be7d66fc3a8c1883456cb9c511226dc62f65888958bffce` |
+| `robert_github_agent-0.1.0b1.tar.gz` | `c4286a8211a8335d69e2133408a312778ad30af78f6ce10ee77dc44cf3dbd631` |
 
-The source-distribution hash is reported with the release rather than embedded
-here because this development document is included in that artifact.
+These hashes match the files published by the release workflow.
 
 Packaging acceptance:
 
@@ -391,40 +392,38 @@ documentation was checked for:
 Generated plugin tests, dry-run command generation, scheduler-content scans,
 and `node --check` passed.
 
-## Publication Plan Requiring Explicit Approval
+## Published Release
 
-The private repository `wklken/Robert` already exists with a single initial
-`LICENSE` commit on branch `master`. The plan's `gh repo create` command is
-therefore not applicable.
+- Public repository:
+  [wklken/Robert](https://github.com/wklken/Robert)
+- Release:
+  [v0.1.0b1](https://github.com/wklken/Robert/releases/tag/v0.1.0b1)
+- PyPI:
+  [robert-github-agent 0.1.0b1](https://pypi.org/project/robert-github-agent/0.1.0b1/)
+- Release workflow:
+  [GitHub Actions run 29985280105](https://github.com/wklken/Robert/actions/runs/29985280105)
+- Production canary:
+  [issue 6](https://github.com/wklken/Robert/issues/6)
 
-After explicit approval, the proposed history-replacement sequence is:
+The release workflow completed through PyPI Trusted Publishing, generated
+provenance attestations for the wheel and source distribution, and created the
+GitHub release.
+
+The production canary published one marker-protected comment. A second run
+deduplicated the action, and the issue contains exactly one canary marker.
+
+TestPyPI was intentionally skipped by operator choice.
+
+Public install verification:
 
 ```bash
-git remote add origin https://github.com/wklken/Robert.git
-git push --force origin main
-gh repo edit wklken/Robert --default-branch main
-git push origin --delete master
-gh repo edit wklken/Robert \
-  --visibility public \
-  --accept-visibility-change-consequences
-```
-
-This is destructive to the existing one-commit history and has not been run.
-
-After separate publication approval, the planned package and tag operations
-are:
-
-```bash
-python3 -m twine check dist/*
-python3 -m twine upload --repository testpypi dist/*
-python3 -m venv /tmp/robert-testpypi-smoke
-/tmp/robert-testpypi-smoke/bin/pip install \
-  --index-url https://test.pypi.org/simple/ \
-  --extra-index-url https://pypi.org/simple/ \
+python3 -m venv /tmp/robert-pypi-smoke
+/tmp/robert-pypi-smoke/bin/pip install --upgrade pip
+/tmp/robert-pypi-smoke/bin/pip install \
+  --index-url https://pypi.org/simple/ \
   robert-github-agent==0.1.0b1
-git tag -s v0.1.0b1 -m "Robert 0.1.0b1"
-git push origin v0.1.0b1
+/tmp/robert-pypi-smoke/bin/robert --version
+/tmp/robert-pypi-smoke/bin/robert --help
 ```
 
-Repository settings, PyPI Trusted Publishing, the production GitHub write
-canary, tagging, and package publication remain pending explicit authorization.
+Result: `robert 0.1.0b1`.
