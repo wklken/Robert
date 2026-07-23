@@ -32,5 +32,8 @@ class DistributionTests(unittest.TestCase):
         )
         self.assertEqual(
             data["project"]["dependencies"],
-            ["PyYAML>=6.0,<7"],
+            [
+                "PyYAML>=6.0,<7",
+                "supervisor>=4.2,<5",
+            ],
         )

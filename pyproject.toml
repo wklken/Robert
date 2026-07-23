@@ -10,7 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{name = "Robert contributors"}]
-dependencies = ["PyYAML>=6.0,<7"]
+dependencies = [
+  "PyYAML>=6.0,<7",
+  # Supervisor provides restart/status control when Linux user systemd is unavailable.
+  "supervisor>=4.2,<5",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
