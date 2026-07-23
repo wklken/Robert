@@ -7,6 +7,12 @@ from robert_agent.paths import default_data_dir
 
 
 PLUGIN_ID = "robert-openclaw"
+REQUIRED_COMMANDS = [
+    "robert-status",
+    "robert-task",
+    "robert-run",
+    "robert-artifact",
+]
 DEFAULT_PLUGIN_DIR = (
     default_data_dir()
     / "openclaw-plugin"
@@ -23,6 +29,47 @@ def _run(command, timeout=180):
         timeout=timeout,
         check=False,
     )
+
+
+def _combined_output(completed):
+    return "\n".join(
+        part
+        for part in [
+            completed.stdout.strip(),
+            completed.stderr.strip(),
+        ]
+        if part
+    )
+
+
+def preflight_openclaw(dry_run=False):
+    command = ["openclaw", "--version"]
+    if dry_run:
+        return {
+            "ok": True,
+            "status": "planned",
+            "command": command,
+        }
+    try:
+        completed = _run(command, timeout=30)
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "status": "missing",
+            "command": command,
+            "safe_error": (
+                "OpenClaw CLI is not available on PATH. "
+                "Install or repair OpenClaw before running "
+                "robert openclaw install."
+            ),
+        }
+    return {
+        "ok": completed.returncode == 0,
+        "status": "ready" if completed.returncode == 0 else "failed",
+        "command": command,
+        "stdout": completed.stdout.strip(),
+        "safe_error": completed.stderr.strip(),
+    }
 
 
 def _plugin_source():
@@ -136,7 +183,11 @@ def write_plugin(plugin_dir, force=False):
                 "ok": False,
                 "status": "exists",
                 "plugin_dir": str(path),
-                "safe_error": f"plugin directory already exists: {path}",
+                "safe_error": (
+                    f"plugin directory already exists: {path}. "
+                    "Re-run with --force to rewrite it, or use "
+                    "robert openclaw status to inspect the installed plugin."
+                ),
             }
         shutil.rmtree(path)
     path.mkdir(parents=True)
@@ -225,6 +276,82 @@ def restart_gateway(dry_run=False):
         "command": command,
         "stdout": completed.stdout.strip(),
         "safe_error": completed.stderr.strip(),
+    }
+
+
+def verify_gateway_commands(dry_run=False):
+    command = [
+        "openclaw",
+        "gateway",
+        "call",
+        "commands.list",
+        "--json",
+        "--timeout",
+        "10000",
+    ]
+    if dry_run:
+        return {
+            "ok": True,
+            "status": "planned",
+            "command": command,
+            "required_commands": REQUIRED_COMMANDS,
+        }
+    completed = _run(command, timeout=30)
+    if completed.returncode != 0:
+        detail = _combined_output(completed)
+        return {
+            "ok": False,
+            "status": "verify_failed",
+            "command": command,
+            "stdout": completed.stdout.strip(),
+            "safe_error": (
+                "Robert plugin was installed, but the live OpenClaw "
+                "gateway command list could not be verified. Restart "
+                "the OpenClaw gateway and run robert openclaw status."
+                + (f" OpenClaw output: {detail}" if detail else "")
+            ),
+        }
+    try:
+        payload = json.loads(completed.stdout)
+    except ValueError:
+        return {
+            "ok": False,
+            "status": "invalid_commands_json",
+            "command": command,
+            "stdout": completed.stdout.strip(),
+            "safe_error": (
+                "OpenClaw gateway returned invalid command-list JSON. "
+                "Restart the OpenClaw gateway and try again."
+            ),
+        }
+    command_names = {
+        str(item.get("name"))
+        for item in payload.get("commands", [])
+        if isinstance(item, dict)
+    }
+    missing = [
+        required
+        for required in REQUIRED_COMMANDS
+        if required not in command_names
+    ]
+    if missing:
+        return {
+            "ok": False,
+            "status": "missing_commands",
+            "command": command,
+            "missing_commands": missing,
+            "safe_error": (
+                "Robert plugin is installed, but the live OpenClaw "
+                "gateway command list is missing: "
+                f"{', '.join(missing)}. Restart the OpenClaw gateway "
+                "and run /commands again."
+            ),
+        }
+    return {
+        "ok": True,
+        "status": "verified",
+        "command": command,
+        "commands": REQUIRED_COMMANDS,
     }
 
 

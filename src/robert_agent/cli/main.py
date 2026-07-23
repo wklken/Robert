@@ -437,6 +437,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return web.main(web_argv)
         if args.command == "openclaw":
             if args.openclaw_command == "install":
+                preflight = openclaw.preflight_openclaw(
+                    dry_run=args.dry_run,
+                )
+                if not preflight["ok"]:
+                    return _emit_and_code(preflight, args.output)
                 written = openclaw.write_plugin(
                     args.plugin_dir,
                     force=args.force,
@@ -447,23 +452,40 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.plugin_dir,
                     dry_run=args.dry_run,
                 )
-                steps = [written, installed]
-                if not args.skip_restart:
+                steps = [preflight, written, installed]
+                if installed.get("ok") and not args.skip_restart:
                     steps.append(
                         openclaw.restart_gateway(
                             dry_run=args.dry_run,
                         )
                     )
+                if installed.get("ok"):
+                    steps.append(
+                        openclaw.verify_gateway_commands(
+                            dry_run=args.dry_run,
+                        )
+                    )
+                ok = all(step.get("ok") for step in steps)
+                failed_steps = [
+                    step
+                    for step in steps
+                    if not step.get("ok")
+                ]
                 result = {
-                    "ok": all(step.get("ok") for step in steps),
+                    "ok": ok,
                     "status": (
                         "planned"
                         if args.dry_run
-                        else "installed"
+                        else ("installed" if ok else "failed")
                     ),
                     "plugin_dir": str(args.plugin_dir),
                     "steps": steps,
                 }
+                if failed_steps:
+                    result["safe_error"] = failed_steps[0].get(
+                        "safe_error",
+                        "Robert OpenClaw install failed.",
+                    )
             elif args.openclaw_command == "uninstall":
                 result = openclaw.uninstall_plugin(
                     dry_run=args.dry_run,
