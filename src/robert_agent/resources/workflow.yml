@@ -1,0 +1,50 @@
+name: Robert Run Once
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: Agent config path
+        required: true
+      dry_run:
+        description: Avoid external writes and worker launch
+        required: false
+        default: "true"
+      fixture:
+        description: Optional discovery fixture path
+        required: false
+
+jobs:
+  run_once:
+    runs-on: local-agent
+    steps:
+      - id: validate_config
+        name: Validate config and local skill index
+        uses: robert/validate-config@v1
+      - id: acquire_lease
+        name: Acquire agent lease
+        uses: robert/acquire-lease@v1
+      - id: supervise
+        name: Supervise active workstreams and attempts
+        uses: robert/supervise@v1
+      - id: audit_results
+        name: Audit completed worker results
+        uses: robert/audit-results@v1
+      - id: publish_actions
+        name: Publish audited GitHub actions and finalize published results
+        uses: robert/publish-actions@v1
+      - id: discover
+        name: Discover GitHub events
+        uses: robert/discover@v1
+      - id: authorize
+        name: Authorize trusted triggers and follow-up context
+        uses: robert/authorize@v1
+      - id: route
+        name: Route authorized tasks
+        uses: robert/route@v1
+      - id: dispatch
+        name: Prepare worktrees, prompts, and workers
+        uses: robert/dispatch@v1
+      - id: summarize
+        name: Summarize run
+        uses: robert/summarize@v1

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Robert worker Snapshot",
+  "type": "object",
+  "required": ["task_id", "attempt_id", "phase", "status", "summary"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "attempt_id": {"type": "string"},
+    "phase": {
+      "enum": ["prepare", "analyze", "plan", "execute", "verify", "publish", "handoff"]
+    },
+    "status": {"type": "string"},
+    "summary": {"type": "string"},
+    "next_step": {"type": "string"}
+  },
+  "additionalProperties": true
+}

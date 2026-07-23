@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install --upgrade pip setuptools
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m ruff check src tests
+      - run: >-
+          python -m mypy
+          src/robert_agent/cli
+          src/robert_agent/paths.py
+          src/robert_agent/route_config.py
+          src/robert_agent/skills.py
+          src/robert_agent/service.py
+          src/robert_agent/migrate.py
+      - run: python -B -m unittest discover -s tests
+      - run: python -m compileall -q src
+      - run: python -m build
+      - run: python -m pip_audit
+      - run: git diff --check
+
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build
+      - run: python -m build
+      - run: python -m venv /tmp/robert-smoke
+      - run: /tmp/robert-smoke/bin/pip install dist/*.whl
+      - run: /tmp/robert-smoke/bin/robert --version
+      - run: /tmp/robert-smoke/bin/robert --help
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+
+  docs-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          failIfEmpty: false
+          args: >-
+            --no-progress
+            README.md
+            README_ZH.md
+            COMMUNITY.md
+            docs

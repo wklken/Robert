@@ -1,0 +1,53 @@
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify Signed-off-by trailers
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          base = os.environ["BASE_SHA"]
+          head = os.environ["HEAD_SHA"]
+          commits = subprocess.check_output(
+              ["git", "rev-list", f"{base}..{head}"],
+              text=True,
+          ).splitlines()
+          failures = []
+          for commit in commits:
+              name = subprocess.check_output(
+                  ["git", "show", "-s", "--format=%an", commit],
+                  text=True,
+              ).strip()
+              email = subprocess.check_output(
+                  ["git", "show", "-s", "--format=%ae", commit],
+                  text=True,
+              ).strip()
+              body = subprocess.check_output(
+                  ["git", "show", "-s", "--format=%B", commit],
+                  text=True,
+              )
+              expected = f"Signed-off-by: {name} <{email}>"
+              if expected.lower() not in body.lower():
+                  failures.append(f"{commit[:12]} missing {expected}")
+          if failures:
+              print("\n".join(failures))
+              sys.exit(1)
+          print(f"DCO sign-off verified for {len(commits)} commit(s)")
+          PY

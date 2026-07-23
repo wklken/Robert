@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-color-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robert Workbench</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2324292f'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='ui-sans-serif' font-size='24' font-weight='700' fill='%23f0f6fc'%3ER%3C/text%3E%3C/svg%3E">
+  <script>
+    (() => {
+      const choice = localStorage.getItem('robertWorkbenchTheme') || 'system';
+      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.themeChoice = choice;
+      document.documentElement.dataset.colorMode = choice === 'system' ? (dark ? 'dark' : 'light') : choice;
+    })();
+  </script>
+  <link rel="stylesheet" href="/assets/github-shell.css">
+  <link rel="stylesheet" href="/assets/workbench.css">
+  <script src="/assets/workbench.js" defer></script>
+</head>
+<body>
+  <header class="global-bar">
+    <a class="brand" href="/" aria-label="Robert Workbench">
+      <span class="brand-mark" aria-hidden="true">R</span>
+      <span>GitHub Agent</span>
+    </a>
+    <div class="global-actions" aria-label="Workbench controls" data-i18n-aria="workbenchControls">
+      <span class="live-indicator"><i aria-hidden="true"></i><span class="responsive-label" id="refresh-label" data-i18n="live">Live</span></span>
+      <label class="theme-control"><span class="sr-only" data-i18n="theme">Theme</span><select id="theme-select" aria-label="Theme" data-i18n-aria="theme">
+        <option value="system" data-i18n="themeSystem">System</option><option value="light" data-i18n="themeLight">Light</option><option value="dark" data-i18n="themeDark">Dark</option>
+      </select></label>
+      <label class="shell-select language-control"><span class="sr-only" data-i18n="language">Language</span><select id="language-select" aria-label="Language" data-i18n-aria="language">
+        <option value="en" data-i18n="languageEnglish">English</option><option value="zh" data-i18n="languageChinese">中文</option>
+      </select></label>
+    </div>
+  </header>
+
+  <header class="repo-header">
+    <div class="repo-context"><a href="/">Robert</a><span>/</span><strong>workbench</strong><span class="counter-label">Private</span></div>
+    <nav class="underline-nav" aria-label="Workbench" data-i18n-aria="primaryNavigation">
+      <a class="underline-nav-item selected" data-nav="work" href="/"><span aria-hidden="true">⌁</span> <span data-i18n="navWork">Work</span> <span class="counter" id="nav-work-count">0</span></a>
+      <a class="underline-nav-item" href="/board"><span aria-hidden="true">▦</span> <span data-i18n="navBoard">Board</span></a>
+      <a class="underline-nav-item" data-nav="history" href="/?bucket=history"><span aria-hidden="true">◷</span> <span data-i18n="navHistory">History</span> <span class="counter" id="nav-history-count">0</span></a>
+      <a class="underline-nav-item" href="/operations"><span aria-hidden="true">▣</span> <span data-i18n="navOperations">Operations</span></a>
+      <a class="underline-nav-item" href="/operations#knowledge"><span aria-hidden="true">◇</span> <span data-i18n="navKnowledge">Knowledge</span></a>
+    </nav>
+  </header>
+
+  <main id="workbench-app" class="workbench-shell" aria-busy="true">
+    <section class="work-column" aria-labelledby="work-title">
+      <div class="page-header">
+        <div><h1 id="work-title" data-i18n="workTitle">Work queue</h1><p id="work-subtitle" data-i18n="workSubtitle">Active GitHub work that still needs attention</p></div>
+        <div class="summary-counts" aria-label="Work summary" data-i18n-aria="workSummary">
+          <span><strong class="danger-text" id="count-attention">0</strong> <span data-i18n="needsYou">needs you</span></span>
+          <span><strong id="count-working">0</strong> <span data-i18n="working">working</span></span>
+          <span><strong id="count-waiting">0</strong> <span data-i18n="waiting">waiting</span></span>
+        </div>
+      </div>
+
+      <form id="filter-form" class="filter-bar" role="search">
+        <label class="search-field"><span class="sr-only" data-i18n="searchWork">Search work</span><input id="work-search" name="q" type="search" autocomplete="off" placeholder="Search title, #number or task ID" data-i18n-placeholder="workSearchPlaceholder" data-i18n-aria="searchWork"></label>
+        <label><span class="sr-only" data-i18n="repository">Repository</span><select id="repo-filter" name="repo" aria-label="Repository" data-i18n-aria="repository"><option value="" data-i18n="allRepositories">All repositories</option></select></label>
+        <label><span class="sr-only" data-i18n="actor">Actor</span><select id="actor-filter" name="actor" aria-label="Actor" data-i18n-aria="actor"><option value="" data-i18n="anyActor">Any actor</option></select></label>
+        <label><span class="sr-only" data-i18n="status">Status</span><select id="bucket-filter" name="bucket" aria-label="Status" data-i18n-aria="status">
+          <option value="" data-i18n="activeWork">Active work</option>
+          <option value="needs_attention" data-i18n="needsAttention">Needs attention</option>
+          <option value="working" data-i18n="agentWorking">Agent working</option>
+          <option value="waiting" data-i18n="waiting">Waiting</option>
+          <option value="history" data-i18n="navHistory">History</option>
+        </select></label>
+        <label><span class="sr-only" data-i18n="sort">Sort</span><select id="sort-filter" name="sort" aria-label="Sort" data-i18n-aria="sort">
+          <option value="priority" data-i18n="priority">Priority</option>
+          <option value="updated-desc" data-i18n="newest">Newest</option>
+          <option value="updated-asc" data-i18n="oldest">Oldest</option>
+        </select></label>
+      </form>
+
+      <div id="refresh-notice" class="flash flash-danger" hidden><span id="refresh-error"></span><button id="retry-button" type="button" data-i18n="retry">Retry</button></div>
+      <div id="list-status" class="sr-only" aria-live="polite"></div>
+      <div id="work-list" class="work-list" aria-label="GitHub work items" data-i18n-aria="githubWorkItems"></div>
+      <div id="pagination" class="pagination" hidden><button id="load-more" class="button" type="button" data-i18n="loadMore">Load more</button></div>
+    </section>
+
+    <aside id="detail-panel" class="detail-panel" aria-labelledby="detail-title">
+      <div id="detail-content" class="detail-empty"><h2 id="detail-title" data-i18n="selectWorkItem">Select a PR or issue</h2><p data-i18n="selectWorkItemHelp">Choose a work item to inspect its current Agent state.</p></div>
+    </aside>
+  </main>
+
+  <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+  <aside id="detail-drawer" class="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
+    <header><h2 id="drawer-title" data-i18n="workItemDetail">Work item detail</h2><button id="drawer-close" class="icon-button" type="button" aria-label="Close detail" data-i18n-aria="closeDetail">×</button></header>
+    <div id="drawer-content"></div>
+  </aside>
+
+  <template id="skeleton-template">
+    <div class="box skeleton-box" aria-hidden="true">
+      <div class="box-header"><span class="skeleton short"></span></div>
+      <div class="skeleton-row"><span class="skeleton icon"></span><span class="skeleton wide"></span></div>
+      <div class="skeleton-row"><span class="skeleton icon"></span><span class="skeleton medium"></span></div>
+      <div class="skeleton-row"><span class="skeleton icon"></span><span class="skeleton wide"></span></div>
+    </div>
+  </template>
+</body>
+</html>

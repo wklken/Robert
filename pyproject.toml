@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "robert-github-agent"
+version = "0.1.0b1"
+description = "An AI teammate that takes care of your GitHub work."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{name = "Robert contributors"}]
+dependencies = ["PyYAML>=6.0,<7"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development",
+]
+
+[project.scripts]
+robert = "robert_agent.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/wklken/robert"
+Documentation = "https://github.com/wklken/robert/tree/main/docs"
+Issues = "https://github.com/wklken/robert/issues"
+
+[project.optional-dependencies]
+dev = [
+  "build",
+  "mypy",
+  "pip-audit",
+  "ruff",
+  "twine",
+  "tomli; python_version < '3.11'",
+  "types-PyYAML",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/robert_agent"]

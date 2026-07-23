@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Robert Route",
+  "type": "object",
+  "required": ["id", "expected_output", "allowed_github_actions", "recommended_skills"],
+  "properties": {
+    "id": {"type": "string"},
+    "expected_output": {
+      "enum": [
+        "comment_analysis",
+        "new_pr",
+        "update_existing_pr",
+        "review_comment",
+        "pr_review_comment",
+        "classification_result",
+        "waiting_for_user"
+      ]
+    },
+    "allowed_github_actions": {"type": "array", "items": {"type": "string"}},
+    "recommended_skills": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

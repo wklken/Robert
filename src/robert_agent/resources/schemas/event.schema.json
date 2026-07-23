@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Robert Event",
+  "type": "object",
+  "required": ["repo", "source_key", "event_fingerprint", "event_type"],
+  "properties": {
+    "repo": {"type": "string"},
+    "source_key": {"type": "string"},
+    "source_type": {"type": "string"},
+    "workstream_id": {"type": "string"},
+    "origin_workstream_id": {"type": "string"},
+    "event_fingerprint": {"type": "string"},
+    "event_type": {"type": "string"},
+    "actor_login": {"type": "string"},
+    "author_association": {"type": "string"}
+  },
+  "additionalProperties": true
+}
