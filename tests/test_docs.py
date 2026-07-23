@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationTests(unittest.TestCase):
-    def test_readmes_contain_fixed_brand_copy_and_quick_start(self):
+    def test_readmes_contain_fixed_brand_copy_and_agent_install(self):
         for name in ["README.md", "README_EN.md"]:
             text = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn("Robert", text)
@@ -15,9 +15,6 @@ class DocumentationTests(unittest.TestCase):
                 "An AI teammate that takes care of your GitHub work.",
                 text,
             )
-            self.assertIn("pipx install robert-github-agent", text)
-            self.assertIn("robert doctor", text)
-            self.assertIn("robert service start", text)
             self.assertIn("[English](README_EN.md)", text)
             self.assertIn("[简体中文](README.md)", text)
             self.assertIn("```mermaid", text)
@@ -25,6 +22,18 @@ class DocumentationTests(unittest.TestCase):
                 "https://github.com/wklken/Robert/blob/main/docs/agent-install.md",
                 text,
             )
+
+    def test_chinese_readme_keeps_manual_install_and_migration_out(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("## 快速开始", text)
+        self.assertNotIn("## 迁移", text)
+        self.assertNotIn("dd-" + "github-agent", text)
+
+    def test_human_install_guide_contains_manual_quick_start(self):
+        text = (ROOT / "docs" / "human-install.md").read_text(encoding="utf-8")
+        self.assertIn("pipx install robert-github-agent", text)
+        self.assertIn("robert doctor", text)
+        self.assertIn("robert service start", text)
 
     def test_governance_files_exist(self):
         for name in [

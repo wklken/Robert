@@ -8,11 +8,29 @@ Default path: `~/.config/robert/config.yml`.
 version: 1
 data_dir: ~/.local/share/robert
 database: robert.sqlite3
+python_bin: python3
+max_concurrency: 3
+stale_after_minutes: 20
+hard_timeout_minutes: 90
+worker_startup_grace_seconds: 300
+lease_ttl_minutes: 9
+daemon_enabled: true
+daemon_local_poll_seconds: 5
+daemon_github_poll_seconds: 300
+daemon_github_poll_when_full_seconds: 600
+daemon_rate_limit_cache_seconds: 300
+daemon_min_search_remaining: 10
+daemon_min_core_remaining: 500
+daemon_live_run_timeout_seconds: 300
+daemon_local_drain_timeout_seconds: 180
+daemon_event_retention_days: 7
+daemon_run_on_start: false
 github:
   account: robert-bot
   poll_seconds: 300
 skills:
-  search_paths: []
+  search_paths:
+    - ~/.agents/skills
 workers:
   default:
     adapter: codex
@@ -22,13 +40,54 @@ workers:
     prompt_transport: stdin
     timeout_seconds: 5400
     environment_allowlist: []
-routes: {}
+  reviewer:
+    adapter: command
+    command: [custom-reviewer, --batch]
+    model: default
+    effort: default
+    prompt_transport: stdin
+    timeout_seconds: 3600
+    environment_allowlist:
+      - CUSTOM_REVIEWER_HOME
+route_worker_models:
+  new-pr:
+    worker: default
+    model: gpt-5.4
+    effort: high
+routes:
+  new-pr:
+    worker: default
+    required_skills:
+      - fast-add-tests
+    recommended_skills:
+      - fast-preflight
+  review-pr:
+    worker: reviewer
+    required_skills: []
+    recommended_skills:
+      - fast-review-github-pr
 repos:
   - full_name: example/backend
     checkout: /srv/repos/backend
     worktrees: /srv/repos/backend/.worktrees
     default_branch: main
-    trusted_actors: [maintainer]
+    github_account: robert-bot
+    trusted_actors:
+      - maintainer
+    max_concurrency: 2
+    routes:
+      new-pr:
+        worker: default
+        required_skills:
+          - fast-add-tests
+        recommended_skills:
+          - fast-test-fix
+  - full_name: example/frontend
+    checkout: /srv/repos/frontend
+    worktrees: /srv/repos/frontend/.worktrees
+    default_branch: main
+    trusted_actors:
+      - maintainer
 ```
 
 `github` accepts only `account` and `poll_seconds`; credentials are rejected.
@@ -37,6 +96,29 @@ set `worker`, `required_skills`, and `recommended_skills` only.
 
 ```bash
 robert config validate --config ~/.config/robert/config.yml --output json
+```
+
+If Superpowers skills are installed locally, add their skill root to
+`skills.search_paths` and then reference the skill names in route overrides:
+
+```yaml
+skills:
+  search_paths:
+    - ~/.agents/skills
+    - ~/.agents/vendor/superpowers/skills
+routes:
+  new-pr:
+    required_skills:
+      - superpowers:verification-before-completion
+    recommended_skills:
+      - superpowers:test-driven-development
+      - fast-small-pr
+  update-existing-pr:
+    required_skills:
+      - superpowers:verification-before-completion
+    recommended_skills:
+      - superpowers:receiving-code-review
+      - fast-verify-review-point
 ```
 
 ## CLI
