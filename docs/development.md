@@ -362,7 +362,7 @@ git status --short
 git log --oneline --decorate --reverse
 rg -n \
   'daemon_supervisor|start_daemon\.sh|start_web\.sh|dd_status|dd_agent|dd-github-worker' \
-  src tests docs README.md README_ZH.md
+  src tests docs README.md README_EN.md
 /tmp/robert-dev-check/bin/pip check
 ```
 

@@ -1,77 +1,72 @@
 # Robert
 
-[English](README.md) | [简体中文](README_ZH.md)
+[English](README_EN.md) | [简体中文](README.md)
 
 **Your Repo Teammate**
 
 An AI teammate that takes care of your GitHub work.
 
-Robert is a self-hosted GitHub teammate that turns trusted issues, mentions,
-assignments, reviews, and follow-up comments into controlled coding-agent work.
-It coordinates local workers, isolates repository work in Git worktrees,
-audits proposed GitHub actions, and stores durable workstream state in SQLite.
+Robert 是一个自托管的 GitHub 队友。它把可信的 Issue、提及、指派、评审和
+后续评论转换为受控的编码代理任务，并通过 Git worktree、审计门禁和 SQLite
+持久状态保证无人值守运行仍然可检查、可恢复。
 
-## What Robert Is
+## Robert 是什么
 
-Robert is a local control plane for trusted GitHub collaboration. It discovers
-authorized work, routes it to a configured worker, supervises execution, audits
-the proposed GitHub actions, and publishes only actions allowed by the route.
+Robert 是运行在本机的 GitHub 协作控制面。它发现事件、校验信任关系、选择
+路由和 Worker、监督执行、审计计划中的 GitHub 动作，并只发布路由允许的动作。
 
-## Why Robert Exists
+## 为什么需要 Robert
 
-Coding agents are useful, but unattended GitHub automation needs durable state,
-clear trust boundaries, isolated workspaces, deduplication, and evidence.
-Robert provides those controls without requiring a GitHub App or hosted service.
+编码代理本身不能解决授权、并发、去重、失败恢复和证据留存。Robert 将这些
+约束做成稳定协议，不需要 GitHub App，也不需要托管控制服务。
 
-## Key Capabilities
+## 核心能力
 
-- Trusted issue, pull-request, review, assignment, and mention handling.
-- Multi-repository workstreams stored in SQLite.
-- Per-route worker, required-skill, and recommended-skill configuration.
-- Isolated Git worktrees for analysis, implementation, and source review.
-- Native systemd user services and macOS LaunchAgents.
-- Read-only local web UI with an explicitly enabled writable mode.
-- Optional read-only OpenClaw chat commands.
-- Safe migration from the former `dd-github-agent` state directory.
+- 处理可信的 Issue、PR、评审、指派和提及。
+- 使用 SQLite 管理多仓库工作流。
+- 按路由配置 Worker、必需 Skill 和推荐 Skill。
+- 使用隔离的 Git worktree 进行分析、实现和源码评审。
+- 支持 systemd 用户服务和 macOS LaunchAgent。
+- 默认只读的本地 Web UI。
+- 可选的 OpenClaw 只读聊天命令。
+- 安全迁移原 `dd-github-agent` 目录中的配置和数据库。
 
-## How It Works
+## 工作流程
 
 ```mermaid
 flowchart LR
-    A[Poll GitHub with gh] --> B[Normalize and authorize]
-    B --> C[Create or resume workstream]
-    C --> D[Resolve route and skills]
-    D --> E[Prepare isolated workspace]
-    E --> F[Run configured worker]
-    F --> G[Audit structured result]
-    G -->|Accepted| H[Deduplicate and publish]
-    G -->|Blocked| I[Persist failure evidence]
-    H --> J[(SQLite state)]
+    A[通过 gh 轮询 GitHub] --> B[规范化并校验授权]
+    B --> C[创建或恢复 workstream]
+    C --> D[选择路由和 Skill]
+    D --> E[准备隔离 workspace]
+    E --> F[运行配置的 Worker]
+    F --> G[审计结构化结果]
+    G -->|通过| H[去重并发布]
+    G -->|阻止| I[保存失败证据]
+    H --> J[(SQLite 状态)]
     I --> J
 ```
 
-Robert polls GitHub through the authenticated `gh` CLI, normalizes events,
-checks repository-specific trust rules, creates or resumes a workstream, selects
-a route, prepares a task workspace, launches a local worker, audits its
-structured result, and deduplicates approved GitHub actions before publication.
+Robert 使用已认证的 `gh` CLI 轮询 GitHub，规范化事件，应用仓库级信任规则，
+创建或恢复 workstream，准备任务目录，启动本地 Worker，审计结构化结果，并
+在发布前执行去重。
 
-## Security and Trust
+## 安全与信任模型
 
-GitHub text is untrusted input. Only configured actors can trigger work.
-Repository overrides cannot change immutable route permissions or workspace
-policy. Worker environments use an allowlist, credentials are never stored in
-Robert configuration, and GitHub-facing text passes the redaction and audit
-gates. The web UI binds to `127.0.0.1` by default.
+GitHub 文本始终按不可信输入处理。只有配置中的可信 Actor 能触发工作。仓库
+覆盖不能改变路由的 GitHub 权限和 workspace 策略。Worker 环境变量采用白名单，
+配置文件不保存 GitHub Token，所有对外文本都经过脱敏和审计。Web UI 默认绑定
+`127.0.0.1`。
 
-## Requirements
+## 环境要求
 
-- Linux or macOS. Windows is supported through WSL.
-- Python 3.10 or newer.
-- Git and GitHub CLI (`gh`) with an authenticated session.
-- At least one local worker command such as Codex.
-- `pipx` is recommended for installation.
+- Linux 或 macOS；Windows 通过 WSL 使用。
+- Python 3.10 或更高版本。
+- Git 和已登录的 GitHub CLI。
+- 至少一个本地 Worker 命令。
+- 推荐使用 `pipx` 安装。
 
-## Quick Start
+## 快速开始
 
 ```bash
 pipx install robert-github-agent
@@ -82,12 +77,12 @@ robert service install
 robert service start
 ```
 
-The configuration is written to `~/.config/robert/config.yml`. Runtime data is
-stored under `~/.local/share/robert/`.
+配置路径为 `~/.config/robert/config.yml`，运行数据默认位于
+`~/.local/share/robert/`。
 
-## Install with a Coding Agent
+## 使用编码 Agent 安装
 
-Copy this prompt into Codex, Claude Code, or another terminal coding agent:
+把下面的提示词复制给 Codex、Claude Code 或其他终端编码 Agent：
 
 ```text
 Install and fully configure Robert on this machine by following:
@@ -97,31 +92,28 @@ Read the entire guide before executing. Ask me for required values and for
 confirmation wherever the guide requires it.
 ```
 
-## Configuration
+## 配置
 
-Robert uses versioned YAML. Configure the GitHub account, worker definitions,
-skill search paths, route overrides, and one or more repository checkouts.
-See [docs/reference.md](docs/reference.md#configuration).
+Robert 使用带版本号的 YAML。配置包括 GitHub 账号、Worker、Skill 搜索路径、
+路由覆盖和一个或多个本地仓库。详见
+[docs/reference.md](docs/reference.md#configuration)。
 
-## Worker Adapters
+## Worker 适配器
 
-Built-in adapters support `codex`, `tcodex`, `cbc`, and a generic `command`
-adapter. A worker definition chooses its adapter, executable, default model,
-effort, timeout, prompt transport, and environment-variable allowlist.
+内置 `codex`、`tcodex`、`cbc` 和通用 `command` 适配器。Worker 定义包含命令、
+默认模型、推理强度、超时、输入方式和环境变量白名单。
 
-## Route Skills
+## 路由技能配置
 
-Each route can declare required and recommended skills. Missing required skills
-block that task before a worktree or worker is created. Missing recommended
-skills appear in doctor output but do not block execution.
+路由可以配置必需 Skill 和推荐 Skill。缺少必需 Skill 时，任务会在创建
+worktree 和启动 Worker 之前被阻止；缺少推荐 Skill 只会产生诊断提示。
 
-## Multiple Repositories
+## 多仓库
 
-Each repository has its own checkout, worktree root, trusted actors, concurrency
-limit, and optional route overrides. A failure in one repository does not stop
-other repository pipelines in the same cycle.
+每个仓库拥有独立 checkout、worktree 根目录、可信 Actor、并发限制和路由覆盖。
+单个仓库失败不会阻塞同一轮中的其他仓库。
 
-## Daemon Service
+## 守护进程
 
 ```bash
 robert service install
@@ -129,67 +121,63 @@ robert service start
 robert service status
 ```
 
-Robert runs in the foreground under systemd user services or launchd. Use
-`robert daemon run` for direct foreground operation.
+无人值守运行使用 systemd 用户服务或 launchd。前台调试使用
+`robert daemon run`。
 
-## Local Web UI
+## 本地 Web UI
 
 ```bash
 robert web run
 ```
 
-The default server is local and read-only. Writable mode requires:
+默认模式只读且仅监听本机。写入模式必须显式开启：
 
 ```bash
 robert web run --writable --operator "$USER"
 ```
 
-Non-loopback binding also requires `--allow-remote` and an authenticated reverse
-proxy.
+非回环地址还必须使用 `--allow-remote`，并部署经过认证的反向代理。
 
-## OpenClaw
+## OpenClaw 集成
 
 ```bash
 robert openclaw install
 robert openclaw status
 ```
 
-The optional plugin exposes read-only Robert status, task, run, and artifact
-commands. It never schedules or starts Robert.
+插件只提供 Robert 状态、任务、运行和产物查询，不会启动 Robert，也不会创建
+定时任务。
 
-## Migration
-
-Preview and import legacy state:
+## 迁移
 
 ```bash
 robert migrate dd-github-agent --dry-run
 robert migrate dd-github-agent
 ```
 
-Migration creates a separate backup and preserves legacy deduplication markers.
+迁移会保留独立备份，并继续识别旧的去重标记。
 
-## Troubleshooting
+## 故障排查
 
-Run `robert doctor --output json`, check `robert service status`, and export a
-redacted support archive with:
+先运行 `robert doctor --output json` 和 `robert service status`。需要提供诊断
+信息时，生成经过脱敏的压缩包：
 
 ```bash
 robert diagnostics export --output robert-diagnostics.zip
 ```
 
-Do not attach private repository content or credentials to public issues.
+不要在公开 Issue 中上传凭证或私有仓库内容。
 
-## Contributing
+## 参与贡献
 
-Read [COMMUNITY.md](COMMUNITY.md), run the documented verification commands,
-and sign commits with `git commit -s`. Robert uses the Developer Certificate
-of Origin and does not require a CLA for the first beta.
+阅读 [COMMUNITY.md](COMMUNITY.md)，执行其中的验证命令，并使用
+`git commit -s` 签署提交。首个 Beta 使用 DCO，不要求 CLA。
 
-## Project Status
+## 项目状态
 
-Robert `0.1.0b1` is a public beta. Polling is the only GitHub event transport in
-this release. Interfaces may evolve before the first stable release.
+Robert `0.1.0b1` 是公开 Beta。当前只使用轮询获取 GitHub 事件，稳定版之前接口
+仍可能调整。
 
-## License
+## 许可证
 
-Apache License 2.0. See `LICENSE`.
+Apache License 2.0，详见 `LICENSE`。

@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class DocumentationTests(unittest.TestCase):
     def test_readmes_contain_fixed_brand_copy_and_quick_start(self):
-        for name in ["README.md", "README_ZH.md"]:
+        for name in ["README.md", "README_EN.md"]:
             text = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn("Robert", text)
             self.assertIn("Your Repo Teammate", text)
@@ -18,8 +18,8 @@ class DocumentationTests(unittest.TestCase):
             self.assertIn("pipx install robert-github-agent", text)
             self.assertIn("robert doctor", text)
             self.assertIn("robert service start", text)
-            self.assertIn("[English](README.md)", text)
-            self.assertIn("[简体中文](README_ZH.md)", text)
+            self.assertIn("[English](README_EN.md)", text)
+            self.assertIn("[简体中文](README.md)", text)
             self.assertIn("```mermaid", text)
             self.assertIn(
                 "https://github.com/wklken/Robert/blob/main/docs/agent-install.md",
