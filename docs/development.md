@@ -106,6 +106,94 @@ PyPI Trusted Publishing using repository `wklken/Robert`, workflow
 Never tag or publish until release evidence, secret scans, TestPyPI rehearsal,
 and explicit publication approval are complete.
 
+## Robert 0.1.0b2 Local Release Evidence
+
+## Status
+
+- Version: `0.1.0b2`
+- Evidence date: `2026-07-24`
+- Repository root: sanitized local checkout
+- Publication status: local release commit and tag preparation only; no push,
+  GitHub release, or PyPI publication was authorized in this pass
+
+## Release Summary
+
+- Added Supervisor fallback support for Linux hosts without user systemd.
+- Improved OpenClaw plugin installation diagnostics and command exposure checks.
+- Nested daemon settings in generated configuration and schema.
+- Fixed GitHub Actions release, DCO, gitleaks, documentation-link, and worker
+  dispatch checks.
+- Refreshed README and installation documentation with Web UI and OpenClaw
+  screenshots.
+
+## Full Local Gate
+
+Commands:
+
+```bash
+python3 -B -m unittest discover -s tests
+python3 -B -m compileall -q src
+python3 -m build
+/tmp/robert-release-tools-b2/bin/python -m twine check dist/*
+/tmp/robert-release-smoke-b2/bin/pip install dist/*.whl
+/tmp/robert-release-smoke-b2/bin/robert --version
+/tmp/robert-release-smoke-b2/bin/robert --help
+git diff --check
+```
+
+Results:
+
+- Unit and controlled integration tests: `553` passed
+- Compileall: passed
+- Wheel and source distribution build: passed
+- Twine package metadata check: passed
+- Clean wheel install smoke: passed
+- CLI version smoke: `robert 0.1.0b2`
+- CLI help smoke: passed
+- Diff whitespace check: passed
+
+## Dependency Audit and Secret Scan
+
+Commands:
+
+```bash
+/tmp/robert-release-smoke-b2/bin/pip install --upgrade setuptools
+python3 -m pip_audit \
+  --path /tmp/robert-release-smoke-b2/lib/python3.10/site-packages \
+  --progress-spinner off
+git grep -I -n -E \
+  '(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' \
+  -- .
+```
+
+Results:
+
+- Dependency audit: no known vulnerabilities found after upgrading the smoke
+  venv bootstrap `setuptools`; local unpublished package
+  `robert-github-agent 0.1.0b2` was skipped because it is not yet on PyPI.
+- Secret scan: no matches.
+
+## Distribution Artifacts
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `robert_github_agent-0.1.0b2-py3-none-any.whl` | `fd29696b3440df5de2f55ed9cb1a900543a4fff9fd552bdbced97ff7e8ae07b7` |
+
+The source distribution was built and passed `twine check`. Its hash is not
+committed in this evidence block because `docs/development.md` is included in
+the source distribution, so embedding the source distribution hash here would
+make the committed source distribution hash self-referential. Compute the final
+source distribution hash from the immutable tag or release workflow artifact.
+
+## Publication Notes
+
+TestPyPI rehearsal was intentionally skipped by operator choice for `0.1.0b2`.
+The operator explicitly approved publishing after local release evidence, secret
+scan, dependency audit, package build, metadata check, and wheel smoke testing.
+
+Pushing `v0.1.0b2` triggers the GitHub release workflow, which publishes through
+PyPI Trusted Publishing and creates the GitHub release.
+
 ## Robert 0.1.0b1 Release Evidence
 
 ## Status

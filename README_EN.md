@@ -191,7 +191,7 @@ of Origin and does not require a CLA for the first beta.
 
 ## Project Status
 
-Robert `0.1.0b1` is a public beta. Polling is the only GitHub event transport in
+Robert `0.1.0b2` is a public beta. Polling is the only GitHub event transport in
 this release. Interfaces may evolve before the first stable release.
 
 ## License

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robert-github-agent"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "An AI teammate that takes care of your GitHub work."
 readme = "README.md"
 requires-python = ">=3.10"
