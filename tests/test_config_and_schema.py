@@ -523,7 +523,7 @@ repos:
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
                 "database: dd.sqlite3",
-                "database: dd.sqlite3\nworker_agent: claude",
+                "database: dd.sqlite3\nworker_agent: notarealagent",
             ),
             encoding="utf-8",
         )
@@ -532,7 +532,10 @@ repos:
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "failed_config")
-        self.assertEqual(result["safe_error"], "unsupported worker_agent: claude")
+        self.assertEqual(
+            result["safe_error"],
+            "unsupported worker_agent: notarealagent",
+        )
 
     def test_config_accepts_route_worker_models(self):
         from robert_agent import validate_config
