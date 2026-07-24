@@ -105,9 +105,10 @@ See [docs/reference.md](docs/reference.md#configuration).
 
 ## Worker Adapters
 
-Built-in adapters support `codex`, `tcodex`, `cbc`, and a generic `command`
-adapter. A worker definition chooses its adapter, executable, default model,
-effort, timeout, prompt transport, and environment-variable allowlist.
+Built-in adapters support `codex`, `tcodex`, `claude`, `tclaude`, `opencode`,
+`cbc`, and a generic `command` adapter. A worker definition chooses its
+adapter, executable, default model, effort, timeout, prompt transport, and
+environment-variable allowlist.
 
 ## Route Skills
 

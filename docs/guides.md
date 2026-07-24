@@ -85,8 +85,8 @@ workers:
     environment_allowlist: []
 ```
 
-Built-in adapters are `codex`, `tcodex`, `cbc`, and `command`. The generic
-adapter requires a YAML command sequence:
+Built-in adapters are `codex`, `tcodex`, `claude`, `tclaude`, `opencode`,
+`cbc`, and `command`. The generic adapter requires a YAML command sequence:
 
 ```yaml
 workers:
@@ -95,6 +95,18 @@ workers:
     command: [custom-agent, --batch]
     model: default
     effort: default
+```
+
+OpenCode model names use `provider/model` form. Robert maps the worker's
+`effort` value to OpenCode's model variant:
+
+```yaml
+workers:
+  openai:
+    adapter: opencode
+    command: opencode
+    model: openai/gpt-5.4
+    effort: high
 ```
 
 ## External Skills

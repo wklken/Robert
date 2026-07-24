@@ -246,10 +246,20 @@ class OperationalCommandTests(unittest.TestCase):
     def test_worker_agents_are_discovered_from_adapter_modules(self):
         from robert_agent import worker_adapters
 
-        self.assertIn("cbc", worker_adapters.available_worker_agents())
-        self.assertIn("codex", worker_adapters.available_worker_agents())
-        self.assertEqual(worker_adapters._load_adapter("cbc").AGENT_NAME, "cbc")
-        self.assertEqual(worker_adapters._load_adapter("codex").AGENT_NAME, "codex")
+        for agent in [
+            "cbc",
+            "claude",
+            "codex",
+            "opencode",
+            "tclaude",
+            "tcodex",
+        ]:
+            with self.subTest(agent=agent):
+                self.assertIn(agent, worker_adapters.available_worker_agents())
+                self.assertEqual(
+                    worker_adapters._load_adapter(agent).AGENT_NAME,
+                    agent,
+                )
 
     def test_dispatch_builds_worker_command_with_configured_launcher(self):
         from robert_agent import dispatch
@@ -327,6 +337,92 @@ class OperationalCommandTests(unittest.TestCase):
             'model_reasoning_effort="high"',
         )
         self.assertLess(command.index("--config"), command.index("exec"))
+
+    def test_dispatch_builds_claude_family_worker_commands(self):
+        from robert_agent import dispatch
+        from robert_agent.worker_adapters.cbc import (
+            DEFAULT_DISALLOWED_WORKER_TOOLS,
+        )
+        prompt_path = self.root / "task" / "prompt.md"
+        prompt_path.parent.mkdir()
+        prompt = "claude prompt that must stay on stdin"
+        prompt_path.write_text(prompt, encoding="utf-8")
+        worktree = Path("/tmp/repo/.worktrees/dd-123")
+
+        for agent in ["claude", "tclaude"]:
+            with self.subTest(agent=agent):
+                command = dispatch.build_worker_command(
+                    prompt_path=prompt_path,
+                    worktree_path=worktree,
+                    model="claude-sonnet-4-6",
+                    reasoning_effort="high",
+                    worker_command=agent,
+                    worker_agent=agent,
+                )
+
+                self.assertEqual(command[:2], [agent, "-p"])
+                self.assertEqual(
+                    command[command.index("--model") + 1],
+                    "claude-sonnet-4-6",
+                )
+                self.assertEqual(
+                    command[command.index("--effort") + 1],
+                    "high",
+                )
+                self.assertEqual(
+                    command[command.index("--permission-mode") + 1],
+                    "bypassPermissions",
+                )
+                self.assertEqual(
+                    command[command.index("--disallowedTools") + 1],
+                    DEFAULT_DISALLOWED_WORKER_TOOLS,
+                )
+                self.assertEqual(
+                    command[command.index("--input-format") + 1],
+                    "text",
+                )
+                self.assertEqual(
+                    command[command.index("--output-format") + 1],
+                    "stream-json",
+                )
+                self.assertIn(str(prompt_path.parent), command)
+                self.assertIn(str(worktree), command)
+                self.assertNotIn(prompt, command)
+
+    def test_dispatch_builds_opencode_worker_command_with_stdin_prompt(self):
+        from robert_agent import dispatch
+        prompt_path = self.root / "task" / "prompt.md"
+        prompt_path.parent.mkdir()
+        prompt = "opencode prompt that must stay on stdin"
+        prompt_path.write_text(prompt, encoding="utf-8")
+        worktree = Path("/tmp/repo/.worktrees/dd-123")
+
+        command = dispatch.build_worker_command(
+            prompt_path=prompt_path,
+            worktree_path=worktree,
+            model="openai/gpt-5.4",
+            reasoning_effort="high",
+            worker_command="opencode",
+            worker_agent="opencode",
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "opencode",
+                "run",
+                "--model",
+                "openai/gpt-5.4",
+                "--variant",
+                "high",
+                "--format",
+                "json",
+                "--auto",
+                "--dir",
+                str(worktree),
+            ],
+        )
+        self.assertNotIn(prompt, command)
 
     def test_dispatch_splits_configured_launcher_command(self):
         from robert_agent import dispatch
