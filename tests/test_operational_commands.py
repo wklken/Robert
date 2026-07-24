@@ -203,10 +203,68 @@ class OperationalCommandTests(unittest.TestCase):
             result["commands"],
             [
                 "git fetch upstream master",
-                "git fetch upstream pull/707/head:review/pr-707-review-feature-pr",
-                "git worktree add /tmp/repo/.worktrees/review__pr-707-review-feature-pr review/pr-707-review-feature-pr",
+                "git fetch upstream +pull/707/head:refs/robert/reviews/pr-707",
+                "git worktree add /tmp/repo/.worktrees/review__pr-707-review-feature-pr -B review/pr-707-review-feature-pr refs/robert/reviews/pr-707",
             ],
         )
+
+    def test_review_worktree_refreshes_reused_branch_to_latest_pr_head(self):
+        from robert_agent import worktree
+        repo_root = self.root / "repo"
+        repo_root.mkdir()
+        worktree_root = repo_root / ".worktrees"
+        worktree_root.mkdir()
+        review_path = worktree_root / "review__pr-707-review-feature-pr"
+        calls = []
+
+        class Completed:
+            stdout = (
+                f"worktree {repo_root}\n"
+                "HEAD abc\n"
+                "branch refs/heads/master\n\n"
+                f"worktree {review_path}\n"
+                "HEAD old\n"
+                "branch refs/heads/review/pr-707-review-feature-pr\n\n"
+            )
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            return Completed()
+
+        original_run = worktree.subprocess.run
+        try:
+            worktree.subprocess.run = fake_run
+            result = worktree.plan_review_worktree(
+                repo_root=repo_root,
+                worktree_root=worktree_root,
+                source_number=707,
+                short_slug="Review Feature PR",
+                base_branch="master",
+                dry_run=False,
+            )
+        finally:
+            worktree.subprocess.run = original_run
+
+        self.assertEqual(result["mode"], "reuse_existing_worktree")
+        self.assertEqual(
+            [call[0] for call in calls],
+            [
+                ["git", "worktree", "list", "--porcelain"],
+                [
+                    "git",
+                    "fetch",
+                    "upstream",
+                    "+pull/707/head:refs/robert/reviews/pr-707",
+                ],
+                [
+                    "git",
+                    "reset",
+                    "--hard",
+                    "refs/robert/reviews/pr-707",
+                ],
+            ],
+        )
+        self.assertEqual(calls[2][1]["cwd"], review_path)
 
     def test_dispatch_builds_worker_command_with_prompt_and_worktree(self):
         from robert_agent import dispatch
@@ -3489,6 +3547,72 @@ class OperationalCommandTests(unittest.TestCase):
                 "https://github.com/x/y/issues/1#issuecomment-987",
             ),
         )
+
+    def test_publish_revalidates_comment_target_against_audited_scope(self):
+        from robert_agent import publish
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                (
+                    json.dumps(
+                        {
+                            "audit": {
+                                "status": "accepted",
+                                "action_scope": {
+                                    "repo": "x/y",
+                                    "sources": [
+                                        {
+                                            "source_type": "issue",
+                                            "number": 1,
+                                        }
+                                    ],
+                                },
+                            }
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE github_actions
+                SET target_url = 'https://github.com/other/repo/issues/999',
+                    metadata_json = ?
+                WHERE action_id = 'action-1'
+                """,
+                (
+                    json.dumps(
+                        {
+                            "body": self._dd_comment_body("ready"),
+                            "target_url": "https://github.com/other/repo/issues/999",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        calls = []
+
+        class Completed:
+            returncode = 0
+            stdout = "{}"
+            stderr = ""
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return Completed()
+
+        result = publish.publish_ready_actions(
+            db_path,
+            dry_run=False,
+            run_command=fake_run,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "publish_failed")
+        self.assertEqual(calls, [])
+        self.assertIn("action scope", result["failures"][0]["safe_error"])
 
     def test_publish_ready_comment_reuses_existing_comment_with_same_marker(self):
         from robert_agent import publish

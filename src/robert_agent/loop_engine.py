@@ -179,9 +179,12 @@ def run_loop(
     runner=run_once_module.run_once,
 ):
     started = time.monotonic()
+    if max_publish_actions < 0:
+        raise ValueError("max_publish_actions must be at least 0")
     db_path, repo_ids = load_config_scope(config_path, skip_external=skip_external)
     cycle_results = []
     stop_reason = "max_cycles"
+    publish_actions_used = 0
     with closing(_connect(db_path)) as conn, conn:
         if not has_runnable_local_work(conn, repo_ids=repo_ids):
             summary = {
@@ -195,7 +198,8 @@ def run_loop(
                     "max_seconds": max_seconds,
                     "max_dispatches": max_dispatches,
                     "max_publish_actions": max_publish_actions,
-                    "max_publish_actions_enforcement": "not_enforced",
+                    "max_publish_actions_used": publish_actions_used,
+                    "max_publish_actions_enforcement": "enforced",
                 },
                 "db_path": str(db_path),
             }
@@ -206,6 +210,10 @@ def run_loop(
         if time.monotonic() - started >= max_seconds:
             stop_reason = "max_seconds"
             break
+        remaining_publish_actions = max_publish_actions - publish_actions_used
+        if not skip_publish and remaining_publish_actions <= 0:
+            stop_reason = "max_publish_actions"
+            break
         with closing(_connect(db_path)) as conn, conn:
             before = snapshot_progress(conn)
         result = runner(
@@ -215,11 +223,19 @@ def run_loop(
             skip_external=skip_external,
             skip_publish=skip_publish,
             max_dispatches=max_dispatches,
+            max_publish_actions=remaining_publish_actions,
         )
         cycle_results.append(result)
         if not result.get("ok"):
             stop_reason = "run_once_failed"
             break
+        publish_actions_used += min(
+            remaining_publish_actions,
+            max(
+                0,
+                int((result.get("publish_result") or {}).get("pending_count", 0)),
+            ),
+        )
         with closing(_connect(db_path)) as conn, conn:
             after = snapshot_progress(conn)
             diff = diff_progress(before, after)
@@ -227,6 +243,9 @@ def run_loop(
         cycle_results[-1] = {**result, "progress": diff}
         if not diff["changed"]:
             stop_reason = "no_progress"
+            break
+        if not skip_publish and publish_actions_used >= max_publish_actions:
+            stop_reason = "max_publish_actions"
             break
         if not runnable:
             stop_reason = "no_runnable_work"
@@ -244,7 +263,8 @@ def run_loop(
             "max_seconds": max_seconds,
             "max_dispatches": max_dispatches,
             "max_publish_actions": max_publish_actions,
-            "max_publish_actions_enforcement": "not_enforced",
+            "max_publish_actions_used": publish_actions_used,
+            "max_publish_actions_enforcement": "enforced",
         },
         "db_path": str(db_path),
     }

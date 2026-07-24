@@ -68,6 +68,12 @@ repos:
                         ]
                     )
                 )
+            if args[:3] == [
+                "gh",
+                "api",
+                "repos/example/repo/issues/77/comments",
+            ]:
+                return Completed("[]")
             if args[:3] == ["gh", "api", "notifications"]:
                 return Completed("[]")
             raise AssertionError(args)

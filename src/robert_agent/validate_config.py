@@ -272,7 +272,10 @@ def _normalize_daemon_config(config):
     for key, default in DAEMON_DEFAULTS.items():
         raw_value = daemon_source.get(key, default)
         if key in DAEMON_BOOLEAN_FIELDS:
-            daemon[key] = bool(raw_value)
+            if not isinstance(raw_value, bool):
+                label = field_labels.get(key, f"daemon.{key}")
+                raise ValueError(f"{label} must be a boolean")
+            daemon[key] = raw_value
         else:
             value = int(raw_value)
             if value < 1:

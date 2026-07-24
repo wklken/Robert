@@ -33,11 +33,17 @@ def _dd_pr_body(text, task_id="task-1", issue_number="123"):
     )
 
 
-def _open_pr_action(task_id="task-1", issue_number="123", pr_number="9"):
+def _open_pr_action(
+    task_id="task-1",
+    issue_number="123",
+    pr_number="9",
+    branch=None,
+):
+    branch = branch or f"codex/dd-{issue_number}-task"
     return {
         "type": "open_pr",
         "repo": "example/backend",
-        "head": f"codex/dd-{issue_number}-task",
+        "head": branch,
         "base": "master",
         "title": f"Fix issue {issue_number}",
         "body": _dd_pr_body("Opened PR", task_id=task_id, issue_number=issue_number),
@@ -45,14 +51,27 @@ def _open_pr_action(task_id="task-1", issue_number="123", pr_number="9"):
     }
 
 
-def _new_pr_actions(task_id="task-1", issue_number="123", pr_number="9"):
+def _new_pr_actions(
+    task_id="task-1",
+    issue_number="123",
+    pr_number="9",
+    worktree_path=None,
+    branch=None,
+):
+    branch = branch or f"codex/dd-{issue_number}-task"
+    worktree_path = worktree_path or f"/tmp/.worktrees/codex__dd-{issue_number}-task"
     return [
         {
             "type": "push_existing_pr",
-            "worktree_path": f"/tmp/.worktrees/codex__dd-{issue_number}-task",
-            "branch": f"codex/dd-{issue_number}-task",
+            "worktree_path": worktree_path,
+            "branch": branch,
         },
-        _open_pr_action(task_id=task_id, issue_number=issue_number, pr_number=pr_number),
+        _open_pr_action(
+            task_id=task_id,
+            issue_number=issue_number,
+            pr_number=pr_number,
+            branch=branch,
+        ),
     ]
 
 
@@ -138,6 +157,32 @@ repos:
                 }
             ),
             encoding="utf-8",
+        )
+
+    def _new_pr_actions_for_attempt(
+        self,
+        db_path,
+        task_id,
+        issue_number="123",
+        pr_number="9",
+    ):
+        with closing(sqlite3.connect(db_path)) as conn:
+            worktree_path, branch = conn.execute(
+                """
+                SELECT worktree_path, branch_name
+                FROM attempts
+                WHERE task_id = ?
+                ORDER BY attempt_no DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+        return _new_pr_actions(
+            task_id=task_id,
+            issue_number=issue_number,
+            pr_number=pr_number,
+            worktree_path=worktree_path,
+            branch=branch,
         )
 
     def _seed_active_pr_task(self, pr_number):
@@ -1469,7 +1514,10 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "opened PR",
@@ -1532,7 +1580,10 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [],
                 "handoff": "opened PR without verification",
@@ -1621,7 +1672,10 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "opened PR",
@@ -1847,6 +1901,92 @@ repos:
         self.assertEqual(workstream, ("completed", None))
         self.assertEqual(relationship, "consumed")
         self.assertEqual(publish_step["finalized_task_count"], 1)
+
+    def test_audit_rejects_comment_target_outside_task_repository(self):
+        from robert_agent.worker import result
+        from robert_agent import run_once
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "comment-analysis-scope",
+                            "number": 123,
+                            "source_type": "issue",
+                            "event_type": "comment",
+                            "actor_login": "wklken",
+                            "body": "@robert-bot please analyze this",
+                            "intent": "analysis",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        first = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
+        )
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            task_id, attempt_id = conn.execute(
+                "SELECT task_id, attempt_id FROM attempts"
+            ).fetchone()
+        record = result.record_result(
+            db_path,
+            {
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "output_type": "comment_analysis",
+                "planned_github_actions": [
+                    {
+                        "type": "comment",
+                        "target_url": "https://github.com/other/repo/issues/999",
+                        "body": _dd_comment_body(
+                            "Analysis is ready",
+                            task_id=task_id,
+                            attempt_id=attempt_id,
+                            fingerprints="comment:comment-analysis-scope",
+                        ),
+                    }
+                ],
+                "consumed_event_fingerprints": [
+                    "comment:comment-analysis-scope"
+                ],
+                "verification": [],
+                "handoff": "ready",
+                "used_skills": ["fast-code-path"],
+            },
+        )
+        self.assertTrue(record["ok"], record)
+
+        second = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            dry_run=True,
+            skip_external=True,
+            skip_publish=True,
+        )
+
+        self.assertTrue(second["ok"], second)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            task_lifecycle = conn.execute(
+                "SELECT lifecycle FROM tasks WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()[0]
+            metadata = json.loads(
+                conn.execute(
+                    "SELECT metadata_json FROM worker_results WHERE result_id = ?",
+                    (record["result_id"],),
+                ).fetchone()[0]
+            )
+        self.assertEqual(task_lifecycle, "failed")
+        self.assertEqual(metadata["audit"]["status"], "policy_violation")
+        self.assertEqual(metadata["audit"]["violations"], ["action_scope"])
 
     def test_completed_consumed_trigger_is_not_reprocessed(self):
         from robert_agent.worker import result
@@ -2426,7 +2566,10 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "opened PR",
@@ -2650,7 +2793,10 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "opened PR",
@@ -2698,7 +2844,7 @@ repos:
         self.assertEqual(action_status, ("accepted", "not_published"))
         self.assertEqual(audit_metadata["status"], "accepted")
 
-    def test_open_pr_result_materializes_pr_workstream_linked_to_origin_issue(self):
+    def test_open_pr_result_materializes_published_pr_target_linked_to_origin_issue(self):
         from robert_agent.worker import result
         from robert_agent import run_once
         first = run_once.run_once(
@@ -2721,7 +2867,10 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "opened PR",
@@ -2731,7 +2880,16 @@ repos:
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
-                "UPDATE github_actions SET publish_status = 'published' WHERE result_id = ?",
+                """
+                UPDATE github_actions
+                SET publish_status = 'published',
+                    target_url = CASE
+                      WHEN action_type = 'open_pr'
+                      THEN 'https://github.com/example/backend/pull/10'
+                      ELSE target_url
+                    END
+                WHERE result_id = ?
+                """,
                 (record["result_id"],),
             )
 
@@ -2748,13 +2906,13 @@ repos:
                 """
                 SELECT workstream_id, origin_workstream_id
                 FROM workstreams
-                WHERE workstream_id = 'github:example/backend!9'
+                WHERE workstream_id = 'github:example/backend!10'
                 """
             ).fetchone()
         self.assertEqual(
             pr_workstream,
             (
-                "github:example/backend!9",
+                "github:example/backend!10",
                 "github:example/backend#123",
             ),
         )
@@ -2835,7 +2993,8 @@ repos:
                 "task_id": issue_task_id,
                 "attempt_id": issue_attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
                     task_id=issue_task_id,
                     issue_number="123",
                     pr_number="456",
@@ -3748,7 +3907,10 @@ repos:
                 "task_id": parent_task_id,
                 "attempt_id": parent_attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=parent_task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    parent_task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "done",
@@ -3829,7 +3991,10 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "opened PR",
@@ -5098,6 +5263,85 @@ repos:
             "failed_worker_process_exited",
         )
         self.assertEqual(notification, ("worker_process_exited", "recorded"))
+
+    def test_worker_timeout_seconds_caps_attempt_runtime(self):
+        from robert_agent import run_once
+        first = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
+        )
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        old = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            task_id, attempt_id = conn.execute(
+                "SELECT task_id, attempt_id FROM attempts"
+            ).fetchone()
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                """
+                UPDATE attempts
+                SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ?
+                WHERE attempt_id = ?
+                """,
+                (
+                    old,
+                    old,
+                    json.dumps(
+                        {
+                            "dispatch": {
+                                "pid": 12345,
+                                "worker_launch": {"timeout_seconds": 60},
+                            }
+                        },
+                        sort_keys=True,
+                    ),
+                    attempt_id,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO worker_phases(
+                  phase_id, attempt_id, phase, status, summary, next_step, created_at
+                )
+                VALUES ('phase-worker-timeout', ?, 'prepare', 'running', 'worker started', '', ?)
+                """,
+                (attempt_id, old),
+            )
+
+        signals = []
+        original_kill = run_once.os.kill
+
+        def fake_kill(pid, sig):
+            signals.append((pid, sig))
+
+        try:
+            run_once.os.kill = fake_kill
+            second = run_once.run_once(
+                self.config_path,
+                workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+                dry_run=False,
+                skip_external=True,
+            )
+        finally:
+            run_once.os.kill = original_kill
+
+        self.assertTrue(second["ok"], second)
+        self.assertEqual(signals, [(12345, 0), (12345, run_once.signal.SIGTERM)])
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            attempt_status, failure_json = conn.execute(
+                "SELECT status, failure_json FROM attempts WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+        self.assertEqual(attempt_status, "failed")
+        self.assertEqual(json.loads(failure_json)["status"], "failed_timeout")
+        self.assertEqual(json.loads(failure_json)["timeout_seconds"], 60)
 
     def test_stale_attempt_later_hard_timeout_signals_pid_and_releases_workstream(self):
         from robert_agent import run_once
@@ -6422,7 +6666,10 @@ raise SystemExit(0 if record["ok"] else 1)
                 "task_id": parent_task_id,
                 "attempt_id": parent_attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=parent_task_id),
+                "planned_github_actions": self._new_pr_actions_for_attempt(
+                    db_path,
+                    parent_task_id,
+                ),
                 "consumed_event_fingerprints": ["comment:comment-1"],
                 "verification": [_verification_evidence()],
                 "handoff": "done",

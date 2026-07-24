@@ -445,6 +445,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 written = openclaw.write_plugin(
                     args.plugin_dir,
                     force=args.force,
+                    dry_run=args.dry_run,
                 )
                 if not written["ok"]:
                     return _emit_and_code(written, args.output)

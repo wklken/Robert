@@ -749,6 +749,24 @@ repos:
         self.assertEqual(result["daemon"]["local_poll_seconds"], 9)
         self.assertTrue(result["daemon"]["run_on_start"])
 
+    def test_config_rejects_quoted_daemon_boolean(self):
+        from robert_agent import validate_config
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + '\ndaemon:\n  enabled: "false"\n',
+            encoding="utf-8",
+        )
+
+        result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "failed_config")
+        self.assertEqual(
+            result["safe_error"],
+            "invalid config: daemon.enabled must be a boolean",
+        )
+
     def test_config_rejects_nonpositive_daemon_setting(self):
         from robert_agent import validate_config
         good_config_path = self.write_config()

@@ -683,9 +683,16 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
                     args,
                     """[
                       {
-                        "id": "assign-event-1",
+                        "id": "assign-event-old",
                         "event": "assigned",
                         "created_at": "2026-06-16T00:01:00Z",
+                        "actor": {"login": "wklken"},
+                        "assignee": {"login": "robert-bot"}
+                      },
+                      {
+                        "id": "assign-event-new",
+                        "event": "assigned",
+                        "created_at": "2026-06-16T00:02:00Z",
                         "actor": {"login": "wklken"},
                         "assignee": {"login": "robert-bot"}
                       }
@@ -703,7 +710,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
 
         self.assertEqual(events[0]["assignment_actor_login"], "wklken")
         self.assertEqual(events[0]["assigned_to"], "robert-bot")
-        self.assertEqual(events[0]["event_fingerprint"], "assigned:assign-event-1")
+        self.assertEqual(events[0]["event_fingerprint"], "assigned:assign-event-new")
         self.assertEqual(decisions[0]["authorization_status"], "authorized_trigger")
 
     def test_notification_assignment_reuses_assignment_fingerprint(self):
@@ -892,6 +899,12 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
                       "head": {"ref": "codex/dd-123-fix-timeout"}
                     }""",
                 )
+            if tuple(args[:3]) in {
+                ("gh", "api", "repos/example/backend/issues/601/comments"),
+                ("gh", "api", "repos/example/backend/pulls/601/reviews"),
+                ("gh", "api", "repos/example/backend/pulls/601/comments"),
+            }:
+                return _Completed(args, "[]")
             if args[:3] == ["gh", "api", "notifications"]:
                 return _Completed(args, "[]")
             raise AssertionError(args)
@@ -905,7 +918,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[0]["existing_pr_head_branch"], "codex/dd-123-fix-timeout")
         self.assertEqual(events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent")
 
-    def test_live_pr_followup_uses_latest_trusted_comment(self):
+    def test_live_pr_followup_collects_all_trusted_comments(self):
         from robert_agent import discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
@@ -966,10 +979,25 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         raw_events = discover.collect_live_events(REPO_CONFIG, runner=fake_runner)
         events = discover.normalize_events(raw_events, REPO_CONFIG)
 
-        self.assertEqual(events[0]["event_fingerprint"], "comment:comment-new")
-        self.assertEqual(events[0]["body"], "@robert-bot handle the latest review feedback")
-        self.assertEqual(events[0]["workstream_id"], "github:example/backend!603")
-        self.assertEqual(events[0]["existing_pr_head_branch"], "codex/issue-2884-fix-operator")
+        self.assertEqual(
+            [event["event_fingerprint"] for event in events],
+            ["comment:comment-old", "comment:comment-new"],
+        )
+        self.assertEqual(
+            [event["body"] for event in events],
+            [
+                "@robert-bot old follow-up",
+                "@robert-bot handle the latest review feedback",
+            ],
+        )
+        self.assertEqual(
+            {event["workstream_id"] for event in events},
+            {"github:example/backend!603"},
+        )
+        self.assertEqual(
+            {event["existing_pr_head_branch"] for event in events},
+            {"codex/issue-2884-fix-operator"},
+        )
 
     def test_live_known_pr_workstream_accepts_collaborator_followup(self):
         from robert_agent import authorize
@@ -1160,6 +1188,12 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
                       "user": {"login": "robert-bot"}
                     }""",
                 )
+            if tuple(args[:3]) in {
+                ("gh", "api", "repos/example/backend/issues/602/comments"),
+                ("gh", "api", "repos/example/backend/pulls/602/reviews"),
+                ("gh", "api", "repos/example/backend/pulls/602/comments"),
+            }:
+                return _Completed(args, "[]")
             if args[:3] == ["gh", "api", "notifications"]:
                 return _Completed(args, "[]")
             raise AssertionError(args)

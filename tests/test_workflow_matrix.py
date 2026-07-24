@@ -23,11 +23,17 @@ def _dd_pr_body(text, task_id="task-1", issue_number="101"):
     )
 
 
-def _open_pr_action(task_id="task-1", issue_number="101", pr_number="909"):
+def _open_pr_action(
+    task_id="task-1",
+    issue_number="101",
+    pr_number="909",
+    branch=None,
+):
+    branch = branch or f"codex/dd-{issue_number}-fix"
     return {
         "type": "open_pr",
         "repo": "example/backend",
-        "head": f"codex/dd-{issue_number}-fix",
+        "head": branch,
         "base": "master",
         "title": f"Fix issue {issue_number}",
         "body": _dd_pr_body("Opened PR", task_id=task_id, issue_number=issue_number),
@@ -35,14 +41,27 @@ def _open_pr_action(task_id="task-1", issue_number="101", pr_number="909"):
     }
 
 
-def _new_pr_actions(task_id="task-1", issue_number="101", pr_number="909"):
+def _new_pr_actions(
+    task_id="task-1",
+    issue_number="101",
+    pr_number="909",
+    worktree_path=None,
+    branch=None,
+):
+    branch = branch or f"codex/dd-{issue_number}-fix"
+    worktree_path = worktree_path or f"/tmp/.worktrees/codex__dd-{issue_number}-fix"
     return [
         {
             "type": "push_existing_pr",
-            "worktree_path": f"/tmp/.worktrees/codex__dd-{issue_number}-fix",
-            "branch": f"codex/dd-{issue_number}-fix",
+            "worktree_path": worktree_path,
+            "branch": branch,
         },
-        _open_pr_action(task_id=task_id, issue_number=issue_number, pr_number=pr_number),
+        _open_pr_action(
+            task_id=task_id,
+            issue_number=issue_number,
+            pr_number=pr_number,
+            branch=branch,
+        ),
     ]
 
 
@@ -125,6 +144,30 @@ repos:
     def fetchall(self, sql, params=()):
         with closing(sqlite3.connect(self.db_path)) as conn:
             return conn.execute(sql, params).fetchall()
+
+    def new_pr_actions_for_attempt(
+        self,
+        task_id,
+        issue_number="101",
+        pr_number="909",
+    ):
+        worktree_path, branch = self.fetchone(
+            """
+            SELECT worktree_path, branch_name
+            FROM attempts
+            WHERE task_id = ?
+            ORDER BY attempt_no DESC
+            LIMIT 1
+            """,
+            (task_id,),
+        )
+        return _new_pr_actions(
+            task_id=task_id,
+            issue_number=issue_number,
+            pr_number=pr_number,
+            worktree_path=worktree_path,
+            branch=branch,
+        )
 
     def create_review_pr_workstream(self):
         result = self.run_fixture(
@@ -216,7 +259,7 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self.new_pr_actions_for_attempt(task_id),
                 "consumed_event_fingerprints": ["assigned:assign-issue-101"],
                 "verification": _passed_verification(),
                 "handoff": "opened PR",
@@ -320,7 +363,7 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": _new_pr_actions(task_id=task_id),
+                "planned_github_actions": self.new_pr_actions_for_attempt(task_id),
                 "consumed_event_fingerprints": ["assigned:assign-issue-101"],
                 "verification": _passed_verification(),
                 "handoff": "opened PR",
@@ -348,7 +391,7 @@ repos:
                     "body": "@robert-bot please address this review",
                     "intent": "bug_fix",
                     "has_open_dd_pr": True,
-                    "existing_pr_head_branch": "codex/dd-101-fix",
+                    "existing_pr_head_branch": "codex/dd-101-task",
                     "metadata": {
                         "dd_workstream": {
                             "origin_workstream_id": "github:example/backend#101",
@@ -379,7 +422,7 @@ repos:
                 "github:example/backend!909",
                 "update-existing-pr",
                 "update_existing_pr",
-                "codex/dd-101-fix",
+                "codex/dd-101-task",
             ),
         )
         self.assertIn("push_existing_pr", prompt)
