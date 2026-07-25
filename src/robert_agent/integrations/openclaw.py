@@ -175,7 +175,7 @@ export default definePluginEntry({
 '''
 
 
-def write_plugin(plugin_dir, force=False):
+def write_plugin(plugin_dir, force=False, dry_run=False):
     path = Path(plugin_dir).expanduser()
     if path.exists():
         if not force:
@@ -189,8 +189,6 @@ def write_plugin(plugin_dir, force=False):
                     "robert openclaw status to inspect the installed plugin."
                 ),
             }
-        shutil.rmtree(path)
-    path.mkdir(parents=True)
     package = {
         "name": "openclaw-robert-commands-local",
         "version": "0.1.0",
@@ -225,6 +223,16 @@ def write_plugin(plugin_dir, force=False):
         + "\n",
         "index.js": _plugin_source(),
     }
+    if dry_run:
+        return {
+            "ok": True,
+            "status": "planned",
+            "plugin_dir": str(path),
+            "files": sorted(files),
+        }
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
     for name, content in files.items():
         (path / name).write_text(content, encoding="utf-8")
     return {

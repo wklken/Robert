@@ -19,18 +19,29 @@ def classify_attempt(
     now=None,
     stale_after_minutes=20,
     hard_timeout_minutes=90,
+    hard_timeout_seconds=None,
 ):
     now = now or datetime.now(timezone.utc)
     heartbeat_at = _parse_time(heartbeat_at)
     started_at = _parse_time(started_at)
-    heartbeat_age = (now - heartbeat_at).total_seconds() / 60
-    runtime_age = (now - started_at).total_seconds() / 60
+    heartbeat_age_seconds = (now - heartbeat_at).total_seconds()
+    runtime_seconds = (now - started_at).total_seconds()
+    heartbeat_age = heartbeat_age_seconds / 60
+    runtime_age = runtime_seconds / 60
+    global_timeout_seconds = hard_timeout_minutes * 60
+    timeout_seconds = global_timeout_seconds
+    if hard_timeout_seconds is not None:
+        timeout_seconds = min(global_timeout_seconds, hard_timeout_seconds)
 
-    if runtime_age >= hard_timeout_minutes or heartbeat_age >= hard_timeout_minutes:
+    if (
+        runtime_seconds >= timeout_seconds
+        or heartbeat_age_seconds >= global_timeout_seconds
+    ):
         return {
             "ok": False,
             "status": "failed_timeout",
             "terminate": True,
+            "timeout_seconds": timeout_seconds,
             "heartbeat_age_minutes": heartbeat_age,
             "runtime_minutes": runtime_age,
         }

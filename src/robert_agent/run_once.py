@@ -607,12 +607,21 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
         if not heartbeat_at or not started_at:
             continue
         metadata = _json_object(metadata_json)
+        worker_launch = (metadata.get("dispatch") or {}).get("worker_launch") or {}
+        worker_timeout_seconds = worker_launch.get("timeout_seconds")
+        try:
+            worker_timeout_seconds = int(worker_timeout_seconds)
+        except (TypeError, ValueError):
+            worker_timeout_seconds = None
+        if worker_timeout_seconds is not None and worker_timeout_seconds < 1:
+            worker_timeout_seconds = None
         status = supervise.classify_attempt(
             heartbeat_at=heartbeat_at,
             started_at=started_at,
             now=now_dt,
             stale_after_minutes=config_result.get("stale_after_minutes", 20),
             hard_timeout_minutes=config_result.get("hard_timeout_minutes", 90),
+            hard_timeout_seconds=worker_timeout_seconds,
         )
         process_status = {"status": "not_checked"}
         if (
@@ -3356,11 +3365,10 @@ def _load_result_payload(conn, result_row):
         (result_id,),
     ):
         action = json.loads(row[0])
-        if row[1] and not action.get("target_url"):
+        if row[1]:
             action["target_url"] = row[1]
-        if row[1] and not action.get("url"):
             action["url"] = row[1]
-        if row[2] and not action.get("id"):
+        if row[2]:
             action["id"] = row[2]
         actions.append(action)
     metadata = json.loads(metadata_json) if metadata_json else {}
@@ -3387,6 +3395,54 @@ def _load_result_payload(conn, result_row):
             [],
         ),
         "operator_question": metadata.get("operator_question"),
+    }
+
+
+def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
+    row = conn.execute(
+        """
+        SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name
+        FROM tasks t
+        JOIN workstreams w ON w.workstream_id = t.workstream_id
+        JOIN repos r ON r.repo_id = w.repo_id
+        JOIN attempts a ON a.attempt_id = ?
+        WHERE t.task_id = ?
+          AND t.workstream_id = ?
+        """,
+        (attempt_id, task_id, workstream_id),
+    ).fetchone()
+    if not row:
+        return None
+    sources = [
+        {
+            "source_type": source_type,
+            "number": number,
+        }
+        for source_type, number in conn.execute(
+            """
+            SELECT DISTINCT gs.source_type, gs.number
+            FROM github_sources gs
+            WHERE gs.source_id IN (
+              SELECT primary_source_id
+              FROM workstreams
+              WHERE workstream_id = ?
+              UNION
+              SELECT source_id
+              FROM workstream_sources
+              WHERE workstream_id = ?
+            )
+            ORDER BY gs.source_type, gs.number
+            """,
+            (workstream_id, workstream_id),
+        )
+    ]
+    return {
+        "repo": row[0],
+        "base_branch": row[1],
+        "worktree_path": row[2] or "",
+        "branch_name": row[3] or "",
+        "remote": "origin",
+        "sources": sources,
     }
 
 
@@ -3956,6 +4012,12 @@ def _audit_completed_results(
         ).fetchone()
         origin_type = origin_row[0] if origin_row else "github"
         _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
+        action_scope = _action_scope_for_result(
+            conn,
+            payload["task_id"],
+            payload["attempt_id"],
+            workstream_id,
+        )
         audit = audit_result.audit_result(
             payload,
             allowed_actions,
@@ -3964,6 +4026,7 @@ def _audit_completed_results(
             expected_output=expected_output,
             verification_policy=verification_policy,
             origin_type=origin_type,
+            action_scope=action_scope,
         )
         _record_result_audit(conn, payload["result_id"], audit)
         wakeup.consume_wakeups_for_results(
@@ -4087,8 +4150,20 @@ def _finalize_published_results(
     return finalized
 
 
-def _publish_ready_actions_for_repo(db_path, dry_run, repo_id, repo_count):
-    return publish.publish_ready_actions(db_path, dry_run=dry_run, repo_id=repo_id)
+def _publish_ready_actions_for_repo(
+    db_path,
+    dry_run,
+    repo_id,
+    repo_count,
+    limit=None,
+):
+    kwargs = {
+        "dry_run": dry_run,
+        "repo_id": repo_id,
+    }
+    if limit is not None:
+        kwargs["limit"] = limit
+    return publish.publish_ready_actions(db_path, **kwargs)
 
 
 def _aggregate_repo_step_status(conn, run_id, step_key):
@@ -4134,6 +4209,7 @@ def _run_repo_pipeline(
     notification_hints,
     dispatch_queue,
     dispatch_budget,
+    publish_budget,
     prompt_paths,
 ):
     summary = {
@@ -4321,15 +4397,34 @@ def _run_repo_pipeline(
         else:
             _mark_repo_run_step(conn, run_id, repo_id, "publish_actions", "running", run_now)
             conn.commit()
-            try:
-                publish_result = _publish_ready_actions_for_repo(
-                    db_path,
-                    dry_run,
-                    repo_id,
-                    repo_count,
-                )
-            except Exception as exc:
-                publish_result = _safe_publish_error(exc)
+            publish_limit = publish_budget["remaining"]
+            if publish_limit == 0:
+                publish_result = {
+                    "ok": True,
+                    "status": "budget_exhausted",
+                    "pending_count": 0,
+                    "published_count": 0,
+                    "deduplicated_count": 0,
+                    "skipped_count": 0,
+                    "failed_count": 0,
+                }
+            else:
+                try:
+                    publish_result = _publish_ready_actions_for_repo(
+                        db_path,
+                        dry_run,
+                        repo_id,
+                        repo_count,
+                        limit=publish_limit,
+                    )
+                except Exception as exc:
+                    publish_result = _safe_publish_error(exc)
+                if publish_limit is not None:
+                    publish_budget["remaining"] = max(
+                        0,
+                        publish_limit
+                        - int(publish_result.get("pending_count", 0)),
+                    )
             publish_failed = not publish_result["ok"]
             try:
                 finalized_after_publish_count = _finalize_published_results(
@@ -4813,6 +4908,7 @@ def run_once(
     skip_publish=False,
     discovery_runner=None,
     max_dispatches=None,
+    max_publish_actions=None,
 ):
     config_result = validate_config.validate_config(config_path, skip_external=skip_external)
     if not config_result["ok"]:
@@ -4920,6 +5016,13 @@ def run_once(
         if max_dispatches is not None:
             capacity_remaining = min(capacity_remaining, max(0, int(max_dispatches)))
         dispatch_budget = {"remaining": capacity_remaining}
+        publish_budget = {
+            "remaining": (
+                None
+                if max_publish_actions is None
+                else max(0, int(max_publish_actions))
+            )
+        }
 
         _mark_run_step(conn, run_id, "repo_pipelines", "running", run_now)
         repo_summaries = []
@@ -4945,6 +5048,7 @@ def run_once(
                 notification_hints=notification_hints,
                 dispatch_queue=dispatch_queue,
                 dispatch_budget=dispatch_budget,
+                publish_budget=publish_budget,
                 prompt_paths=prompt_paths,
             )
             repo_summaries.append(summary)
@@ -5358,6 +5462,7 @@ def main(argv=None):
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-publish", action="store_true")
     parser.add_argument("--max-dispatches", type=int)
+    parser.add_argument("--max-publish-actions", type=int)
     args = parser.parse_args(argv)
     result = run_once(
         args.config,
@@ -5367,6 +5472,7 @@ def main(argv=None):
         skip_external=args.skip_external,
         skip_publish=args.skip_publish,
         max_dispatches=args.max_dispatches,
+        max_publish_actions=args.max_publish_actions,
     )
     return emit(result, 0 if result.get("ok") else 3)
 

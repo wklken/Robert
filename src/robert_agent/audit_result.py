@@ -3,6 +3,8 @@ import argparse
 import json
 import re
 import sys
+from pathlib import Path
+from urllib.parse import urlparse
 
 from robert_agent.common import emit
 from robert_agent import redaction
@@ -127,6 +129,90 @@ def _audit_publisher_requirements(actions):
             missing = _missing_fields(action, ["worktree_path", "branch"])
             if missing:
                 return f"push_existing_pr action missing fields: {missing}"
+    return None
+
+
+def _github_source_target(value):
+    parsed = urlparse(value or "")
+    if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 4 or parts[2] not in {"issues", "pull"}:
+        return None
+    try:
+        number = int(parts[3])
+    except ValueError:
+        return None
+    source_type = "issue" if parts[2] == "issues" else "pull_request"
+    return f"{parts[0]}/{parts[1]}", source_type, number
+
+
+def _canonical_path(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        return str(Path(value).expanduser().resolve())
+    except (OSError, RuntimeError):
+        return ""
+
+
+def action_scope_violation(actions, action_scope):
+    if action_scope is None:
+        return None
+    if not isinstance(action_scope, dict):
+        return "action scope must be an object"
+    scoped_repo = action_scope.get("repo", "")
+    raw_sources = action_scope.get("sources", [])
+    if not isinstance(raw_sources, list):
+        return "action scope sources must be a list"
+    scoped_sources = {
+        (source.get("source_type"), source.get("number"))
+        for source in raw_sources
+        if isinstance(source, dict)
+    }
+    for action in actions:
+        action_type = action.get("type")
+        if action_type == "comment":
+            target = _github_source_target(_string_value(action, "target_url", "url"))
+            if target is None:
+                return "comment target is not a GitHub issue or pull request"
+            repo, source_type, number = target
+            if scoped_repo and repo.lower() != scoped_repo.lower():
+                return f"comment target repository {repo} is outside {scoped_repo}"
+            if scoped_sources and (source_type, number) not in scoped_sources:
+                return f"comment target {source_type} #{number} is outside the workstream"
+            continue
+        if action_type == "open_pr":
+            repo = _string_value(action, "repo")
+            if scoped_repo and repo.lower() != scoped_repo.lower():
+                return f"open_pr repository {repo} is outside {scoped_repo}"
+            scoped_base = action_scope.get("base_branch", "")
+            if scoped_base and _string_value(action, "base") != scoped_base:
+                return f"open_pr base branch is outside {scoped_base}"
+            scoped_branch = action_scope.get("branch_name", "")
+            head = _string_value(action, "head").split(":", 1)[-1]
+            if scoped_branch and head != scoped_branch:
+                return f"open_pr head branch is outside {scoped_branch}"
+            target_url = _string_value(action, "target_url", "url")
+            if target_url:
+                target = _github_source_target(target_url)
+                if target is None or target[1] != "pull_request":
+                    return "open_pr target is not a GitHub pull request"
+                if scoped_repo and target[0].lower() != scoped_repo.lower():
+                    return f"open_pr target repository {target[0]} is outside {scoped_repo}"
+            continue
+        if action_type == "push_existing_pr":
+            scoped_worktree = _canonical_path(action_scope.get("worktree_path"))
+            worktree = _canonical_path(_string_value(action, "worktree_path"))
+            if scoped_worktree and worktree != scoped_worktree:
+                return "push_existing_pr worktree is outside the assigned worktree"
+            scoped_branch = action_scope.get("branch_name", "")
+            if scoped_branch and _string_value(action, "branch") != scoped_branch:
+                return f"push_existing_pr branch is outside {scoped_branch}"
+            scoped_remote = action_scope.get("remote", "origin")
+            remote = _string_value(action, "remote") or "origin"
+            if remote != scoped_remote:
+                return f"push_existing_pr remote is outside {scoped_remote}"
     return None
 
 
@@ -343,6 +429,7 @@ def audit_result(
     expected_output=None,
     verification_policy=None,
     origin_type="github",
+    action_scope=None,
 ):
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):
@@ -396,6 +483,14 @@ def audit_result(
             "ok": False,
             "status": "policy_violation",
             "violations": ["web_origin_github_action"],
+        }
+    scope_violation = action_scope_violation(actions, action_scope)
+    if scope_violation:
+        return {
+            "ok": False,
+            "status": "policy_violation",
+            "violations": ["action_scope"],
+            "safe_error": scope_violation,
         }
 
     output_type = result.get("output_type")
@@ -482,11 +577,14 @@ def audit_result(
             "safe_error": classification_error,
         }
 
-    return {
+    accepted = {
         "ok": True,
         "status": "accepted",
         "planned_github_actions": actual_types,
     }
+    if action_scope is not None:
+        accepted["action_scope"] = action_scope
+    return accepted
 
 
 def main(argv=None):

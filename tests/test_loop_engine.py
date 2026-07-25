@@ -282,6 +282,84 @@ repos:
         self.assertFalse(result["ok"], result)
         self.assertEqual(runner_kwargs[0]["skip_publish"], True)
 
+    def test_loop_zero_publish_budget_does_not_block_skip_publish_work(self):
+        from robert_agent import loop_engine
+        self._init_runnable_db()
+        runner_kwargs = []
+
+        def runner(*_args, **kwargs):
+            runner_kwargs.append(kwargs)
+            return {
+                "ok": False,
+                "status": "failed_dispatch",
+                "safe_error": "worker failed",
+            }
+
+        result = loop_engine.run_loop(
+            self.config_path,
+            dry_run=True,
+            skip_external=True,
+            skip_publish=True,
+            max_publish_actions=0,
+            runner=runner,
+        )
+
+        self.assertEqual(len(runner_kwargs), 1)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["stop_reason"], "run_once_failed")
+
+    def test_loop_enforces_publish_action_budget(self):
+        from robert_agent import loop_engine
+        db_path = self._init_runnable_db()
+        runner_kwargs = []
+
+        def runner(*_args, **kwargs):
+            runner_kwargs.append(kwargs)
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute(
+                    "UPDATE wakeups SET status = 'consumed' WHERE wakeup_id = 'wakeup-1'"
+                )
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO workstreams(
+                      workstream_id, repo_id, lifecycle, active_task_id, created_at, updated_at
+                    )
+                    VALUES ('workstream-budget', 'repo-1', 'active', 'task-budget', ?, ?)
+                    """,
+                    (now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO tasks(
+                      task_id, workstream_id, lifecycle, priority, created_at, updated_at
+                    )
+                    VALUES ('task-budget', 'workstream-budget', 'running', 'P1', ?, ?)
+                    """,
+                    (now, now),
+                )
+            return {
+                "ok": True,
+                "status": "completed",
+                "publish_result": {"pending_count": 1},
+            }
+
+        result = loop_engine.run_loop(
+            self.config_path,
+            dry_run=False,
+            skip_external=True,
+            max_publish_actions=1,
+            runner=runner,
+        )
+
+        self.assertEqual(runner_kwargs[0]["max_publish_actions"], 1)
+        self.assertEqual(result["cycles"], 1)
+        self.assertEqual(result["stop_reason"], "max_publish_actions")
+        self.assertEqual(
+            result["budgets"]["max_publish_actions_enforcement"],
+            "enforced",
+        )
+
     def _init_runnable_db(self):
         from robert_agent import loop_engine
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)

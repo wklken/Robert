@@ -143,6 +143,36 @@ class CliTests(unittest.TestCase):
         write_plugin.assert_not_called()
         self.assertEqual(json.loads(output.getvalue()), missing)
 
+    def test_openclaw_install_dry_run_does_not_rewrite_plugin_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_dir = Path(tmp) / "robert-openclaw"
+            plugin_dir.mkdir()
+            sentinel = plugin_dir / "sentinel"
+            sentinel.write_text("keep\n", encoding="utf-8")
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "openclaw",
+                        "install",
+                        "--plugin-dir",
+                        str(plugin_dir),
+                        "--dry-run",
+                        "--force",
+                        "--skip-restart",
+                        "--output",
+                        "json",
+                    ]
+                )
+
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(result["status"], "planned")
+            self.assertEqual(result["steps"][1]["status"], "planned")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+            self.assertEqual(list(plugin_dir.iterdir()), [sentinel])
+
     def test_openclaw_install_verifies_live_gateway_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin_dir = str(Path(tmp) / "robert-openclaw")

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from robert_agent import audit_result
 from robert_agent.common import emit
 
 
@@ -559,7 +560,40 @@ def _publish_push_existing_pr(action, run_command):
     }
 
 
+def _trusted_action_scope(conn, action):
+    if not conn or not action.get("result_id"):
+        return None
+    row = conn.execute(
+        "SELECT metadata_json FROM worker_results WHERE result_id = ?",
+        (action["result_id"],),
+    ).fetchone()
+    metadata = _decode_json(row[0] if row else None)
+    audit = metadata.get("audit")
+    if not isinstance(audit, dict) or audit.get("status") != "accepted":
+        return None
+    return audit.get("action_scope")
+
+
+def _publish_scope_violation(conn, action):
+    action_scope = _trusted_action_scope(conn, action)
+    if action_scope is None:
+        return None
+    payload = _decode_json(action["metadata_json"])
+    payload["type"] = action["action_type"]
+    if action.get("target_url"):
+        payload["target_url"] = action["target_url"]
+        payload["url"] = action["target_url"]
+    return audit_result.action_scope_violation([payload], action_scope)
+
+
 def _publish_action(action, run_command, conn=None):
+    scope_violation = _publish_scope_violation(conn, action)
+    if scope_violation:
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": f"action scope validation failed: {scope_violation}",
+        }
     if action["action_type"] == "comment":
         return _publish_comment(action, run_command)
     if action["action_type"] == "open_pr":

@@ -119,17 +119,25 @@ def plan_review_worktree(
     repo_root = Path(repo_root)
     worktree_root = Path(worktree_root)
     branch_name = f"review/pr-{source_number}-{_slug(short_slug)}"
+    review_ref = f"refs/robert/reviews/pr-{source_number}"
     existing_worktree_path = _existing_worktree_for_branch(repo_root, branch_name)
     mode = "reuse_existing_worktree" if existing_worktree_path else "review_pr"
     worktree_path = existing_worktree_path or (worktree_root / branch_name.replace("/", "__"))
     start_point = f"upstream/{base_branch}"
     commands = []
     if mode == "reuse_existing_worktree":
-        commands.append(f"reuse existing worktree {worktree_path}")
+        commands.append(
+            f"git fetch upstream +pull/{source_number}/head:{review_ref}"
+        )
+        commands.append(f"git -C {worktree_path} reset --hard {review_ref}")
     else:
         commands.append(f"git fetch upstream {base_branch}")
-        commands.append(f"git fetch upstream pull/{source_number}/head:{branch_name}")
-        commands.append(f"git worktree add {worktree_path} {branch_name}")
+        commands.append(
+            f"git fetch upstream +pull/{source_number}/head:{review_ref}"
+        )
+        commands.append(
+            f"git worktree add {worktree_path} -B {branch_name} {review_ref}"
+        )
 
     result = {
         "ok": True,
@@ -143,18 +151,49 @@ def plan_review_worktree(
         "start_point": start_point,
         "commands": commands,
     }
-    if dry_run or mode == "reuse_existing_worktree":
+    if dry_run:
+        return result
+
+    if mode == "reuse_existing_worktree":
+        subprocess.run(
+            [
+                "git",
+                "fetch",
+                "upstream",
+                f"+pull/{source_number}/head:{review_ref}",
+            ],
+            cwd=repo_root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "reset", "--hard", review_ref],
+            cwd=worktree_path,
+            check=True,
+        )
         return result
 
     worktree_root.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True)
     subprocess.run(
-        ["git", "fetch", "upstream", f"pull/{source_number}/head:{branch_name}"],
+        [
+            "git",
+            "fetch",
+            "upstream",
+            f"+pull/{source_number}/head:{review_ref}",
+        ],
         cwd=repo_root,
         check=True,
     )
     subprocess.run(
-        ["git", "worktree", "add", str(worktree_path), branch_name],
+        [
+            "git",
+            "worktree",
+            "add",
+            str(worktree_path),
+            "-B",
+            branch_name,
+            review_ref,
+        ],
         cwd=repo_root,
         check=True,
     )

@@ -327,6 +327,10 @@ def _source_metadata(raw, repo_config, runner):
     )
 
 
+def _timeline_sort_key(item):
+    return (item.get("created_at") or "", str(item.get("id") or ""))
+
+
 def _timeline_assignment(raw, repo_config, runner):
     repo = repo_config["full_name"]
     github_account = repo_config["github_account"]
@@ -337,11 +341,14 @@ def _timeline_assignment(raw, repo_config, runner):
             "assigned_to": github_account,
             "authorization_lookup_complete": False,
         }
-    for item in timeline:
-        if item.get("event") != "assigned":
-            continue
-        if _login(item, "assignee") != github_account:
-            continue
+    matches = [
+        item
+        for item in timeline
+        if item.get("event") == "assigned"
+        and _login(item, "assignee") == github_account
+    ]
+    if matches:
+        item = max(matches, key=_timeline_sort_key)
         event_id = item.get("id") or raw.get("id")
         enriched = {
             **raw,
@@ -378,6 +385,7 @@ def _timeline_review_request(raw, repo_config, runner):
             **raw,
             "authorization_lookup_complete": False,
         }
+    matches = []
     for item in timeline:
         if item.get("event") != "review_requested":
             continue
@@ -390,6 +398,18 @@ def _timeline_review_request(raw, repo_config, runner):
             requested_team_slug = requested_team.get("slug")
         if github_account not in {requested_reviewer, requested_team_name, requested_team_slug}:
             continue
+        matches.append(
+            (
+                item,
+                requested_reviewer,
+                requested_team_slug or requested_team_name,
+            )
+        )
+    if matches:
+        item, requested_reviewer, requested_team = max(
+            matches,
+            key=lambda match: _timeline_sort_key(match[0]),
+        )
         event_id = item.get("id") or raw.get("id")
         enriched = {
             **raw,
@@ -397,7 +417,7 @@ def _timeline_review_request(raw, repo_config, runner):
             "event_type": "review_request",
             "requester_login": _login(item, "actor"),
             "requested_reviewer": requested_reviewer,
-            "requested_team": requested_team_slug or requested_team_name,
+            "requested_team": requested_team,
             "authorization_lookup_complete": True,
             "event_at": item.get("created_at") or raw.get("event_at"),
             "intent": "review_request",
@@ -476,10 +496,10 @@ def _event_sort_key(event):
     return (event.get("event_at") or "", str(event.get("id") or ""))
 
 
-def _latest_discussion_event(raw, repo_config, runner, predicate):
+def _discussion_events(raw, repo_config, runner, predicate):
     items = _discussion_items(raw, repo_config, runner)
     if items is None:
-        return None, False
+        return [], False
 
     matched = []
     for event_type, item in items:
@@ -495,47 +515,60 @@ def _latest_discussion_event(raw, repo_config, runner, predicate):
         enriched["intent"] = _infer_intent(raw.get("title"), enriched.get("body"), event_type)
         matched.append(enriched)
 
-    if not matched:
-        return None, True
-    return max(matched, key=_event_sort_key), True
+    return sorted(matched, key=_event_sort_key), True
 
 
-def _enrich_mention(raw, repo_config, runner):
+def _enrich_mentions(raw, repo_config, runner):
     github_account = repo_config["github_account"]
     trusted = set(repo_config.get("trusted_actors", []))
     body_mentions_dd = _mentions_dd(raw.get("body"), github_account)
+    matches = []
     if body_mentions_dd and raw.get("actor_login") in trusted:
-        return {
-            **raw,
-            "authorization_lookup_complete": True,
-        }
+        matches.append(
+            {
+                **raw,
+                "authorization_lookup_complete": True,
+            }
+        )
 
-    latest_mention, lookup_complete = _latest_discussion_event(
+    discussion_matches, lookup_complete = _discussion_events(
         raw,
         repo_config,
         runner,
         lambda item, _event_type: _mentions_dd(item.get("body"), github_account)
         and (item.get("user") or {}).get("login") in trusted,
     )
-    if latest_mention:
-        return {
-            **latest_mention,
+    matches.extend(
+        {
+            **event,
             "authorization_lookup_complete": True,
         }
+        for event in discussion_matches
+    )
+    if matches:
+        return matches
     if not lookup_complete:
-        return {
+        return [
+            {
+                **raw,
+                "authorization_lookup_complete": False,
+            }
+        ]
+    return [
+        {
             **raw,
-            "authorization_lookup_complete": False,
+            "authorization_lookup_complete": not body_mentions_dd,
         }
-    return {
-        **raw,
-        "authorization_lookup_complete": not body_mentions_dd,
-    }
+    ]
 
 
-def _enrich_known_workstream_context(raw, repo_config, runner):
+def _enrich_mention(raw, repo_config, runner):
+    return _enrich_mentions(raw, repo_config, runner)[-1]
+
+
+def _enrich_known_workstream_contexts(raw, repo_config, runner):
     github_account = repo_config["github_account"]
-    latest_context, lookup_complete = _latest_discussion_event(
+    matches, lookup_complete = _discussion_events(
         raw,
         repo_config,
         runner,
@@ -543,21 +576,31 @@ def _enrich_known_workstream_context(raw, repo_config, runner):
         and _mentions_dd(item.get("body"), github_account)
         and bool((item.get("body") or "").strip()),
     )
-    if latest_context:
-        return {
-            **latest_context,
+    if matches:
+        return [
+            {
+                **event,
+                "authorization_lookup_complete": True,
+            }
+            for event in matches
+        ]
+    if not lookup_complete:
+        return [
+            {
+                **raw,
+                "authorization_lookup_complete": False,
+            }
+        ]
+    return [
+        {
+            **raw,
             "authorization_lookup_complete": True,
         }
-    if not lookup_complete:
-        return {
-            **raw,
-            "authorization_lookup_complete": False,
-        }
+    ]
 
-    return {
-        **raw,
-        "authorization_lookup_complete": True,
-    }
+
+def _enrich_known_workstream_context(raw, repo_config, runner):
+    return _enrich_known_workstream_contexts(raw, repo_config, runner)[-1]
 
 
 def _trusted_trigger_from_source(
@@ -706,9 +749,15 @@ def collect_live_events(
             raw["actor_permission"] = _actor_permission(repo_config, raw.get("actor_login"), runner)
         raw = _enrich_pull_request_metadata(raw, repo_config, runner)
         if _raw_workstream_id(raw, repo) in known_workstreams:
-            raw_events.append(_enrich_known_workstream_context(raw, repo_config, runner))
+            raw_events.extend(
+                _enrich_known_workstream_contexts(
+                    raw,
+                    repo_config,
+                    runner,
+                )
+            )
             continue
-        raw_events.append(_enrich_mention(raw, repo_config, runner))
+        raw_events.extend(_enrich_mentions(raw, repo_config, runner))
 
     notification_raws = list(notification_hints or [])
     if include_notifications and notification_hints is None:
