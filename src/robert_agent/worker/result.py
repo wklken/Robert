@@ -134,6 +134,7 @@ def build_result(
     review_point_evaluation=None,
     consumed_work_item_event_ids=None,
     operator_question=None,
+    remediation_evidence=None,
 ):
     payload = {
         "task_id": task_id,
@@ -160,6 +161,10 @@ def build_result(
         payload["review_point_evaluation"] = list(review_point_evaluation)
     if operator_question is not None:
         payload["operator_question"] = operator_question
+    if remediation_evidence is not None:
+        if not isinstance(remediation_evidence, dict):
+            raise ValueError("remediation_evidence must be an object")
+        payload["remediation_evidence"] = dict(remediation_evidence)
     return payload
 
 
@@ -208,6 +213,8 @@ def record_result(db_path, payload):
         "review_point_evaluation": payload.get("review_point_evaluation", []),
         "consumed_work_item_event_ids": local_event_ids,
     }
+    if isinstance(payload.get("remediation_evidence"), dict):
+        metadata["remediation_evidence"] = payload["remediation_evidence"]
     if operator_question is not None:
         metadata["operator_question"] = operator_question
     recommended_route = payload.get("recommended_route")
@@ -309,6 +316,7 @@ def main(argv=None):
         review_point_evaluation=payload.get("review_point_evaluation"),
         consumed_work_item_event_ids=payload.get("consumed_work_item_event_ids", []),
         operator_question=payload.get("operator_question"),
+        remediation_evidence=payload.get("remediation_evidence"),
     )
     if args.db:
         output = record_result(args.db, result)

@@ -238,6 +238,30 @@ DAEMON_LEGACY_FIELDS = {
 }
 DAEMON_BOOLEAN_FIELDS = {"enabled", "run_on_start"}
 
+PR_AUTOMATION_DEFAULTS = {
+    "conflict": {
+        "enabled": False,
+        "max_attempts": 2,
+        "max_wall_minutes": 60,
+    },
+    "ci": {
+        "enabled": False,
+        "check_allowlist": [],
+        "max_attempts": 2,
+        "max_wall_minutes": 120,
+        "max_total_tokens": 200000,
+        "max_cost_usd": 10.0,
+        "max_failure_summary_chars": 12000,
+    },
+}
+PR_AUTOMATION_BOOLEAN_FIELDS = {"enabled"}
+PR_AUTOMATION_INTEGER_FIELDS = {
+    "max_attempts",
+    "max_wall_minutes",
+    "max_total_tokens",
+    "max_failure_summary_chars",
+}
+
 
 def _normalize_daemon_config(config):
     raw_daemon = config.get("daemon")
@@ -283,6 +307,78 @@ def _normalize_daemon_config(config):
                 raise ValueError(f"{label} must be at least 1")
             daemon[key] = value
     return daemon
+
+
+def _normalize_pr_automation(raw, repo_index):
+    label = f"repos[{repo_index}].pr_automation"
+    if raw in (None, ""):
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} must be a mapping")
+    unsupported_sections = sorted(set(raw) - set(PR_AUTOMATION_DEFAULTS))
+    if unsupported_sections:
+        raise ValueError(
+            f"{label} contains unsupported fields: "
+            + ", ".join(unsupported_sections)
+        )
+
+    normalized = {}
+    for section, defaults in PR_AUTOMATION_DEFAULTS.items():
+        raw_section = raw.get(section, {})
+        section_label = f"{label}.{section}"
+        if not isinstance(raw_section, dict):
+            raise ValueError(f"{section_label} must be a mapping")
+        unsupported_fields = sorted(set(raw_section) - set(defaults))
+        if unsupported_fields:
+            raise ValueError(
+                f"{section_label} contains unsupported fields: "
+                + ", ".join(unsupported_fields)
+            )
+        values = {}
+        for field, default in defaults.items():
+            value = raw_section.get(field, default)
+            field_label = f"{section_label}.{field}"
+            if field in PR_AUTOMATION_BOOLEAN_FIELDS:
+                if not isinstance(value, bool):
+                    raise ValueError(f"{field_label} must be a boolean")
+            elif field in PR_AUTOMATION_INTEGER_FIELDS:
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    raise ValueError(f"{field_label} must be at least 1")
+            elif field == "max_cost_usd":
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or value <= 0
+                ):
+                    raise ValueError(f"{field_label} must be greater than 0")
+                value = float(value)
+            elif field == "check_allowlist":
+                if not isinstance(value, list):
+                    raise ValueError(f"{field_label} must be a list")
+                checks = []
+                for check in value:
+                    check_name = str(check).strip()
+                    if not check_name:
+                        raise ValueError(
+                            f"{field_label} entries must not be empty"
+                        )
+                    checks.append(check_name)
+                if len(checks) != len(set(checks)):
+                    raise ValueError(
+                        f"{field_label} entries must be unique"
+                    )
+                value = checks
+            values[field] = value
+        normalized[section] = values
+
+    if (
+        normalized["ci"]["enabled"]
+        and not normalized["ci"]["check_allowlist"]
+    ):
+        raise ValueError(
+            f"{label}.ci.check_allowlist must not be empty when CI automation is enabled"
+        )
+    return normalized
 
 
 def _placeholder_fields(repo):
@@ -544,6 +640,17 @@ def validate_config(config_path, skip_external=False):
             }
 
         worktree_root = Path(str(repo["worktree_root"])).expanduser()
+        try:
+            pr_automation = _normalize_pr_automation(
+                repo.get("pr_automation"),
+                index,
+            )
+        except ValueError as exc:
+            return {
+                "ok": False,
+                "status": "failed_config",
+                "safe_error": f"invalid config: {exc}",
+            }
         repo_max_concurrency = repo.get("max_concurrency", max_concurrency)
         if (
             isinstance(repo_max_concurrency, bool)
@@ -566,6 +673,7 @@ def validate_config(config_path, skip_external=False):
                 "repo_root": str(repo_root),
                 "worktree_root": str(worktree_root),
                 "max_concurrency": repo_max_concurrency,
+                "pr_automation": pr_automation,
             }
         )
 

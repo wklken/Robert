@@ -25,6 +25,9 @@ calling the source issue or PR API.
 | `review_comment` | Pull request diff review comment | `review_comment:<comment-id>` | No for new work by itself; accepted as follow-up context in known workstreams. | Diff comments are distinct from issue comments and must stay distinguishable in prompts and evidence. |
 | `review_request` | PR timeline `review_requested` event | `review_request:<timeline-event-id>` | Yes, only when the requester is trusted and the requested reviewer or team matches `github_account`. | Notification reason `review_requested` must be resolved through the PR timeline before authorization. Route to `review-pr` so the worker reviews PR source in a read-only worktree and records a comment-only result. |
 | `notification` | `/notifications` thread | `notification:<thread-id>` only while unresolved | No. | If lookup cannot complete, record pending authorization; if lookup completes without an actionable canonical event, ignore it. |
+| `ci_run_completed` | GitHub Actions workflow run for the current PR head SHA | `github-system:workflow_run:<run-id>:<attempt>` | Yes, only through an eligible CI remediation episode. | Multiple configured failing checks on the same head/base snapshot aggregate into one episode and task. |
+| `ci_check_completed` | External check run for the current PR head SHA | `github-system:check_run:<check-id>:<attempt>` | Yes, only through an eligible CI remediation episode. | Metadata and annotations are evidence; unavailable or blocked failure evidence requires operator attention instead of speculative repair. |
+| `pr_merge_conflict_detected` | Current PR snapshot reports `mergeable: false` | `github-system:merge-conflict:<pr>:<head-sha>:<base-sha>` | Yes, only through an eligible conflict remediation episode. | Conflict remediation has priority over CI remediation for the same PR workstream. |
 
 ## Trigger Rules
 
@@ -45,6 +48,12 @@ Issue follow-up belongs to the issue mainline. PR follow-up belongs to the PR ma
 
 DD-authored GitHub content never creates a task. It remains available as
 context and audit evidence.
+
+CI and conflict signals are internal `github_system` events, not trusted-user
+comments. They can drive execution only for an existing Robert-created PR
+workstream, when repository `pr_automation` explicitly enables the signal and
+the observed head/base still match the current PR. Discovery input cannot claim
+`github_system` authority.
 
 Closed issue or PR notification sources do not create follow-up work. Active
 workstreams are reconciled against the remote source state before new discovery

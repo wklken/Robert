@@ -34,3 +34,19 @@ Default timeouts:
   context artifact
 
 Local environment, permission, script, and network failures normally notify locally instead of posting GitHub comments. Public comments are allowed only after redaction.
+
+PR remediation stops and enters operator attention when:
+
+- configured CI fails but usable, redacted failure evidence is unavailable
+- a manual-only CI conclusion such as cancellation or timeout is observed
+- attempt, wall-clock, token, or cost budget is exhausted
+- token or cost limits are configured but completed remediation usage cannot
+  be measured
+- the same CI failure signature returns after a repair push
+- a conflict repair push produces a new head that is still unmergeable
+- the exact remediation worktree is dirty or its fetched head/base no longer
+  matches the episode
+
+A changed remote PR head/base supersedes the episode and blocks publication.
+The paired remediation comment is skipped with the push, so Robert never
+describes a repair it did not publish.

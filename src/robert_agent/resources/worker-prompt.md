@@ -85,6 +85,15 @@ comment with each point and the reason it was not changed. If the report says
 there are no blocking items and the PR can merge, still comment to acknowledge
 that no code change is needed.
 
+`ci_remediation` and `merge_conflict_remediation` are system-triggered
+exceptions to that review-point workflow. Their prompts include the trusted
+episode id, observed head/base SHAs, exact fetched refs, and bounded CI failure
+evidence when available. CI work must reproduce the reported failure when
+possible. Conflict work must merge the supplied exact base ref with
+`git merge --no-edit <base-ref>`. Workers must never rebase or force-push and
+must return matching `remediation_evidence`; Robert performs independent git
+attestation and remote snapshot revalidation.
+
 For `pr_review_comment`, the worker is reviewing the requested PR source rather
 than responding to an external review point. The prompt must include the review
 worktree path and require `fast-review-github-pr`. The worker should compare

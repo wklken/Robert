@@ -188,6 +188,18 @@ def _load_state(conn):
         """,
         "task_id",
     )
+    remediation_episodes = _group_rows(
+        conn,
+        """
+        SELECT episode_id, workstream_id, episode_kind, status,
+               observed_head_sha, observed_base_sha, result_head_sha,
+               attempt_count, failure_signature, first_seen_at, updated_at,
+               terminal_at, last_task_id, metadata_json
+        FROM pr_remediation_episodes
+        ORDER BY updated_at DESC, episode_id DESC
+        """,
+        "workstream_id",
+    )
     return {
         "workstreams": workstreams,
         "tasks": tasks,
@@ -197,6 +209,7 @@ def _load_state(conn):
         "actions": actions,
         "artifacts": artifacts,
         "notifications": notifications,
+        "remediation_episodes": remediation_episodes,
     }
 
 
@@ -217,7 +230,22 @@ def _publish_error(action):
     return publish.get("safe_error") or publish.get("error")
 
 
-def _derive_operator_state(workstream, task, attempt, results, actions):
+def _derive_operator_state(
+    workstream,
+    task,
+    attempt,
+    results,
+    actions,
+    remediation_episodes,
+):
+    latest_by_kind = {}
+    for episode in remediation_episodes:
+        latest_by_kind.setdefault(episode["episode_kind"], episode)
+    latest_episodes = list(latest_by_kind.values())
+    remediation_superseded = bool(latest_episodes) and all(
+        episode["status"] in {"resolved", "superseded", "canceled"}
+        for episode in latest_episodes
+    )
     for action in actions:
         if action["publish_status"] == "published":
             continue
@@ -229,12 +257,32 @@ def _derive_operator_state(workstream, task, attempt, results, actions):
                 "publish_failed",
                 "Publishing the accepted GitHub action failed.",
             )
-        if action["audit_status"] == "accepted" and action["publish_status"] == "skipped":
+        if (
+            action["audit_status"] == "accepted"
+            and action["publish_status"] == "skipped"
+            and not remediation_superseded
+        ):
             return (
                 "needs_attention",
                 "publish_skipped",
                 "An accepted GitHub action was skipped during publication.",
             )
+    exhausted = next(
+        (
+            episode
+            for episode in latest_episodes
+            if episode["status"] == "exhausted"
+        ),
+        None,
+    )
+    if exhausted:
+        metadata = _decode_json(exhausted.get("metadata_json"), {}) or {}
+        reason = metadata.get("last_transition_reason") or "budget_exhausted"
+        return (
+            "needs_attention",
+            "pr_remediation_exhausted",
+            f"Automated PR remediation stopped: {reason}.",
+        )
     if task and task["lifecycle"] in {"failed", "canceled"}:
         return (
             "needs_attention",
@@ -297,6 +345,24 @@ def _derive_operator_state(workstream, task, attempt, results, actions):
             "active_workstream",
             "The GitHub workstream remains active.",
         )
+    if any(
+        episode["status"] in {"open", "queued", "remediating"}
+        for episode in latest_episodes
+    ):
+        return (
+            "working",
+            "pr_remediation_active",
+            "Automated PR remediation is active.",
+        )
+    if any(
+        episode["status"] == "waiting_for_signal"
+        for episode in latest_episodes
+    ):
+        return (
+            "waiting",
+            "pr_remediation_waiting_for_signal",
+            "A remediation push is waiting for the next PR health signal.",
+        )
     return (
         "history",
         "inactive",
@@ -336,12 +402,17 @@ def _item_from_workstream(state, workstream):
     results = state["results"].get(task_id, []) if task_id else []
     actions = state["actions"].get(task_id, []) if task_id else []
     notifications = state["notifications"].get(task_id, []) if task_id else []
+    remediation_episodes = state["remediation_episodes"].get(
+        workstream["workstream_id"],
+        [],
+    )
     bucket, reason_code, reason_summary = _derive_operator_state(
         workstream,
         task,
         attempt,
         results,
         actions,
+        remediation_episodes,
     )
     failed_publish_actions = sum(
         1
@@ -378,6 +449,11 @@ def _item_from_workstream(state, workstream):
                 1
                 for notification in notifications
                 if notification["notification_type"] == "worker_resume_prepared"
+            ),
+            "remediation_status": (
+                remediation_episodes[0]["status"]
+                if remediation_episodes
+                else None
             ),
         },
         "task_ids": [candidate["task_id"] for candidate in tasks],

@@ -16,6 +16,8 @@ from robert_agent import audit_result
 from robert_agent import authorize
 from robert_agent import dispatch
 from robert_agent import discover
+from robert_agent import pr_health
+from robert_agent import remediation
 from robert_agent import render_prompt
 from robert_agent import publish
 from robert_agent import route
@@ -385,6 +387,16 @@ def _safe_route_error(exc):
 def _event_priority(event):
     event_at = event.get("event_at") or ""
     fingerprint = event.get("event_fingerprint") or ""
+    if event.get("authorization_status") == "authorized_system_trigger":
+        episode_kind = (
+            (event.get("metadata") or {}).get("remediation") or {}
+        ).get("episode_kind")
+        return (
+            -1,
+            0 if episode_kind == "merge_conflict" else 1,
+            event_at,
+            fingerprint,
+        )
     if event.get("authorization_status") == "authorized_trigger":
         if event.get("source_type") == "pull_request" and event.get("has_open_dd_pr"):
             return (0, event_at, fingerprint)
@@ -1506,8 +1518,274 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
             audit_type,
             run_now,
         )
+        remediation.cancel_workstream_episodes(
+            conn,
+            workstream_id=workstream_id,
+            reason="remote_pr_terminal",
+            now=run_now,
+        )
         reconciled += 1
     return reconciled
+
+
+def _system_event(
+    *,
+    repo,
+    workstream_id,
+    origin_workstream_id,
+    source_key,
+    number,
+    snapshot,
+    episode,
+    observation=None,
+    run_now,
+):
+    observation = observation or {}
+    episode_kind = episode["episode_kind"]
+    if episode_kind == "merge_conflict":
+        event_type = "pr_merge_conflict_detected"
+        fingerprint = (
+            f"github-system:merge-conflict:{number}:"
+            f"{snapshot['head_sha']}:{snapshot['base_sha']}"
+        )
+        task_kind = "merge_conflict_remediation"
+    else:
+        source_kind = observation.get("source_kind") or "workflow_run"
+        event_type = (
+            "ci_check_completed"
+            if source_kind == "check_run"
+            else "ci_run_completed"
+        )
+        external_id = observation.get("external_id") or episode["episode_id"]
+        attempt_no = observation.get("attempt_no") or 1
+        fingerprint = (
+            f"github-system:{source_kind}:{external_id}:{attempt_no}"
+        )
+        task_kind = "ci_remediation"
+    metadata = {
+        "remediation": {
+            "episode_id": episode["episode_id"],
+            "episode_kind": episode_kind,
+            "observed_head_sha": snapshot["head_sha"],
+            "observed_base_sha": snapshot["base_sha"],
+            "failure_signature": episode.get("failure_signature"),
+            "failure_summary": (
+                observation.get("failure_summary")
+                or episode["metadata"].get("failures")
+                or ""
+            ),
+            "failures": episode["metadata"].get("failures", []),
+            "details_url": observation.get("details_url"),
+        }
+    }
+    return {
+        "repo": repo["full_name"],
+        "source_type": "pull_request",
+        "source_key": source_key,
+        "number": number,
+        "workstream_id": workstream_id,
+        "origin_workstream_id": origin_workstream_id,
+        "event_type": event_type,
+        "event_fingerprint": fingerprint,
+        "event_at": observation.get("completed_at") or run_now,
+        "actor_kind": "github_system",
+        "actor_login": "github",
+        "source_author_login": snapshot.get("author_login"),
+        "authorization_status": "authorized_system_trigger",
+        "creates_task": True,
+        "drives_execution": True,
+        "task_kind": task_kind,
+        "intent": "pr_followup_fix",
+        "has_open_dd_pr": True,
+        "existing_pr_head_branch": snapshot.get("head_ref"),
+        "base_branch": snapshot.get("base_ref"),
+        "head_sha": snapshot.get("head_sha"),
+        "base_sha": snapshot.get("base_sha"),
+        "mergeable": snapshot.get("mergeable"),
+        "state": snapshot.get("state") or "open",
+        "url": snapshot.get("html_url"),
+        "check_name": observation.get("check_name"),
+        "external_id": observation.get("external_id"),
+        "attempt_no": observation.get("attempt_no"),
+        "status": observation.get("status"),
+        "conclusion": observation.get("conclusion"),
+        "details_url": observation.get("details_url"),
+        "completed_at": observation.get("completed_at"),
+        "failure_summary": observation.get("failure_summary"),
+        "failure_signature": episode.get("failure_signature"),
+        "title": f"Automated {episode_kind} remediation",
+        "body": "",
+        "metadata": metadata,
+    }
+
+
+def _collect_pr_remediation_decisions(
+    conn,
+    repo_id,
+    repo,
+    runner,
+    run_now,
+):
+    automation = repo.get("pr_automation") or {}
+    conflict_policy = automation.get("conflict") or {}
+    ci_policy = automation.get("ci") or {}
+    repo_with_id = {**repo, "repo_id": repo_id}
+    remediation.cancel_disabled_episodes(
+        conn,
+        repo=repo_with_id,
+        now=run_now,
+    )
+    if not conflict_policy.get("enabled") and not ci_policy.get("enabled"):
+        return []
+
+    rows = conn.execute(
+        """
+        SELECT w.workstream_id, w.origin_workstream_id, gs.source_key,
+               gs.number
+        FROM workstreams w
+        JOIN github_sources gs ON gs.source_id = w.primary_source_id
+        WHERE w.repo_id = ?
+          AND w.origin_workstream_id IS NOT NULL
+          AND gs.source_type = 'pull_request'
+          AND gs.state = 'open'
+        ORDER BY w.created_at, w.workstream_id
+        """,
+        (repo_id,),
+    ).fetchall()
+    event_by_episode = {}
+    snapshot_by_episode = {}
+    for workstream_id, origin_workstream_id, source_key, number in rows:
+        snapshot = pr_health.fetch_pr_snapshot(
+            repo["full_name"],
+            number,
+            runner=runner,
+        )
+        if not snapshot:
+            continue
+        if (
+            snapshot.get("author_login", "").lower()
+            != repo["github_account"].lower()
+        ):
+            continue
+        if not snapshot.get("head_sha") or not snapshot.get("base_sha"):
+            continue
+        ci_summary = None
+        if ci_policy.get("enabled"):
+            observations = pr_health.collect_ci_observations(
+                repo["full_name"],
+                snapshot["head_sha"],
+                check_allowlist=ci_policy["check_allowlist"],
+                max_summary_chars=ci_policy["max_failure_summary_chars"],
+                runner=runner,
+            )
+            ci_summary = pr_health.summarize_ci(
+                observations,
+                ci_policy["check_allowlist"],
+            )
+        workstream_record = {
+            "workstream_id": workstream_id,
+            "repo_id": repo_id,
+            "number": number,
+        }
+        remediation.upsert_health_episodes(
+            conn,
+            repo=repo_with_id,
+            workstream=workstream_record,
+            snapshot=snapshot,
+            ci_summary=ci_summary,
+            now=run_now,
+        )
+        episodes = {
+            row[1]: remediation._load_episode(conn, row[0])
+            for row in conn.execute(
+                """
+                SELECT episode_id, episode_kind
+                FROM pr_remediation_episodes
+                WHERE workstream_id = ?
+                  AND subject_key = ?
+                  AND status = 'open'
+                """,
+                (
+                    workstream_id,
+                    f"{snapshot['head_sha']}:{snapshot['base_sha']}",
+                ),
+            )
+        }
+        conflict_episode = episodes.get("merge_conflict")
+        if conflict_episode:
+            event = _system_event(
+                repo=repo,
+                workstream_id=workstream_id,
+                origin_workstream_id=origin_workstream_id,
+                source_key=source_key,
+                number=number,
+                snapshot=snapshot,
+                episode=conflict_episode,
+                run_now=run_now,
+            )
+            _insert_source_and_event(conn, repo_id, event, run_now)
+            event_by_episode[conflict_episode["episode_id"]] = event
+            snapshot_by_episode[conflict_episode["episode_id"]] = snapshot
+        ci_episode = episodes.get("ci")
+        if ci_episode:
+            ci_observations = (
+                ci_summary.get("observations", [])
+                if ci_summary
+                else []
+            )
+            completed = [
+                observation
+                for observation in ci_observations
+                if observation.get("status") == "completed"
+            ]
+            for observation in completed:
+                event = _system_event(
+                    repo=repo,
+                    workstream_id=workstream_id,
+                    origin_workstream_id=origin_workstream_id,
+                    source_key=source_key,
+                    number=number,
+                    snapshot=snapshot,
+                    episode=ci_episode,
+                    observation=observation,
+                    run_now=run_now,
+                )
+                _insert_source_and_event(conn, repo_id, event, run_now)
+                if observation.get("conclusion") == "failure":
+                    event_by_episode.setdefault(ci_episode["episode_id"], event)
+                    snapshot_by_episode[ci_episode["episode_id"]] = snapshot
+
+    decisions = remediation.next_system_decisions(
+        conn,
+        repo=repo_with_id,
+        now=run_now,
+    )
+    events = []
+    for decision in decisions:
+        episode_id = decision["episode_id"]
+        event = event_by_episode.get(episode_id)
+        snapshot = snapshot_by_episode.get(episode_id)
+        if not event or not snapshot:
+            continue
+        eligibility = remediation.revalidate_decision(
+            conn,
+            decision=decision,
+            snapshot=snapshot,
+            repo=repo_with_id,
+        )
+        if eligibility["status"] != "eligible":
+            continue
+        policy_key = (
+            "conflict"
+            if decision["episode_kind"] == "merge_conflict"
+            else "ci"
+        )
+        event["metadata"]["remediation"]["budget"] = {
+            "limits": repo["pr_automation"][policy_key],
+            "usage": decision["budget"],
+        }
+        events.append(event)
+    return events
 
 
 def _latest_task_id(conn, workstream_id):
@@ -1630,6 +1908,15 @@ def _event_has_terminal_trigger(conn, event_fingerprint):
         (event_fingerprint,),
     ).fetchone()
     return bool(row)
+
+
+def _should_skip_terminal_trigger(conn, event):
+    if not _event_has_terminal_trigger(
+        conn,
+        event["event_fingerprint"],
+    ):
+        return False
+    return event.get("actor_kind") != "github_system"
 
 
 def _active_task_state(conn, workstream_id):
@@ -2028,7 +2315,7 @@ def _insert_source_and_event(conn, repo_id, event, run_now):
             event.get("url"),
             event.get("title", ""),
             event.get("state", "open"),
-            event.get("actor_login"),
+            event.get("source_author_login", event.get("actor_login")),
             event.get("source_updated_at"),
         ),
     )
@@ -2036,25 +2323,49 @@ def _insert_source_and_event(conn, repo_id, event, run_now):
     conn.execute(
         """
         INSERT INTO github_events(
-          event_id, repo_id, source_id, event_fingerprint, event_type, actor_login,
+          event_id, repo_id, source_id, event_fingerprint, event_type, actor_kind,
+          actor_login,
           author_association, authorization_status, event_at, payload_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(event_fingerprint) DO UPDATE SET
           authorization_status = CASE
-            WHEN github_events.authorization_status = 'authorized_trigger'
+            WHEN github_events.authorization_status IN (
+              'authorized_trigger',
+              'authorized_system_trigger'
+            )
               THEN github_events.authorization_status
             ELSE excluded.authorization_status
           END,
+          actor_kind = CASE
+            WHEN github_events.authorization_status IN (
+              'authorized_trigger',
+              'authorized_system_trigger'
+            )
+              THEN github_events.actor_kind
+            ELSE excluded.actor_kind
+          END,
           author_association = CASE
-            WHEN github_events.authorization_status = 'authorized_trigger'
-              AND excluded.authorization_status != 'authorized_trigger'
+            WHEN github_events.authorization_status IN (
+              'authorized_trigger',
+              'authorized_system_trigger'
+            )
+              AND excluded.authorization_status NOT IN (
+                'authorized_trigger',
+                'authorized_system_trigger'
+              )
               THEN github_events.author_association
             ELSE excluded.author_association
           END,
           payload_json = CASE
-            WHEN github_events.authorization_status = 'authorized_trigger'
-              AND excluded.authorization_status != 'authorized_trigger'
+            WHEN github_events.authorization_status IN (
+              'authorized_trigger',
+              'authorized_system_trigger'
+            )
+              AND excluded.authorization_status NOT IN (
+                'authorized_trigger',
+                'authorized_system_trigger'
+              )
               THEN github_events.payload_json
             ELSE excluded.payload_json
           END
@@ -2065,6 +2376,7 @@ def _insert_source_and_event(conn, repo_id, event, run_now):
             source_id,
             event["event_fingerprint"],
             event["event_type"],
+            event.get("actor_kind", "github_user"),
             event.get("actor_login"),
             event.get("author_association"),
             event.get("authorization_status", "pending"),
@@ -2109,6 +2421,10 @@ def _runtime_context(db_path, repo, worktree_result=None):
         "worktree_path": worktree_result.get("worktree_path", ""),
         "branch_name": worktree_result.get("branch_name", ""),
         "target_base_branch": worktree_result.get("base_branch") or repo["default_base_branch"],
+        "head_ref": worktree_result.get("head_ref", ""),
+        "base_ref": worktree_result.get("base_ref", ""),
+        "observed_head_sha": worktree_result.get("observed_head_sha", ""),
+        "observed_base_sha": worktree_result.get("observed_base_sha", ""),
     }
 
 
@@ -2161,6 +2477,21 @@ def _prepare_worktree(repo, event, route_result, dry_run):
         and not route_result.get("enforce_workspace_policy", False)
     ):
         return None
+    if event.get("task_kind") in {
+        "ci_remediation",
+        "merge_conflict_remediation",
+    }:
+        return worktree.prepare_existing_pr_worktree(
+            repo_root=repo["repo_root"],
+            worktree_root=repo["worktree_root"],
+            source_number=event["number"],
+            head_branch=event["existing_pr_head_branch"],
+            head_sha=event["head_sha"],
+            base_branch=event.get("base_branch")
+            or repo["default_base_branch"],
+            base_sha=event["base_sha"],
+            dry_run=dry_run,
+        )
     return worktree.resolve_task_workspace(
         repo,
         {**route_result, "workspace_mode": workspace_mode},
@@ -2177,6 +2508,48 @@ def _prepare_worktree(repo, event, route_result, dry_run):
     )
 
 
+def _handle_blocked_remediation_worktree(
+    conn,
+    event,
+    worktree_result,
+    run_now,
+):
+    if event.get("task_kind") not in {
+        "ci_remediation",
+        "merge_conflict_remediation",
+    }:
+        return False
+    if not isinstance(worktree_result, dict) or worktree_result.get(
+        "ok",
+        True,
+    ):
+        return False
+    remediation_context = (
+        (event.get("metadata") or {}).get("remediation") or {}
+    )
+    episode_id = remediation_context.get("episode_id")
+    if episode_id:
+        reason = (
+            worktree_result.get("status")
+            or "remediation_worktree_unavailable"
+        )
+        if reason == "stale_snapshot":
+            remediation.supersede_episode(
+                conn,
+                episode_id=episode_id,
+                reason=reason,
+                now=run_now,
+            )
+        else:
+            remediation.exhaust_episode(
+                conn,
+                episode_id=episode_id,
+                reason=reason,
+                now=run_now,
+            )
+    return True
+
+
 def _effective_route(config_result, repo, event):
     base_route = route.route_task(event)
     policy = ROUTE_POLICIES[base_route["route_id"]]
@@ -2188,8 +2561,12 @@ def _effective_route(config_result, repo, event):
     installed = skills.discover_skill_names(
         config_result["skills"]["search_paths"]
     )
+    required_skills = list(resolved["required_skills"])
+    for skill_name in base_route.get("required_skills", []):
+        if skill_name not in required_skills:
+            required_skills.append(skill_name)
     skill_status = skills.route_skill_status(
-        required=resolved["required_skills"],
+        required=required_skills,
         recommended=resolved["recommended_skills"],
         installed=installed,
     )
@@ -2199,6 +2576,7 @@ def _effective_route(config_result, repo, event):
         "confidence": base_route.get("confidence", "low"),
         "needs_worktree": base_route.get("needs_worktree", False),
         "enforce_workspace_policy": config_result.get("version") == 1,
+        "required_skills": required_skills,
         "skill_status": skill_status,
     }
 
@@ -2455,6 +2833,7 @@ def _create_task_attempt_and_prompt(
         "task_id": task_id,
         "attempt_id": attempt_id,
         "workstream_id": workstream_id,
+        "task_kind": event.get("task_kind", "human_request"),
     }
     runtime_knowledge_items = _load_runtime_knowledge(
         conn,
@@ -2536,20 +2915,38 @@ def _create_task_attempt_and_prompt(
     conn.execute(
         """
         INSERT INTO tasks(
-          task_id, workstream_id, lifecycle, parent_task_id, priority, route_id, expected_output,
-          created_at, updated_at
+          task_id, workstream_id, task_kind, lifecycle, parent_task_id,
+          priority, route_id, expected_output, created_at, updated_at,
+          metadata_json
         )
-        VALUES (?, ?, ?, ?, 'P1', ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 'P1', ?, ?, ?, ?, ?)
         """,
         (
             task_id,
             workstream_id,
+            event.get("task_kind", "human_request"),
             task_lifecycle,
             parent_task_id,
             route_result["route_id"],
             route_result["expected_output"],
             run_now,
             run_now,
+            json.dumps(
+                {
+                    "remediation_episode_id": (
+                        ((event.get("metadata") or {}).get("remediation") or {}).get(
+                            "episode_id"
+                        )
+                    )
+                }
+                if event.get("task_kind") in {
+                    "ci_remediation",
+                    "merge_conflict_remediation",
+                }
+                else {},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         ),
     )
     for index, related_event in enumerate(related_events):
@@ -2623,6 +3020,23 @@ def _create_task_attempt_and_prompt(
                     + ", ".join(skill_status["missing_required"])
                 ),
             },
+        )
+    remediation_context = (
+        (event.get("metadata") or {}).get("remediation") or {}
+    )
+    if blocked and remediation_context.get("episode_id"):
+        remediation.exhaust_episode(
+            conn,
+            episode_id=remediation_context["episode_id"],
+            reason="required_route_skills_missing",
+            now=run_now,
+        )
+    if not blocked and remediation_context.get("episode_id"):
+        remediation.record_task_started(
+            conn,
+            episode_id=remediation_context["episode_id"],
+            task_id=task_id,
+            now=run_now,
         )
     return {
         "task_id": task_id,
@@ -3395,13 +3809,15 @@ def _load_result_payload(conn, result_row):
             [],
         ),
         "operator_question": metadata.get("operator_question"),
+        "remediation_evidence": metadata.get("remediation_evidence"),
     }
 
 
 def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
     row = conn.execute(
         """
-        SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name
+        SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name,
+               t.task_kind, t.metadata_json
         FROM tasks t
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         JOIN repos r ON r.repo_id = w.repo_id
@@ -3436,7 +3852,7 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
             (workstream_id, workstream_id),
         )
     ]
-    return {
+    action_scope = {
         "repo": row[0],
         "base_branch": row[1],
         "worktree_path": row[2] or "",
@@ -3444,6 +3860,21 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
         "remote": "origin",
         "sources": sources,
     }
+    task_metadata = _json_object(row[5])
+    episode_id = task_metadata.get("remediation_episode_id")
+    if row[4] in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
+        episode = remediation.load_episode(conn, episode_id)
+        if episode:
+            action_scope.update(
+                {
+                    "task_kind": row[4],
+                    "episode_id": episode_id,
+                    "pr_number": episode["metadata"].get("pr_number"),
+                    "observed_head_sha": episode["observed_head_sha"],
+                    "observed_base_sha": episode["observed_base_sha"],
+                }
+            )
+    return action_scope
 
 
 def _set_github_actions_status(conn, result_id, status):
@@ -3574,6 +4005,17 @@ def _finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
             workstream_id,
         ),
     )
+    remediation.record_task_failure(
+        conn,
+        task_id=task_id,
+        reason=(
+            audit.get("status")
+            if isinstance(audit, dict)
+            else "task_failed"
+        )
+        or "task_failed",
+        now=run_now,
+    )
 
 
 def _mark_task_waiting_for_publish(conn, task_id, workstream_id, run_now):
@@ -3689,7 +4131,24 @@ def _create_child_task_for_pending_events(
         )
         return None
 
-    child_event = pending_events[0]
+    child_event = next(
+        (
+            pending_event
+            for pending_event in pending_events
+            if pending_event.get("actor_kind") != "github_system"
+        ),
+        None,
+    )
+    if child_event is None:
+        conn.execute(
+            """
+            UPDATE workstreams
+            SET lifecycle = 'completed', active_task_id = NULL, updated_at = ?
+            WHERE workstream_id = ?
+            """,
+            (run_now, workstream_id),
+        )
+        return None
     stream = {
         "workstream_id": workstream_id,
         "source_relationship": workstream.source_relationship(child_event),
@@ -3708,7 +4167,12 @@ def _create_child_task_for_pending_events(
         run_now,
         worktree_result=worktree_result,
         parent_task_id=parent_task_id,
-        related_events=pending_events,
+        related_events=[child_event]
+        + [
+            pending_event
+            for pending_event in pending_events
+            if pending_event is not child_event
+        ],
     )
     _queue_dispatch(
         dispatch_queue,
@@ -3790,7 +4254,33 @@ def _result_actions_all_published(conn, result_id):
     ).fetchall()
     if not rows:
         return True
-    return all(audit_status == "accepted" and publish_status == "published" for audit_status, publish_status in rows)
+    if all(
+        audit_status == "accepted"
+        and publish_status == "published"
+        for audit_status, publish_status in rows
+    ):
+        return True
+    if not all(
+        audit_status == "accepted"
+        and publish_status in {"published", "skipped"}
+        for audit_status, publish_status in rows
+    ):
+        return False
+    result_row = conn.execute(
+        """
+        SELECT metadata_json
+        FROM worker_results
+        WHERE result_id = ?
+        """,
+        (result_id,),
+    ).fetchone()
+    metadata = _json_object(result_row[0] if result_row else None)
+    action_scope = (metadata.get("audit") or {}).get("action_scope")
+    return (
+        isinstance(action_scope, dict)
+        and action_scope.get("task_kind")
+        in {"ci_remediation", "merge_conflict_remediation"}
+    )
 
 
 def _result_audit_accepted(conn, result_id):
@@ -3980,7 +4470,9 @@ def _audit_completed_results(
           rd.expected_output,
           rd.required_skills_json,
           rd.recommended_skills_json,
-          rd.route_id
+          rd.route_id,
+          t.task_kind,
+          t.metadata_json
         FROM worker_results wr
         JOIN tasks t ON t.task_id = wr.task_id
         JOIN attempts a ON a.attempt_id = wr.attempt_id
@@ -4005,6 +4497,8 @@ def _audit_completed_results(
         required_skills = json.loads(row[11] or "[]")
         recommended_skills = json.loads(row[12] or "[]")
         verification_policy = route.verification_policy_for(row[13])
+        task_kind = row[14]
+        task_metadata = _json_object(row[15])
         payload = _load_result_payload(conn, result_row)
         origin_row = conn.execute(
             "SELECT origin_type FROM work_items WHERE workstream_id = ?",
@@ -4018,6 +4512,31 @@ def _audit_completed_results(
             payload["attempt_id"],
             workstream_id,
         )
+        remediation_context = None
+        remediation_attestation = None
+        if task_kind in {"ci_remediation", "merge_conflict_remediation"}:
+            episode = remediation.load_episode(
+                conn,
+                task_metadata.get("remediation_episode_id"),
+            )
+            if episode:
+                remediation_context = {
+                    "episode_id": episode["episode_id"],
+                    "episode_kind": episode["episode_kind"],
+                    "observed_head_sha": episode["observed_head_sha"],
+                    "observed_base_sha": episode["observed_base_sha"],
+                    "failure_signature": episode.get("failure_signature"),
+                }
+            if payload["output_type"] != "waiting_for_user":
+                remediation_attestation = (
+                    remediation.attest_remediation_worktree(
+                        task_kind=task_kind,
+                        action_scope=action_scope,
+                        remediation_evidence=payload.get(
+                            "remediation_evidence"
+                        ),
+                    )
+                )
         audit = audit_result.audit_result(
             payload,
             allowed_actions,
@@ -4027,6 +4546,9 @@ def _audit_completed_results(
             verification_policy=verification_policy,
             origin_type=origin_type,
             action_scope=action_scope,
+            task_kind=task_kind,
+            remediation_context=remediation_context,
+            remediation_attestation=remediation_attestation,
         )
         _record_result_audit(conn, payload["result_id"], audit)
         wakeup.consume_wakeups_for_results(
@@ -4053,6 +4575,19 @@ def _audit_completed_results(
             audited += 1
             continue
 
+        if (
+            task_kind
+            in {"ci_remediation", "merge_conflict_remediation"}
+            and payload["output_type"] == "waiting_for_user"
+        ):
+            remediation.exhaust_episode(
+                conn,
+                episode_id=task_metadata.get(
+                    "remediation_episode_id"
+                ),
+                reason="worker_waiting_for_user",
+                now=run_now,
+            )
         _set_github_actions_status(conn, payload["result_id"], "accepted")
         memory_status = project_memory.record_memory_delta(
             conn,
@@ -4521,6 +5056,13 @@ def _run_repo_pipeline(
                 run_now,
             )
             summary["reconciled_source_count"] = reconciled_source_count
+            system_decisions = _collect_pr_remediation_decisions(
+                conn,
+                repo_id,
+                repo,
+                discovery_runner or subprocess.run,
+                run_now,
+            )
             _mark_repo_run_step(
                 conn,
                 run_id,
@@ -4618,6 +5160,11 @@ def _run_repo_pipeline(
             repo,
             known_workstreams=known_workstreams,
         )
+        decisions.extend(
+            system_decisions
+            if not fixture_path and not skip_external
+            else []
+        )
         decisions = sorted(decisions, key=_event_priority)
         summary["decision_count"] = len(decisions)
         _mark_repo_run_step(
@@ -4661,7 +5208,7 @@ def _run_repo_pipeline(
 
         for event in decisions:
             source_id, event_id = _insert_source_and_event(conn, repo_id, event, run_now)
-            if _event_has_terminal_trigger(conn, event["event_fingerprint"]):
+            if _should_skip_terminal_trigger(conn, event):
                 continue
             if _is_driving_context_event(event):
                 waiting_task = _waiting_task_state(conn, event["workstream_id"])
@@ -4697,6 +5244,13 @@ def _run_repo_pipeline(
                     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                         route_error = _safe_route_error(exc)
                         break
+                    if _handle_blocked_remediation_worktree(
+                        conn,
+                        event,
+                        worktree_result,
+                        run_now,
+                    ):
+                        continue
                     conn.execute(
                         "UPDATE tasks SET lifecycle = 'completed', updated_at = ? WHERE task_id = ?",
                         (run_now, waiting_task["task_id"]),
@@ -4781,6 +5335,13 @@ def _run_repo_pipeline(
                 except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                     route_error = _safe_route_error(exc)
                     break
+                if _handle_blocked_remediation_worktree(
+                    conn,
+                    task_event,
+                    worktree_result,
+                    run_now,
+                ):
+                    continue
                 task_info = _create_task_attempt_and_prompt(
                     conn,
                     data_dir,
@@ -4807,7 +5368,10 @@ def _run_repo_pipeline(
                 active_workstreams.add(task_info["workstream_id"])
                 known_workstreams.add(task_info["workstream_id"])
                 continue
-            if event["authorization_status"] != "authorized_trigger":
+            if event["authorization_status"] not in {
+                "authorized_trigger",
+                "authorized_system_trigger",
+            }:
                 continue
             stream = workstream.plan_event(event, active_workstreams=active_workstreams)
             if stream["action"] == "append_pending_event":
@@ -4833,6 +5397,13 @@ def _run_repo_pipeline(
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 route_error = _safe_route_error(exc)
                 break
+            if _handle_blocked_remediation_worktree(
+                conn,
+                event,
+                worktree_result,
+                run_now,
+            ):
+                continue
             task_info = _create_task_attempt_and_prompt(
                 conn,
                 data_dir,

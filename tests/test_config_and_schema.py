@@ -153,6 +153,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
         "worker_phases",
         "worker_results",
         "github_actions",
+        "pr_remediation_episodes",
+        "pr_ci_observations",
         "artifacts",
         "notifications",
         "wakeups",
@@ -232,6 +234,133 @@ repos:
         self.assertEqual(result["default_worker"]["name"], "default")
         self.assertEqual(result["route_worker_models"], {})
         self.assertEqual(result["repos"][0]["max_concurrency"], 3)
+        self.assertEqual(
+            result["repos"][0]["pr_automation"],
+            {
+                "conflict": {
+                    "enabled": False,
+                    "max_attempts": 2,
+                    "max_wall_minutes": 60,
+                },
+                "ci": {
+                    "enabled": False,
+                    "check_allowlist": [],
+                    "max_attempts": 2,
+                    "max_wall_minutes": 120,
+                    "max_total_tokens": 200000,
+                    "max_cost_usd": 10.0,
+                    "max_failure_summary_chars": 12000,
+                },
+            },
+        )
+
+    def test_config_accepts_pr_automation(self):
+        from robert_agent import validate_config
+
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + """    pr_automation:
+      conflict:
+        enabled: true
+        max_attempts: 3
+        max_wall_minutes: 45
+      ci:
+        enabled: true
+        check_allowlist:
+          - unit
+          - lint
+        max_attempts: 4
+        max_wall_minutes: 90
+        max_total_tokens: 100000
+        max_cost_usd: 5.5
+        max_failure_summary_chars: 6000
+""",
+            encoding="utf-8",
+        )
+
+        result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["repos"][0]["pr_automation"]["conflict"]["enabled"])
+        self.assertEqual(
+            result["repos"][0]["pr_automation"]["ci"]["check_allowlist"],
+            ["unit", "lint"],
+        )
+        self.assertEqual(
+            result["repos"][0]["pr_automation"]["ci"]["max_cost_usd"],
+            5.5,
+        )
+
+    def test_config_rejects_enabled_ci_without_allowlist(self):
+        from robert_agent import validate_config
+
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + """    pr_automation:
+      ci:
+        enabled: true
+""",
+            encoding="utf-8",
+        )
+
+        result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "repos[0].pr_automation.ci.check_allowlist must not be empty",
+            result["safe_error"],
+        )
+
+    def test_config_rejects_invalid_pr_automation_values(self):
+        from robert_agent import validate_config
+
+        cases = {
+            "duplicate checks": (
+                """    pr_automation:
+      ci:
+        check_allowlist: [unit, unit]
+""",
+                "check_allowlist entries must be unique",
+            ),
+            "empty check": (
+                """    pr_automation:
+      ci:
+        check_allowlist: [""]
+""",
+                "check_allowlist entries must not be empty",
+            ),
+            "zero limit": (
+                """    pr_automation:
+      conflict:
+        max_attempts: 0
+""",
+                "max_attempts must be at least 1",
+            ),
+            "unknown field": (
+                """    pr_automation:
+      ci:
+        unknown: true
+""",
+                "contains unsupported fields",
+            ),
+        }
+        for label, (addition, expected_error) in cases.items():
+            with self.subTest(label=label):
+                config_path = self.write_config()
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8") + addition,
+                    encoding="utf-8",
+                )
+
+                result = validate_config.validate_config(
+                    config_path,
+                    skip_external=True,
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertIn(expected_error, result["safe_error"])
 
     def test_repo_max_concurrency_is_bounded_by_global_capacity(self):
         from robert_agent import validate_config
@@ -989,6 +1118,105 @@ repos:
                 for row in conn.execute("PRAGMA table_info(github_actions)")
             }
         self.assertIn("publish_status", columns)
+
+    def test_schema_includes_remediation_contracts_and_unique_identities(self):
+        from robert_agent import storage
+
+        db_path = self.data_dir / "dd.sqlite3"
+        storage.init_database(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            event_columns = {
+                row[1]: row[4]
+                for row in conn.execute("PRAGMA table_info(github_events)")
+            }
+            task_columns = {
+                row[1]: row[4]
+                for row in conn.execute("PRAGMA table_info(tasks)")
+            }
+            conn.execute(
+                """
+                INSERT INTO repos(
+                  repo_id, full_name, github_account, default_base_branch,
+                  repo_root, worktree_root
+                )
+                VALUES ('repo-1', 'example/backend', 'robert-bot', 'main', '/repo', '/worktrees')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO workstreams(
+                  workstream_id, repo_id, lifecycle, created_at, updated_at
+                )
+                VALUES ('ws-1', 'repo-1', 'completed', '2026-07-26', '2026-07-26')
+                """
+            )
+            episode = (
+                "episode-1",
+                "ws-1",
+                "ci",
+                "head:base",
+                "head",
+                "base",
+                "open",
+                "2026-07-26",
+                "2026-07-26",
+            )
+            conn.execute(
+                """
+                INSERT INTO pr_remediation_episodes(
+                  episode_id, workstream_id, episode_kind, subject_key,
+                  observed_head_sha, observed_base_sha, status,
+                  first_seen_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                episode,
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO pr_remediation_episodes(
+                      episode_id, workstream_id, episode_kind, subject_key,
+                      observed_head_sha, observed_base_sha, status,
+                      first_seen_at, updated_at
+                    )
+                    VALUES ('episode-2', 'ws-1', 'ci', 'head:base',
+                            'head', 'base', 'open', '2026-07-26', '2026-07-26')
+                    """
+                )
+            observation = (
+                "observation-1",
+                "episode-1",
+                "workflow_run",
+                "123",
+                1,
+                "unit",
+                "completed",
+            )
+            conn.execute(
+                """
+                INSERT INTO pr_ci_observations(
+                  observation_id, episode_id, source_kind, external_id,
+                  attempt_no, check_name, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                observation,
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO pr_ci_observations(
+                      observation_id, episode_id, source_kind, external_id,
+                      attempt_no, check_name, status
+                    )
+                    VALUES ('observation-2', 'episode-1', 'workflow_run',
+                            '123', 1, 'unit', 'completed')
+                    """
+                )
+
+        self.assertEqual(event_columns["actor_kind"], "'github_user'")
+        self.assertEqual(task_columns["task_kind"], "'human_request'")
 
     def test_schema_includes_project_memory_tables_and_lookup_index(self):
         from robert_agent import storage

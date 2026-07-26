@@ -26,6 +26,9 @@ Robert provides those controls without requiring a GitHub App or hosted service.
 ## Key Capabilities
 
 - Trusted issue, pull-request, review, assignment, and mention handling.
+- Opt-in per-repository PR self-healing for aggregated CI failures and exact
+  base-snapshot conflict merges, with a head/base compare-and-swap before a
+  non-force push.
 - Multi-repository workstreams stored in SQLite.
 - Per-route worker, required-skill, and recommended-skill configuration.
 - Isolated Git worktrees for analysis, implementation, and source review.
@@ -98,6 +101,9 @@ confirmation wherever the guide requires it.
 ```
 
 ## Configuration
+
+PR self-healing is disabled by default. Enable `pr_automation` on an individual
+repository; CI automation also requires a non-empty `check_allowlist`.
 
 Robert uses versioned YAML. Configure the GitHub account, worker definitions,
 skill search paths, route overrides, and one or more repository checkouts.

@@ -89,6 +89,41 @@ class RoutingTests(unittest.TestCase):
             ],
         )
 
+    def test_ci_remediation_reuses_existing_pr_route_with_required_skills(self):
+        from robert_agent import route
+
+        result = route.route_task(
+            {
+                "task_kind": "ci_remediation",
+                "source_type": "pull_request",
+                "has_open_dd_pr": True,
+            }
+        )
+
+        self.assertEqual(result["route_id"], "update-existing-pr")
+        self.assertEqual(result["expected_output"], "update_existing_pr")
+        self.assertEqual(
+            result["required_skills"],
+            ["fast-test-fix", "fast-preflight"],
+        )
+
+    def test_conflict_remediation_reuses_existing_pr_route_with_required_skills(self):
+        from robert_agent import route
+
+        result = route.route_task(
+            {
+                "task_kind": "merge_conflict_remediation",
+                "source_type": "pull_request",
+                "has_open_dd_pr": True,
+            }
+        )
+
+        self.assertEqual(result["route_id"], "update-existing-pr")
+        self.assertEqual(
+            result["required_skills"],
+            ["fast-conflict-fix", "fast-preflight"],
+        )
+
     def test_dd_pr_bug_fix_followup_updates_existing_pr(self):
         from robert_agent import route
         result = route.route_task(
@@ -233,6 +268,95 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('"target_url": "<target GitHub URL>"', prompt)
         self.assertIn('"review_point_evaluation": []', prompt)
         self.assertIn('"used_skills": []', prompt)
+
+    def test_ci_remediation_prompt_uses_evidence_without_review_point_contract(self):
+        from robert_agent import render_prompt, route
+
+        task = {
+            "task_id": "task-ci",
+            "attempt_id": "attempt-ci",
+            "workstream_id": "github:example/repo!77",
+            "task_kind": "ci_remediation",
+        }
+        event = {
+            "event_fingerprint": "github-system:workflow_run:101:1",
+            "url": "https://github.com/example/repo/pull/77",
+            "metadata": {
+                "remediation": {
+                    "episode_id": "episode-ci",
+                    "episode_kind": "ci",
+                    "observed_head_sha": "head-1",
+                    "observed_base_sha": "base-1",
+                    "failure_signature": "failure-1",
+                    "failure_summary": "unit: expected 1 got 2",
+                    "details_url": "https://github.com/run/101",
+                }
+            },
+        }
+        prompt = render_prompt.render_prompt(
+            task,
+            route.route_task(task),
+            [event],
+            runtime_context={
+                "db_path": "/tmp/robert.sqlite3",
+                "result_script": "/agent/result.py",
+                "worktree_path": "/tmp/worktree",
+                "branch_name": "codex/fix",
+                "head_ref": "refs/robert/prs/pr-77-head",
+                "base_ref": "refs/robert/prs/pr-77-base",
+            },
+        )
+
+        self.assertIn("task_kind: ci_remediation", prompt)
+        self.assertIn("episode-ci", prompt)
+        self.assertIn("head-1", prompt)
+        self.assertIn("base-1", prompt)
+        self.assertIn("expected 1 got 2", prompt)
+        self.assertIn("reproduce the reported failure", prompt)
+        self.assertIn('"remediation_evidence"', prompt)
+        self.assertNotIn("Review-point evaluation", prompt)
+
+    def test_conflict_remediation_prompt_requires_exact_base_merge(self):
+        from robert_agent import render_prompt, route
+
+        task = {
+            "task_id": "task-conflict",
+            "attempt_id": "attempt-conflict",
+            "workstream_id": "github:example/repo!77",
+            "task_kind": "merge_conflict_remediation",
+        }
+        prompt = render_prompt.render_prompt(
+            task,
+            route.route_task(task),
+            [
+                {
+                    "event_fingerprint": (
+                        "github-system:merge-conflict:77:head-1:base-1"
+                    ),
+                    "metadata": {
+                        "remediation": {
+                            "episode_id": "episode-conflict",
+                            "episode_kind": "merge_conflict",
+                            "observed_head_sha": "head-1",
+                            "observed_base_sha": "base-1",
+                        }
+                    },
+                }
+            ],
+            runtime_context={
+                "base_ref": "refs/robert/prs/pr-77-base",
+                "worktree_path": "/tmp/worktree",
+                "branch_name": "codex/fix",
+            },
+        )
+
+        self.assertIn(
+            "git merge --no-edit refs/robert/prs/pr-77-base",
+            prompt,
+        )
+        self.assertIn("never rebase", prompt)
+        self.assertIn("never force-push", prompt)
+        self.assertNotIn("Review-point evaluation", prompt)
 
     def test_comment_analysis_prompt_result_example_includes_required_comment_action(self):
         from robert_agent import render_prompt

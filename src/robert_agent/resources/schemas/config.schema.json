@@ -17,6 +17,38 @@
         }
       },
       "additionalProperties": false
+    },
+    "prAutomation": {
+      "type": "object",
+      "properties": {
+        "conflict": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "max_attempts": {"type": "integer", "minimum": 1},
+            "max_wall_minutes": {"type": "integer", "minimum": 1}
+          },
+          "additionalProperties": false
+        },
+        "ci": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "check_allowlist": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            },
+            "max_attempts": {"type": "integer", "minimum": 1},
+            "max_wall_minutes": {"type": "integer", "minimum": 1},
+            "max_total_tokens": {"type": "integer", "minimum": 1},
+            "max_cost_usd": {"type": "number", "exclusiveMinimum": 0},
+            "max_failure_summary_chars": {"type": "integer", "minimum": 1}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": ["version", "github", "workers", "repos"],
@@ -125,6 +157,7 @@
             "items": {"type": "string", "minLength": 1}
           },
           "max_concurrency": {"type": "integer", "minimum": 1},
+          "pr_automation": {"$ref": "#/$defs/prAutomation"},
           "routes": {
             "type": "object",
             "additionalProperties": {

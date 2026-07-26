@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from robert_agent import audit_result
+from robert_agent import audit_result, pr_health, remediation
 from robert_agent.common import emit
 
 
@@ -521,7 +521,7 @@ def _publish_open_pr(action, run_command, conn=None):
     }
 
 
-def _publish_push_existing_pr(action, run_command):
+def _publish_push_existing_pr(action, run_command, source_ref="HEAD"):
     metadata = _decode_json(action["metadata_json"])
     worktree_path = _metadata_value(metadata, "worktree_path")
     remote = _metadata_value(metadata, "remote") or "origin"
@@ -540,7 +540,7 @@ def _publish_push_existing_pr(action, run_command):
             "status": "publish_failed",
             "safe_error": f"push_existing_pr action missing fields: {missing}",
         }
-    command = ["git", "push", remote, f"HEAD:{branch}"]
+    command = ["git", "push", remote, f"{source_ref}:{branch}"]
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
     safe_error = _command_failure(completed, "git push failed")
     if safe_error:
@@ -586,6 +586,82 @@ def _publish_scope_violation(conn, action):
     return audit_result.action_scope_violation([payload], action_scope)
 
 
+def _publish_remediation_push(action, run_command, action_scope):
+    repo = action_scope.get("repo")
+    pr_number = action_scope.get("pr_number")
+    observed_head_sha = action_scope.get("observed_head_sha")
+    observed_base_sha = action_scope.get("observed_base_sha")
+    audited_result_head_sha = action_scope.get("result_head_sha")
+    if (
+        not repo
+        or not pr_number
+        or not observed_head_sha
+        or not observed_base_sha
+        or not audited_result_head_sha
+    ):
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": "remediation publish scope is incomplete",
+        }
+    snapshot = pr_health.fetch_pr_snapshot(
+        repo,
+        pr_number,
+        runner=run_command,
+    )
+    if snapshot is None:
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": "remediation PR snapshot revalidation failed",
+        }
+    if (
+        snapshot.get("state") != "open"
+        or snapshot.get("merged")
+        or snapshot.get("head_sha") != observed_head_sha
+        or snapshot.get("base_sha") != observed_base_sha
+    ):
+        return {
+            "ok": True,
+            "status": "superseded",
+            "safe_error": "remediation PR snapshot changed before publication",
+            "snapshot": snapshot,
+        }
+    metadata = _decode_json(action["metadata_json"])
+    worktree_path = _metadata_value(metadata, "worktree_path")
+    head_command = ["git", "rev-parse", "HEAD"]
+    completed = run_command(
+        head_command,
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+    )
+    safe_error = _command_failure(completed, "git rev-parse HEAD failed")
+    local_head_sha = (getattr(completed, "stdout", "") or "").strip()
+    if safe_error or not local_head_sha:
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": safe_error or "git rev-parse HEAD returned no SHA",
+            "command": head_command,
+        }
+    if local_head_sha != audited_result_head_sha:
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": "remediation worktree HEAD changed after audit",
+            "command": head_command,
+        }
+    result = _publish_push_existing_pr(
+        action,
+        run_command,
+        source_ref=audited_result_head_sha,
+    )
+    if result.get("status") == "published":
+        result["result_head_sha"] = audited_result_head_sha
+    return result
+
+
 def _publish_action(action, run_command, conn=None):
     scope_violation = _publish_scope_violation(conn, action)
     if scope_violation:
@@ -599,6 +675,17 @@ def _publish_action(action, run_command, conn=None):
     if action["action_type"] == "open_pr":
         return _publish_open_pr(action, run_command, conn=conn)
     if action["action_type"] == "push_existing_pr":
+        action_scope = _trusted_action_scope(conn, action)
+        if (
+            isinstance(action_scope, dict)
+            and action_scope.get("task_kind")
+            in {"ci_remediation", "merge_conflict_remediation"}
+        ):
+            return _publish_remediation_push(
+                action,
+                run_command,
+                action_scope,
+            )
         return _publish_push_existing_pr(action, run_command)
     return {
         "ok": False,
@@ -653,6 +740,32 @@ def _mark_skipped(conn, action, result, now):
     _insert_notification(conn, action, "github_publish_skipped", result, now)
 
 
+def _skip_pending_result_actions(
+    conn,
+    *,
+    result_id,
+    excluding_action_id,
+    result,
+    now,
+):
+    rows = conn.execute(
+        """
+        SELECT action_id, result_id, task_id, action_type, target_url,
+               external_id, audit_status, publish_status, created_at,
+               metadata_json
+        FROM github_actions
+        WHERE result_id = ?
+          AND action_id != ?
+          AND audit_status = 'accepted'
+          AND publish_status = 'not_published'
+        """,
+        (result_id, excluding_action_id),
+    ).fetchall()
+    for row in rows:
+        _mark_skipped(conn, dict(row), result, now)
+    return len(rows)
+
+
 def _record_failure(conn, action, result, now):
     metadata = _decode_json(action["metadata_json"])
     metadata["publish"] = {
@@ -670,6 +783,28 @@ def _record_failure(conn, action, result, now):
         (_encode_json(metadata), action["action_id"]),
     )
     _insert_notification(conn, action, "github_publish_failed", result, now)
+
+
+def _record_remediation_publish_outcome(conn, action, result, now):
+    if action["action_type"] != "push_existing_pr":
+        return
+    action_scope = _trusted_action_scope(conn, action)
+    if not isinstance(action_scope, dict):
+        return
+    episode_id = action_scope.get("episode_id")
+    if (
+        action_scope.get("task_kind")
+        not in {"ci_remediation", "merge_conflict_remediation"}
+        or not episode_id
+    ):
+        return
+    remediation.record_publish_result(
+        conn,
+        episode_id=episode_id,
+        publish_status=result["status"],
+        result_head_sha=result.get("result_head_sha"),
+        now=now,
+    )
 
 
 def _ready_actions(conn, limit, repo_id=None):
@@ -724,25 +859,79 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
         failed_count = 0
         failures = []
         failed_result_ids = set()
+        failed_remediation_result_ids = set()
         for action in actions:
             result_id = action["result_id"]
-            if result_id and result_id in failed_result_ids:
-                continue
             now = _now()
+            current_status = conn.execute(
+                """
+                SELECT publish_status
+                FROM github_actions
+                WHERE action_id = ?
+                """,
+                (action["action_id"],),
+            ).fetchone()
+            if not current_status or current_status[0] != "not_published":
+                continue
+            if result_id and result_id in failed_result_ids:
+                if result_id in failed_remediation_result_ids:
+                    result = {
+                        "ok": False,
+                        "status": "publish_failed",
+                        "safe_error": (
+                            "skipped because the preceding remediation "
+                            "push failed"
+                        ),
+                    }
+                    _mark_skipped(conn, action, result, now)
+                    skipped_count += 1
+                continue
             result = _publish_action(action, run_command, conn=conn)
+            _record_remediation_publish_outcome(
+                conn,
+                action,
+                result,
+                now,
+            )
             if result["status"] == "published":
                 _mark_published(conn, action, result, now)
                 published_count += 1
                 if result.get("deduplicated"):
                     deduplicated_count += 1
                 continue
-            if result["status"] == "unsupported_action":
+            if result["status"] in {"unsupported_action", "superseded"}:
                 _mark_skipped(conn, action, result, now)
                 skipped_count += 1
+                if result["status"] == "superseded" and result_id:
+                    skipped_count += _skip_pending_result_actions(
+                        conn,
+                        result_id=result_id,
+                        excluding_action_id=action["action_id"],
+                        result={
+                            "ok": True,
+                            "status": "superseded",
+                            "safe_error": (
+                                "skipped because the remediation PR "
+                                "snapshot changed"
+                            ),
+                        },
+                        now=now,
+                    )
                 continue
             _record_failure(conn, action, result, now)
             if result_id:
                 failed_result_ids.add(result_id)
+                action_scope = _trusted_action_scope(conn, action)
+                if (
+                    action["action_type"] == "push_existing_pr"
+                    and isinstance(action_scope, dict)
+                    and action_scope.get("task_kind")
+                    in {
+                        "ci_remediation",
+                        "merge_conflict_remediation",
+                    }
+                ):
+                    failed_remediation_result_ids.add(result_id)
             failed_count += 1
             failures.append(
                 {

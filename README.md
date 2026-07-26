@@ -20,6 +20,9 @@ Robert 是一个自托管的 GitHub 队友。它把可信的 Issue、提及、�
 ## 核心能力
 
 - 处理可信的 Issue、PR、评审、指派和提及。
+- 可按仓库显式开启 PR 自修复：聚合当前 head SHA 的 CI 失败，或把精确
+  base 快照合入冲突 PR；发布前会再次校验 PR head/base，且不会 rebase 或
+  force-push。
 - 使用 SQLite 管理多仓库工作流；每个仓库有独立 checkout、worktree 根目录、
   可信 Actor、并发限制和路由覆盖。
 - 内置 `codex`、`tcodex`、`claude`、`tclaude`、`opencode`、`cbc` 和通用
@@ -76,6 +79,8 @@ confirmation wherever the guide requires it.
 Robert 使用带版本号的 YAML。配置包括 GitHub 账号、Worker、Skill 搜索路径、
 路由覆盖和一个或多个本地仓库。详见
 [docs/reference.md](docs/reference.md#configuration)。
+CI 和冲突修复默认关闭；只有仓库配置中的 `pr_automation` 显式启用后才运行，
+CI 还必须配置非空 `check_allowlist`。
 
 ## 守护进程
 

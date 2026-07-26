@@ -10,7 +10,7 @@ from robert_agent import worker_adapters
 from robert_agent.common import emit
 
 
-_BACKGROUND_PROCESSES = {}
+_BACKGROUND_PROCESSES: dict[int, subprocess.Popen] = {}
 DEFAULT_WORKER_BASH_DEFAULT_TIMEOUT_MS = "300000"
 DEFAULT_WORKER_ENV = {
     "PATH",

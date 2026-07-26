@@ -198,6 +198,93 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(active_payload["items"], [])
         self.assertEqual(active_payload["counts"]["history"], 1)
 
+    def test_exhausted_remediation_episode_is_operator_attention(self):
+        from robert_agent import workbench
+
+        self.seed_workstream(
+            task_lifecycle="completed",
+            workstream_lifecycle="completed",
+        )
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO pr_remediation_episodes(
+                  episode_id, workstream_id, episode_kind, subject_key,
+                  observed_head_sha, observed_base_sha, status,
+                  first_seen_at, updated_at, terminal_at, metadata_json
+                )
+                VALUES (
+                  'episode-ci', 'workstream-1', 'ci', 'head-1:base-1',
+                  'head-1', 'base-1', 'exhausted',
+                  '2026-07-26T00:00:00Z', '2026-07-26T00:01:00Z',
+                  '2026-07-26T00:01:00Z',
+                  '{"last_transition_reason":"failure_evidence_unavailable"}'
+                )
+                """
+            )
+
+        payload = workbench.list_work_items(self.db_path)
+
+        self.assertEqual(payload["items"][0]["bucket"], "needs_attention")
+        self.assertEqual(
+            payload["items"][0]["reason_code"],
+            "pr_remediation_exhausted",
+        )
+        self.assertEqual(
+            payload["items"][0]["signals"]["remediation_status"],
+            "exhausted",
+        )
+
+    def test_newer_resolved_episode_clears_old_exhausted_attention(self):
+        from robert_agent import workbench
+
+        self.seed_workstream(
+            task_lifecycle="completed",
+            workstream_lifecycle="completed",
+        )
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.executemany(
+                """
+                INSERT INTO pr_remediation_episodes(
+                  episode_id, workstream_id, episode_kind, subject_key,
+                  observed_head_sha, observed_base_sha, status,
+                  first_seen_at, updated_at, terminal_at, metadata_json
+                )
+                VALUES (?, 'workstream-1', 'ci', ?, ?, 'base-1', ?,
+                        ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "episode-old",
+                        "head-1:base-1",
+                        "head-1",
+                        "exhausted",
+                        "2026-07-26T00:00:00Z",
+                        "2026-07-26T00:01:00Z",
+                        "2026-07-26T00:01:00Z",
+                        '{"last_transition_reason":"max_attempts"}',
+                    ),
+                    (
+                        "episode-new",
+                        "head-2:base-1",
+                        "head-2",
+                        "resolved",
+                        "2026-07-26T00:02:00Z",
+                        "2026-07-26T00:03:00Z",
+                        "2026-07-26T00:03:00Z",
+                        "{}",
+                    ),
+                ],
+            )
+
+        payload = workbench.list_work_items(
+            self.db_path,
+            bucket="history",
+        )
+
+        self.assertEqual(payload["items"][0]["bucket"], "history")
+        self.assertEqual(payload["items"][0]["reason_code"], "inactive")
+
     def test_search_qualifiers_and_cursor_cover_the_full_database(self):
         from robert_agent import workbench
 

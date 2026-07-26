@@ -38,6 +38,7 @@ REVIEW_EVALUATION_OUTPUTS = {"update_existing_pr", "review_comment"}
 VALID_REVIEW_VERDICTS = {"correct", "partially_correct", "incorrect", "unverified"}
 VALID_REVIEW_ACTIONS = {"implement", "skip", "comment", "clarify"}
 IMPLEMENTABLE_VERDICTS = {"correct", "partially_correct"}
+REMEDIATION_TASK_KINDS = {"ci_remediation", "merge_conflict_remediation"}
 VALID_VERIFICATION_STATUSES = {"passed", "failed", "skipped"}
 CLASSIFICATION_RECOMMENDED_ROUTES = {
     "comment-analysis",
@@ -290,6 +291,67 @@ def _audit_review_point_evaluation(result, actual_types):
     return None
 
 
+def _audit_remediation_evidence(
+    result,
+    *,
+    task_kind,
+    remediation_context,
+    remediation_attestation,
+):
+    if task_kind not in REMEDIATION_TASK_KINDS:
+        return None
+    if result.get("output_type") == "waiting_for_user":
+        return None
+    evidence = result.get("remediation_evidence")
+    context = remediation_context
+    if not isinstance(evidence, dict) or not isinstance(context, dict):
+        return ["invalid_remediation_evidence"]
+    expected_kind = (
+        "ci" if task_kind == "ci_remediation" else "merge_conflict"
+    )
+    required_fields = {
+        "kind",
+        "episode_id",
+        "observed_head_sha",
+        "observed_base_sha",
+        "resolution_summary",
+    }
+    if task_kind == "ci_remediation":
+        required_fields.add("failure_signature")
+    if any(
+        not isinstance(evidence.get(field), str)
+        or not evidence[field].strip()
+        for field in required_fields
+    ):
+        return ["invalid_remediation_evidence"]
+    comparisons = {
+        "kind": context.get("episode_kind"),
+        "episode_id": context.get("episode_id"),
+        "observed_head_sha": context.get("observed_head_sha"),
+        "observed_base_sha": context.get("observed_base_sha"),
+    }
+    if task_kind == "ci_remediation":
+        comparisons["failure_signature"] = context.get("failure_signature")
+    if expected_kind != evidence["kind"] or any(
+        evidence.get(field) != expected
+        for field, expected in comparisons.items()
+    ):
+        return ["remediation_evidence_mismatch"]
+    if not isinstance(remediation_attestation, dict) or (
+        remediation_attestation.get("status") != "accepted"
+    ):
+        return ["remediation_attestation_failed"]
+    if (
+        not isinstance(
+            remediation_attestation.get("result_head_sha"),
+            str,
+        )
+        or not remediation_attestation["result_head_sha"]
+    ):
+        return ["remediation_attestation_failed"]
+    return None
+
+
 def _audit_classification_recommendation(result):
     if result.get("output_type") != "classification_result":
         return None
@@ -430,6 +492,9 @@ def audit_result(
     verification_policy=None,
     origin_type="github",
     action_scope=None,
+    task_kind="human_request",
+    remediation_context=None,
+    remediation_attestation=None,
 ):
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):
@@ -561,7 +626,24 @@ def audit_result(
             "safe_error": verification_error,
         }
 
-    review_violation = _audit_review_point_evaluation(result, actual_types)
+    remediation_violation = _audit_remediation_evidence(
+        result,
+        task_kind=task_kind,
+        remediation_context=remediation_context,
+        remediation_attestation=remediation_attestation,
+    )
+    if remediation_violation:
+        return {
+            "ok": False,
+            "status": "policy_violation",
+            "violations": remediation_violation,
+        }
+
+    review_violation = (
+        None
+        if task_kind in REMEDIATION_TASK_KINDS
+        else _audit_review_point_evaluation(result, actual_types)
+    )
     if review_violation:
         return {
             "ok": False,
@@ -583,7 +665,13 @@ def audit_result(
         "planned_github_actions": actual_types,
     }
     if action_scope is not None:
-        accepted["action_scope"] = action_scope
+        accepted["action_scope"] = dict(action_scope)
+    if task_kind in REMEDIATION_TASK_KINDS:
+        accepted["remediation_attestation"] = remediation_attestation
+        if action_scope is not None:
+            accepted["action_scope"]["result_head_sha"] = (
+                remediation_attestation["result_head_sha"]
+            )
     return accepted
 
 

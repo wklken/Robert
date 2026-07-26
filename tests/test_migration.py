@@ -5,7 +5,7 @@ import unittest
 
 import yaml
 
-from robert_agent import audit_result, publish
+from robert_agent import audit_result, publish, storage
 from robert_agent.migrate import migrate_legacy
 
 
@@ -96,3 +96,31 @@ class MigrationTests(unittest.TestCase):
         self.assertIsNotNone(
             publish.WORKSTREAM_MARKER_RE.search(legacy_workstream)
         )
+
+    def test_database_init_adds_remediation_columns_to_legacy_schema(self):
+        schema_path = self.root / "legacy-schema.sql"
+        legacy_schema = storage.schema_sql().replace(
+            "  actor_kind TEXT NOT NULL DEFAULT 'github_user',\n",
+            "",
+        ).replace(
+            "  task_kind TEXT NOT NULL DEFAULT 'human_request' "
+            "CHECK (task_kind IN ('human_request', 'ci_remediation', "
+            "'merge_conflict_remediation')),\n",
+            "",
+        )
+        schema_path.write_text(legacy_schema, encoding="utf-8")
+        db_path = self.root / "legacy.sqlite3"
+
+        storage.init_database(db_path, schema_path=schema_path)
+
+        with sqlite3.connect(db_path) as conn:
+            event_columns = {
+                row[1]: row[4]
+                for row in conn.execute("PRAGMA table_info(github_events)")
+            }
+            task_columns = {
+                row[1]: row[4]
+                for row in conn.execute("PRAGMA table_info(tasks)")
+            }
+        self.assertEqual(event_columns["actor_kind"], "'github_user'")
+        self.assertEqual(task_columns["task_kind"], "'human_request'")
