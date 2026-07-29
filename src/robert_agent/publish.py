@@ -521,7 +521,7 @@ def _publish_open_pr(action, run_command, conn=None):
     }
 
 
-def _publish_push_existing_pr(action, run_command):
+def _publish_push_existing_pr(action, run_command, conn=None):
     metadata = _decode_json(action["metadata_json"])
     worktree_path = _metadata_value(metadata, "worktree_path")
     remote = _metadata_value(metadata, "remote") or "origin"
@@ -540,25 +540,37 @@ def _publish_push_existing_pr(action, run_command):
             "status": "publish_failed",
             "safe_error": f"push_existing_pr action missing fields: {missing}",
         }
-    lookup_command = ["git", "ls-remote", "--heads", remote, branch]
-    lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
-    lookup_error = _command_failure(lookup, "git ls-remote failed")
-    if lookup_error:
-        return {
-            "ok": False,
-            "status": "publish_failed",
-            "safe_error": f"remote branch lookup failed: {lookup_error}",
-            "command": lookup_command,
-        }
-    lookup_stdout = (getattr(lookup, "stdout", "") or "").strip()
-    expected_remote_sha = lookup_stdout.split()[0] if lookup_stdout else ""
-    command = [
-        "git",
-        "push",
-        f"--force-with-lease={branch}:{expected_remote_sha}",
-        remote,
-        f"HEAD:{branch}",
-    ]
+    action_scope = _trusted_action_scope(conn, action) or {}
+    expected_remote_sha = action_scope.get("existing_pr_head_sha", "")
+    if expected_remote_sha:
+        lookup_command = ["git", "ls-remote", "--heads", remote, branch]
+        lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
+        lookup_error = _command_failure(lookup, "git ls-remote failed")
+        if lookup_error:
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "safe_error": f"remote branch lookup failed: {lookup_error}",
+                "command": lookup_command,
+            }
+        lookup_stdout = (getattr(lookup, "stdout", "") or "").strip()
+        current_remote_sha = lookup_stdout.split()[0] if lookup_stdout else ""
+        if current_remote_sha and current_remote_sha != expected_remote_sha:
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "safe_error": "remote branch changed since audit; refusing to overwrite unreviewed head",
+                "command": lookup_command,
+            }
+        command = [
+            "git",
+            "push",
+            f"--force-with-lease={branch}:{expected_remote_sha}",
+            remote,
+            f"HEAD:{branch}",
+        ]
+    else:
+        command = ["git", "push", remote, f"HEAD:{branch}"]
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
     safe_error = _command_failure(completed, "git push failed")
     if safe_error:
@@ -617,7 +629,7 @@ def _publish_action(action, run_command, conn=None):
     if action["action_type"] == "open_pr":
         return _publish_open_pr(action, run_command, conn=conn)
     if action["action_type"] == "push_existing_pr":
-        return _publish_push_existing_pr(action, run_command)
+        return _publish_push_existing_pr(action, run_command, conn=conn)
     return {
         "ok": False,
         "status": "unsupported_action",
