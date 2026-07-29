@@ -540,7 +540,25 @@ def _publish_push_existing_pr(action, run_command):
             "status": "publish_failed",
             "safe_error": f"push_existing_pr action missing fields: {missing}",
         }
-    command = ["git", "push", remote, f"HEAD:{branch}"]
+    lookup_command = ["git", "ls-remote", "--heads", remote, branch]
+    lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
+    lookup_error = _command_failure(lookup, "git ls-remote failed")
+    if lookup_error:
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": f"remote branch lookup failed: {lookup_error}",
+            "command": lookup_command,
+        }
+    lookup_stdout = (getattr(lookup, "stdout", "") or "").strip()
+    expected_remote_sha = lookup_stdout.split()[0] if lookup_stdout else ""
+    command = [
+        "git",
+        "push",
+        f"--force-with-lease={branch}:{expected_remote_sha}",
+        remote,
+        f"HEAD:{branch}",
+    ]
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
     safe_error = _command_failure(completed, "git push failed")
     if safe_error:

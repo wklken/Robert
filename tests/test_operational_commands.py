@@ -3843,6 +3843,8 @@ class OperationalCommandTests(unittest.TestCase):
 
         def fake_run(command, **kwargs):
             calls.append((command, kwargs))
+            if command[:3] == ["git", "ls-remote", "--heads"]:
+                return Completed("abc123\trefs/heads/codex/dd-123\n")
             if command[:2] == ["git", "push"]:
                 return Completed("pushed\n")
             if command[:3] == ["gh", "pr", "list"]:
@@ -3858,12 +3860,23 @@ class OperationalCommandTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 2)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"])
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
-        self.assertEqual(calls[1][0], ["git", "remote", "get-url", "origin"])
-        self.assertEqual(calls[2][0][:3], ["gh", "pr", "list"])
-        self.assertEqual(calls[3][0][:3], ["gh", "pr", "create"])
-        self.assertEqual(calls[3][0][calls[3][0].index("--head") + 1], "codex/dd-123")
+        self.assertEqual(
+            calls[1][0],
+            [
+                "git",
+                "push",
+                "--force-with-lease=codex/dd-123:abc123",
+                "origin",
+                "HEAD:codex/dd-123",
+            ],
+        )
+        self.assertEqual(calls[1][1]["cwd"], str(worktree))
+        self.assertEqual(calls[2][0], ["git", "remote", "get-url", "origin"])
+        self.assertEqual(calls[3][0][:3], ["gh", "pr", "list"])
+        self.assertEqual(calls[4][0][:3], ["gh", "pr", "create"])
+        self.assertEqual(calls[4][0][calls[4][0].index("--head") + 1], "codex/dd-123")
         with closing(sqlite3.connect(db_path)) as conn, conn:
             rows = conn.execute(
                 """
@@ -4025,6 +4038,8 @@ class OperationalCommandTests(unittest.TestCase):
 
         def fake_run(command, **kwargs):
             calls.append((command, kwargs))
+            if command[:3] == ["git", "ls-remote", "--heads"]:
+                return Completed(stdout="abc123\trefs/heads/codex/dd-123\n")
             if command[:2] == ["git", "push"]:
                 return Completed(returncode=1, stderr="push rejected")
             raise AssertionError(command)
@@ -4034,8 +4049,18 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["published_count"], 0)
         self.assertEqual(result["failed_count"], 1)
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"])
+        self.assertEqual(
+            calls[1][0],
+            [
+                "git",
+                "push",
+                "--force-with-lease=codex/dd-123:abc123",
+                "origin",
+                "HEAD:codex/dd-123",
+            ],
+        )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             rows = conn.execute(
                 """
@@ -4051,6 +4076,57 @@ class OperationalCommandTests(unittest.TestCase):
                 ("action-2", "not_published", None, None),
             ],
         )
+
+    def test_publish_ready_existing_pr_stops_when_remote_lookup_fails(self):
+        from robert_agent import publish
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+        worktree = self.root / "worktree"
+        worktree.mkdir()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                """
+                UPDATE github_actions
+                SET action_type = 'push_existing_pr',
+                    target_url = NULL,
+                    created_at = '2026-06-18T08:00:00+00:00',
+                    metadata_json = ?
+                WHERE action_id = 'action-1'
+                """,
+                (
+                    json.dumps(
+                        {
+                            "worktree_path": str(worktree),
+                            "branch": "codex/dd-123",
+                            "remote": "origin",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        calls = []
+
+        class Completed:
+            def __init__(self, returncode=0, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[:3] == ["git", "ls-remote", "--heads"]:
+                return Completed(returncode=128, stderr="network unavailable")
+            raise AssertionError(command)
+
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["published_count"], 0)
+        self.assertEqual(result["failed_count"], 1)
+        self.assertEqual([call[0] for call in calls], [
+            ["git", "ls-remote", "--heads", "origin", "codex/dd-123"],
+        ])
+        self.assertIn("remote branch lookup failed", result["failures"][0]["safe_error"])
 
     def test_publish_ready_open_pr_reuses_existing_head_pr(self):
         from robert_agent import publish
@@ -4468,15 +4544,30 @@ class OperationalCommandTests(unittest.TestCase):
 
         def fake_run(command, **kwargs):
             calls.append((command, kwargs))
+            if command[:3] == ["git", "ls-remote", "--heads"]:
+                completed = Completed()
+                completed.stdout = "abc123\trefs/heads/codex/dd-123\n"
+                return completed
             return Completed()
 
         result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"])
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
-        self.assertNotIn("shell", calls[0][1])
+        self.assertEqual(
+            calls[1][0],
+            [
+                "git",
+                "push",
+                "--force-with-lease=codex/dd-123:abc123",
+                "origin",
+                "HEAD:codex/dd-123",
+            ],
+        )
+        self.assertEqual(calls[1][1]["cwd"], str(worktree))
+        self.assertNotIn("shell", calls[1][1])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             row = conn.execute(
                 """
@@ -4486,6 +4577,59 @@ class OperationalCommandTests(unittest.TestCase):
                 """
             ).fetchone()
         self.assertEqual(row, ("published", "codex/dd-123", "https://github.com/x/y/pull/42"))
+
+    def test_publish_ready_push_existing_pr_creates_missing_remote_branch_with_empty_lease(self):
+        from robert_agent import publish
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+        worktree = self.root / "worktree"
+        worktree.mkdir()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                """
+                UPDATE github_actions
+                SET action_type = 'push_existing_pr',
+                    target_url = 'https://github.com/x/y/pull/42',
+                    metadata_json = ?
+                WHERE action_id = 'action-1'
+                """,
+                (
+                    json.dumps(
+                        {
+                            "worktree_path": str(worktree),
+                            "remote": "origin",
+                            "branch": "codex/dd-123",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        calls = []
+
+        class Completed:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return Completed()
+
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["published_count"], 1)
+        self.assertEqual(calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"])
+        self.assertEqual(
+            calls[1][0],
+            [
+                "git",
+                "push",
+                "--force-with-lease=codex/dd-123:",
+                "origin",
+                "HEAD:codex/dd-123",
+            ],
+        )
 
     def test_publish_ignores_actions_not_accepted_or_already_published(self):
         from robert_agent import publish
