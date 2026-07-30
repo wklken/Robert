@@ -1689,25 +1689,39 @@ def _is_dd_pr_followup_event(event):
     )
 
 
-def _task_related_events(conn, task_id):
+def _task_related_events(conn, task_id, include_consumed=False):
+    relationships = ["trigger", "context", "pending"]
+    if include_consumed:
+        relationships.append("consumed")
+    placeholders = ", ".join("?" for _ in relationships)
     rows = conn.execute(
-        """
-        SELECT ge.payload_json
+        f"""
+        SELECT te.relationship, ge.event_fingerprint, ge.payload_json
         FROM task_events te
         JOIN github_events ge ON ge.event_id = te.event_id
         WHERE te.task_id = ?
-          AND te.relationship IN ('trigger', 'context', 'pending')
+          AND te.relationship IN ({placeholders})
         ORDER BY CASE te.relationship
             WHEN 'trigger' THEN 0
-            WHEN 'context' THEN 1
-            ELSE 2
+            WHEN 'consumed' THEN 1
+            WHEN 'context' THEN 2
+            ELSE 3
           END,
           ge.event_at,
           ge.event_id
         """,
-        (task_id,),
+        (task_id, *relationships),
     ).fetchall()
-    return [json.loads(payload) for (payload,) in rows]
+    events = []
+    consumed_events = []
+    for relationship, event_fingerprint, payload in rows:
+        event = json.loads(payload)
+        event.setdefault("event_fingerprint", event_fingerprint)
+        if relationship == "consumed":
+            consumed_events.append(event)
+        else:
+            events.append(event)
+    return events + consumed_events
 
 
 def _failed_parent_context_events(conn, parent_task_id):
@@ -1721,7 +1735,7 @@ def _failed_parent_context_events(conn, parent_task_id):
         return []
     rows = conn.execute(
         """
-        SELECT te.relationship, ge.payload_json
+        SELECT te.relationship, ge.event_fingerprint, ge.payload_json
         FROM task_events te
         JOIN github_events ge ON ge.event_id = te.event_id
         WHERE te.task_id = ?
@@ -1737,8 +1751,9 @@ def _failed_parent_context_events(conn, parent_task_id):
         (parent_task_id,),
     ).fetchall()
     events = []
-    for relationship, payload in rows:
+    for relationship, event_fingerprint, payload in rows:
         event = json.loads(payload)
+        event.setdefault("event_fingerprint", event_fingerprint)
         if relationship == "trigger" or event.get("mentions_dd"):
             events.append(event)
     return events
@@ -3732,6 +3747,7 @@ def _create_child_task_for_recommended_route(
     related_events,
     recommended_route,
     branch_slug,
+    consumed_event_fingerprints,
     run_now,
     dry_run,
     dispatch_queue,
@@ -3745,7 +3761,18 @@ def _create_child_task_for_recommended_route(
     related_events = list(related_events)
     if not related_events:
         return None
-    child_event = related_events[0]
+    consumed_fingerprints = set(consumed_event_fingerprints or [])
+    child_event = next(
+        (
+            event
+            for event in related_events
+            if event.get("event_fingerprint") in consumed_fingerprints
+        ),
+        related_events[0],
+    )
+    related_events = [child_event] + [
+        event for event in related_events if event is not child_event
+    ]
     stream = {
         "workstream_id": workstream_id,
         "source_relationship": workstream.source_relationship(child_event),
@@ -3848,7 +3875,11 @@ def _finalize_accepted_result(
                 action,
                 run_now,
             )
-    related_events = _task_related_events(conn, payload["task_id"])
+    related_events = _task_related_events(
+        conn,
+        payload["task_id"],
+        include_consumed=payload["output_type"] == "classification_result",
+    )
     _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
     pending_events = _pending_events_for_task(
         conn,
@@ -3889,6 +3920,7 @@ def _finalize_accepted_result(
             related_events,
             payload.get("recommended_route"),
             payload.get("branch_slug"),
+            payload.get("consumed_event_fingerprints"),
             run_now,
             dry_run,
             dispatch_queue,
@@ -3950,6 +3982,90 @@ def _finalize_accepted_result(
         dispatch_queue,
         dispatch_budget,
     )
+
+
+def _recover_orphaned_classification_results(
+    conn,
+    repo_id,
+    data_dir,
+    db_path,
+    repo,
+    run_id,
+    run_now,
+    dry_run,
+    dispatch_queue,
+    dispatch_budget,
+):
+    rows = conn.execute(
+        """
+        SELECT
+          wr.result_id,
+          wr.task_id,
+          wr.attempt_id,
+          wr.output_type,
+          wr.consumed_event_fingerprints_json,
+          wr.verification_json,
+          wr.handoff,
+          wr.metadata_json,
+          t.workstream_id
+        FROM worker_results wr
+        JOIN tasks t ON t.task_id = wr.task_id
+        JOIN workstreams w ON w.workstream_id = t.workstream_id
+        WHERE w.repo_id = ?
+          AND w.lifecycle = 'active'
+          AND w.active_task_id = t.task_id
+          AND t.lifecycle = 'completed'
+          AND wr.output_type = 'classification_result'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM tasks child
+            WHERE child.parent_task_id = t.task_id
+          )
+        ORDER BY wr.created_at, wr.result_id
+        """,
+        (repo_id,),
+    ).fetchall()
+    recovered = 0
+    for row in rows:
+        result_row = row[:8]
+        workstream_id = row[8]
+        payload = _load_result_payload(conn, result_row)
+        if not payload.get("recommended_route"):
+            continue
+        if not _result_audit_accepted(conn, payload["result_id"]):
+            continue
+        if not _result_actions_all_published(conn, payload["result_id"]):
+            continue
+        wakeup.consume_wakeups_for_results(
+            conn,
+            result_ids=[payload["result_id"]],
+            run_id=run_id,
+            now=run_now,
+        )
+        before_children = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
+            (payload["task_id"],),
+        ).fetchone()[0]
+        _finalize_accepted_result(
+            conn,
+            data_dir,
+            db_path,
+            repo,
+            repo_id,
+            payload,
+            workstream_id,
+            run_now,
+            dry_run,
+            dispatch_queue,
+            dispatch_budget,
+        )
+        after_children = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
+            (payload["task_id"],),
+        ).fetchone()[0]
+        if after_children > before_children:
+            recovered += 1
+    return recovered
 
 
 def _audit_completed_results(
@@ -4327,6 +4443,18 @@ def _run_repo_pipeline(
         _mark_repo_run_step(conn, run_id, repo_id, "audit_results", "running", run_now)
         try:
             audited_result_count = _audit_completed_results(
+                conn,
+                repo_id,
+                data_dir,
+                db_path,
+                repo,
+                run_id,
+                run_now,
+                dry_run,
+                dispatch_queue,
+                dispatch_budget,
+            )
+            audited_result_count += _recover_orphaned_classification_results(
                 conn,
                 repo_id,
                 data_dir,
