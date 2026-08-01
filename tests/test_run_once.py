@@ -2266,6 +2266,111 @@ repos:
             "背景：dashboard admin missing fields\n需求：add readonly fields",
         )
 
+
+    def test_classification_recommended_update_existing_pr_reuses_prior_pr_branch(self):
+        from robert_agent.worker import result
+        from robert_agent import run_once
+
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "pr-conflict-followup",
+                            "number": 2886,
+                            "source_type": "pull_request",
+                            "event_type": "comment",
+                            "actor_login": "wklken",
+                            "author_association": "COLLABORATOR",
+                            "authorization_lookup_complete": True,
+                            "event_fingerprint": "comment:pr-conflict-followup",
+                            "body": "@robert-bot 有冲突",
+                            "intent": "unclear",
+                            "title": "fix(operator): improve release log context",
+                            "url": "https://github.com/example/backend/pull/2886",
+                            "state": "open",
+                            "has_open_dd_pr": False,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        first = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
+        )
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            task_id, attempt_id, workstream_id = conn.execute(
+                """
+                SELECT a.task_id, a.attempt_id, t.workstream_id
+                FROM attempts a
+                JOIN tasks t ON t.task_id = a.task_id
+                """
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, route_id, expected_output, created_at, updated_at)
+                VALUES ('task-pr-existing', ?, 'completed', 'P1', 'update-existing-pr', 'update_existing_pr', ?, ?)
+                """,
+                (workstream_id, "2026-06-17T08:00:00+00:00", "2026-06-17T08:30:00+00:00"),
+            )
+            conn.execute(
+                """
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at, finished_at)
+                VALUES ('attempt-pr-existing', 'task-pr-existing', 1, 'completed', ?, 'codex/issue-2884-fix-operator', ?, ?, ?)
+                """,
+                (
+                    str(self.worktree_root / "codex__issue-2884-fix-operator"),
+                    "2026-06-17T08:00:00+00:00",
+                    "2026-06-17T08:30:00+00:00",
+                    "2026-06-17T08:30:00+00:00",
+                ),
+            )
+        record = result.record_result(
+            db_path,
+            {
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "output_type": "classification_result",
+                "planned_github_actions": [],
+                "consumed_event_fingerprints": ["comment:pr-conflict-followup"],
+                "verification": [],
+                "handoff": "PR #2886 has conflicts; route to update-existing-pr and reuse the current PR branch.",
+                "used_skills": [],
+                "recommended_route": "update-existing-pr",
+            },
+        )
+        self.assertTrue(record["ok"], record)
+
+        finalized = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            dry_run=True,
+            skip_external=True,
+        )
+
+        self.assertTrue(finalized["ok"], finalized)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            row = conn.execute(
+                """
+                SELECT child.route_id, child.expected_output, a.branch_name, a.worktree_path
+                FROM tasks child
+                JOIN attempts a ON a.task_id = child.task_id
+                WHERE child.parent_task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(row[0], "update-existing-pr")
+        self.assertEqual(row[1], "update_existing_pr")
+        self.assertEqual(row[2], "codex/issue-2884-fix-operator")
+        self.assertIn("codex__issue-2884-fix-operator", row[3])
+
     def test_completed_classification_result_with_consumed_trigger_recovers_child_task(self):
         from robert_agent import run_once
         from robert_agent.worker import result

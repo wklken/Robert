@@ -4221,6 +4221,32 @@ def _create_child_task_for_pending_events(
     return task_info
 
 
+def _latest_workstream_update_branch(conn, workstream_id, exclude_task_id=None):
+    params = [workstream_id]
+    exclude_clause = ""
+    if exclude_task_id:
+        exclude_clause = "AND t.task_id != ?"
+        params.append(exclude_task_id)
+    row = conn.execute(
+        f"""
+        SELECT a.branch_name
+        FROM attempts a
+        JOIN tasks t ON t.task_id = a.task_id
+        WHERE t.workstream_id = ?
+          AND t.route_id = 'update-existing-pr'
+          AND a.branch_name IS NOT NULL
+          AND a.branch_name != ''
+          {exclude_clause}
+        ORDER BY COALESCE(a.finished_at, a.started_at, a.heartbeat_at, t.updated_at, t.created_at) DESC,
+                 a.attempt_no DESC,
+                 a.attempt_id DESC
+        LIMIT 1
+        """,
+        params,
+    ).fetchone()
+    return row[0] if row else ""
+
+
 def _create_child_task_for_recommended_route(
     conn,
     data_dir,
@@ -4265,6 +4291,17 @@ def _create_child_task_for_recommended_route(
     worktree_event = dict(child_event)
     if branch_slug:
         worktree_event["branch_slug"] = branch_slug
+    if (
+        route_result["route_id"] == "update-existing-pr"
+        and not worktree_event.get("existing_pr_head_branch")
+    ):
+        branch_name = _latest_workstream_update_branch(
+            conn,
+            workstream_id,
+            exclude_task_id=parent_task_id,
+        )
+        if branch_name:
+            worktree_event["existing_pr_head_branch"] = branch_name
     worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
     task_info = _create_task_attempt_and_prompt(
         conn,
