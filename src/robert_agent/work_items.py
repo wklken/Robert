@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
-from robert_agent import wakeup
+from robert_agent import wakeup, wakeup_notifier
 
 
 MAX_TITLE = 200
@@ -573,6 +573,13 @@ def _create_task(
     return task_id
 
 
+def _commit_result(conn, db_path, result, notifier):
+    conn.commit()
+    if result.get("task_id"):
+        wakeup_notifier.notify(db_path, sender=notifier)
+    return result
+
+
 def _activate(conn, item, context, idempotency_key, now, *, initial_version=None):
     if item["origin_type"] != "web" or item["activated_at"] is not None:
         raise WorkItemConflictError("only a web Backlog item can be started")
@@ -643,6 +650,7 @@ def create_work_item(
     requested_worker,
     start,
     idempotency_key,
+    notifier=None,
 ):
     _validate_idempotency_key(idempotency_key)
     if repo_id not in context.allowed_repo_ids:
@@ -673,11 +681,9 @@ def create_work_item(
                 metadata = _decode_json(existing["metadata_json"], {}) or {}
                 result = metadata.get("command_result")
                 if result:
-                    conn.commit()
-                    return result
+                    return _commit_result(conn, db_path, result, notifier)
                 result = {"ok": True, "command": "create", "item": _item_from_row(existing)}
-                conn.commit()
-                return result
+                return _commit_result(conn, db_path, result, notifier)
 
             now = utc_now()
             work_item_id = f"wi-{uuid4().hex}"
@@ -733,8 +739,7 @@ def create_work_item(
                     work_item_id,
                 ),
             )
-            conn.commit()
-            return result
+            return _commit_result(conn, db_path, result, notifier)
         except Exception:
             conn.rollback()
             raise
@@ -777,6 +782,7 @@ def execute_command(
     title=None,
     description=None,
     priority=None,
+    notifier=None,
 ):
     _validate_idempotency_key(idempotency_key)
     if command not in COMMANDS:
@@ -797,16 +803,14 @@ def execute_command(
                 raise WorkItemNotFoundError("work item not found")
             replay = _stored_command_result(conn, work_item_id, idempotency_key)
             if replay:
-                conn.commit()
-                return replay
+                return _commit_result(conn, db_path, replay, notifier)
             if item["version"] != expected_version:
                 raise WorkItemConflictError("work item version is stale")
 
             now = utc_now()
             if command == "start":
                 result = _activate(conn, item, context, idempotency_key, now)
-                conn.commit()
-                return result
+                return _commit_result(conn, db_path, result, notifier)
 
             if command == "edit":
                 if item["activated_at"] is not None or item["canceled_at"] is not None:
@@ -1009,8 +1013,7 @@ def execute_command(
                 metadata={"command_result": result, "task_id": task_id},
                 now=now,
             )
-            conn.commit()
-            return result
+            return _commit_result(conn, db_path, result, notifier)
         except Exception:
             conn.rollback()
             raise

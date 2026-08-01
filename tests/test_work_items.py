@@ -378,6 +378,14 @@ class WorkItemCommandTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 0)
 
+    def test_create_backlog_without_runnable_work_does_not_notify(self):
+        notifications = []
+
+        result = self._create(notifier=lambda db_path: notifications.append(db_path))
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(notifications, [])
+
     def test_create_and_start_materializes_one_local_task_and_wakeup(self):
         result = self._create(
             start=True,
@@ -399,6 +407,26 @@ class WorkItemCommandTests(unittest.TestCase):
         self.assertEqual(wakeup[:2], ("manual_operator_request", item["work_item_id"]))
         self.assertIsNotNone(wakeup[2])
         self.assertEqual(wakeup[3], "pending")
+
+    def test_create_and_start_notifies_only_after_transaction_commits(self):
+        observed = []
+
+        def committed_notifier(notified_db_path):
+            with closing(sqlite3.connect(notified_db_path)) as conn:
+                observed.append(
+                    (
+                        conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
+                        conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0],
+                    )
+                )
+
+        result = self._create(
+            start=True,
+            notifier=committed_notifier,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(observed, [(1, 1)])
 
     def test_validation_conflict_and_transaction_rollback_are_explicit(self):
         from robert_agent import work_items
@@ -457,6 +485,57 @@ class WorkItemCommandTests(unittest.TestCase):
         self.assertEqual(second, first)
         self.assertEqual(first["item"]["version"], 2)
         with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
+
+    def test_start_command_notifies_only_after_transaction_commits(self):
+        from robert_agent import work_items
+
+        item = self._create()["item"]
+        observed = []
+
+        def committed_notifier(notified_db_path):
+            with closing(sqlite3.connect(notified_db_path)) as conn:
+                observed.append(
+                    (
+                        conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
+                        conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0],
+                    )
+                )
+
+        result = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="start",
+            expected_version=1,
+            idempotency_key="start-notify",
+            notifier=committed_notifier,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(observed, [(1, 1)])
+
+    def test_start_command_stays_successful_when_notification_fails(self):
+        from robert_agent import work_items
+
+        item = self._create()["item"]
+
+        def failed_notifier(_db_path):
+            raise OSError("listener unavailable")
+
+        result = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="start",
+            expected_version=1,
+            idempotency_key="start-notify-failure",
+            notifier=failed_notifier,
+        )
+
+        self.assertTrue(result["ok"], result)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
 
     def test_two_waiting_reply_cycles_keep_one_item_and_one_serial_workstream(self):

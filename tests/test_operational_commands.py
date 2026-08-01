@@ -22,20 +22,6 @@ class OperationalCommandTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
-    def test_daemon_resource_key_uses_configured_repo_set(self):
-        from robert_agent import daemon_state
-
-        config_result = {
-            "repos": [
-                {"full_name": "Org/repo-b"},
-                {"full_name": "Org/repo-a"},
-            ]
-        }
-
-        key = daemon_state.repo_id_for_config(config_result)
-
-        self.assertEqual(key, "config:Org/repo-a,Org/repo-b")
-
     def test_loop_engine_local_work_accepts_repo_id_list(self):
         from robert_agent import loop_engine
         from robert_agent import storage

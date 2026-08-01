@@ -12,7 +12,7 @@ import time
 from uuid import uuid4
 
 from robert_agent.common import emit
-from robert_agent import daemon_state, storage
+from robert_agent import daemon_state, storage, wakeup_notifier
 from robert_agent import loop_engine
 from robert_agent import validate_config
 
@@ -205,7 +205,8 @@ def _daemon_run_id():
 
 
 def _daemon_resource_key(config_result):
-    return daemon_state.repo_id_for_config(config_result)
+    db_path = Path(config_result["db_path"]).expanduser().resolve()
+    return f"database:{db_path}"
 
 
 def _parse_time(value):
@@ -262,6 +263,23 @@ def _sleep_seconds_after_decision(context, result, *, now=None):
         if (result.get("result") or {}).get("stop_reason") == "no_progress":
             return context.daemon_config["local_poll_seconds"]
     return 0
+
+
+def _wait_for_next_decision(
+    context,
+    result,
+    *,
+    listener=None,
+    sleeper=time.sleep,
+    now=None,
+):
+    sleep_seconds = _sleep_seconds_after_decision(context, result, now=now)
+    if sleep_seconds <= 0:
+        return False
+    if listener is not None:
+        return listener.wait(sleep_seconds)
+    sleeper(sleep_seconds)
+    return False
 
 
 def _lookup_repo_id(conn, full_name, fallback):
@@ -529,17 +547,50 @@ def _heartbeat(context, now=None):
         )
 
 
-def _resident_loop(context):
+def _resident_loop(
+    context,
+    *,
+    listener_factory=wakeup_notifier.WakeupListener,
+    sleeper=time.sleep,
+):
     global _STOP_REQUESTED
     _STOP_REQUESTED = False
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
-    while not _STOP_REQUESTED:
-        result = run_once_decision(context)
-        sleep_seconds = _sleep_seconds_after_decision(context, result)
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
-        _heartbeat(context)
+    listener = None
+    try:
+        try:
+            listener = listener_factory(context.db_path)
+        except OSError as exc:
+            with closing(daemon_state.connect(context.db_path)) as conn, conn:
+                daemon_state.record_event(
+                    conn,
+                    context.daemon_run_id,
+                    "wakeup_listener_unavailable",
+                    "degraded",
+                    {"safe_error": str(exc)},
+                )
+        else:
+            with closing(daemon_state.connect(context.db_path)) as conn, conn:
+                daemon_state.record_event(
+                    conn,
+                    context.daemon_run_id,
+                    "wakeup_listener_started",
+                    "ok",
+                    {"path": str(getattr(listener, "path", ""))},
+                )
+        while not _STOP_REQUESTED:
+            result = run_once_decision(context)
+            _wait_for_next_decision(
+                context,
+                result,
+                listener=listener,
+                sleeper=sleeper,
+            )
+            _heartbeat(context)
+    finally:
+        if listener is not None:
+            listener.close()
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
             conn,

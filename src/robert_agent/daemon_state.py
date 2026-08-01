@@ -312,8 +312,3 @@ def capacity_full_for_repos(conn, repo_ids, max_concurrency):
 
 def repo_id_for_full_name(full_name):
     return f"repo:{full_name}"
-
-
-def repo_id_for_config(config_result):
-    repo_names = sorted(repo["full_name"] for repo in config_result.get("repos", []))
-    return "config:" + ",".join(repo_names)

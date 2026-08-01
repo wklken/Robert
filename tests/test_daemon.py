@@ -204,6 +204,58 @@ class DaemonStateTests(unittest.TestCase):
 
 
 class DaemonChildRunnerTests(unittest.TestCase):
+    def test_daemon_resource_key_is_database_scoped(self):
+        from robert_agent import daemon
+
+        db_path = Path("/tmp/robert-state/../robert-state/robert.sqlite3")
+        first = daemon._daemon_resource_key(
+            {"db_path": str(db_path), "repos": [{"full_name": "example/one"}]}
+        )
+        second = daemon._daemon_resource_key(
+            {"db_path": str(db_path), "repos": [{"full_name": "example/two"}]}
+        )
+
+        self.assertEqual(first, f"database:{db_path.resolve()}")
+        self.assertEqual(second, first)
+
+    def test_wait_for_next_decision_uses_listener_instead_of_sleep(self):
+        from robert_agent import daemon
+
+        context = daemon.DaemonContext(
+            config_path="/tmp/config.yml",
+            workflow_path=None,
+            db_path=Path("/tmp/dd.sqlite3"),
+            repo_id="repo-1",
+            max_concurrency=3,
+            daemon_config={
+                "local_poll_seconds": 30,
+                "live_run_timeout_seconds": 300,
+                "local_drain_timeout_seconds": 180,
+            },
+            daemon_run_id="daemon-run-1",
+            lease_id="lease-1",
+        )
+
+        class Listener:
+            timeout = None
+
+            def wait(self, timeout_seconds):
+                self.timeout = timeout_seconds
+                return True
+
+        listener = Listener()
+
+        notified = daemon._wait_for_next_decision(
+            context,
+            {"decision": "idle"},
+            listener=listener,
+            sleeper=lambda _seconds: self.fail("sleep must not run with a listener"),
+            now="2026-07-03T00:00:00+00:00",
+        )
+
+        self.assertTrue(notified)
+        self.assertEqual(listener.timeout, 30)
+
     def test_build_child_commands(self):
         from robert_agent import daemon
         run_once_cmd = daemon.build_run_once_command(
@@ -484,6 +536,134 @@ repos:
             encoding="utf-8",
         )
         return config_path
+
+    def test_resident_loop_waits_on_listener_and_closes_it(self):
+        from robert_agent import daemon
+
+        config_path = self._write_config()
+        self._init_db()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            self._insert_repo(conn)
+        context, error = daemon._load_context(
+            config_path,
+            now="2026-07-03T00:00:00+00:00",
+        )
+        self.assertIsNone(error)
+        calls = []
+
+        class Listener:
+            def __init__(self, db_path):
+                calls.append(("open", Path(db_path)))
+
+            def wait(self, timeout_seconds):
+                calls.append(("wait", timeout_seconds))
+                daemon._STOP_REQUESTED = True
+                return True
+
+            def close(self):
+                calls.append(("close", None))
+
+        with (
+            mock.patch.object(daemon.signal, "signal"),
+            mock.patch.object(
+                daemon,
+                "run_once_decision",
+                return_value={"ok": True, "decision": "idle"},
+            ),
+        ):
+            result = daemon._resident_loop(context, listener_factory=Listener)
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            event_types = {
+                row[0]
+                for row in conn.execute("SELECT event_type FROM daemon_events")
+            }
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            calls,
+            [("open", self.db_path), ("wait", 5), ("close", None)],
+        )
+        self.assertIn("wakeup_listener_started", event_types)
+
+    def test_resident_loop_falls_back_to_polling_when_listener_is_unavailable(self):
+        from robert_agent import daemon
+
+        config_path = self._write_config()
+        self._init_db()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            self._insert_repo(conn)
+        context, error = daemon._load_context(
+            config_path,
+            now="2026-07-03T00:00:00+00:00",
+        )
+        self.assertIsNone(error)
+        sleeps = []
+
+        def unavailable_listener(_db_path):
+            raise OSError("socket path too long")
+
+        def sleeper(seconds):
+            sleeps.append(seconds)
+            daemon._STOP_REQUESTED = True
+
+        with (
+            mock.patch.object(daemon.signal, "signal"),
+            mock.patch.object(
+                daemon,
+                "run_once_decision",
+                return_value={"ok": True, "decision": "idle"},
+            ),
+        ):
+            result = daemon._resident_loop(
+                context,
+                listener_factory=unavailable_listener,
+                sleeper=sleeper,
+            )
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            event_types = {
+                row[0]
+                for row in conn.execute("SELECT event_type FROM daemon_events")
+            }
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(sleeps, [5])
+        self.assertIn("wakeup_listener_unavailable", event_types)
+
+    def test_resident_loop_closes_listener_when_start_event_fails(self):
+        from robert_agent import daemon
+
+        config_path = self._write_config()
+        self._init_db()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            self._insert_repo(conn)
+        context, error = daemon._load_context(
+            config_path,
+            now="2026-07-03T00:00:00+00:00",
+        )
+        self.assertIsNone(error)
+        closed = []
+
+        class Listener:
+            path = Path("/tmp/daemon-wakeup.sock")
+
+            def __init__(self, _db_path):
+                pass
+
+            def close(self):
+                closed.append(True)
+
+        with (
+            mock.patch.object(daemon.signal, "signal"),
+            mock.patch.object(
+                daemon.daemon_state,
+                "record_event",
+                side_effect=RuntimeError("event write failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "event write failed"):
+                daemon._resident_loop(context, listener_factory=Listener)
+
+        self.assertEqual(closed, [True])
 
     def test_default_lease_ttl_covers_live_and_local_decision_window(self):
         from robert_agent import daemon
