@@ -16,7 +16,3 @@ Read [COMMUNITY.md](../COMMUNITY.md) before contributing.
 - [ ] No trust, authorization, audit, redaction, or idempotency boundary was weakened
 - [ ] New dependencies are listed and justified
 - [ ] New network calls, subprocesses, filesystem writes, credentials, or GitHub actions are disclosed
-
-## DCO
-
-- [ ] Every commit includes a `Signed-off-by` line created with `git commit -s`

@@ -2266,6 +2266,266 @@ repos:
             "背景：dashboard admin missing fields\n需求：add readonly fields",
         )
 
+    def test_completed_classification_result_with_consumed_trigger_recovers_child_task(self):
+        from robert_agent import run_once
+        from robert_agent.worker import result
+
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "assign-16",
+                            "number": 16,
+                            "source_type": "issue",
+                            "event_type": "assigned",
+                            "actor_login": "robert-bot",
+                            "assignment_actor_login": "wklken",
+                            "assigned_to": "robert-bot",
+                            "authorization_lookup_complete": True,
+                            "event_fingerprint": "assigned:assign-16",
+                            "body": "remove the DCO check from GitHub Actions",
+                            "intent": "unclear",
+                            "title": "remove the dco in ci",
+                            "url": "https://github.com/example/backend/issues/16",
+                            "state": "open",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        first = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
+        )
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn:
+            task_id, attempt_id = conn.execute(
+                "SELECT task_id, attempt_id FROM attempts"
+            ).fetchone()
+        record = result.record_result(
+            db_path,
+            {
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "output_type": "classification_result",
+                "planned_github_actions": [],
+                "consumed_event_fingerprints": ["assigned:assign-16"],
+                "verification": [],
+                "handoff": "Route to an implementation PR",
+                "used_skills": [],
+                "recommended_route": "new-pr",
+                "branch_slug": "remove-dco-from-ci",
+            },
+        )
+        self.assertTrue(record["ok"], record)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE worker_results SET metadata_json = json_set(metadata_json, '$.audit.status', 'accepted', '$.audit.ok', json('true'))"
+            )
+            conn.execute(
+                "UPDATE task_events SET relationship = 'consumed' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE workstreams SET lifecycle = 'active', active_task_id = ?",
+                (task_id,),
+            )
+
+        recovered = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            dry_run=True,
+            skip_external=True,
+        )
+
+        self.assertTrue(recovered["ok"], recovered)
+        self.assertEqual(recovered["dispatch_count"], 1)
+        with closing(sqlite3.connect(db_path)) as conn:
+            tasks = conn.execute(
+                """
+                SELECT task_id, parent_task_id, lifecycle, route_id, expected_output
+                FROM tasks
+                ORDER BY created_at, task_id
+                """
+            ).fetchall()
+            branch_name = conn.execute(
+                """
+                SELECT a.branch_name
+                FROM attempts a
+                JOIN tasks t ON t.task_id = a.task_id
+                WHERE t.parent_task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()[0]
+            child_relationship = conn.execute(
+                """
+                SELECT te.relationship
+                FROM task_events te
+                JOIN github_events ge ON ge.event_id = te.event_id
+                WHERE te.task_id = ?
+                  AND ge.event_fingerprint = 'assigned:assign-16'
+                """,
+                (tasks[1][0],),
+            ).fetchone()[0]
+            workstream = conn.execute(
+                "SELECT lifecycle, active_task_id FROM workstreams"
+            ).fetchone()
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[0][2], "completed")
+        self.assertEqual(tasks[1][1], tasks[0][0])
+        self.assertEqual(tasks[1][2:], ("queued", "new-pr", "new_pr"))
+        self.assertEqual(branch_name, "codex/dd-16-remove-dco-from-ci")
+        self.assertEqual(child_relationship, "trigger")
+        self.assertEqual(workstream, ("active", tasks[1][0]))
+
+
+    def test_recovered_classification_result_uses_consumed_trigger_not_older_context(self):
+        from robert_agent import run_once
+        from robert_agent.worker import result
+
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "context-old",
+                            "number": 15,
+                            "source_type": "issue",
+                            "event_type": "comment",
+                            "actor_login": "wklken",
+                            "authorization_lookup_complete": True,
+                            "event_fingerprint": "comment:context-old",
+                            "body": "older context that should not drive the implementation task",
+                            "intent": "unclear",
+                            "title": "older issue context",
+                            "url": "https://github.com/example/backend/issues/15#issuecomment-1",
+                            "state": "open",
+                            "event_at": "2026-07-30T08:00:00Z",
+                            "drives_execution": False,
+                            "creates_task": False,
+                        },
+                        {
+                            "id": "assign-16",
+                            "number": 16,
+                            "source_type": "issue",
+                            "event_type": "assigned",
+                            "actor_login": "robert-bot",
+                            "assignment_actor_login": "wklken",
+                            "assigned_to": "robert-bot",
+                            "authorization_lookup_complete": True,
+                            "event_fingerprint": "assigned:assign-16",
+                            "body": "remove the DCO check from GitHub Actions",
+                            "intent": "unclear",
+                            "title": "remove the dco in ci",
+                            "url": "https://github.com/example/backend/issues/16",
+                            "state": "open",
+                            "event_at": "2026-07-30T08:32:30Z",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        first = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
+        )
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            task_id, attempt_id = conn.execute(
+                "SELECT task_id, attempt_id FROM attempts"
+            ).fetchone()
+            context_event_id = conn.execute(
+                "SELECT event_id FROM github_events WHERE event_fingerprint = 'comment:context-old'"
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO task_events (task_id, event_id, relationship, created_at) VALUES (?, ?, 'context', datetime('now'))",
+                (task_id, context_event_id),
+            )
+        record = result.record_result(
+            db_path,
+            {
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "output_type": "classification_result",
+                "planned_github_actions": [],
+                "consumed_event_fingerprints": ["assigned:assign-16"],
+                "verification": [],
+                "handoff": "Route to an implementation PR",
+                "used_skills": [],
+                "recommended_route": "new-pr",
+                "branch_slug": "remove-dco-from-ci",
+            },
+        )
+        self.assertTrue(record["ok"], record)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE worker_results SET metadata_json = json_set(metadata_json, '$.audit.status', 'accepted', '$.audit.ok', json('true'))"
+            )
+            conn.execute(
+                "UPDATE task_events SET relationship = 'consumed' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE workstreams SET lifecycle = 'active', active_task_id = ?",
+                (task_id,),
+            )
+
+        recovered = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            dry_run=True,
+            skip_external=True,
+        )
+
+        self.assertTrue(recovered["ok"], recovered)
+        with closing(sqlite3.connect(db_path)) as conn:
+            child_task_id = conn.execute(
+                "SELECT task_id FROM tasks WHERE parent_task_id = ?",
+                (task_id,),
+            ).fetchone()[0]
+            child_context_path = conn.execute(
+                """
+                SELECT path
+                FROM artifacts
+                WHERE task_id = ?
+                  AND artifact_type = 'github_context_json'
+                """,
+                (child_task_id,),
+            ).fetchone()[0]
+            branch_name = conn.execute(
+                """
+                SELECT a.branch_name
+                FROM attempts a
+                JOIN tasks t ON t.task_id = a.task_id
+                WHERE t.task_id = ?
+                """,
+                (child_task_id,),
+            ).fetchone()[0]
+        child_context = json.loads(Path(child_context_path).read_text(encoding="utf-8"))
+        child_event = child_context["events"][0]
+        self.assertEqual(child_event["event_fingerprint"], "assigned:assign-16")
+        self.assertEqual(child_event["body"], "remove the DCO check from GitHub Actions")
+        self.assertEqual(branch_name, "codex/dd-16-remove-dco-from-ci")
+
     def test_classification_result_branch_slug_names_child_worktree(self):
         from robert_agent import run_once
         from robert_agent.worker import result
