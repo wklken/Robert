@@ -192,9 +192,8 @@ Do not attach private repository content or credentials to public issues.
 
 ## Contributing
 
-Read [COMMUNITY.md](COMMUNITY.md), run the documented verification commands,
-and sign commits with `git commit -s`. Robert uses the Developer Certificate
-of Origin and does not require a CLA for the first beta.
+Read [COMMUNITY.md](COMMUNITY.md) and run the documented verification commands.
+Robert does not require DCO sign-off or a CLA for the first beta.
 
 ## Project Status
 

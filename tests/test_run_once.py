@@ -2992,6 +2992,7 @@ repos:
                             "intent": "bug_fix",
                             "has_open_dd_pr": True,
                             "existing_pr_head_branch": "codex/dd-123-task",
+                            "existing_pr_head_sha": "worker-base-sha",
                             "pr_author_login": "robert-bot",
                             "url": "https://github.com/example/backend/pull/456#discussion_r1",
                         }
@@ -3013,6 +3014,26 @@ repos:
             task_id, attempt_id = conn.execute(
                 "SELECT task_id, attempt_id FROM attempts"
             ).fetchone()
+            repo_id, source_id = conn.execute(
+                "SELECT repo_id, primary_source_id FROM workstreams"
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO github_events(
+                  event_id, repo_id, source_id, event_fingerprint, event_type,
+                  actor_login, authorization_status, event_at, payload_json
+                ) VALUES (?, ?, ?, ?, 'comment', 'wklken',
+                          'authorized_trigger', ?, ?)
+                """,
+                (
+                    "event-human-update",
+                    repo_id,
+                    source_id,
+                    "comment:human-update",
+                    "2099-01-01T00:00:00Z",
+                    json.dumps({"existing_pr_head_sha": "human-new-sha"}),
+                ),
+            )
             required_skills, recommended_skills = conn.execute(
                 "SELECT required_skills_json, recommended_skills_json FROM route_decisions"
             ).fetchone()
@@ -3069,6 +3090,10 @@ repos:
             ],
         )
         self.assertEqual(audit_metadata["status"], "accepted")
+        self.assertEqual(
+            audit_metadata["action_scope"]["existing_pr_head_sha"],
+            "worker-base-sha",
+        )
 
     def test_worker_result_output_type_must_match_route_expected_output(self):
         from robert_agent.worker import result
@@ -4872,7 +4897,12 @@ repos:
                 (
                     now,
                     now,
-                    json.dumps({"dispatch": {"pid": 987654, "status": "running"}}),
+                    json.dumps(
+                        {
+                            "dispatch": {"pid": 987654, "status": "running"},
+                            "existing_pr_head_sha": "worker-base-sha",
+                        }
+                    ),
                     attempt_id,
                 ),
             )
@@ -4947,8 +4977,13 @@ repos:
         self.assertEqual(attempts[0][0], attempt_id)
         self.assertEqual(attempts[0][2], "failed")
         self.assertEqual(attempts[1][1:5], (2, "prepared", worktree_path, branch_name))
-        resume_metadata = json.loads(attempts[1][5])["resume"]
+        resumed_attempt_metadata = json.loads(attempts[1][5])
+        resume_metadata = resumed_attempt_metadata["resume"]
         self.assertEqual(resume_metadata["previous_attempt_id"], attempt_id)
+        self.assertEqual(
+            resumed_attempt_metadata["existing_pr_head_sha"],
+            "worker-base-sha",
+        )
         self.assertEqual(task_lifecycle, "running")
         self.assertEqual(workstream, ("active", task_id))
         self.assertEqual(notification, ("worker_resume_prepared", "recorded"))
@@ -7351,6 +7386,7 @@ raise SystemExit(0 if record["ok"] else 1)
                             "intent": "bug_fix",
                             "has_open_dd_pr": True,
                             "existing_pr_head_branch": "codex/issue-2884-fix-operator",
+                            "existing_pr_head_sha": "rerouted-head-sha",
                             "pr_author_login": "robert-bot",
                             "metadata": {
                                 "dd_workstream": {
@@ -7381,7 +7417,8 @@ raise SystemExit(0 if record["ok"] else 1)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             row = conn.execute(
                 """
-                SELECT t.route_id, t.expected_output, a.branch_name
+                SELECT t.route_id, t.expected_output, a.branch_name,
+                       a.metadata_json
                 FROM tasks t
                 JOIN attempts a ON a.task_id = t.task_id
                 WHERE t.workstream_id = 'github:example/backend!2886'
@@ -7403,7 +7440,18 @@ raise SystemExit(0 if record["ok"] else 1)
                 ORDER BY te.relationship, ge.event_fingerprint
                 """
             , (task_id,)).fetchall()
-        self.assertEqual(row, ("update-existing-pr", "update_existing_pr", "codex/issue-2884-fix-operator"))
+        self.assertEqual(
+            row[:3],
+            (
+                "update-existing-pr",
+                "update_existing_pr",
+                "codex/issue-2884-fix-operator",
+            ),
+        )
+        self.assertEqual(
+            json.loads(row[3])["existing_pr_head_sha"],
+            "rerouted-head-sha",
+        )
         prompt = Path(prompt_path).read_text(encoding="utf-8")
         self.assertIn('expected_output: update_existing_pr', prompt)
         self.assertIn('push_existing_pr', prompt)
