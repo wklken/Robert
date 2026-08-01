@@ -204,6 +204,77 @@ class PrHealthTests(unittest.TestCase):
             commands,
         )
 
+    def test_collect_ci_observations_marks_workflow_unavailable_when_any_failed_job_log_is_unreadable(self):
+        from robert_agent import pr_health
+
+        responses = {
+            (
+                "gh",
+                "api",
+                "repos/example/backend/actions/runs?head_sha=head-1&per_page=100",
+            ): {
+                "workflow_runs": [
+                    {
+                        "id": 101,
+                        "run_attempt": 1,
+                        "name": "unit",
+                        "head_sha": "head-1",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "html_url": "https://github.com/run/101",
+                        "updated_at": "2026-07-26T00:01:00Z",
+                    }
+                ]
+            },
+            (
+                "gh",
+                "api",
+                "repos/example/backend/actions/runs/101/jobs?per_page=100",
+            ): {
+                "jobs": [
+                    {
+                        "id": 501,
+                        "name": "python-3.11",
+                        "status": "completed",
+                        "conclusion": "failure",
+                    },
+                    {
+                        "id": 502,
+                        "name": "python-3.12",
+                        "status": "completed",
+                        "conclusion": "failure",
+                    },
+                ]
+            },
+            (
+                "gh",
+                "api",
+                "repos/example/backend/actions/jobs/501/logs",
+            ): "FAIL tests/test_api.py expected 1 got 2",
+            (
+                "gh",
+                "api",
+                "repos/example/backend/actions/jobs/502/logs",
+            ): subprocess.CalledProcessError(1, ["gh", "api"]),
+            (
+                "gh",
+                "api",
+                "repos/example/backend/commits/head-1/check-runs?per_page=100",
+            ): {"check_runs": []},
+        }
+
+        observations = pr_health.collect_ci_observations(
+            "example/backend",
+            "head-1",
+            check_allowlist=["unit"],
+            max_summary_chars=200,
+            runner=FixtureRunner(responses),
+        )
+
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0]["evidence_status"], "unavailable")
+        self.assertIn("expected 1 got 2", observations[0]["failure_summary"])
+
     def test_collect_ci_observations_reads_external_check_output_and_annotations(self):
         from robert_agent import pr_health
 

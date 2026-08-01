@@ -187,7 +187,7 @@ def _workflow_observation(
                 continue
             excerpts.append(f"[job: {job.get('name') or job.get('id')}]\n{log}")
         evidence = _evidence("\n".join(excerpts), max_summary_chars)
-        if evidence_status == "unavailable" and not excerpts:
+        if evidence_status == "unavailable":
             evidence["evidence_status"] = "unavailable"
     observation = {
         "source_kind": "workflow_run",

@@ -214,6 +214,10 @@ repos:
         merge = subprocess.run(
             [
                 "git",
+                "-c",
+                "user.name=Robert Test",
+                "-c",
+                "user.email=robert@example.com",
                 "merge",
                 "--no-edit",
                 "refs/robert/prs/pr-13-base",
@@ -230,7 +234,14 @@ repos:
         )
         self._git(["add", "value.txt"], cwd=worktree_path)
         self._git(
-            ["commit", "-m", "Resolve base conflict"],
+            [
+                "-c",
+                "user.name=Robert Test",
+                "-c",
+                "user.email=robert@example.com",
+                "commit",
+                "--no-edit",
+            ],
             cwd=worktree_path,
         )
 
