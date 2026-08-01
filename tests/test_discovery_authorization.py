@@ -919,7 +919,10 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
                     args,
                     """{
                       "body": "<!-- robert-workstream\\nworkstream_id: github:example/backend#123\\ntask_id: task-parent\\ncreated_by: robert\\n-->",
-                      "head": {"ref": "codex/dd-123-fix-timeout"}
+                      "head": {
+                        "ref": "codex/dd-123-fix-timeout",
+                        "sha": "head-sha-123"
+                      }
                     }""",
                 )
             if tuple(args[:3]) in {
@@ -939,6 +942,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#123")
         self.assertTrue(events[0]["has_open_dd_pr"])
         self.assertEqual(events[0]["existing_pr_head_branch"], "codex/dd-123-fix-timeout")
+        self.assertEqual(events[0]["existing_pr_head_sha"], "head-sha-123")
         self.assertEqual(events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent")
 
     def test_live_pr_followup_collects_all_trusted_comments(self):
