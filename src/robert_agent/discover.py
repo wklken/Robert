@@ -213,6 +213,7 @@ def _enrich_pull_request_metadata(raw, repo_config, runner):
     base_ref = base.get("ref") or raw.get("baseRefName") or raw.get("base_branch")
     head = details.get("head") if isinstance(details.get("head"), dict) else {}
     head_ref = head.get("ref") or raw.get("headRefName") or raw.get("head_ref")
+    head_sha = head.get("sha") or raw.get("headRefOid") or raw.get("head_sha")
 
     if not dd_workstream and not is_dd_authored_pr:
         enriched = {**raw}
@@ -242,6 +243,8 @@ def _enrich_pull_request_metadata(raw, repo_config, runner):
         )
     if head_ref:
         enriched["existing_pr_head_branch"] = head_ref
+    if head_sha:
+        enriched["existing_pr_head_sha"] = head_sha
     if base_ref:
         enriched["base_branch"] = base_ref
     if pr_author:

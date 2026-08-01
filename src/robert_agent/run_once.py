@@ -2127,6 +2127,24 @@ def _runtime_context(db_path, repo, worktree_result=None):
     }
 
 
+def _existing_pr_head_sha_from_events(conn, workstream_id):
+    for row in conn.execute(
+        """
+        SELECT ge.payload_json
+        FROM github_events ge
+        JOIN workstream_sources ws ON ws.source_id = ge.source_id
+        WHERE ws.workstream_id = ?
+        ORDER BY ge.event_at DESC, ge.event_id DESC
+        """,
+        (workstream_id,),
+    ):
+        payload = _json_object(row[0])
+        head_sha = payload.get("existing_pr_head_sha")
+        if isinstance(head_sha, str) and head_sha:
+            return head_sha
+    return ""
+
+
 def _load_runtime_knowledge(conn, repo_id, workstream_id, route_result, events):
     try:
         return runtime_knowledge.load_runtime_knowledge(
@@ -3451,7 +3469,7 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
             (workstream_id, workstream_id),
         )
     ]
-    return {
+    scope = {
         "repo": row[0],
         "base_branch": row[1],
         "worktree_path": row[2] or "",
@@ -3459,6 +3477,10 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
         "remote": "origin",
         "sources": sources,
     }
+    existing_pr_head_sha = _existing_pr_head_sha_from_events(conn, workstream_id)
+    if existing_pr_head_sha:
+        scope["existing_pr_head_sha"] = existing_pr_head_sha
+    return scope
 
 
 def _set_github_actions_status(conn, result_id, status):
