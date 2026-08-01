@@ -186,6 +186,75 @@ def _migrate_project_memory_fts(conn):
         return
 
 
+def _migrate_pr_remediation(conn):
+    _ensure_column(
+        conn,
+        "github_events",
+        "actor_kind",
+        "actor_kind TEXT NOT NULL DEFAULT 'github_user'",
+    )
+    _ensure_column(
+        conn,
+        "tasks",
+        "task_kind",
+        "task_kind TEXT NOT NULL DEFAULT 'human_request' "
+        "CHECK (task_kind IN ('human_request', 'ci_remediation', "
+        "'merge_conflict_remediation'))",
+    )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS pr_remediation_episodes (
+          episode_id TEXT PRIMARY KEY,
+          workstream_id TEXT NOT NULL
+            REFERENCES workstreams(workstream_id) ON DELETE CASCADE,
+          episode_kind TEXT NOT NULL
+            CHECK (episode_kind IN ('ci', 'merge_conflict')),
+          subject_key TEXT NOT NULL,
+          observed_head_sha TEXT NOT NULL,
+          observed_base_sha TEXT NOT NULL,
+          result_head_sha TEXT,
+          status TEXT NOT NULL
+            CHECK (status IN (
+              'open', 'queued', 'remediating', 'waiting_for_signal',
+              'resolved', 'exhausted', 'superseded', 'canceled'
+            )),
+          attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+          failure_signature TEXT,
+          first_seen_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          terminal_at TEXT,
+          last_task_id TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          UNIQUE(workstream_id, episode_kind, subject_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pr_remediation_episodes_status
+        ON pr_remediation_episodes(status, updated_at);
+
+        CREATE TABLE IF NOT EXISTS pr_ci_observations (
+          observation_id TEXT PRIMARY KEY,
+          episode_id TEXT NOT NULL
+            REFERENCES pr_remediation_episodes(episode_id) ON DELETE CASCADE,
+          source_kind TEXT NOT NULL
+            CHECK (source_kind IN ('workflow_run', 'check_run')),
+          external_id TEXT NOT NULL,
+          attempt_no INTEGER NOT NULL DEFAULT 1 CHECK (attempt_no >= 1),
+          check_name TEXT NOT NULL,
+          status TEXT NOT NULL,
+          conclusion TEXT,
+          details_url TEXT,
+          completed_at TEXT,
+          failure_signature TEXT,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          UNIQUE(source_kind, external_id, attempt_no)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pr_ci_observations_episode
+        ON pr_ci_observations(episode_id, completed_at);
+        """
+    )
+
+
 def _backfill_work_item_id(workstream_id):
     digest = hashlib.sha256(workstream_id.encode("utf-8")).hexdigest()[:20]
     return f"wi-{digest}"
@@ -360,6 +429,7 @@ def init_database(db_path, schema_path=None):
         _migrate_route_recommended_skills(conn)
         _migrate_work_item_control(conn)
         _migrate_project_memory_fts(conn)
+        _migrate_pr_remediation(conn)
         tables = sorted(
             row[0]
             for row in conn.execute(

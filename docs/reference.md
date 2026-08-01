@@ -73,6 +73,19 @@ repos:
     trusted_actors:
       - maintainer
     max_concurrency: 2
+    pr_automation:
+      conflict:
+        enabled: true
+        max_attempts: 2
+        max_wall_minutes: 60
+      ci:
+        enabled: true
+        check_allowlist: [unit, lint]
+        max_attempts: 2
+        max_wall_minutes: 120
+        max_total_tokens: 200000
+        max_cost_usd: 10.0
+        max_failure_summary_chars: 12000
     routes:
       new-pr:
         worker: default
@@ -89,6 +102,10 @@ repos:
 `github` accepts only `account` and `poll_seconds`; credentials are rejected.
 The `command` adapter requires a YAML sequence. Repository route overrides may
 set `worker`, `required_skills`, and `recommended_skills` only.
+`pr_automation` is optional and defaults to disabled. Enabling CI remediation
+requires a non-empty `check_allowlist`; its limits are per durable PR snapshot
+episode. Conflict remediation and CI publication use ordinary non-force pushes
+only after the current remote PR head and base match the audited snapshot.
 
 ```bash
 robert config validate --config ~/.config/robert/config.yml --output json

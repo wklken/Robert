@@ -4561,6 +4561,257 @@ class OperationalCommandTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(row, ("published", "codex/dd-123", "https://github.com/x/y/pull/42"))
 
+    def test_remediation_publish_revalidates_snapshot_and_records_result_head(self):
+        from robert_agent import publish
+
+        db_path, worktree = self._init_remediation_publish_db()
+        calls = []
+
+        class Completed:
+            def __init__(self, stdout=""):
+                self.returncode = 0
+                self.stdout = stdout
+                self.stderr = ""
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if command == ["gh", "api", "repos/x/y/pulls/42"]:
+                return Completed(
+                    json.dumps(
+                        {
+                            "state": "open",
+                            "merged": False,
+                            "head": {"sha": "head-1", "ref": "codex/fix"},
+                            "base": {"sha": "base-1", "ref": "main"},
+                        }
+                    )
+                )
+            if command == ["git", "rev-parse", "HEAD"]:
+                return Completed("repair-1\n")
+            if command[:2] == ["git", "push"]:
+                return Completed("pushed\n")
+            if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments?per_page=100"]:
+                return Completed("[]")
+            if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments"]:
+                return Completed(
+                    json.dumps(
+                        {
+                            "id": 9001,
+                            "html_url": "https://github.com/x/y/pull/42#issuecomment-9001",
+                        }
+                    )
+                )
+            raise AssertionError(command)
+
+        result = publish.publish_ready_actions(
+            db_path,
+            dry_run=False,
+            run_command=fake_run,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn(
+            ["git", "push", "origin", "repair-1:codex/fix"],
+            calls,
+        )
+        with closing(sqlite3.connect(db_path)) as conn:
+            episode = conn.execute(
+                """
+                SELECT status, result_head_sha
+                FROM pr_remediation_episodes
+                WHERE episode_id = 'episode-ci'
+                """
+            ).fetchone()
+        self.assertEqual(episode, ("waiting_for_signal", "repair-1"))
+        self.assertTrue(worktree.is_dir())
+
+    def test_remediation_publish_skips_push_and_comment_when_snapshot_changed(self):
+        from robert_agent import publish, run_once
+
+        db_path, _worktree = self._init_remediation_publish_db()
+        calls = []
+
+        class Completed:
+            returncode = 0
+            stdout = json.dumps(
+                {
+                    "state": "open",
+                    "merged": False,
+                    "head": {"sha": "head-new", "ref": "codex/fix"},
+                    "base": {"sha": "base-1", "ref": "main"},
+                }
+            )
+            stderr = ""
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if command == ["gh", "api", "repos/x/y/pulls/42"]:
+                return Completed()
+            raise AssertionError(command)
+
+        result = publish.publish_ready_actions(
+            db_path,
+            dry_run=False,
+            limit=1,
+            run_command=fake_run,
+        )
+        second = publish.publish_ready_actions(
+            db_path,
+            dry_run=False,
+            limit=1,
+            run_command=fake_run,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(second["ok"], second)
+        self.assertEqual(second["pending_count"], 0)
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in calls))
+        self.assertFalse(
+            any(
+                command[:3]
+                == ["gh", "api", "repos/x/y/issues/42/comments"]
+                for command in calls
+            )
+        )
+        with closing(sqlite3.connect(db_path)) as conn:
+            statuses = conn.execute(
+                """
+                SELECT action_type, publish_status
+                FROM github_actions
+                WHERE result_id = 'result-1'
+                ORDER BY created_at, action_id
+                """
+            ).fetchall()
+            episode_status = conn.execute(
+                """
+                SELECT status
+                FROM pr_remediation_episodes
+                WHERE episode_id = 'episode-ci'
+                """
+            ).fetchone()[0]
+            actions_terminal = run_once._result_actions_all_published(
+                conn,
+                "result-1",
+            )
+        self.assertEqual(
+            statuses,
+            [
+                ("push_existing_pr", "skipped"),
+                ("comment", "skipped"),
+            ],
+        )
+        self.assertEqual(episode_status, "superseded")
+        self.assertTrue(actions_terminal)
+
+    def test_remediation_publish_failure_skips_following_comment(self):
+        from robert_agent import publish
+
+        db_path, _worktree = self._init_remediation_publish_db()
+
+        class Completed:
+            def __init__(self, returncode=0, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def fake_run(command, **_kwargs):
+            if command == ["gh", "api", "repos/x/y/pulls/42"]:
+                return Completed(
+                    stdout=json.dumps(
+                        {
+                            "state": "open",
+                            "merged": False,
+                            "head": {"sha": "head-1", "ref": "codex/fix"},
+                            "base": {"sha": "base-1", "ref": "main"},
+                        }
+                    )
+                )
+            if command == ["git", "rev-parse", "HEAD"]:
+                return Completed(stdout="repair-1\n")
+            if command == [
+                "git",
+                "push",
+                "origin",
+                "repair-1:codex/fix",
+            ]:
+                return Completed(
+                    returncode=1,
+                    stderr="non-fast-forward",
+                )
+            raise AssertionError(command)
+
+        result = publish.publish_ready_actions(
+            db_path,
+            dry_run=False,
+            run_command=fake_run,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failed_count"], 1)
+        self.assertEqual(result["skipped_count"], 1)
+        with closing(sqlite3.connect(db_path)) as conn:
+            statuses = conn.execute(
+                """
+                SELECT action_type, publish_status
+                FROM github_actions
+                WHERE result_id = 'result-1'
+                ORDER BY action_id
+                """
+            ).fetchall()
+            episode_status = conn.execute(
+                """
+                SELECT status
+                FROM pr_remediation_episodes
+                WHERE episode_id = 'episode-ci'
+                """
+            ).fetchone()[0]
+        self.assertEqual(
+            statuses,
+            [
+                ("push_existing_pr", "not_published"),
+                ("comment", "skipped"),
+            ],
+        )
+        self.assertEqual(episode_status, "open")
+
+    def test_remediation_publish_rejects_head_changed_after_audit(self):
+        from robert_agent import publish
+
+        db_path, _worktree = self._init_remediation_publish_db()
+        calls = []
+
+        class Completed:
+            def __init__(self, stdout=""):
+                self.returncode = 0
+                self.stdout = stdout
+                self.stderr = ""
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if command == ["gh", "api", "repos/x/y/pulls/42"]:
+                return Completed(
+                    json.dumps(
+                        {
+                            "state": "open",
+                            "merged": False,
+                            "head": {"sha": "head-1", "ref": "codex/fix"},
+                            "base": {"sha": "base-1", "ref": "main"},
+                        }
+                    )
+                )
+            if command == ["git", "rev-parse", "HEAD"]:
+                return Completed("repair-2\n")
+            raise AssertionError(command)
+
+        result = publish.publish_ready_actions(
+            db_path,
+            dry_run=False,
+            run_command=fake_run,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in calls))
+
     def test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push(self):
         from robert_agent import publish
         db_path = self.root / "dd.sqlite3"
@@ -5109,6 +5360,7 @@ class OperationalCommandTests(unittest.TestCase):
                     ),
                 ],
             )
+
             conn.execute(
                 """
                 INSERT INTO workstreams(
@@ -5283,6 +5535,111 @@ class OperationalCommandTests(unittest.TestCase):
                     ("artifact-stderr", "worker_stderr", str(stderr_path), stderr_path.stat().st_size, now),
                 ],
             )
+
+    def _init_remediation_publish_db(self):
+        db_path = self.root / "remediation.sqlite3"
+        self._init_summary_db(db_path)
+        worktree = self.root / "remediation-worktree"
+        worktree.mkdir()
+        now = datetime.now(timezone.utc).isoformat()
+        action_scope = {
+            "repo": "x/y",
+            "base_branch": "main",
+            "worktree_path": str(worktree),
+            "branch_name": "codex/fix",
+            "remote": "origin",
+            "sources": [{"source_type": "pull_request", "number": 42}],
+            "task_kind": "ci_remediation",
+            "episode_id": "episode-ci",
+            "pr_number": 42,
+            "observed_head_sha": "head-1",
+            "observed_base_sha": "base-1",
+            "result_head_sha": "repair-1",
+        }
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                """
+                UPDATE tasks
+                SET task_kind = 'ci_remediation',
+                    metadata_json = '{"remediation_episode_id":"episode-ci"}'
+                WHERE task_id = 'task-1'
+                """
+            )
+            conn.execute(
+                """
+                UPDATE worker_results
+                SET metadata_json = ?
+                WHERE result_id = 'result-1'
+                """,
+                (
+                    json.dumps(
+                        {
+                            "audit": {
+                                "ok": True,
+                                "status": "accepted",
+                                "action_scope": action_scope,
+                            }
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO pr_remediation_episodes(
+                  episode_id, workstream_id, episode_kind, subject_key,
+                  observed_head_sha, observed_base_sha, status, attempt_count,
+                  failure_signature, first_seen_at, updated_at, last_task_id,
+                  metadata_json
+                )
+                VALUES (
+                  'episode-ci', 'ws-1', 'ci', 'head-1',
+                  'head-1', 'base-1', 'remediating', 1,
+                  'failure-1', ?, ?, 'task-1', '{"pr_number":42}'
+                )
+                """,
+                (now, now),
+            )
+            conn.execute(
+                """
+                UPDATE github_actions
+                SET action_type = 'push_existing_pr',
+                    target_url = 'https://github.com/x/y/pull/42',
+                    metadata_json = ?
+                WHERE action_id = 'action-1'
+                """,
+                (
+                    json.dumps(
+                        {
+                            "worktree_path": str(worktree),
+                            "remote": "origin",
+                            "branch": "codex/fix",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO github_actions(
+                  action_id, result_id, task_id, action_type, target_url,
+                  audit_status, publish_status, created_at, metadata_json
+                )
+                VALUES (
+                  'action-2', 'result-1', 'task-1', 'comment',
+                  'https://github.com/x/y/pull/42', 'accepted',
+                  'not_published', ?, ?
+                )
+                """,
+                (
+                    now,
+                    json.dumps(
+                        {"body": self._dd_comment_body("CI repair published")},
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        return db_path, worktree
 
     def _record_knowledge_candidate(self, db_path):
         now = datetime.now(timezone.utc).isoformat()

@@ -39,3 +39,15 @@ def redact_text(text):
         "status": "redacted",
         "text": redacted,
     }
+
+
+def redact_and_truncate(text, max_chars):
+    result = redact_text(text)
+    if not result["ok"]:
+        return result
+    redacted = result["text"]
+    return {
+        **result,
+        "text": redacted[:max_chars],
+        "truncated": len(redacted) > max_chars,
+    }

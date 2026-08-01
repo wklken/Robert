@@ -24,6 +24,10 @@ A result may also include:
   concise `summary`, and at most five `{id, label}` choices
 - `branch_slug` for a `classification_result` that recommends `new-pr`; use a
   meaningful lowercase ASCII kebab-case value of at most 60 characters
+- `remediation_evidence` for `ci_remediation` and
+  `merge_conflict_remediation`; it records `kind`, `episode_id`,
+  `observed_head_sha`, `observed_base_sha`, and `resolution_summary`. CI
+  remediation also records `failure_signature`.
 
 `local_result` is the terminal output for web-origin analysis that needs no
 GitHub action. Any route may return `waiting_for_user` instead of its ordinary
@@ -54,3 +58,10 @@ Publisher-required fields:
 
 For `new_pr`, record both a `push_existing_pr` action for the prepared worktree
 branch and the final `open_pr` action.
+
+System remediation tasks reuse `update_existing_pr`, but they do not use the
+human review-point contract. Robert compares `remediation_evidence` with the
+durable episode and independently attests the assigned branch, original head
+ancestry, unresolved-conflict set, and—for conflict work—the observed base
+ancestry. Publication then fetches the PR again and pushes only if its head and
+base still match the audited snapshot.

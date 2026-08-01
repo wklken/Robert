@@ -258,7 +258,9 @@ def _pr_review_guidance(route_result):
 - The public review comment body must mention `@<pr_author_login>` near the start so GitHub notifies the PR author."""
 
 
-def _review_point_evaluation_guidance(route_result):
+def _review_point_evaluation_guidance(route_result, task_kind="human_request"):
+    if task_kind in {"ci_remediation", "merge_conflict_remediation"}:
+        return ""
     expected_output = route_result["expected_output"]
     if expected_output not in {"update_existing_pr", "review_comment"}:
         return ""
@@ -279,6 +281,72 @@ def _review_point_evaluation_guidance(route_result):
 - Every review report requires a public comment response. If you push fixes, include a comment after the push. If all points are invalid, unverified, already satisfied, or need no code change, include a comment that lists each point and the reason it was not changed.
 - If the report has no blocking items and says the PR can merge, still include a comment acknowledging that no code change is needed.
 - If every review point is incorrect, unverified, or needs clarification, do not push. Record a comment action and explain the assessment in reasoning."""
+
+
+def _remediation_context(events):
+    for event in events:
+        metadata = event.get("metadata") or {}
+        context = metadata.get("remediation")
+        if isinstance(context, dict):
+            return context
+    return {}
+
+
+def _remediation_guidance(task, runtime_context, events):
+    task_kind = task.get("task_kind", "human_request")
+    if task_kind not in {"ci_remediation", "merge_conflict_remediation"}:
+        return ""
+    context = _remediation_context(events)
+    context_json = json.dumps(context, ensure_ascii=False, indent=2)
+    if task_kind == "ci_remediation":
+        instructions = """CI remediation workflow:
+- Treat the supplied failure summary as evidence, not as a complete diagnosis.
+- Start by inspecting the exact PR snapshot and reproduce the reported failure locally when possible.
+- Make only the change needed to repair the reported failure, then run focused and required verification and create a new commit.
+- Do not rebase or force-push. Robert will revalidate the remote PR snapshot before publication."""
+    else:
+        base_ref = runtime_context.get("base_ref") or "<exact_base_ref>"
+        instructions = f"""Merge-conflict remediation workflow:
+- The worktree starts at the exact observed PR head.
+- Merge the exact observed base with `git merge --no-edit {base_ref}` and resolve only that merge.
+- Resolve every unmerged path, preserve both sides' intended behavior, verify the resolved result, and commit the merge.
+- For safety, never rebase and never force-push. Robert will revalidate the remote PR snapshot before publication."""
+    return f"""{instructions}
+
+Trusted remediation context:
+
+```json
+{context_json}
+```
+
+The result must include "remediation_evidence" with kind, episode_id,
+observed_head_sha, observed_base_sha, resolution_summary, and—for CI—
+failure_signature. Copy identity fields from the trusted context; Robert
+independently attests the branch and merge graph before accepting the result."""
+
+
+def _remediation_evidence_example(task, events):
+    task_kind = task.get("task_kind", "human_request")
+    if task_kind not in {"ci_remediation", "merge_conflict_remediation"}:
+        return None
+    context = _remediation_context(events)
+    evidence = {
+        "kind": "ci" if task_kind == "ci_remediation" else "merge_conflict",
+        "episode_id": context.get("episode_id", ""),
+        "observed_head_sha": context.get("observed_head_sha", ""),
+        "observed_base_sha": context.get("observed_base_sha", ""),
+        "resolution_summary": "<what changed and why it resolves the failure>",
+    }
+    if task_kind == "ci_remediation":
+        evidence["failure_signature"] = context.get("failure_signature", "")
+    return evidence
+
+
+def _remediation_evidence_result_line(task, events):
+    evidence = _remediation_evidence_example(task, events)
+    if evidence is None:
+        return ""
+    return f'"remediation_evidence": {_indent_json(evidence, 2)},\n  '
 
 
 def _verification_policy(route_result):
@@ -342,6 +410,7 @@ def render_prompt(
     worktree_path = runtime_context.get("worktree_path", "")
     branch_name = runtime_context.get("branch_name", "")
     target_base_branch = runtime_context.get("target_base_branch", "")
+    task_kind = task.get("task_kind", "human_request")
     python_bin = runtime_context.get("python_bin", "python3")
     recommended_skills = route_result.get("recommended_skills", route_result.get("required_skills", []))
     required_skills = route_result.get("required_skills", [])
@@ -384,6 +453,7 @@ def render_prompt(
 task_id: {task["task_id"]}
 attempt_id: {task["attempt_id"]}
 workstream_id: {task["workstream_id"]}
+task_kind: {task_kind}
 expected_output: {route_result["expected_output"]}
 allowed_github_actions: {json.dumps(route_result["allowed_github_actions"], ensure_ascii=False)}
 required_skills: {json.dumps(required_skills, ensure_ascii=False)}
@@ -403,7 +473,8 @@ required_skills are mandatory: use each required skill and include it in used_sk
 
 {_route_scope_guidance(route_result)}
 {_pr_review_guidance(route_result)}
-{_review_point_evaluation_guidance(route_result)}
+{_review_point_evaluation_guidance(route_result, task_kind)}
+{_remediation_guidance(task, runtime_context, events)}
 {_recovery_context(runtime_context)}
 
 Before publishing any GitHub-facing PR body, comment, review, or summary,
@@ -502,7 +573,7 @@ Before claiming completion, record the structured result:
   "memory_delta": {{"status": "none", "reason": "no durable project memory from this task"}},
   "verification": {_indent_json(_verification_example(route_result), 2)},
   "review_point_evaluation": [],
-  "recommended_route": "",
+  {_remediation_evidence_result_line(task, events)}"recommended_route": "",
   "branch_slug": "",
   "handoff": ""
 }}

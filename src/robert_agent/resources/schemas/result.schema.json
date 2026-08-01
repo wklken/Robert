@@ -93,7 +93,20 @@
       },
       "additionalProperties": true
     },
-    "used_memory_ids": {"type": "array", "items": {"type": "string", "minLength": 1}}
+    "used_memory_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "remediation_evidence": {
+      "type": "object",
+      "required": ["kind", "episode_id", "observed_head_sha", "observed_base_sha", "resolution_summary"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["ci", "merge_conflict"]},
+        "episode_id": {"type": "string", "minLength": 1},
+        "observed_head_sha": {"type": "string", "minLength": 1},
+        "observed_base_sha": {"type": "string", "minLength": 1},
+        "failure_signature": {"type": "string", "minLength": 1},
+        "resolution_summary": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": true
 }

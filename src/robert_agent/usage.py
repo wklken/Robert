@@ -160,9 +160,7 @@ def _add_usage_totals(totals, usage_payload):
     return True
 
 
-def summarize_acceptance_metrics(conn):
-    accepted_results, rejected_results = _result_counts(conn)
-    published_actions, publish_failed_actions, deduplicated_actions = _action_counts(conn)
+def summarize_usage_payloads(usage_payloads):
     totals = {
         "total_input_tokens": 0,
         "total_output_tokens": 0,
@@ -170,13 +168,30 @@ def summarize_acceptance_metrics(conn):
         "total_cache_read_input_tokens": 0,
         "total_cost_usd": 0.0,
     }
-    usage_available = False
+    available = False
+    for payload in usage_payloads:
+        available = _add_usage_totals(totals, payload) or available
+    return {
+        "usage_available": available,
+        "total_tokens": (
+            totals["total_input_tokens"]
+            + totals["total_output_tokens"]
+        ),
+        **totals,
+    }
+
+
+def summarize_acceptance_metrics(conn):
+    accepted_results, rejected_results = _result_counts(conn)
+    published_actions, publish_failed_actions, deduplicated_actions = _action_counts(conn)
+    payloads = []
     for row in conn.execute("SELECT metadata_json FROM worker_results"):
         try:
             metadata = json.loads(row[0] or "{}")
         except ValueError:
             metadata = {}
-        usage_available = _add_usage_totals(totals, metadata.get("usage")) or usage_available
+        payloads.append(metadata.get("usage"))
+    usage_summary = summarize_usage_payloads(payloads)
     result_total = accepted_results + rejected_results
     publish_total = published_actions + publish_failed_actions
     return {
@@ -187,6 +202,9 @@ def summarize_acceptance_metrics(conn):
         "deduplicated_actions": deduplicated_actions,
         "accepted_result_rate": accepted_results / result_total if result_total else 0.0,
         "publish_success_rate": published_actions / publish_total if publish_total else 0.0,
-        "usage_available": usage_available,
-        **totals,
+        **{
+            key: value
+            for key, value in usage_summary.items()
+            if key != "total_tokens"
+        },
     }

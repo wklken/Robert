@@ -108,6 +108,177 @@ def plan_worktree(
     return result
 
 
+def prepare_existing_pr_worktree(
+    repo_root,
+    worktree_root,
+    *,
+    source_number,
+    head_branch,
+    head_sha,
+    base_branch,
+    base_sha,
+    dry_run=True,
+    runner=subprocess.run,
+):
+    repo_root = Path(repo_root)
+    worktree_root = Path(worktree_root)
+    branch_name = head_branch
+    head_ref = f"refs/robert/prs/pr-{source_number}-head"
+    base_ref = f"refs/robert/prs/pr-{source_number}-base"
+    existing_worktree_path = _existing_worktree_for_branch(
+        repo_root,
+        branch_name,
+    )
+    worktree_path = existing_worktree_path or (
+        worktree_root / branch_name.replace("/", "__")
+    )
+    command_argvs = [
+        [
+            "git",
+            "fetch",
+            "upstream",
+            f"+pull/{source_number}/head:{head_ref}",
+        ],
+        [
+            "git",
+            "fetch",
+            "upstream",
+            f"+refs/heads/{base_branch}:{base_ref}",
+        ],
+    ]
+    if existing_worktree_path:
+        command_argvs.extend(
+            [
+                ["git", "status", "--porcelain"],
+                ["git", "reset", "--hard", head_ref],
+            ]
+        )
+    else:
+        command_argvs.append(
+            [
+                "git",
+                "worktree",
+                "add",
+                str(worktree_path),
+                "-B",
+                branch_name,
+                head_ref,
+            ]
+        )
+    commands = [
+        " ".join(shlex.quote(part) for part in command)
+        for command in command_argvs
+    ]
+    result = {
+        "ok": True,
+        "status": "planned" if dry_run else "created",
+        "mode": (
+            "reuse_existing_worktree"
+            if existing_worktree_path
+            else "existing_pr_snapshot"
+        ),
+        "repo_root": str(repo_root),
+        "worktree_root": str(worktree_root),
+        "worktree_path": str(worktree_path),
+        "branch_name": branch_name,
+        "base_branch": base_branch,
+        "head_ref": head_ref,
+        "base_ref": base_ref,
+        "observed_head_sha": head_sha,
+        "observed_base_sha": base_sha,
+        "start_point": head_ref,
+        "commands": commands,
+    }
+    if existing_worktree_path:
+        try:
+            existing_worktree_path.resolve().relative_to(
+                worktree_root.resolve()
+            )
+        except ValueError:
+            return {
+                **result,
+                "ok": False,
+                "status": "blocked_unmanaged_worktree",
+            }
+    if dry_run:
+        return result
+
+    for command in command_argvs[:2]:
+        runner(
+            command,
+            cwd=repo_root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    actual_head = runner(
+        ["git", "rev-parse", head_ref],
+        cwd=repo_root,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    actual_base = runner(
+        ["git", "rev-parse", base_ref],
+        cwd=repo_root,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    if actual_head != head_sha or actual_base != base_sha:
+        return {
+            **result,
+            "ok": False,
+            "status": "stale_snapshot",
+            "actual_head_sha": actual_head,
+            "actual_base_sha": actual_base,
+        }
+
+    if existing_worktree_path:
+        status = runner(
+            ["git", "status", "--porcelain"],
+            cwd=worktree_path,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        if status.strip():
+            return {
+                **result,
+                "ok": False,
+                "status": "blocked_dirty_worktree",
+            }
+        runner(
+            ["git", "reset", "--hard", head_ref],
+            cwd=worktree_path,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        return {
+            **result,
+            "status": "refreshed",
+        }
+
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    runner(
+        [
+            "git",
+            "worktree",
+            "add",
+            str(worktree_path),
+            "-B",
+            branch_name,
+            head_ref,
+        ],
+        cwd=repo_root,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    return result
+
+
 def plan_review_worktree(
     repo_root,
     worktree_root,

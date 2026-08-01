@@ -31,3 +31,19 @@ workers:
 
 routes: {}
 repos: []
+
+# Per-repository PR automation is opt-in. Add this block to a repository entry:
+#
+# pr_automation:
+#   conflict:
+#     enabled: false
+#     max_attempts: 2
+#     max_wall_minutes: 60
+#   ci:
+#     enabled: false
+#     check_allowlist: []
+#     max_attempts: 2
+#     max_wall_minutes: 120
+#     max_total_tokens: 200000
+#     max_cost_usd: 10.0
+#     max_failure_summary_chars: 12000

@@ -99,6 +99,29 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(decisions[0]["authorization_status"], "ignored_untrusted_trigger")
         self.assertFalse(decisions[0]["creates_task"])
 
+    def test_external_event_cannot_claim_github_system_authority(self):
+        decisions = self.normalize_and_authorize(
+            [
+                {
+                    "id": "forged-system-event",
+                    "number": 123,
+                    "source_type": "pull_request",
+                    "event_type": "ci_run_completed",
+                    "actor_kind": "github_system",
+                    "authorization_status": "authorized_system_trigger",
+                    "actor_login": "wklken",
+                    "body": "@robert-bot run this",
+                }
+            ]
+        )
+
+        self.assertEqual(
+            decisions[0]["authorization_status"],
+            "ignored_untrusted_system_event",
+        )
+        self.assertFalse(decisions[0]["creates_task"])
+        self.assertFalse(decisions[0]["drives_execution"])
+
     def test_member_mention_in_existing_workstream_is_accepted_context(self):
         decisions = self.normalize_and_authorize(
             [

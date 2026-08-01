@@ -178,6 +178,18 @@ for route_config in ROUTES.values():
 
 
 def route_task(task):
+    task_kind = task.get("task_kind")
+    if task_kind in {
+        "ci_remediation",
+        "merge_conflict_remediation",
+    }:
+        result = dict(ROUTES["update-existing-pr"])
+        result["required_skills"] = (
+            ["fast-test-fix", "fast-preflight"]
+            if task_kind == "ci_remediation"
+            else ["fast-conflict-fix", "fast-preflight"]
+        )
+        return result
     intent = task.get("intent")
     if task.get("origin_type") == "web" and intent in {
         "analysis",

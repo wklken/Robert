@@ -84,6 +84,20 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("/home/runner", result["text"])
         self.assertIn("<local-path>", result["text"])
 
+    def test_redact_and_truncate_never_returns_unredacted_suffix(self):
+        from robert_agent import redaction
+
+        result = redaction.redact_and_truncate(
+            "failed in /home/runner/work/project " + ("x" * 100),
+            max_chars=40,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["truncated"])
+        self.assertEqual(len(result["text"]), 40)
+        self.assertIn("<local-path>", result["text"])
+        self.assertNotIn("/home/runner", result["text"])
+
 
 if __name__ == "__main__":
     unittest.main()
