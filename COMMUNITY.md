@@ -31,16 +31,14 @@ Explain every new dependency and why the standard library and current
 dependencies are insufficient. Pull requests must disclose new network calls,
 filesystem writes, subprocesses, credentials, or GitHub actions.
 
-### DCO sign-off
+### Commit sign-off
 
-Robert uses the Developer Certificate of Origin. Sign every commit:
+Robert does not require DCO sign-off or a contributor license agreement for
+the first beta. Contributors may still sign commits voluntarily:
 
 ```bash
 git commit -s
 ```
-
-By signing, you certify that you have the right to submit the contribution.
-Robert does not require a contributor license agreement for the first beta.
 
 ## Code of Conduct
 

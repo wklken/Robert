@@ -2290,15 +2290,26 @@ def _refresh_prepared_task(
         ),
     )
     _upsert_route_decision(conn, state["task_id"], route_result, run_now)
+    attempt_metadata_row = conn.execute(
+        "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
+        (state["attempt_id"],),
+    ).fetchone()
+    attempt_metadata = _json_object(
+        attempt_metadata_row[0] if attempt_metadata_row else None
+    )
+    existing_pr_head_sha = _event_existing_pr_head_sha(event)
+    if existing_pr_head_sha:
+        attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
     conn.execute(
         """
         UPDATE attempts
-        SET worktree_path = ?, branch_name = ?
+        SET worktree_path = ?, branch_name = ?, metadata_json = ?
         WHERE attempt_id = ?
         """,
         (
             (worktree_result or {}).get("worktree_path"),
             (worktree_result or {}).get("branch_name"),
+            json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
             state["attempt_id"],
         ),
     )
@@ -2443,22 +2454,9 @@ def _runtime_context(db_path, repo, worktree_result=None):
     }
 
 
-def _existing_pr_head_sha_from_events(conn, workstream_id):
-    for row in conn.execute(
-        """
-        SELECT ge.payload_json
-        FROM github_events ge
-        JOIN workstream_sources ws ON ws.source_id = ge.source_id
-        WHERE ws.workstream_id = ?
-        ORDER BY ge.event_at DESC, ge.event_id DESC
-        """,
-        (workstream_id,),
-    ):
-        payload = _json_object(row[0])
-        head_sha = payload.get("existing_pr_head_sha")
-        if isinstance(head_sha, str) and head_sha:
-            return head_sha
-    return ""
+def _event_existing_pr_head_sha(event):
+    head_sha = event.get("existing_pr_head_sha") or event.get("head_sha")
+    return head_sha if isinstance(head_sha, str) else ""
 
 
 def _load_runtime_knowledge(conn, repo_id, workstream_id, route_result, events):
@@ -3017,12 +3015,19 @@ def _create_task_attempt_and_prompt(
             run_now,
         ),
     )
+    existing_pr_head_sha = _event_existing_pr_head_sha(event)
+    attempt_metadata = (
+        {"existing_pr_head_sha": existing_pr_head_sha}
+        if existing_pr_head_sha
+        else {}
+    )
     conn.execute(
         """
         INSERT INTO attempts(
-          attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at
+          attempt_id, task_id, attempt_no, status, worktree_path, branch_name,
+          started_at, heartbeat_at, metadata_json
         )
-        VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
         """,
         (
             attempt_id,
@@ -3032,6 +3037,7 @@ def _create_task_attempt_and_prompt(
             (worktree_result or {}).get("branch_name"),
             run_now,
             run_now,
+            json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
         ),
     )
     for artifact_type, path in [
@@ -3150,7 +3156,7 @@ def _create_resume_attempt_and_prompt(
 ):
     previous = conn.execute(
         """
-        SELECT attempt_no, worktree_path, branch_name
+        SELECT attempt_no, worktree_path, branch_name, metadata_json
         FROM attempts
         WHERE attempt_id = ?
         """,
@@ -3164,7 +3170,7 @@ def _create_resume_attempt_and_prompt(
     ).fetchone()[0]
     attempt_id = _id("attempt")
     attempt_no = max_attempt_no + 1
-    _previous_attempt_no, worktree_path, branch_name = previous
+    _previous_attempt_no, worktree_path, branch_name, previous_metadata_json = previous
     route_result = _latest_route_result_for_task(conn, task_id)
     events = _events_for_task(conn, task_id)
     if not route_result or not events:
@@ -3225,6 +3231,18 @@ def _create_resume_attempt_and_prompt(
         encoding="utf-8",
     )
 
+    attempt_metadata = {
+        "resume": {
+            "previous_attempt_id": previous_attempt_id,
+            "strategy": "resume_from_worktree",
+            "recovery_artifact_path": str(recovery_path),
+        }
+    }
+    existing_pr_head_sha = _json_object(previous_metadata_json).get(
+        "existing_pr_head_sha"
+    )
+    if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
+        attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
     conn.execute(
         """
         INSERT INTO attempts(
@@ -3241,17 +3259,7 @@ def _create_resume_attempt_and_prompt(
             branch_name,
             run_now,
             run_now,
-            json.dumps(
-                {
-                    "resume": {
-                        "previous_attempt_id": previous_attempt_id,
-                        "strategy": "resume_from_worktree",
-                        "recovery_artifact_path": str(recovery_path),
-                    }
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
+            json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
         ),
     )
     for artifact_type, path in [
@@ -3850,7 +3858,7 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
     row = conn.execute(
         """
         SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name,
-               t.task_kind, t.metadata_json
+               a.metadata_json, t.task_kind, t.metadata_json
         FROM tasks t
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         JOIN repos r ON r.repo_id = w.repo_id
@@ -3893,17 +3901,18 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
         "remote": "origin",
         "sources": sources,
     }
-    existing_pr_head_sha = _existing_pr_head_sha_from_events(conn, workstream_id)
-    if existing_pr_head_sha:
+    attempt_metadata = _json_object(row[4])
+    existing_pr_head_sha = attempt_metadata.get("existing_pr_head_sha")
+    if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
         action_scope["existing_pr_head_sha"] = existing_pr_head_sha
-    task_metadata = _json_object(row[5])
+    task_metadata = _json_object(row[6])
     episode_id = task_metadata.get("remediation_episode_id")
-    if row[4] in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
+    if row[5] in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
         episode = remediation.load_episode(conn, episode_id)
         if episode:
             action_scope.update(
                 {
-                    "task_kind": row[4],
+                    "task_kind": row[5],
                     "episode_id": episode_id,
                     "pr_number": episode["metadata"].get("pr_number"),
                     "observed_head_sha": episode["observed_head_sha"],

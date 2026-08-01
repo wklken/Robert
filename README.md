@@ -134,8 +134,8 @@ robert diagnostics export --output robert-diagnostics.zip
 
 ## 参与贡献
 
-阅读 [COMMUNITY.md](COMMUNITY.md)，执行其中的验证命令，并使用
-`git commit -s` 签署提交。首个 Beta 使用 DCO，不要求 CLA。
+阅读 [COMMUNITY.md](COMMUNITY.md) 并执行其中的验证命令。首个 Beta
+不强制 DCO 签署，也不要求 CLA。
 
 ## 安全与信任模型
 
