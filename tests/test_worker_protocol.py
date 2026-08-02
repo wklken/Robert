@@ -1481,6 +1481,68 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(metadata["recorded_by"], "robert.worker")
         self.assertEqual(metadata["output_type"], "comment_analysis")
 
+    def test_result_notifies_only_after_transaction_commits(self):
+        from robert_agent.worker import result
+
+        db_path = self._init_attempt_db()
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="comment_analysis",
+            planned_github_actions=[],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="done",
+            used_skills=["fast-code-path"],
+        )
+        observed = []
+
+        def committed_notifier(notified_db_path):
+            with closing(sqlite3.connect(notified_db_path)) as conn:
+                observed.append(
+                    (
+                        conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0],
+                        conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0],
+                        conn.execute(
+                            "SELECT status FROM attempts WHERE attempt_id = 'attempt-1'"
+                        ).fetchone()[0],
+                    )
+                )
+
+        record = result.record_result(
+            db_path,
+            payload,
+            notifier=committed_notifier,
+        )
+
+        self.assertTrue(record["ok"], record)
+        self.assertEqual(observed, [(1, 1, "completed")])
+
+    def test_result_stays_successful_when_post_commit_notification_fails(self):
+        from robert_agent.worker import result
+
+        db_path = self._init_attempt_db()
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="comment_analysis",
+            planned_github_actions=[],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="done",
+            used_skills=["fast-code-path"],
+        )
+
+        def failed_notifier(_db_path):
+            raise OSError("listener unavailable")
+
+        record = result.record_result(db_path, payload, notifier=failed_notifier)
+
+        self.assertTrue(record["ok"], record)
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
+
     def test_duplicate_result_does_not_create_extra_wakeup(self):
         from robert_agent.worker import result
 

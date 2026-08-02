@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from robert_agent.common import emit
+from robert_agent import wakeup_notifier
 
 
 def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
@@ -168,7 +169,7 @@ def build_result(
     return payload
 
 
-def record_result(db_path, payload):
+def record_result(db_path, payload, *, notifier=None):
     if "planned_github_actions" not in payload:
         return {
             "ok": False,
@@ -288,6 +289,7 @@ def record_result(db_path, payload):
             conn.rollback()
             return {"ok": False, "status": "rejected_by_supervisor", "result_id": result_id}
         _insert_worker_result_wakeup(conn, payload, result_id, result_created_at)
+    wakeup_notifier.notify(db_path, sender=notifier)
     return {"ok": True, "status": "recorded", "result_id": result_id}
 
 
