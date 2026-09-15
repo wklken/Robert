@@ -671,6 +671,34 @@ class WorkItemCommandTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
+    def test_cancel_is_terminal_for_start_and_reply(self):
+        from robert_agent import board, work_items
+
+        for command in ("start", "reply"):
+            with self.subTest(command=command):
+                item = self._create(start=command == "reply", idempotency_key=command)["item"]
+                if command == "reply":
+                    self._question(item["work_item_id"], 1)
+                current = board.get_work_item_detail(self.db_path, item["work_item_id"])
+                canceled = work_items.execute_command(
+                    self.db_path, item["work_item_id"], context=self.context,
+                    command="cancel", expected_version=current["version"],
+                    idempotency_key="cancel",
+                )
+                with self.assertRaises(work_items.WorkItemConflictError):
+                    work_items.execute_command(
+                        self.db_path, item["work_item_id"], context=self.context,
+                        command=command, expected_version=canceled["item"]["version"],
+                        idempotency_key="after-cancel", body="Continue",
+                    )
+                current = board.get_work_item_detail(self.db_path, item["work_item_id"])
+                self.assertEqual(current["column"], "history")
+                with closing(sqlite3.connect(self.db_path)) as conn:
+                    self.assertEqual(conn.execute(
+                        "SELECT COUNT(*) FROM tasks WHERE workstream_id = ? AND lifecycle = 'detected'",
+                        (item["workstream_id"],),
+                    ).fetchone()[0], 0)
+
     def test_cancel_rejects_a_live_attempt_without_mutation(self):
         from robert_agent import work_items
 

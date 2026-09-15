@@ -239,6 +239,41 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(self.episodes()[0][2], "resolved")
         self.assertEqual(self.episodes()[0][5], "head-2")
 
+    def test_exhausted_result_is_not_retried_on_later_identical_polls(self):
+        from robert_agent import remediation
+
+        for kind in ("merge_conflict", "ci"):
+            with self.subTest(kind=kind), closing(self.connect()) as conn, conn:
+                conn.execute("DELETE FROM pr_remediation_episodes")
+                snapshot = {**self.snapshot, "mergeable": kind == "ci"}
+                summary = {"status": "failing" if kind == "ci" else "waiting",
+                           "failure_signature": "same", "failures": [], "observations": []}
+                remediation.upsert_health_episodes(
+                    conn, repo=self.repo, workstream=self.workstream,
+                    snapshot=snapshot, ci_summary=summary, now="2026-07-26T00:01:00Z",
+                )
+                episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
+                remediation.record_publish_result(
+                    conn, episode_id=episode_id, publish_status="published",
+                    result_head_sha="head-2", now="2026-07-26T00:02:00Z",
+                )
+                for minute in (3, 4, 5):
+                    remediation.upsert_health_episodes(
+                        conn, repo=self.repo, workstream=self.workstream,
+                        snapshot={**snapshot, "head_sha": "head-2"}, ci_summary=summary,
+                        now=f"2026-07-26T00:0{minute}:00Z",
+                    )
+                self.assertEqual(remediation.next_system_decisions(
+                    conn, repo=self.repo, now="2026-07-26T00:05:00Z"), [])
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0], 1)
+                remediation.upsert_health_episodes(
+                    conn, repo=self.repo, workstream=self.workstream,
+                    snapshot={**snapshot, "head_sha": "human-head"}, ci_summary=summary,
+                    now="2026-07-26T00:06:00Z",
+                )
+                self.assertEqual(len(remediation.next_system_decisions(
+                    conn, repo=self.repo, now="2026-07-26T00:06:00Z")), 1)
+
     def test_waiting_conflict_exhausts_when_result_head_is_still_conflicted(self):
         from robert_agent import remediation
 

@@ -4728,7 +4728,7 @@ repos:
         self.assertEqual(attempt_status, "stale")
         self.assertEqual(notification, ("worker_stale", "recorded"))
 
-    def test_supervise_fails_running_attempt_without_startup_snapshot(self):
+    def test_supervise_retains_running_attempt_without_cleanup_pid(self):
         from robert_agent import run_once
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
@@ -4784,11 +4784,11 @@ repos:
             notification = conn.execute(
                 "SELECT notification_type, status FROM notifications"
             ).fetchone()
-        self.assertEqual(attempt_status, "failed")
-        self.assertIn("failed_worker_startup", failure_json)
-        self.assertEqual(task_lifecycle, "failed")
-        self.assertEqual(workstream_lifecycle, "failed")
-        self.assertEqual(notification, ("worker_startup_failed", "recorded"))
+        self.assertEqual(attempt_status, "running")
+        self.assertIsNone(failure_json)
+        self.assertEqual(task_lifecycle, "running")
+        self.assertEqual(workstream_lifecycle, "active")
+        self.assertEqual(notification, ("worker_cleanup_pending", "recorded"))
 
     def test_supervise_fails_running_attempt_when_dispatch_pid_is_gone(self):
         from robert_agent import run_once
@@ -5386,6 +5386,51 @@ repos:
             },
         )
 
+    def test_blocked_worktree_is_not_dispatched(self):
+        from unittest.mock import patch
+        from robert_agent import run_once
+
+        with patch.object(run_once, "_prepare_worktree", return_value={
+            "ok": False, "status": "blocked_dirty_worktree", "worktree_path": "/unmanaged",
+        }):
+            result = run_once.run_once(self.config_path, fixture_path=self.fixture_path,
+                                       dry_run=True, skip_external=True)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["dispatch_count"], 0)
+        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
+
+    def test_remote_close_waits_for_process_cleanup_and_preserves_dispatch_metadata(self):
+        from unittest.mock import patch
+        from robert_agent import run_once
+
+        run_once.run_once(self.config_path, fixture_path=self.fixture_path,
+                          dry_run=True, skip_external=True)
+        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
+            conn.execute("UPDATE tasks SET lifecycle = 'running'")
+            conn.execute("UPDATE attempts SET status = 'running', metadata_json = ?",
+                         (json.dumps({"dispatch": {"pid": 12345}}),))
+            repo_id, ws, source_id, source_key, source_type, number = conn.execute(
+                "SELECT w.repo_id,w.workstream_id,gs.source_id,gs.source_key,gs.source_type,gs.number "
+                "FROM workstreams w JOIN github_sources gs ON gs.source_id=w.primary_source_id"
+            ).fetchone()
+            args = (conn, repo_id, ws, source_id, source_key, source_type, number,
+                    task_id, {"state": "closed"}, "canceled", "remote_issue_closed", datetime.now(timezone.utc).isoformat())
+            conn.execute("UPDATE attempts SET metadata_json='{}'")
+            self.assertFalse(run_once._record_remote_terminal_state(*args))
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
+            conn.execute("UPDATE attempts SET metadata_json=?", (json.dumps({"dispatch": {"pid": 12345}}),))
+            with patch.object(run_once, "_terminate_attempt_process", return_value={"status": "permission_denied"}):
+                run_once._record_remote_terminal_state(*args)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
+            self.assertEqual(conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0], task_id)
+            with patch.object(run_once, "_terminate_attempt_process", return_value={"status": "terminated"}):
+                run_once._record_remote_terminal_state(*args)
+            status, metadata = conn.execute("SELECT status,metadata_json FROM attempts").fetchone()
+            self.assertEqual(status, "canceled")
+            self.assertEqual(json.loads(metadata)["dispatch"]["pid"], 12345)
+
     def test_terminate_attempt_process_skips_sigterm_for_zombie_pid(self):
         from robert_agent import run_once
         kill_calls = []
@@ -5438,6 +5483,10 @@ repos:
             raise FileNotFoundError(str(path_obj))
 
         def fake_run(command, **kwargs):
+            if command == ["ps", "-axo", "pid=,pgid=,stat="]:
+                result = Completed()
+                result.stdout = "13579 13579 Z\n"
+                return result
             self.assertEqual(command, ["ps", "-o", "stat=", "-p", "13579"])
             self.assertTrue(kwargs["capture_output"])
             self.assertTrue(kwargs["text"])
@@ -5717,12 +5766,17 @@ repos:
 
         signals = []
         original_kill = run_once.os.kill
+        original_killpg = run_once.os.killpg
+        original_group = run_once._live_process_group
+        group_checks = iter((True, False))
 
         def fake_kill(pid, sig):
             signals.append((pid, sig))
 
         try:
             run_once.os.kill = fake_kill
+            run_once.os.killpg = fake_kill
+            run_once._live_process_group = lambda pid: next(group_checks)
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5731,6 +5785,8 @@ repos:
             )
         finally:
             run_once.os.kill = original_kill
+            run_once.os.killpg = original_killpg
+            run_once._live_process_group = original_group
 
         self.assertTrue(second["ok"], second)
         self.assertEqual(signals, [(12345, 0), (12345, run_once.signal.SIGTERM)])
@@ -5788,12 +5844,17 @@ repos:
 
         signals = []
         original_kill = run_once.os.kill
+        original_killpg = run_once.os.killpg
+        original_group = run_once._live_process_group
+        group_checks = iter((True, False))
 
         def fake_kill(pid, sig):
             signals.append((pid, sig))
 
         try:
             run_once.os.kill = fake_kill
+            run_once.os.killpg = fake_kill
+            run_once._live_process_group = lambda pid: next(group_checks)
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5802,6 +5863,8 @@ repos:
             )
         finally:
             run_once.os.kill = original_kill
+            run_once.os.killpg = original_killpg
+            run_once._live_process_group = original_group
 
         self.assertTrue(second["ok"], second)
         self.assertEqual(signals, [(12345, 0), (12345, run_once.signal.SIGTERM)])
@@ -5965,6 +6028,9 @@ repos:
 
         signals = []
         original_kill = run_once.os.kill
+        original_killpg = run_once.os.killpg
+        original_group = run_once._live_process_group
+        group_checks = iter((True, False))
         original_collect_notifications = run_once.discover.collect_account_notifications
         original_collect = run_once.discover.collect_live_events
 
@@ -5987,6 +6053,8 @@ repos:
 
         try:
             run_once.os.kill = fake_kill
+            run_once.os.killpg = fake_kill
+            run_once._live_process_group = lambda pid: next(group_checks)
             run_once.discover.collect_account_notifications = fake_collect_notifications
             run_once.discover.collect_live_events = fake_collect
             second = run_once.run_once(
@@ -5997,6 +6065,8 @@ repos:
             )
         finally:
             run_once.os.kill = original_kill
+            run_once.os.killpg = original_killpg
+            run_once._live_process_group = original_group
             run_once.discover.collect_account_notifications = original_collect_notifications
             run_once.discover.collect_live_events = original_collect
 
@@ -7295,7 +7365,21 @@ raise SystemExit(0 if record["ok"] else 1)
             [("trigger", "comment:older-issue-task"), ("trigger", "comment:pr-followup-task")],
         )
 
-    def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(self):
+    def test_prepared_pr_reroute_preserves_required_skill_gate(self):
+        with self.config_path.open("a") as config:
+            config.write("\nroutes:\n  update-existing-pr:\n    required_skills: [missing-reroute-skill]\n")
+        self.test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(blocked=True)
+        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
+            row = conn.execute("SELECT t.lifecycle, a.status, rd.required_skills_json "
+                "FROM tasks t JOIN attempts a ON a.task_id=t.task_id "
+                "JOIN route_decisions rd ON rd.task_id=t.task_id "
+                "WHERE t.task_id='task-pr-2886'").fetchone()
+            self.assertEqual(row[:2], ("failed", "failed"))
+            self.assertIn("missing-reroute-skill", json.loads(row[2]))
+            from robert_agent.run_once import _current_dispatch_target
+            self.assertIsNone(_current_dispatch_target(conn, "attempt-pr-2886"))
+
+    def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(self, blocked=False):
         from robert_agent import run_once
         from robert_agent import storage
 
@@ -7440,6 +7524,8 @@ raise SystemExit(0 if record["ok"] else 1)
                 ORDER BY te.relationship, ge.event_fingerprint
                 """
             , (task_id,)).fetchall()
+        if blocked:
+            return
         self.assertEqual(
             row[:3],
             (

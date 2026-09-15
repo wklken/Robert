@@ -215,7 +215,10 @@ class OperationalCommandTests(unittest.TestCase):
 
         def fake_run(args, **kwargs):
             calls.append((args, kwargs))
-            return Completed()
+            result = Completed()
+            if args == ["git", "status", "--porcelain"]:
+                result.stdout = ""
+            return result
 
         original_run = worktree.subprocess.run
         try:
@@ -236,6 +239,7 @@ class OperationalCommandTests(unittest.TestCase):
             [call[0] for call in calls],
             [
                 ["git", "worktree", "list", "--porcelain"],
+                ["git", "status", "--porcelain"],
                 [
                     "git",
                     "fetch",
@@ -250,7 +254,7 @@ class OperationalCommandTests(unittest.TestCase):
                 ],
             ],
         )
-        self.assertEqual(calls[2][1]["cwd"], review_path)
+        self.assertEqual(calls[3][1]["cwd"], review_path)
 
     def test_dispatch_builds_worker_command_with_prompt_and_worktree(self):
         from robert_agent import dispatch
@@ -4081,6 +4085,7 @@ class OperationalCommandTests(unittest.TestCase):
                                     "branch_name": "codex/dd-123",
                                     "remote": "origin",
                                     "existing_pr_head_sha": "audited-sha",
+                                    "result_head_sha": "result-sha",
                                 },
                             }
                         },
@@ -4611,6 +4616,64 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(episode, ("waiting_for_signal", "repair-1"))
         self.assertTrue(worktree.is_dir())
 
+    def test_remediation_retry_recognizes_already_pushed_result(self):
+        from robert_agent import publish
+
+        db_path, worktree = self._init_remediation_publish_db()
+        calls = []
+
+        class Completed:
+            def __init__(self, stdout=""):
+                self.returncode = 0
+                self.stdout = stdout
+                self.stderr = ""
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if command == ["gh", "api", "repos/x/y/pulls/42"]:
+                return Completed(
+                    json.dumps(
+                        {
+                            "state": "open",
+                            "merged": False,
+                            "head": {"sha": "repair-1", "ref": "codex/fix"},
+                            "base": {"sha": "base-1", "ref": "main"},
+                        }
+                    )
+                )
+            if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments?per_page=100"]:
+                return Completed("[]")
+            if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments"]:
+                return Completed(
+                    json.dumps(
+                        {
+                            "id": 9001,
+                            "html_url": "https://github.com/x/y/pull/42#issuecomment-9001",
+                        }
+                    )
+                )
+            raise AssertionError(command)
+
+        result = publish.publish_ready_actions(
+            db_path,
+            dry_run=False,
+            run_command=fake_run,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(any(command[0] == "git" for command in calls))
+        self.assertEqual(result["deduplicated_count"], 1)
+        with closing(sqlite3.connect(db_path)) as conn:
+            episode = conn.execute(
+                """
+                SELECT status, result_head_sha
+                FROM pr_remediation_episodes
+                WHERE episode_id = 'episode-ci'
+                """
+            ).fetchone()
+        self.assertEqual(episode, ("waiting_for_signal", "repair-1"))
+        self.assertTrue(worktree.is_dir())
+
     def test_remediation_publish_skips_push_and_comment_when_snapshot_changed(self):
         from robert_agent import publish, run_once
 
@@ -4882,6 +4945,7 @@ class OperationalCommandTests(unittest.TestCase):
                                     "branch_name": "codex/dd-123",
                                     "remote": "origin",
                                     "existing_pr_head_sha": "audited-sha",
+                                    "result_head_sha": "result-sha",
                                 },
                             }
                         },
@@ -4916,7 +4980,7 @@ class OperationalCommandTests(unittest.TestCase):
                 "push",
                 "--force-with-lease=codex/dd-123:audited-sha",
                 "origin",
-                "HEAD:codex/dd-123",
+                "result-sha:codex/dd-123",
             ],
         )
 
@@ -4962,6 +5026,7 @@ class OperationalCommandTests(unittest.TestCase):
                                     "branch_name": "codex/dd-123",
                                     "remote": "origin",
                                     "existing_pr_head_sha": "audited-sha",
+                                    "result_head_sha": "result-sha",
                                 },
                             }
                         },
@@ -5521,6 +5586,30 @@ class OperationalCommandTests(unittest.TestCase):
                     ("artifact-stderr", "worker_stderr", str(stderr_path), stderr_path.stat().st_size, now),
                 ],
             )
+
+    def test_audit_scope_records_controller_observed_commit_and_fork(self):
+        import subprocess
+        from robert_agent import run_once
+
+        db_path = self.root / "scope.sqlite3"
+        self._init_summary_db(db_path)
+        tree = self.root / "real-tree"
+        tree.mkdir()
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=tree, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        git("init", "-b", "codex/fix")
+        git("config", "user.email", "test@example.invalid")
+        git("config", "user.name", "Test")
+        git("commit", "--allow-empty", "-m", "result")
+        git("remote", "add", "origin", "https://github.com/expected-owner/y.git")
+        expected_sha = git("rev-parse", "HEAD")
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE attempts SET worktree_path = ?, branch_name = 'codex/fix'", (str(tree),))
+            ws = conn.execute("SELECT workstream_id FROM tasks WHERE task_id='task-1'").fetchone()[0]
+            scope = run_once._action_scope_for_result(conn, "task-1", "attempt-1", ws)
+        self.assertEqual(scope["result_head_sha"], expected_sha)
+        self.assertEqual(scope["head_owner"], "expected-owner")
 
     def _init_remediation_publish_db(self):
         db_path = self.root / "remediation.sqlite3"

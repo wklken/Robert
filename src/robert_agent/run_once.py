@@ -8,6 +8,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -792,7 +793,19 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                     {"task_id": task_id, "attempt_id": attempt_id, "workstream_id": workstream_id},
                 )
             continue
+        previous_termination = metadata.get("termination")
         metadata["termination"] = _terminate_attempt_process(metadata)
+        if metadata["termination"]["status"] not in {"terminated", "not_found"}:
+            if previous_termination != metadata["termination"]:
+                _insert_notification(conn, "worker_cleanup_pending", "recorded", run_now,
+                                     {"task_id": task_id, "attempt_id": attempt_id,
+                                      "termination": metadata["termination"]})
+            # Keep ownership and capacity until process cleanup is confirmed.
+            conn.execute(
+                "UPDATE attempts SET status = 'running', metadata_json = ? WHERE attempt_id = ?",
+                (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
+            )
+            continue
         conn.execute(
             """
             UPDATE attempts
@@ -945,12 +958,22 @@ def _dispatch_process_status(metadata):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
+        try:
+            if _live_process_group(pid):
+                return {"status": "alive", "pid": pid, "reason": "descendants_running"}
+        except (OSError, subprocess.TimeoutExpired):
+            return {"status": "unknown", "pid": pid, "reason": "group_inspection_failed"}
         return {"status": "not_found", "pid": pid}
     except PermissionError:
         return {"status": "alive", "pid": pid, "visibility": "permission_denied"}
 
     process_state = _process_state(pid)
     if process_state in {"Z", "X", "x"}:
+        try:
+            if _live_process_group(pid):
+                return {"status": "alive", "pid": pid, "reason": "descendants_running"}
+        except (OSError, subprocess.TimeoutExpired):
+            return {"status": "unknown", "pid": pid, "reason": "group_inspection_failed"}
         return {
             "status": "not_found",
             "pid": pid,
@@ -968,6 +991,19 @@ def _supervision_failure_notification_type(status):
     return "worker_timeout"
 
 
+def _live_process_group(pgid):
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, timeout=5,
+    )
+    if completed.returncode != 0:
+        raise OSError("cannot inspect worker process group")
+    return any(
+        fields[1] == str(pgid) and fields[2][0] not in {"Z", "X", "x"}
+        for line in completed.stdout.splitlines()
+        if len(fields := line.split()) >= 3
+    )
+
+
 def _terminate_attempt_process(metadata):
     dispatch_metadata = (metadata or {}).get("dispatch") or {}
     pid = dispatch_metadata.get("pid")
@@ -977,24 +1013,32 @@ def _terminate_attempt_process(metadata):
         pid = int(pid)
     except (TypeError, ValueError):
         return {"status": "not_signalled", "reason": "invalid_pid", "pid": pid}
-    if pid <= 0:
+    if pid <= 0 or pid == os.getpgrp():
         return {"status": "not_signalled", "reason": "invalid_pid", "pid": pid}
-    process_state = _process_state(pid)
-    if process_state in {"Z", "X", "x"}:
-        return {
-            "status": "not_found",
-            "reason": "zombie",
-            "pid": pid,
-            "process_state": process_state,
-            "signal": "SIGTERM",
-        }
+    # dispatch always uses start_new_session=True, so the worker PID is also
+    # its process group ID. The group may outlive its leader.
     try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return {"status": "not_found", "pid": pid, "signal": "SIGTERM"}
+        if not _live_process_group(pid):
+            state = _process_state(pid)
+            if state in {"Z", "X", "x"}:
+                return {"status": "not_found", "reason": "zombie", "pid": pid,
+                        "process_state": state, "signal": "SIGTERM"}
+            return {"status": "not_found", "pid": pid}
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pid, sig)
+            except ProcessLookupError:
+                return {"status": "not_found", "pid": pid}
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                if not _live_process_group(pid):
+                    return {"status": "terminated", "pid": pid, "signal": sig.name}
+                time.sleep(.05)
+        return {"status": "termination_pending", "pid": pid}
     except PermissionError:
-        return {"status": "permission_denied", "pid": pid, "signal": "SIGTERM"}
-    return {"status": "signalled", "pid": pid, "signal": "SIGTERM"}
+        return {"status": "permission_denied", "pid": pid}
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"status": "termination_pending", "pid": pid, "safe_error": str(exc)}
 
 
 def _proc_process_state(pid):
@@ -1185,6 +1229,31 @@ def _record_remote_terminal_state(
     audit_type,
     run_now,
 ):
+    attempts = conn.execute(
+        "SELECT attempt_id, status, metadata_json FROM attempts "
+        "WHERE task_id = ? AND status IN ('prepared', 'running', 'stale')",
+        (task_id,),
+    ).fetchall()
+    attempt_metadata = {}
+    cleanup_pending = False
+    for attempt_id, attempt_status, metadata_json in attempts:
+        metadata = _json_object(metadata_json)
+        if attempt_status in {"running", "stale"}:
+            previous_termination = metadata.get("termination")
+            metadata["termination"] = _terminate_attempt_process(metadata)
+            if metadata["termination"]["status"] not in {"terminated", "not_found"}:
+                cleanup_pending = True
+                if previous_termination != metadata["termination"]:
+                    _insert_notification(conn, "worker_cleanup_pending", "recorded", run_now,
+                                         {"task_id": task_id, "attempt_id": attempt_id,
+                                          "termination": metadata["termination"]})
+            conn.execute(
+                "UPDATE attempts SET status = 'running', metadata_json = ? WHERE attempt_id = ?",
+                (json.dumps(metadata, sort_keys=True), attempt_id),
+            )
+        attempt_metadata[attempt_id] = metadata
+    if cleanup_pending:
+        return False
     source_metadata_row = conn.execute(
         "SELECT metadata_json FROM github_sources WHERE source_id = ?",
         (source_id,),
@@ -1232,28 +1301,14 @@ def _record_remote_terminal_state(
             task_id,
         ),
     )
-    attempt_metadata_json = json.dumps(
-        {"remote_reconciliation": remote_payload},
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    conn.execute(
-        """
-        UPDATE attempts
-        SET status = 'canceled',
-            finished_at = ?,
-            failure_json = ?,
-            metadata_json = ?
-        WHERE task_id = ?
-          AND status IN ('prepared', 'running', 'stale')
-        """,
-        (
-            run_now,
-            json.dumps(remote_payload, ensure_ascii=False, sort_keys=True),
-            attempt_metadata_json,
-            task_id,
-        ),
-    )
+    for attempt_id, metadata in attempt_metadata.items():
+        metadata["remote_reconciliation"] = remote_payload
+        conn.execute(
+            "UPDATE attempts SET status = 'canceled', finished_at = ?, failure_json = ?, "
+            "metadata_json = ? WHERE attempt_id = ?",
+            (run_now, json.dumps(remote_payload, sort_keys=True),
+             json.dumps(metadata, sort_keys=True), attempt_id),
+        )
     workstream_metadata_row = conn.execute(
         "SELECT metadata_json FROM workstreams WHERE workstream_id = ?",
         (workstream_id,),
@@ -1330,6 +1385,7 @@ def _record_remote_terminal_state(
                 metadata={"source_key": source_key, "number": number},
                 now=run_now,
             )
+    return True
 
 
 def _current_state_terminal_reason(event):
@@ -1504,7 +1560,7 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
         if not terminal:
             continue
         workstream_lifecycle, audit_type = terminal
-        _record_remote_terminal_state(
+        reconciled_source = _record_remote_terminal_state(
             conn,
             repo_id,
             workstream_id,
@@ -1518,6 +1574,8 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
             audit_type,
             run_now,
         )
+        if not reconciled_source:
+            continue
         remediation.cancel_workstream_episodes(
             conn,
             workstream_id=workstream_id,
@@ -2212,6 +2270,7 @@ def _refresh_prepared_task(
     event,
     run_now,
     dry_run,
+    config_result=None,
 ):
     state = _active_task_state(conn, event["workstream_id"])
     if not state:
@@ -2223,7 +2282,7 @@ def _refresh_prepared_task(
     if state["route_id"] not in {"new-pr", "update-existing-pr"}:
         return None
 
-    route_result = route.route_task(event)
+    route_result = _effective_route(config_result, repo, event)
     if route_result["route_id"] != "update-existing-pr":
         return None
     event_known = _task_has_event(conn, state["task_id"], event["event_fingerprint"])
@@ -2313,6 +2372,17 @@ def _refresh_prepared_task(
             state["attempt_id"],
         ),
     )
+    skill_status = route_result.get("skill_status") or {"runnable": True}
+    workspace_blocked = bool(worktree_result and not worktree_result.get("ok", True))
+    if not skill_status["runnable"] or workspace_blocked:
+        reason = (worktree_result.get("status", "worktree_unavailable")
+                  if workspace_blocked else "required_route_skills_missing")
+        conn.execute("UPDATE attempts SET status='failed', finished_at=? WHERE attempt_id=?",
+                     (run_now, state["attempt_id"]))
+        _finalize_failed_task(conn, state["task_id"], event["workstream_id"], run_now,
+                              {"status": reason})
+        _insert_notification(conn, reason, "recorded", run_now,
+                             metadata={"task_id": state["task_id"], "safe_error": reason})
     return prompt_path
 
 
@@ -2581,8 +2651,10 @@ def _handle_blocked_remediation_worktree(
     return True
 
 
-def _effective_route(config_result, repo, event):
-    base_route = route.route_task(event)
+def _effective_route(config_result, repo, event, route_id=None):
+    base_route = dict(route.ROUTES[route_id]) if route_id else route.route_task(event)
+    if config_result is None:
+        return base_route
     policy = ROUTE_POLICIES[base_route["route_id"]]
     resolved = route_config.resolve_route_config(
         config_result,
@@ -2624,6 +2696,7 @@ def _prepare_detected_local_tasks(
     dispatch_queue,
     dispatch_budget,
     prompt_paths,
+    config_result=None,
 ):
     rows = conn.execute(
         """
@@ -2636,6 +2709,7 @@ def _prepare_detected_local_tasks(
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE w.repo_id = ?
           AND wi.origin_type = 'web'
+          AND wi.canceled_at IS NULL AND wi.completed_at IS NULL
           AND t.lifecycle = 'detected'
           AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = t.task_id)
         ORDER BY t.created_at, t.task_id
@@ -2688,7 +2762,7 @@ def _prepare_detected_local_tasks(
             "title": title,
             "body": description,
         }
-        route_result = route.route_task(normalized)
+        route_result = _effective_route(config_result, repo, normalized)
         source_reference = work_item_id.removeprefix("wi-")[:12]
         worktree_event = {
             "number": source_reference,
@@ -2696,6 +2770,19 @@ def _prepare_detected_local_tasks(
             "base_branch": repo["default_base_branch"],
         }
         worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
+        skill_status = route_result.get("skill_status") or {"runnable": True}
+        if not skill_status["runnable"] or (worktree_result and not worktree_result.get("ok", True)):
+            reason = ("missing required route skills: " + ", ".join(skill_status["missing_required"])
+                      if not skill_status["runnable"] else worktree_result["status"])
+            _upsert_route_decision(conn, task_id, route_result, run_now)
+            conn.execute("UPDATE tasks SET route_id = ?, expected_output = ? WHERE task_id = ?",
+                         (route_result["route_id"], route_result["expected_output"], task_id))
+            _finalize_failed_task(conn, task_id, workstream_id, run_now, {"status": reason})
+            work_items.record_system_event(
+                conn, work_item_id, event_type="execution_failed", idempotency_key=f"prepare:{task_id}",
+                body=reason, metadata={"task_id": task_id}, now=run_now,
+            )
+            continue
         attempt_id = _id("attempt")
         prompt_dir = data_dir / "artifacts" / task_id
         prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -2848,7 +2935,8 @@ def _create_task_attempt_and_prompt(
         "missing_required": [],
         "missing_recommended": [],
     }
-    blocked = not skill_status["runnable"]
+    workspace_blocked = bool(worktree_result and not worktree_result.get("ok", True))
+    blocked = not skill_status["runnable"] or workspace_blocked
     lifecycle = "failed" if blocked else "active"
     task_lifecycle = "failed" if blocked else "queued"
     attempt_status = "failed" if blocked else "prepared"
@@ -3049,14 +3137,15 @@ def _create_task_attempt_and_prompt(
     if blocked:
         _insert_notification(
             conn,
-            "required_route_skills_missing",
+            "worktree_unavailable" if workspace_blocked else "required_route_skills_missing",
             "recorded",
             run_now,
             metadata={
                 "task_id": task_id,
                 "safe_error": (
-                    "missing required route skills: "
-                    + ", ".join(skill_status["missing_required"])
+                    worktree_result.get("status", "worktree_unavailable")
+                    if workspace_blocked else
+                    "missing required route skills: " + ", ".join(skill_status["missing_required"])
                 ),
             },
         )
@@ -3738,7 +3827,11 @@ def _dispatch_queued(
             "dry_run": dry_run,
         }
         try:
-            dispatch_result = dispatch.dispatch_worker(**worker_kwargs)
+            if worktree_result and not worktree_result.get("ok", True):
+                dispatch_result = {"ok": False, "status": "failed_dispatch",
+                                   "safe_error": worktree_result.get("status", "worktree_unavailable")}
+            else:
+                dispatch_result = dispatch.dispatch_worker(**worker_kwargs)
         except Exception as exc:
             dispatch_result = {
                 **_safe_dispatch_error(exc),
@@ -3901,6 +3994,21 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
         "remote": "origin",
         "sources": sources,
     }
+    if action_scope["worktree_path"] and action_scope["branch_name"]:
+        # Pin the controller-observed commit and fork, never worker supplied values.
+        for command, field in ((["git", "rev-parse", "HEAD"], "result_head_sha"),
+                               (["git", "remote", "get-url", "origin"], "head_owner")):
+            try:
+                inspected = subprocess.run(command, cwd=action_scope["worktree_path"],
+                                           capture_output=True, text=True, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if inspected.returncode == 0 and inspected.stdout.strip():
+                value = inspected.stdout.strip()
+                if field == "head_owner":
+                    value = publish._github_remote_owner(value)
+                if value:
+                    action_scope[field] = value
     attempt_metadata = _json_object(row[4])
     existing_pr_head_sha = attempt_metadata.get("existing_pr_head_sha")
     if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
@@ -4164,6 +4272,7 @@ def _create_child_task_for_pending_events(
     dry_run,
     dispatch_queue,
     dispatch_budget,
+    config_result=None,
 ):
     if not pending_events:
         conn.execute(
@@ -4198,7 +4307,7 @@ def _create_child_task_for_pending_events(
         "workstream_id": workstream_id,
         "source_relationship": workstream.source_relationship(child_event),
     }
-    route_result = route.route_task(child_event)
+    route_result = _effective_route(config_result, repo, child_event)
     worktree_result = _prepare_worktree(repo, child_event, route_result, dry_run)
     task_info = _create_task_attempt_and_prompt(
         conn,
@@ -4272,6 +4381,7 @@ def _create_child_task_for_recommended_route(
     dry_run,
     dispatch_queue,
     dispatch_budget,
+    config_result=None,
 ):
     if not recommended_route:
         return None
@@ -4297,6 +4407,7 @@ def _create_child_task_for_recommended_route(
         "workstream_id": workstream_id,
         "source_relationship": workstream.source_relationship(child_event),
     }
+    route_result = _effective_route(config_result, repo, child_event, recommended_route)
     worktree_event = dict(child_event)
     if branch_slug:
         worktree_event["branch_slug"] = branch_slug
@@ -4398,6 +4509,7 @@ def _finalize_accepted_result(
     dry_run,
     dispatch_queue,
     dispatch_budget,
+    config_result=None,
 ):
     work_item_row = conn.execute(
         "SELECT work_item_id, origin_type FROM work_items WHERE workstream_id = ?",
@@ -4482,6 +4594,7 @@ def _finalize_accepted_result(
             dry_run,
             dispatch_queue,
             dispatch_budget,
+            config_result=config_result,
         )
         if child_task:
             if work_item_row:
@@ -4538,6 +4651,7 @@ def _finalize_accepted_result(
         dry_run,
         dispatch_queue,
         dispatch_budget,
+        config_result=config_result,
     )
 
 
@@ -4552,6 +4666,7 @@ def _recover_orphaned_classification_results(
     dry_run,
     dispatch_queue,
     dispatch_budget,
+    config_result=None,
 ):
     rows = conn.execute(
         """
@@ -4615,6 +4730,7 @@ def _recover_orphaned_classification_results(
             dry_run,
             dispatch_queue,
             dispatch_budget,
+            config_result=config_result,
         )
         after_children = conn.execute(
             "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
@@ -4636,6 +4752,7 @@ def _audit_completed_results(
     dry_run,
     dispatch_queue,
     dispatch_budget,
+    config_result=None,
 ):
     rows = conn.execute(
         """
@@ -4793,6 +4910,7 @@ def _audit_completed_results(
                 dry_run,
                 dispatch_queue,
                 dispatch_budget,
+                config_result=config_result,
             )
         else:
             _mark_task_waiting_for_publish(conn, payload["task_id"], workstream_id, run_now)
@@ -4811,6 +4929,7 @@ def _finalize_published_results(
     dry_run,
     dispatch_queue,
     dispatch_budget,
+    config_result=None,
 ):
     rows = conn.execute(
         """
@@ -4863,6 +4982,7 @@ def _finalize_published_results(
             dry_run,
             dispatch_queue,
             dispatch_budget,
+            config_result=config_result,
         )
         finalized += 1
     return finalized
@@ -5055,6 +5175,7 @@ def _run_repo_pipeline(
                 dry_run,
                 dispatch_queue,
                 dispatch_budget,
+                config_result=config_result,
             )
             audited_result_count += _recover_orphaned_classification_results(
                 conn,
@@ -5067,6 +5188,7 @@ def _run_repo_pipeline(
                 dry_run,
                 dispatch_queue,
                 dispatch_budget,
+                config_result=config_result,
             )
         except (subprocess.CalledProcessError, FileNotFoundError) as exc:
             error = _safe_route_error(exc)
@@ -5168,6 +5290,7 @@ def _run_repo_pipeline(
                     dry_run,
                     dispatch_queue,
                     dispatch_budget,
+                    config_result=config_result,
                 )
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 error = _safe_route_error(exc)
@@ -5398,6 +5521,7 @@ def _run_repo_pipeline(
                 dispatch_queue,
                 dispatch_budget,
                 prompt_paths,
+                config_result=config_result,
             )
         route_error = None
 
@@ -5488,6 +5612,7 @@ def _run_repo_pipeline(
                                 event,
                                 run_now,
                                 dry_run,
+                                config_result=config_result,
                             )
                         except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                             route_error = _safe_route_error(exc)
