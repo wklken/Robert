@@ -236,3 +236,31 @@ robert doctor --output json
 ```
 
 Do not place GitHub tokens or OpenClaw credentials in configuration.
+
+## Recovery safeguards
+
+Review and analysis workspaces are refreshed only when the registered directory
+is inside the configured worktree root and has no local changes. A dirty or
+unmanaged workspace blocks execution instead of discarding files. Commit or
+preserve those changes before retrying. Repeated analysis uses the refreshed
+upstream base rather than the first analysis snapshot.
+
+Worker timeout and remote Issue/PR closure terminate the worker process group,
+including descendants whose leader has exited. Cleanup escalates from SIGTERM
+to SIGKILL. If cleanup cannot be confirmed, Robert retains task ownership and
+capacity for another supervision pass and records a `worker_cleanup_pending`
+notification. Missing or invalid worker PIDs require operator investigation.
+
+Publication records the controller-observed result commit and fork owner in the
+audit scope. A retry recognizes an existing-PR push that already reached that
+commit, while a different remote head remains protected by the lease. Older
+pending pushes without an audited result SHA fail with an explicit
+message; retry the task to obtain a new audited result. PR creation and
+deduplication must agree with the assigned fork owner even when a workstream
+marker matches.
+
+An exhausted repair stays stopped when later polls observe the same failed
+result snapshot. A new head or base may start a new remediation episode.
+Configured required skills also apply to classification follow-ups, pending
+context children, prepared-task reroutes, and local work items. Canceled work items cannot be started
+or resumed by later commands; completed items must be reopened first.

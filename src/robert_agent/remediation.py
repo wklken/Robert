@@ -482,6 +482,22 @@ def upsert_health_episodes(
     suppress_current_ci_episode = False
     suppress_current_conflict_episode = False
     for episode in episodes:
+        # A failed repair remains exhausted across polls of its result snapshot.
+        # A new externally supplied head/base can still start a new episode.
+        if (
+            episode["status"] == "exhausted"
+            and episode["result_head_sha"] == snapshot.get("head_sha")
+            and episode["observed_base_sha"] == snapshot.get("base_sha")
+        ):
+            reason = episode["metadata"].get("last_transition_reason")
+            if reason == "merge_conflict_persisted":
+                suppress_current_conflict_episode = True
+            elif (
+                reason == "repeated_failure_signature"
+                and ci_summary
+                and ci_summary.get("failure_signature") == episode["failure_signature"]
+            ):
+                suppress_current_ci_episode = True
         if (
             episode["status"] != "waiting_for_signal"
             or episode["result_head_sha"] != snapshot.get("head_sha")

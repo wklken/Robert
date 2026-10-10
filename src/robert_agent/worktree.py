@@ -8,10 +8,6 @@ from pathlib import Path
 from robert_agent.common import emit
 
 
-class ReviewWorktreeError(ValueError):
-    pass
-
-
 def _slug(value):
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip().lower()).strip("-")
     return normalized or "task"
@@ -283,6 +279,21 @@ def prepare_existing_pr_worktree(
     return result
 
 
+def _workspace_reuse_error(worktree_path, worktree_root, dry_run):
+    try:
+        Path(worktree_path).resolve().relative_to(Path(worktree_root).resolve())
+    except ValueError:
+        return "blocked_unmanaged_worktree"
+    if not dry_run:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=worktree_path,
+            check=True, text=True, capture_output=True,
+        ).stdout
+        if status.strip():
+            return "blocked_dirty_worktree"
+    return None
+
+
 def plan_review_worktree(
     repo_root,
     worktree_root,
@@ -327,23 +338,14 @@ def plan_review_worktree(
         "start_point": start_point,
         "commands": commands,
     }
+    if existing_worktree_path:
+        blocked = _workspace_reuse_error(worktree_path, worktree_root, dry_run)
+        if blocked:
+            return {**result, "ok": False, "status": blocked}
     if dry_run:
         return result
 
     if mode == "reuse_existing_worktree":
-        try:
-            worktree_path.resolve().relative_to(worktree_root.resolve())
-        except ValueError:
-            raise ReviewWorktreeError("unmanaged review worktree") from None
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=worktree_path,
-            check=True,
-            text=True,
-            capture_output=True,
-        ).stdout
-        if status.strip():
-            raise ReviewWorktreeError("dirty review worktree")
         subprocess.run(
             ["git", "fetch", "upstream", base_branch],
             cwd=repo_root,
@@ -435,7 +437,14 @@ def plan_analysis_worktree(
         ],
     ]
     reused = _registered_worktree(repo_root, worktree_path)
-    if not dry_run and not reused:
+    if reused:
+        blocked = _workspace_reuse_error(worktree_path, worktree_root, dry_run)
+        if blocked:
+            return {"ok": False, "status": blocked, "mode": "analysis",
+                    "worktree_path": str(worktree_path), "branch_name": None}
+        commands = [commands[0], ["git", "-C", str(worktree_path), "reset", "--hard",
+                                  f"upstream/{base_branch}"]]
+    if not dry_run:
         worktree_root.mkdir(parents=True, exist_ok=True)
         for command in commands:
             subprocess.run(command, cwd=repo_root, check=True)
