@@ -191,7 +191,16 @@ def action_scope_violation(actions, action_scope):
             if scoped_base and _string_value(action, "base") != scoped_base:
                 return f"open_pr base branch is outside {scoped_base}"
             scoped_branch = action_scope.get("branch_name", "")
-            head = _string_value(action, "head").split(":", 1)[-1]
+            raw_head = _string_value(action, "head")
+            head = raw_head.split(":", 1)[-1]
+            expected_owner = action_scope.get("head_owner") or scoped_repo.split("/", 1)[0]
+            supplied_owner = raw_head.split(":", 1)[0] if ":" in raw_head else ""
+            for owner in [supplied_owner] + [
+                _string_value(action, name)
+                for name in ("head_owner", "fork_owner", "remote_owner", "head_repo_owner")
+            ]:
+                if owner and expected_owner and owner.lower() != expected_owner.lower():
+                    return "open_pr head owner is outside the assigned repository"
             if scoped_branch and head != scoped_branch:
                 return f"open_pr head branch is outside {scoped_branch}"
             target_url = _string_value(action, "target_url", "url")

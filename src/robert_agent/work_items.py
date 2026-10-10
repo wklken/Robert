@@ -807,6 +807,11 @@ def execute_command(
             if item["version"] != expected_version:
                 raise WorkItemConflictError("work item version is stale")
 
+            if item["canceled_at"] is not None:
+                raise WorkItemConflictError("a canceled work item cannot be changed")
+            if item["completed_at"] is not None and command != "reopen":
+                raise WorkItemConflictError("a completed work item must be reopened first")
+
             now = utc_now()
             if command == "start":
                 result = _activate(conn, item, context, idempotency_key, now)

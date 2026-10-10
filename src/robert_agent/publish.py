@@ -342,6 +342,8 @@ def _find_existing_open_pr(repo, head, marker, run_command, base="", head_owner=
         body = existing.get("body") if isinstance(existing.get("body"), str) else ""
         existing_owner = _pr_head_owner(existing) or _pr_head_owner(pr)
         dedupe_reason = ""
+        if head_owner and not _owners_match(head_owner, existing_owner):
+            continue
         if marker and marker in body:
             dedupe_reason = "matching_marker"
         elif _owners_match(head_owner, existing_owner):
@@ -418,6 +420,9 @@ def _sibling_push_metadata(conn, action, head):
 
 
 def _head_owner_for_action(metadata, head, action, conn, run_command):
+    scope = _trusted_action_scope(conn, action) or {}
+    if scope.get("head_owner"):
+        return scope["head_owner"]
     if ":" in head:
         return head.split(":", 1)[0]
     owner = _metadata_value(metadata, "head_owner", "fork_owner", "remote_owner", "head_repo_owner")
@@ -542,6 +547,11 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
         }
     action_scope = _trusted_action_scope(conn, action) or {}
     expected_remote_sha = action_scope.get("existing_pr_head_sha", "")
+    result_head_sha = action_scope.get("result_head_sha")
+    source_ref = result_head_sha or source_ref
+    if action_scope and not result_head_sha:
+        return {"ok": False, "status": "publish_failed",
+                "safe_error": "audited result SHA is missing; retry the task to obtain a new audited result"}
     if expected_remote_sha:
         lookup_command = ["git", "ls-remote", "--heads", remote, branch]
         lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
@@ -555,6 +565,11 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
             }
         lookup_stdout = (getattr(lookup, "stdout", "") or "").strip()
         current_remote_sha = lookup_stdout.split()[0] if lookup_stdout else ""
+        if result_head_sha and current_remote_sha == result_head_sha:
+            return {"ok": True, "status": "published", "deduplicated": True,
+                    "external_id": branch, "target_url": action.get("target_url"),
+                    "result_head_sha": result_head_sha,
+                    "response": {"head_sha": result_head_sha}, "command": lookup_command}
         if current_remote_sha and current_remote_sha != expected_remote_sha:
             return {
                 "ok": False,
@@ -645,6 +660,16 @@ def _publish_remediation_push(action, run_command, action_scope, conn=None):
             "status": "publish_failed",
             "safe_error": "remediation PR snapshot revalidation failed",
         }
+    if (
+        snapshot.get("state") == "open"
+        and not snapshot.get("merged")
+        and snapshot.get("head_sha") == audited_result_head_sha
+        and snapshot.get("base_sha") == observed_base_sha
+    ):
+        return {"ok": True, "status": "published", "deduplicated": True,
+                "external_id": str(pr_number), "target_url": action.get("target_url"),
+                "result_head_sha": audited_result_head_sha,
+                "response": {"head_sha": audited_result_head_sha}}
     if (
         snapshot.get("state") != "open"
         or snapshot.get("merged")
