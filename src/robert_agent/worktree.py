@@ -8,6 +8,10 @@ from pathlib import Path
 from robert_agent.common import emit
 
 
+class ReviewWorktreeError(ValueError):
+    pass
+
+
 def _slug(value):
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip().lower()).strip("-")
     return normalized or "task"
@@ -297,6 +301,7 @@ def plan_review_worktree(
     start_point = f"upstream/{base_branch}"
     commands = []
     if mode == "reuse_existing_worktree":
+        commands.append(f"git fetch upstream {base_branch}")
         commands.append(
             f"git fetch upstream +pull/{source_number}/head:{review_ref}"
         )
@@ -326,6 +331,24 @@ def plan_review_worktree(
         return result
 
     if mode == "reuse_existing_worktree":
+        try:
+            worktree_path.resolve().relative_to(worktree_root.resolve())
+        except ValueError:
+            raise ReviewWorktreeError("unmanaged review worktree") from None
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree_path,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        if status.strip():
+            raise ReviewWorktreeError("dirty review worktree")
+        subprocess.run(
+            ["git", "fetch", "upstream", base_branch],
+            cwd=repo_root,
+            check=True,
+        )
         subprocess.run(
             [
                 "git",

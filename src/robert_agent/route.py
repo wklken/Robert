@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 import sys
 
 from robert_agent.common import emit
@@ -206,6 +207,11 @@ def route_task(task):
         task.get("event_type") == "review_request"
         or task.get("requested_reviewer")
         or task.get("requested_team")
+        or (
+            intent == "review_request"
+            and task.get("authorization_status") == "authorized_trigger"
+            and re.search(r"@\S+\s+(?:please\s+)?review\b", task.get("body") or "", re.I)
+        )
     ):
         return dict(ROUTES["review-pr"])
     if task.get("source_type") == "pull_request" and task.get("has_open_dd_pr"):

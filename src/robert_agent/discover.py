@@ -157,6 +157,8 @@ def infer_intent(title, body, event_type):
     text = f"{title or ''}\n{body or ''}".lower()
     if event_type == "review_request":
         return "review_request"
+    if re.search(r"@\S+\s+(?:please\s+)?review\b", body or "", re.I):
+        return "review_request"
     if any(word in text for word in ["bug", "fix", "修复", "报错", "失败"]):
         return "bug_fix"
     if any(

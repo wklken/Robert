@@ -215,6 +215,10 @@ class OperationalCommandTests(unittest.TestCase):
 
         def fake_run(args, **kwargs):
             calls.append((args, kwargs))
+            if args == ["git", "status", "--porcelain"]:
+                completed = Completed()
+                completed.stdout = ""
+                return completed
             return Completed()
 
         original_run = worktree.subprocess.run
@@ -236,6 +240,8 @@ class OperationalCommandTests(unittest.TestCase):
             [call[0] for call in calls],
             [
                 ["git", "worktree", "list", "--porcelain"],
+                ["git", "status", "--porcelain"],
+                ["git", "fetch", "upstream", "master"],
                 [
                     "git",
                     "fetch",
@@ -250,7 +256,8 @@ class OperationalCommandTests(unittest.TestCase):
                 ],
             ],
         )
-        self.assertEqual(calls[2][1]["cwd"], review_path)
+        self.assertEqual(calls[1][1]["cwd"], review_path)
+        self.assertEqual(calls[-1][1]["cwd"], review_path)
 
     def test_dispatch_builds_worker_command_with_prompt_and_worktree(self):
         from robert_agent import dispatch
