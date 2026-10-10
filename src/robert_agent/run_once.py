@@ -5523,10 +5523,18 @@ def _run_repo_pipeline(
                 prompt_paths,
                 config_result=config_result,
             )
-        route_error = None
+        route_failures = []
+        failed_workstreams = set()
 
         for event in decisions:
             source_id, event_id = _insert_source_and_event(conn, repo_id, event, run_now)
+            related_workstreams = {
+                event["workstream_id"],
+                event.get("origin_workstream_id"),
+            } - {None}
+            if related_workstreams & failed_workstreams:
+                failed_workstreams.update(related_workstreams)
+                continue
             if _should_skip_terminal_trigger(conn, event):
                 continue
             if _is_driving_context_event(event):
@@ -5561,8 +5569,13 @@ def _run_repo_pipeline(
                     try:
                         worktree_result = _prepare_worktree(repo, event, route_result, dry_run)
                     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-                        route_error = _safe_route_error(exc)
-                        break
+                        route_failures.append({
+                            **_safe_route_error(exc),
+                            "event_fingerprint": event["event_fingerprint"],
+                            "workstream_id": event["workstream_id"],
+                        })
+                        failed_workstreams.update(related_workstreams)
+                        continue
                     if _handle_blocked_remediation_worktree(
                         conn,
                         event,
@@ -5615,8 +5628,13 @@ def _run_repo_pipeline(
                                 config_result=config_result,
                             )
                         except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-                            route_error = _safe_route_error(exc)
-                            break
+                            route_failures.append({
+                                **_safe_route_error(exc),
+                                "event_fingerprint": event["event_fingerprint"],
+                                "workstream_id": event["workstream_id"],
+                            })
+                            failed_workstreams.update(related_workstreams)
+                            continue
                         if refreshed_prompt:
                             prompt_paths.append(str(refreshed_prompt))
                     continue
@@ -5653,8 +5671,13 @@ def _run_repo_pipeline(
                 try:
                     worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
                 except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-                    route_error = _safe_route_error(exc)
-                    break
+                    route_failures.append({
+                        **_safe_route_error(exc),
+                        "event_fingerprint": event["event_fingerprint"],
+                        "workstream_id": event["workstream_id"],
+                    })
+                    failed_workstreams.update(related_workstreams)
+                    continue
                 if _handle_blocked_remediation_worktree(
                     conn,
                     task_event,
@@ -5715,8 +5738,13 @@ def _run_repo_pipeline(
             try:
                 worktree_result = _prepare_worktree(repo, event, route_result, dry_run)
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-                route_error = _safe_route_error(exc)
-                break
+                route_failures.append({
+                    **_safe_route_error(exc),
+                    "event_fingerprint": event["event_fingerprint"],
+                    "workstream_id": event["workstream_id"],
+                })
+                failed_workstreams.update(related_workstreams)
+                continue
             if _handle_blocked_remediation_worktree(
                 conn,
                 event,
@@ -5747,7 +5775,8 @@ def _run_repo_pipeline(
             prompt_paths.append(str(task_info["prompt_path"]))
             active_workstreams.add(task_info["workstream_id"])
 
-        if route_error:
+        if route_failures:
+            route_error = {**route_failures[0], "failures": route_failures}
             summary["status"] = "failed"
             summary["failure_status"] = route_error["status"]
             summary["safe_error"] = route_error["safe_error"]

@@ -179,6 +179,28 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result["worktree_mode"], "review_pr")
         self.assertEqual(result["required_skills"], [])
 
+    def test_trusted_review_mention_uses_source_review_for_any_pr_author(self):
+        from robert_agent import discover, route
+
+        for has_open_dd_pr in (False, True):
+            with self.subTest(has_open_dd_pr=has_open_dd_pr):
+                intent = discover.infer_intent(
+                    "feat: new subsystem",
+                    "@robert-bot review 下这个 PR，以增加一个新的 subsystem 的标准 review",
+                    "comment",
+                )
+                result = route.route_task({
+                    "event_type": "comment",
+                    "intent": intent,
+                    "source_type": "pull_request",
+                    "authorization_status": "authorized_trigger",
+                    "has_open_dd_pr": has_open_dd_pr,
+                    "body": "@robert-bot review this PR",
+                })
+                self.assertEqual(result["route_id"], "review-pr")
+                self.assertEqual(result["workspace_mode"], "review_pr")
+                self.assertEqual(result["allowed_github_actions"], ["comment"])
+
     def test_dd_pr_unclear_followup_defaults_to_existing_pr_update(self):
         from robert_agent import route
         result = route.route_task(

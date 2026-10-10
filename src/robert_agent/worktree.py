@@ -312,6 +312,7 @@ def plan_review_worktree(
     start_point = f"upstream/{base_branch}"
     commands = []
     if mode == "reuse_existing_worktree":
+        commands.append(f"git fetch upstream {base_branch}")
         commands.append(
             f"git fetch upstream +pull/{source_number}/head:{review_ref}"
         )
@@ -345,6 +346,11 @@ def plan_review_worktree(
         return result
 
     if mode == "reuse_existing_worktree":
+        subprocess.run(
+            ["git", "fetch", "upstream", base_branch],
+            cwd=repo_root,
+            check=True,
+        )
         subprocess.run(
             [
                 "git",

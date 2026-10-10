@@ -145,6 +145,74 @@ repos:
             )
         )
 
+    def test_review_fetches_upstream_pr_head_and_refreshes_reused_worktree(self):
+        from robert_agent import worktree
+
+        checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
+        # Git canonicalizes worktree paths, including macOS /var -> /private/var.
+        alias = self.root / "worktree-root-alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        worktrees = alias / worktrees.name
+        fork = self.root / "fork.git"
+        self._git(["init", "--bare", str(fork)])
+        self._git(["remote", "set-url", "origin", str(fork)], cwd=checkout)
+        first = worktree.plan_review_worktree(
+            checkout, worktrees, 13, "review-feature", "main", dry_run=False
+        )
+        self.assertEqual(
+            self._git(["rev-parse", "HEAD"], cwd=first["worktree_path"]), head_sha
+        )
+        seed = self.root / "seed"
+        (seed / "value.txt").write_text("updated PR\n", encoding="utf-8")
+        self._git(["commit", "-am", "update PR"], cwd=seed)
+        latest_sha = self._git(["rev-parse", "HEAD"], cwd=seed)
+        self._git(["push", "origin", "HEAD:refs/pull/13/head"], cwd=seed)
+        second = worktree.plan_review_worktree(
+            checkout, worktrees, 13, "review-feature", "main", dry_run=False
+        )
+        self.assertEqual(
+            Path(second["worktree_path"]).resolve(),
+            Path(first["worktree_path"]).resolve(),
+        )
+        self.assertEqual(
+            self._git(["rev-parse", "HEAD"], cwd=second["worktree_path"]), latest_sha
+        )
+
+    def test_review_refresh_preserves_dirty_worktree(self):
+        from robert_agent import worktree
+
+        checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
+        first = worktree.plan_review_worktree(
+            checkout, worktrees, 13, "review-feature", "main", dry_run=False
+        )
+        worktree_path = Path(first["worktree_path"])
+        (worktree_path / "value.txt").write_text("local review changes\n", encoding="utf-8")
+        result = worktree.plan_review_worktree(
+            checkout, worktrees, 13, "review-feature", "main", dry_run=False
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status"], "blocked_dirty_worktree")
+        self.assertEqual(
+            (worktree_path / "value.txt").read_text(encoding="utf-8"), "local review changes\n"
+        )
+        self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=worktree_path), head_sha)
+
+    def test_review_refresh_does_not_reset_unmanaged_worktree(self):
+        from robert_agent import worktree
+
+        checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
+        external = self.root / "external-review"
+        self._git([
+            "worktree", "add", str(external),
+            "-b", "review/pr-13-review-feature", head_sha,
+        ], cwd=checkout)
+        result = worktree.plan_review_worktree(
+            checkout, worktrees, 13, "review-feature", "main", dry_run=False
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status"], "blocked_unmanaged_worktree")
+        self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=external), head_sha)
+
     def test_existing_pr_write_worktree_blocks_dirty_reuse_and_stale_sha(self):
         from robert_agent import worktree
 
