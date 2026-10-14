@@ -206,6 +206,75 @@ class BoardReadModelTests(unittest.TestCase):
         self.assertEqual(projected["reason_code"], "unmerged_pr_closed")
         self.assertIn("request_changes", projected["valid_commands"])
 
+    def test_direct_closed_pr_stays_in_review_until_operator_cancels(self):
+        from robert_agent import board, run_once, work_items
+
+        now = "2026-10-13T06:35:18+00:00"
+        source_key = "github:example/repo!3353"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('pr-direct', 'repo-1', ?, 'pull_request', 3353, 'https://github.com/example/repo/pull/3353', 'Direct PR', 'open')",
+                (source_key,),
+            )
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, lifecycle, created_at, updated_at) VALUES (?, 'repo-1', 'pr-direct', 'active', ?, ?)",
+                (source_key, now, now),
+            )
+            item = work_items.ensure_github_work_item(
+                conn,
+                repo_id="repo-1",
+                source_id="pr-direct",
+                workstream_id=source_key,
+                actor_identity="owner",
+                route_confidence="high",
+                now=now,
+            )
+            conn.execute(
+                "INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, route_id, expected_output, created_at, updated_at) VALUES ('task-direct', ?, 'completed', 'P1', 'review', 'review', ?, ?)",
+                (source_key, now, now),
+            )
+            run_once._record_remote_terminal_state(
+                conn,
+                "repo-1",
+                source_key,
+                "pr-direct",
+                source_key,
+                "pull_request",
+                3353,
+                "task-direct",
+                {
+                    "state": "closed",
+                    "merged": False,
+                    "closed_at": "2026-10-13T06:30:26Z",
+                },
+                "canceled",
+                "remote_pr_closed",
+                now,
+            )
+
+        projected = board.list_board(self.db_path)["items"][0]
+        self.assertEqual(projected["column"], "review")
+        self.assertEqual(projected["reason_code"], "unmerged_pr_closed")
+        self.assertEqual(projected["pr"]["number"], 3353)
+        self.assertEqual(projected["pr"]["state"], "closed")
+        self.assertEqual(projected["pr"]["url"], "https://github.com/example/repo/pull/3353")
+        self.assertIn("cancel", projected["valid_commands"])
+
+        canceled = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="cancel",
+            expected_version=projected["version"],
+            idempotency_key="cancel-direct-closed-pr",
+        )
+        self.assertTrue(canceled["ok"])
+        archived = board.get_work_item_detail(self.db_path, item["work_item_id"])
+        self.assertEqual(archived["column"], "history")
+        self.assertEqual(archived["valid_commands"], [])
+        self.assertEqual(board.list_board(self.db_path)["items"], [])
+
     def test_projection_does_not_expose_non_http_pull_request_urls(self):
         from robert_agent import board
 

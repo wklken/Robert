@@ -170,12 +170,12 @@ def _derived_pr(conn, root_workstream_id):
         SELECT gs.number, gs.html_url, gs.state, w.workstream_id
         FROM workstreams w
         JOIN github_sources gs ON gs.source_id = w.primary_source_id
-        WHERE w.origin_workstream_id = ?
+        WHERE (w.workstream_id = ? OR w.origin_workstream_id = ?)
           AND gs.source_type = 'pull_request'
         ORDER BY w.updated_at DESC, gs.number DESC
         LIMIT 1
         """,
-        (root_workstream_id,),
+        (root_workstream_id, root_workstream_id),
     ).fetchone()
 
 
