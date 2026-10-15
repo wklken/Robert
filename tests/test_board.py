@@ -275,6 +275,29 @@ class BoardReadModelTests(unittest.TestCase):
         self.assertEqual(archived["valid_commands"], [])
         self.assertEqual(board.list_board(self.db_path)["items"], [])
 
+    def test_issue_origin_is_linked_separately_from_its_derived_pr(self):
+        from robert_agent import board
+
+        item = self._seed_six_columns()["review"]
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('issue-origin', 'repo-1', 'github:example/repo#11', 'issue', 11, 'https://github.com/example/repo/issues/11', 'Original issue', 'open')"
+            )
+            conn.execute(
+                "UPDATE work_items SET origin_source_id = 'issue-origin' WHERE work_item_id = ?",
+                (item["work_item_id"],),
+            )
+
+        detail = board.get_work_item_detail(self.db_path, item["work_item_id"])
+        self.assertEqual(detail["source"], {
+            "type": "issue", "number": 11,
+            "url": "https://github.com/example/repo/issues/11",
+        })
+        self.assertEqual(detail["pr"]["number"], 12)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'issue-origin'")
+        self.assertIsNone(board.get_work_item_detail(self.db_path, item["work_item_id"])["source"]["url"])
+
     def test_projection_does_not_expose_non_http_pull_request_urls(self):
         from robert_agent import board
 

@@ -127,6 +127,16 @@ class WorkbenchTests(unittest.TestCase):
             )
         return workstream_id, task_id
 
+    def test_operations_task_link_falls_back_to_workstream_source(self):
+        from robert_agent import web
+
+        self.seed_workstream()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("DELETE FROM task_events WHERE task_id = 'task-1'")
+        task = web.build_dashboard_data(self.db_path)["recent_tasks"][0]
+        self.assertEqual(task["github_url"], "https://github.com/Org/repo/pull/1")
+        self.assertEqual(task["source_number"], 1)
+
     def seed_publish_action(
         self,
         task_id="task-1",

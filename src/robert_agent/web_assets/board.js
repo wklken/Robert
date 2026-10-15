@@ -20,7 +20,7 @@ const translations = {
     closeTaskDetail: "Close task detail", localRequest: "Local request", newRepositoryTask: "New repository task",
     closeNewTask: "Close new task", title: "Title", requirement: "Requirement", routing: "Routing", auto: "Auto",
     specificAgent: "Specific agent", afterCreation: "After creation", keepInBacklog: "Keep in backlog",
-    startNow: "Start now", cancel: "Cancel", cancelTask: "Cancel task", createTask: "Create task", requestFailed: "Request failed ({status})",
+    startNow: "Start now", cancel: "Cancel", cancelTask: "Cancel task", openGithub: "Open on GitHub ↗", createTask: "Create task", requestFailed: "Request failed ({status})",
     openTask: "Open {title}", attentionCount: "{count} needs attention", moveToTodo: "Move to TODO",
     noTasksStage: "No tasks in this stage.", agentsRunning: "{count} agent(s) running", agentsRunningEmpty: "0 agents running", status: "Status",
     version: "Version", task: "Task", branch: "Branch", pullRequest: "Pull request", availableActions: "Available actions",
@@ -52,7 +52,7 @@ const translations = {
     closeTaskDetail: "关闭任务详情", localRequest: "本地需求", newRepositoryTask: "新建仓库任务",
     closeNewTask: "关闭新建任务", title: "标题", requirement: "需求描述", routing: "路由", auto: "自动",
     specificAgent: "指定 Agent", afterCreation: "创建后", keepInBacklog: "保留在 Backlog",
-    startNow: "立即开始", cancel: "取消", cancelTask: "取消任务", createTask: "创建任务", requestFailed: "请求失败（{status}）",
+    startNow: "立即开始", cancel: "取消", cancelTask: "取消任务", openGithub: "在 GitHub 打开 ↗", createTask: "创建任务", requestFailed: "请求失败（{status}）",
     openTask: "打开 {title}", attentionCount: "{count} 项需要处理", moveToTodo: "移到待办",
     noTasksStage: "当前阶段没有任务。", agentsRunning: "{count} 个 Agent 运行中", agentsRunningEmpty: "0 个 Agent 运行中", status: "状态",
     version: "版本", task: "任务", branch: "分支", pullRequest: "Pull Request", availableActions: "可执行操作",
@@ -303,9 +303,17 @@ function createCard(item) {
   const meta = node("div", "task-meta");
   addMeta(meta, item.agent);
   addMeta(meta, item.branch);
+  const sourceUrl = safeExternalUrl(item.source?.url);
+  if (sourceUrl && sourceUrl !== safeExternalUrl(item.pr?.url)) {
+    const link = node("a", "", `${item.source.type === "pull_request" ? "PR" : "Issue"} #${item.source.number} ↗`);
+    link.href = sourceUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    meta.append(link);
+  }
   const prUrl = safeExternalUrl(item.pr?.url);
   if (prUrl) {
-    const link = node("a", "", `PR #${item.pr.number}`);
+    const link = node("a", "", `PR #${item.pr.number} ↗`);
     link.href = prUrl;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
@@ -440,11 +448,22 @@ function renderDetail(detail) {
     detailField(t("branch"), detail.branch),
   );
   if (detail.pr) grid.append(detailField(t("pullRequest"), `#${detail.pr.number}`, safeExternalUrl(detail.pr.url)));
+  if (detail.source && detail.source.url !== detail.pr?.url) {
+    grid.append(detailField(detail.source.type === "pull_request" ? "PR" : "Issue", `#${detail.source.number}`, safeExternalUrl(detail.source.url)));
+  }
   summary.append(grid);
 
   const actions = node("section", "detail-block");
   actions.append(node("h3", "", t("availableActions")));
   const actionRow = node("div", "command-row");
+  const githubUrl = safeExternalUrl(detail.pr?.url || detail.source?.url);
+  if (githubUrl) {
+    const link = node("a", "command-button", t("openGithub"));
+    link.href = githubUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    actionRow.append(link);
+  }
   const composerHost = node("div");
   detail.valid_commands.forEach((command) => {
     const button = node("button", "command-button", commandLabel(command));
