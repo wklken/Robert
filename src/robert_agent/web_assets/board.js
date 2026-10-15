@@ -20,7 +20,7 @@ const translations = {
     closeTaskDetail: "Close task detail", localRequest: "Local request", newRepositoryTask: "New repository task",
     closeNewTask: "Close new task", title: "Title", requirement: "Requirement", routing: "Routing", auto: "Auto",
     specificAgent: "Specific agent", afterCreation: "After creation", keepInBacklog: "Keep in backlog",
-    startNow: "Start now", cancel: "Cancel", createTask: "Create task", requestFailed: "Request failed ({status})",
+    startNow: "Start now", cancel: "Cancel", cancelTask: "Cancel task", createTask: "Create task", requestFailed: "Request failed ({status})",
     openTask: "Open {title}", attentionCount: "{count} needs attention", moveToTodo: "Move to TODO",
     noTasksStage: "No tasks in this stage.", agentsRunning: "{count} agent(s) running", agentsRunningEmpty: "0 agents running", status: "Status",
     version: "Version", task: "Task", branch: "Branch", pullRequest: "Pull request", availableActions: "Available actions",
@@ -52,7 +52,7 @@ const translations = {
     closeTaskDetail: "关闭任务详情", localRequest: "本地需求", newRepositoryTask: "新建仓库任务",
     closeNewTask: "关闭新建任务", title: "标题", requirement: "需求描述", routing: "路由", auto: "自动",
     specificAgent: "指定 Agent", afterCreation: "创建后", keepInBacklog: "保留在 Backlog",
-    startNow: "立即开始", cancel: "取消", createTask: "创建任务", requestFailed: "请求失败（{status}）",
+    startNow: "立即开始", cancel: "取消", cancelTask: "取消任务", createTask: "创建任务", requestFailed: "请求失败（{status}）",
     openTask: "打开 {title}", attentionCount: "{count} 项需要处理", moveToTodo: "移到待办",
     noTasksStage: "当前阶段没有任务。", agentsRunning: "{count} 个 Agent 运行中", agentsRunningEmpty: "0 个 Agent 运行中", status: "状态",
     version: "版本", task: "任务", branch: "分支", pullRequest: "Pull Request", availableActions: "可执行操作",
@@ -166,6 +166,7 @@ function safeExternalUrl(value) {
 
 function showStatus(message, isError = false) {
   const target = $("#status-message");
+  ($("dialog[open]") || document.body).append(target);
   target.textContent = message;
   target.classList.toggle("error", isError);
   target.classList.add("visible");
@@ -323,6 +324,16 @@ function createCard(item) {
       await executeCommand(item.work_item_id, "start", item.version);
     });
     footer.append(start);
+  }
+  if (item.column === "review" && item.pr?.state === "closed" && item.valid_commands.includes("cancel")) {
+    const cancel = node("button", "command-button", t("cancelTask"));
+    cancel.type = "button";
+    cancel.dataset.command = "cancel";
+    cancel.disabled = !state.session?.writes_enabled;
+    cancel.addEventListener("click", async () => {
+      await executeCommand(item.work_item_id, "cancel", item.version);
+    });
+    footer.append(cancel);
   }
   card.append(footer);
 
@@ -593,6 +604,9 @@ async function createTask(event) {
 }
 
 function bindControls() {
+  $$("dialog").forEach((dialog) => {
+    dialog.addEventListener("close", () => document.body.append($("#status-message")));
+  });
   $("#theme-select").addEventListener("change", (event) => setTheme(event.target.value));
   $("#language-select").addEventListener("change", (event) => setLanguage(event.target.value));
   $("#new-task-button").addEventListener("click", openNewTask);
