@@ -303,7 +303,11 @@ function workRow(item) {
     attributes: { "aria-pressed": item.id === state.selectedId ? "true" : "false" },
   }, [stateIcon(item.bucket), node("span", { className: "work-copy" }, [titleLine, meta]), signalFor(item)]);
   row.addEventListener("click", () => selectWorkItem(item.id, row));
-  return row;
+  const entry = node("div", { className: "work-entry" }, [row]);
+  if (/^https?:\/\//i.test(source.url || "")) {
+    entry.append(node("a", { className: "work-github-link", text: t("openGithub"), href: source.url, target: "_blank", rel: "noopener noreferrer" }));
+  }
+  return entry;
 }
 
 function renderFilterOptions(payload) {
@@ -492,6 +496,7 @@ function editableTarget(target) {
 }
 
 function handleKeyboardShortcut(event) {
+  if (event.target.closest("a")) return;
   if (editableTarget(event.target)) {
     if (event.key === "Escape") event.target.blur();
     return;

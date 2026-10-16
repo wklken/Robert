@@ -204,6 +204,10 @@ def _project_item(conn, row):
     work_item_id = row["work_item_id"]
     workstream_id = row["workstream_id"]
     attention = _unresolved_attention(conn, work_item_id)
+    source = conn.execute(
+        "SELECT source_type, number, html_url FROM github_sources WHERE source_id = ?",
+        (row["origin_source_id"],),
+    ).fetchone()
     task = _latest_task(conn, workstream_id) if workstream_id else None
     attempt = _latest_attempt(conn, workstream_id) if workstream_id else None
     pr = _derived_pr(conn, workstream_id) if workstream_id else None
@@ -271,6 +275,11 @@ def _project_item(conn, row):
         "task_lifecycle": task["lifecycle"] if task else None,
         "branch": attempt["branch_name"] if attempt else None,
         "worktree_label": Path(attempt["worktree_path"]).name if attempt and attempt["worktree_path"] else None,
+        "source": (
+            {"type": source["source_type"], "number": source["number"], "url": _safe_http_url(source["html_url"])}
+            if source
+            else None
+        ),
         "pr": (
             {
                 "number": pr["number"],
