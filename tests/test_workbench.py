@@ -365,6 +365,25 @@ class WorkbenchTests(unittest.TestCase):
         self.assertNotIn("metadata_json", encoded)
         self.assertIsNone(workbench.get_work_item(self.db_path, "missing"))
 
+    def test_failed_open_github_detail_exposes_retrigger_control(self):
+        from robert_agent import workbench
+
+        workstream_id, task_id = self.seed_workstream(
+            task_lifecycle="failed",
+            workstream_lifecycle="failed",
+        )
+
+        detail = workbench.get_work_item(self.db_path, workstream_id)
+
+        self.assertEqual(
+            detail["controls"],
+            {
+                "can_retrigger": True,
+                "retrigger_pending": False,
+                "task_id": task_id,
+            },
+        )
+
     def test_web_routes_workbench_list_and_detail(self):
         from robert_agent import web
         workstream_id, _task_id = self.seed_workstream()

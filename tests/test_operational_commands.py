@@ -1511,6 +1511,79 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(item["tasks"][0]["task_id"], "task-2")
         self.assertEqual(item["latest_task_updated_at"], "2030-01-01T00:00:00+00:00")
 
+    def test_web_retrigger_api_requires_control_auth_and_returns_child_task(self):
+        from robert_agent import web
+
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = 'task-2'")
+            conn.execute(
+                "UPDATE workstreams SET lifecycle = 'failed', active_task_id = NULL WHERE workstream_id = 'ws-1'"
+            )
+        context = web.ControlContext(
+            db_path=str(db_path),
+            operator_identity="owner",
+            allowed_repo_ids=frozenset({"repo-1"}),
+            allowed_workers=frozenset({"default"}),
+            allowed_origins=frozenset({"http://127.0.0.1:8765"}),
+            csrf_token="csrf-test",
+            writes_enabled=True,
+            write_error=None,
+        )
+        headers = {
+            "host": "127.0.0.1:8765",
+            "origin": "http://127.0.0.1:8765",
+            "content-type": "application/json",
+            "x-robert-csrf-token": "csrf-test",
+            "x-idempotency-key": "retrigger-task-2",
+        }
+
+        denied_headers = dict(headers)
+        denied_headers.pop("x-robert-csrf-token")
+        denied_status, _response_headers, _body = web.handle_dashboard_post(
+            "/api/tasks/task-2/retrigger",
+            b"{}",
+            db_path,
+            control_context=context,
+            request_headers=denied_headers,
+        )
+        status, _response_headers, body = web.handle_dashboard_post(
+            "/api/tasks/task-2/retrigger",
+            b"{}",
+            db_path,
+            control_context=context,
+            request_headers=headers,
+        )
+
+        self.assertEqual(denied_status, 403)
+        self.assertEqual(status, 202, body)
+        payload = json.loads(body)
+        self.assertEqual(payload["task_id"], "task-2")
+        self.assertEqual(payload["status"], "queued")
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT status FROM wakeups WHERE task_id = ?", (payload["task_id"],)
+                ).fetchone()[0],
+                "pending",
+            )
+
+    def test_web_shell_renders_failed_task_retrigger_control(self):
+        from robert_agent import web
+
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+
+        status, _headers, body = web.build_http_response(
+            "/assets/workbench.js", db_path
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn(b"retriggerTask", body)
+        self.assertIn(b"/api/tasks/", body)
+        self.assertIn("重新触发".encode(), body)
+
     def test_web_dashboard_data_lists_all_repositories(self):
         from robert_agent import web
         db_path = self.root / "dd.sqlite3"

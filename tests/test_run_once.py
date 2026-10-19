@@ -2865,6 +2865,127 @@ repos:
         self.assertEqual(child_events[0], ("trigger", "comment:comment-1"))
         self.assertIn(("context", "comment:comment-2"), child_events)
 
+    def test_manual_retrigger_prepares_child_from_failed_github_task(self):
+        from robert_agent import run_once, work_items
+
+        first = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
+        )
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            parent_task_id, workstream_id, parent_route, parent_output = conn.execute(
+                """
+                SELECT task_id, workstream_id, route_id, expected_output
+                FROM tasks ORDER BY created_at LIMIT 1
+                """
+            ).fetchone()
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?",
+                (parent_task_id,),
+            )
+            conn.execute(
+                "UPDATE attempts SET status = 'failed', finished_at = ? WHERE task_id = ?",
+                ("2026-10-19T00:01:00+00:00", parent_task_id),
+            )
+            conn.execute(
+                """
+                UPDATE workstreams
+                SET lifecycle = 'failed', active_task_id = NULL
+                WHERE workstream_id = ?
+                """,
+                (workstream_id,),
+            )
+        context = work_items.CommandContext(
+            actor_kind="operator",
+            actor_identity="owner",
+            allowed_repo_ids=frozenset({"repo:example/backend"}),
+            allowed_workers=frozenset({"default"}),
+        )
+        queued = work_items.retrigger_failed_github_task(
+            db_path,
+            parent_task_id,
+            context=context,
+            idempotency_key="manual-retrigger-1",
+            notifier=lambda _path: None,
+        )
+        self.assertEqual(queued["status"], "queued")
+        followup_fixture = self.root / "retrigger-followup.json"
+        followup_fixture.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "comment-retrigger-followup",
+                            "number": 123,
+                            "source_type": "issue",
+                            "event_type": "comment",
+                            "actor_login": "wklken",
+                            "body": "@robert-bot include the latest acceptance note",
+                            "intent": "bug_fix",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        second = run_once.run_once(
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=followup_fixture,
+            dry_run=True,
+            skip_external=True,
+        )
+
+        self.assertTrue(second["ok"], second)
+        with closing(sqlite3.connect(db_path)) as conn:
+            tasks = conn.execute(
+                """
+                SELECT task_id, parent_task_id, lifecycle, route_id, expected_output
+                FROM tasks ORDER BY created_at, task_id
+                """
+            ).fetchall()
+            child_task_id = tasks[-1][0]
+            parent_events = conn.execute(
+                """
+                SELECT relationship, event_id FROM task_events
+                WHERE task_id = ? ORDER BY relationship, event_id
+                """,
+                (parent_task_id,),
+            ).fetchall()
+            child_events = conn.execute(
+                """
+                SELECT relationship, event_id FROM task_events
+                WHERE task_id = ? ORDER BY relationship, event_id
+                """,
+                (child_task_id,),
+            ).fetchall()
+            attempt = conn.execute(
+                "SELECT status FROM attempts WHERE task_id = ?",
+                (child_task_id,),
+            ).fetchone()
+            wakeup_status = conn.execute(
+                """
+                SELECT status FROM wakeups
+                WHERE task_id = ? AND reason = 'manual_operator_request'
+                """,
+                (parent_task_id,),
+            ).fetchone()[0]
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(
+            tasks[-1][1:],
+            (parent_task_id, "queued", parent_route, parent_output),
+        )
+        self.assertIn(parent_events[0], child_events)
+        self.assertIn(("context", "event:comment:comment-retrigger-followup"), child_events)
+        self.assertEqual(attempt[0], "prepared")
+        self.assertEqual(wakeup_status, "consumed")
+
     def test_publish_failure_does_not_skip_unrelated_routing(self):
         from robert_agent import run_once
         original_publish = run_once.publish.publish_ready_actions

@@ -25,6 +25,7 @@ REQUIRED_TABLES = {
     "github_actions",
     "artifacts",
     "notifications",
+    "wakeups",
 }
 
 
@@ -714,6 +715,26 @@ def get_work_item(db_path, workstream_id):
                 (workstream_id,),
             )
         ]
+        current_task = _current_task(
+            workstream,
+            state["tasks"].get(workstream_id, []),
+        )
+        retrigger_pending = False
+        if current_task:
+            retrigger_pending = bool(
+                conn.execute(
+                    """
+                    SELECT 1
+                    FROM wakeups
+                    WHERE task_id = ?
+                      AND reason = 'manual_operator_request'
+                      AND status = 'pending'
+                      AND json_extract(metadata_json, '$.kind') = 'github_retrigger'
+                    LIMIT 1
+                    """,
+                    (current_task["task_id"],),
+                ).fetchone()
+            )
     tasks = state["tasks"].get(workstream_id, [])
     task_ids = {task["task_id"] for task in tasks}
     attempts = [row for task_id in task_ids for row in state["attempts"].get(task_id, [])]
@@ -730,6 +751,17 @@ def get_work_item(db_path, workstream_id):
             "bucket": item["bucket"],
             "reason_code": item["reason_code"],
             "reason_summary": item["reason_summary"],
+        },
+        "controls": {
+            "can_retrigger": bool(
+                current_task
+                and current_task["lifecycle"] == "failed"
+                and workstream["workstream_lifecycle"] == "failed"
+                and str(workstream.get("source_state") or "").lower() == "open"
+                and not retrigger_pending
+            ),
+            "retrigger_pending": retrigger_pending,
+            "task_id": current_task["task_id"] if current_task else None,
         },
         "tasks": [
             {

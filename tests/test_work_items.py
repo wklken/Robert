@@ -1,4 +1,5 @@
 from contextlib import closing
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -364,6 +365,159 @@ class WorkItemCommandTests(unittest.TestCase):
                 now=f"2026-07-19T01:0{sequence}:00+00:00",
             )
         return event
+
+    def _failed_github_task(self):
+        now = "2026-10-19T00:00:00+00:00"
+        payload = {
+            "event_fingerprint": "comment:retry-source",
+            "event_type": "comment",
+            "source_key": "github:example/repo!21",
+            "source_type": "pull_request",
+            "number": 21,
+            "title": "Update AIDev integration",
+            "state": "open",
+            "actor_login": "owner",
+            "authorization_status": "accepted_context",
+            "mentions_dd": True,
+            "existing_pr_head_branch": "codex/dd-20-add-bkaidev-api-integration",
+        }
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(
+                """
+                INSERT INTO github_sources(
+                  source_id, repo_id, source_key, source_type, number, html_url,
+                  title, state, author_login
+                ) VALUES (
+                  'source-pr-21', 'repo-1', 'github:example/repo!21',
+                  'pull_request', 21, 'https://github.com/example/repo/pull/21',
+                  'Update AIDev integration', 'open', 'robot'
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO github_events(
+                  event_id, repo_id, source_id, event_fingerprint, event_type,
+                  actor_login, author_association, authorization_status,
+                  event_at, payload_json
+                ) VALUES (
+                  'event-retry-source', 'repo-1', 'source-pr-21',
+                  'comment:retry-source', 'comment', 'owner', 'OWNER',
+                  'accepted_context', ?, ?
+                )
+                """,
+                (now, json.dumps(payload, sort_keys=True)),
+            )
+            conn.execute(
+                """
+                INSERT INTO workstreams(
+                  workstream_id, repo_id, primary_source_id, lifecycle,
+                  active_task_id, created_at, updated_at
+                ) VALUES (
+                  'github:example/repo!21', 'repo-1', 'source-pr-21',
+                  'failed', NULL, ?, ?
+                )
+                """,
+                (now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO work_items(
+                  work_item_id, repo_id, title, priority, origin_type,
+                  origin_source_id, routing_mode, workstream_id,
+                  creation_idempotency_key, created_by, activated_at,
+                  created_at, updated_at
+                ) VALUES (
+                  'wi-pr-21', 'repo-1', 'Update AIDev integration', 'P1',
+                  'github', 'source-pr-21', 'auto', 'github:example/repo!21',
+                  'backfill:github:example/repo!21', 'owner', ?, ?, ?
+                )
+                """,
+                (now, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO tasks(
+                  task_id, workstream_id, lifecycle, priority, route_id,
+                  expected_output, created_at, updated_at
+                ) VALUES (
+                  'task-failed-github', 'github:example/repo!21', 'failed',
+                  'P1', 'update-existing-pr', 'update_existing_pr', ?, ?
+                )
+                """,
+                (now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO task_events(task_id, event_id, relationship, created_at)
+                VALUES ('task-failed-github', 'event-retry-source', 'trigger', ?)
+                """,
+                (now,),
+            )
+        return "task-failed-github"
+
+    def test_retrigger_failed_github_task_queues_one_idempotent_wakeup(self):
+        from robert_agent import work_items
+
+        parent_task_id = self._failed_github_task()
+        notifications = []
+
+        first = work_items.retrigger_failed_github_task(
+            self.db_path,
+            parent_task_id,
+            context=self.context,
+            idempotency_key="retrigger-pr-21",
+            notifier=lambda path: notifications.append(path),
+        )
+        second = work_items.retrigger_failed_github_task(
+            self.db_path,
+            parent_task_id,
+            context=self.context,
+            idempotency_key="retrigger-pr-21",
+            notifier=lambda path: notifications.append(path),
+        )
+
+        self.assertEqual(second, first)
+        self.assertEqual(first["task_id"], parent_task_id)
+        self.assertEqual(first["status"], "queued")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            active_task_id, lifecycle = conn.execute(
+                "SELECT active_task_id, lifecycle FROM workstreams WHERE workstream_id = 'github:example/repo!21'"
+            ).fetchone()
+            wakeups = conn.execute(
+                "SELECT reason, task_id, status, metadata_json FROM wakeups"
+            ).fetchall()
+        self.assertEqual((active_task_id, lifecycle), (None, "failed"))
+        self.assertEqual(len(wakeups), 1)
+        self.assertEqual(wakeups[0][:3], ("manual_operator_request", parent_task_id, "pending"))
+        self.assertEqual(json.loads(wakeups[0][3])["parent_task_id"], parent_task_id)
+        self.assertEqual(notifications, [self.db_path])
+
+    def test_retrigger_refuses_nonfailed_or_closed_github_task(self):
+        from robert_agent import work_items
+
+        task_id = self._failed_github_task()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?", (task_id,))
+        with self.assertRaisesRegex(work_items.WorkItemConflictError, "failed GitHub task"):
+            work_items.retrigger_failed_github_task(
+                self.db_path,
+                task_id,
+                context=self.context,
+                idempotency_key="completed-task",
+            )
+
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,))
+            conn.execute("UPDATE github_sources SET state = 'closed' WHERE source_id = 'source-pr-21'")
+        with self.assertRaisesRegex(work_items.WorkItemConflictError, "open GitHub source"):
+            work_items.retrigger_failed_github_task(
+                self.db_path,
+                task_id,
+                context=self.context,
+                idempotency_key="closed-source",
+            )
 
     def test_create_backlog_and_replay_return_the_original_safe_result(self):
         first = self._create()

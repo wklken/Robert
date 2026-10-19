@@ -2916,6 +2916,94 @@ def _prepare_detected_local_tasks(
     return prepared
 
 
+def _prepare_github_retrigger_tasks(
+    conn,
+    data_dir,
+    db_path,
+    repo,
+    repo_id,
+    run_id,
+    run_now,
+    dry_run,
+    dispatch_queue,
+    dispatch_budget,
+    prompt_paths,
+    config_result=None,
+):
+    rows = conn.execute(
+        """
+        SELECT wu.wakeup_id, wu.task_id, t.workstream_id, t.route_id
+        FROM wakeups wu
+        JOIN tasks t ON t.task_id = wu.task_id
+        JOIN workstreams w ON w.workstream_id = t.workstream_id
+        WHERE wu.repo_id = ?
+          AND wu.reason = 'manual_operator_request'
+          AND wu.status = 'pending'
+          AND json_extract(wu.metadata_json, '$.kind') = 'github_retrigger'
+          AND t.lifecycle = 'failed'
+          AND w.lifecycle = 'failed'
+          AND w.active_task_id IS NULL
+        ORDER BY wu.created_at, wu.wakeup_id
+        """,
+        (repo_id,),
+    ).fetchall()
+    prepared_workstreams = set()
+    for wakeup_id, parent_task_id, workstream_id, parent_route_id in rows:
+        if dispatch_budget["remaining"] <= 0:
+            break
+        related_events = _failed_parent_context_events(conn, parent_task_id)
+        if not related_events:
+            continue
+        task_event = related_events[0]
+        route_result = _effective_route(
+            config_result,
+            repo,
+            task_event,
+            route_id=parent_route_id,
+        )
+        try:
+            worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+        stream = {
+            "workstream_id": workstream_id,
+            "source_relationship": workstream.source_relationship(task_event),
+        }
+        task_info = _create_task_attempt_and_prompt(
+            conn,
+            data_dir,
+            db_path,
+            repo,
+            repo_id,
+            task_event,
+            route_result,
+            stream,
+            run_now,
+            worktree_result=worktree_result,
+            parent_task_id=parent_task_id,
+            related_events=related_events,
+        )
+        conn.execute(
+            """
+            UPDATE wakeups
+            SET status = 'consumed', consumed_run_id = ?, updated_at = ?
+            WHERE wakeup_id = ? AND status = 'pending'
+            """,
+            (run_id, run_now, wakeup_id),
+        )
+        _queue_dispatch(
+            dispatch_queue,
+            task_info,
+            worktree_result,
+            dispatch_budget,
+            repo_id=repo_id,
+            repo=repo,
+        )
+        prompt_paths.append(str(task_info["prompt_path"]))
+        prepared_workstreams.add(workstream_id)
+    return prepared_workstreams
+
+
 def _create_task_attempt_and_prompt(
     conn,
     data_dir,
@@ -5508,6 +5596,21 @@ def _run_repo_pipeline(
                 0,
                 dispatch_budget["remaining"] - queued_prepared_count,
             )
+        if dispatch_budget["remaining"] > 0:
+            active_workstreams.update(_prepare_github_retrigger_tasks(
+                conn,
+                data_dir,
+                db_path,
+                repo,
+                repo_id,
+                run_id,
+                run_now,
+                dry_run,
+                dispatch_queue,
+                dispatch_budget,
+                prompt_paths,
+                config_result=config_result,
+            ))
         if dispatch_budget["remaining"] > 0:
             _prepare_detected_local_tasks(
                 conn,
