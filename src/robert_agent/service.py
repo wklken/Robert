@@ -73,6 +73,22 @@ def render_supervisord_config(
             config_path,
         ]
     )
+    web_command = " ".join(
+        shlex.quote(str(part))
+        for part in [
+            executable,
+            "web",
+            "run",
+            "--config",
+            config_path,
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--writable",
+            "--allow-remote",
+        ]
+    )
     return (
         "[unix_http_server]\n"
         f"file={run_dir / 'supervisor.sock'}\n"
@@ -93,7 +109,14 @@ def render_supervisord_config(
         "startsecs=5\n"
         "stopsignal=TERM\n"
         f"stdout_logfile={log_dir / 'daemon.out.log'}\n"
-        f"stderr_logfile={log_dir / 'daemon.err.log'}\n"
+        f"stderr_logfile={log_dir / 'daemon.err.log'}\n\n"
+        "[program:robert-web]\n"
+        f"command={web_command}\n"
+        "autorestart=true\n"
+        "startsecs=5\n"
+        "stopsignal=TERM\n"
+        f"stdout_logfile={log_dir / 'web.out.log'}\n"
+        f"stderr_logfile={log_dir / 'web.err.log'}\n"
     )
 
 
