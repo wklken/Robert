@@ -549,6 +549,7 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
     expected_remote_sha = action_scope.get("existing_pr_head_sha", "")
     result_head_sha = action_scope.get("result_head_sha")
     source_ref = result_head_sha or source_ref
+    destination_ref = f"refs/heads/{branch}"
     if action_scope and not result_head_sha:
         return {"ok": False, "status": "publish_failed",
                 "safe_error": "audited result SHA is missing; retry the task to obtain a new audited result"}
@@ -582,10 +583,10 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
             "push",
             f"--force-with-lease={branch}:{expected_remote_sha}",
             remote,
-            f"{source_ref}:{branch}",
+            f"{source_ref}:{destination_ref}",
         ]
     else:
-        command = ["git", "push", remote, f"{source_ref}:{branch}"]
+        command = ["git", "push", remote, f"{source_ref}:{destination_ref}"]
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
     safe_error = _command_failure(completed, "git push failed")
     if safe_error:
