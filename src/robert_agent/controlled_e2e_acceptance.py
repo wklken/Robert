@@ -116,7 +116,7 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "max_concurrency": 1,
         "worker_startup_grace_seconds": 1,
         "stale_after_minutes": source_config.get("stale_after_minutes", 20),
-        "hard_timeout_minutes": source_config.get("hard_timeout_minutes", 90),
+        "hard_timeout_minutes": source_config.get("hard_timeout_minutes", 45),
         "lease_ttl_minutes": source_config.get("lease_ttl_minutes", 9),
         "repos": [
             {

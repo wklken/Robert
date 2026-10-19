@@ -11,7 +11,7 @@ database: robert.sqlite3
 python_bin: python3
 max_concurrency: 3
 stale_after_minutes: 20
-hard_timeout_minutes: 90
+hard_timeout_minutes: 45
 worker_startup_grace_seconds: 300
 lease_ttl_minutes: 9
 github:
@@ -37,6 +37,7 @@ workers:
     adapter: codex
     command: codex
     model: default
+    fallback_model: gpt-5.6-sol
     effort: default
     prompt_transport: stdin
     timeout_seconds: 5400
@@ -102,6 +103,12 @@ repos:
 `github` accepts only `account` and `poll_seconds`; credentials are rejected.
 The `command` adapter requires a YAML sequence. Repository route overrides may
 set `worker`, `required_skills`, and `recommended_skills` only.
+The default hard worker timeout is 45 minutes. When a worker defines
+`fallback_model`, Robert uses it on the third run after the two immediately
+preceding terminal attempts in the same workstream both end in
+`failed_timeout`. A successful attempt or any other failure type resets the
+sequence. The fallback changes only the model; the selected worker and effort
+remain unchanged.
 `pr_automation` is optional and defaults to disabled. Enabling CI remediation
 requires a non-empty `check_allowlist`; its limits are per durable PR snapshot
 episode. Conflict remediation and CI publication use ordinary non-force pushes

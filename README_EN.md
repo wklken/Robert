@@ -112,12 +112,15 @@ repository; CI automation also requires a non-empty `check_allowlist`.
 Robert uses versioned YAML. Configure the GitHub account, worker definitions,
 skill search paths, route overrides, and one or more repository checkouts.
 See [docs/reference.md](docs/reference.md#configuration).
+Workers may define `fallback_model`. After two consecutive `failed_timeout`
+attempts in the same workstream, the third run uses that model without changing
+the reasoning effort. The default hard timeout is 45 minutes.
 
 ## Worker Adapters
 
 Built-in adapters support `codex`, `tcodex`, `claude`, `tclaude`, `opencode`,
 `cbc`, and a generic `command` adapter. A worker definition chooses its
-adapter, executable, default model, effort, timeout, prompt transport, and
+adapter, executable, default and fallback models, effort, timeout, prompt transport, and
 environment-variable allowlist.
 
 ## Route Skills

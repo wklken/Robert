@@ -1,6 +1,7 @@
 version: 1
 data_dir: ~/.local/share/robert
 database: robert.sqlite3
+hard_timeout_minutes: 45
 
 github:
   account: robert-bot
@@ -27,6 +28,7 @@ workers:
     adapter: codex
     command: codex
     model: default
+    fallback_model: gpt-5.6-sol
     effort: default
 
 routes: {}

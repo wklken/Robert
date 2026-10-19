@@ -78,12 +78,18 @@ workers:
   default:
     adapter: codex
     command: codex
-    model: default
-    effort: default
+    model: gpt-6.1-sol
+    fallback_model: gpt-5.6-sol
+    effort: high
     prompt_transport: stdin
     timeout_seconds: 5400
     environment_allowlist: []
 ```
+
+The global hard worker timeout defaults to 45 minutes. If the two immediately
+preceding terminal attempts in one workstream both end in `failed_timeout`, the
+next run uses `fallback_model`. Other failure types and successful attempts
+reset the sequence. The configured effort is unchanged.
 
 Built-in adapters are `codex`, `tcodex`, `claude`, `tclaude`, `opencode`,
 `cbc`, and `command`. The generic adapter requires a YAML command sequence:

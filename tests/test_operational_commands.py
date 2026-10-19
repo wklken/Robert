@@ -1394,6 +1394,19 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(timed_out["status"], "failed_timeout")
         self.assertTrue(timed_out["terminate"])
 
+    def test_supervise_defaults_hard_timeout_to_45_minutes(self):
+        from robert_agent import supervise
+        now = datetime(2026, 10, 19, tzinfo=timezone.utc)
+
+        timed_out = supervise.classify_attempt(
+            heartbeat_at=now,
+            started_at=now - timedelta(minutes=46),
+            now=now,
+        )
+
+        self.assertEqual(timed_out["status"], "failed_timeout")
+        self.assertEqual(timed_out["timeout_seconds"], 45 * 60)
+
     def test_notify_records_local_notification(self):
         from robert_agent import notify
         db_path = self.root / "dd.sqlite3"

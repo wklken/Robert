@@ -160,6 +160,227 @@ repos:
             encoding="utf-8",
         )
 
+    def _dispatch_model_after_failures(
+        self,
+        failures,
+        fallback_model="model-fallback",
+        same_task=False,
+    ):
+        from robert_agent import run_once
+        from robert_agent import storage
+
+        db_path = self.data_dir / f"fallback-{len(failures)}.sqlite3"
+        storage.init_database(db_path)
+        prompt_path = self.root / f"fallback-{len(failures)}.md"
+        prompt_path.write_text("retry task", encoding="utf-8")
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES ('repo-1', 'example/repo', 'robot', 'main', ?, ?)",
+                (str(self.repo_root), str(self.worktree_root)),
+            )
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id, repo_id, lifecycle, active_task_id, created_at, updated_at) VALUES ('stream-1', 'repo-1', 'active', 'task-current', '2026-10-19T00:00:00+00:00', '2026-10-19T00:03:00+00:00')"
+            )
+            if same_task:
+                conn.execute(
+                    """
+                    INSERT INTO tasks(
+                      task_id, workstream_id, lifecycle, priority, route_id,
+                      expected_output, created_at, updated_at
+                    ) VALUES ('task-current', 'stream-1', 'queued', 'P1',
+                              'new-pr', 'new_pr',
+                              '2026-10-19T00:00:00+00:00',
+                              '2026-10-19T00:03:00+00:00')
+                    """
+                )
+            for index, failure in enumerate(failures, start=1):
+                task_id = "task-current" if same_task else f"task-prior-{index}"
+                attempt_id = f"attempt-prior-{index}"
+                timestamp = f"2026-10-19T00:0{index}:00+00:00"
+                if not same_task:
+                    conn.execute(
+                        """
+                        INSERT INTO tasks(
+                          task_id, workstream_id, lifecycle, priority, route_id,
+                          expected_output, created_at, updated_at
+                        ) VALUES (?, 'stream-1', ?, 'P1', 'new-pr',
+                                  'new_pr', ?, ?)
+                        """,
+                        (
+                            task_id,
+                            "completed" if failure is None else "failed",
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO attempts(
+                      attempt_id, task_id, attempt_no, status, started_at,
+                      heartbeat_at, finished_at, failure_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        attempt_id,
+                        task_id,
+                        index if same_task else 1,
+                        "completed" if failure is None else "failed",
+                        timestamp,
+                        timestamp,
+                        timestamp,
+                        (
+                            None
+                            if failure is None
+                            else json.dumps(failure, sort_keys=True)
+                        ),
+                    ),
+                )
+            if not same_task:
+                conn.execute(
+                    """
+                    INSERT INTO tasks(
+                      task_id, workstream_id, lifecycle, priority, route_id,
+                      expected_output, created_at, updated_at
+                    ) VALUES ('task-current', 'stream-1', 'queued', 'P1',
+                              'new-pr', 'new_pr',
+                              '2026-10-19T00:03:00+00:00',
+                              '2026-10-19T00:03:00+00:00')
+                    """
+                )
+            conn.execute(
+                """
+                INSERT INTO attempts(
+                  attempt_id, task_id, attempt_no, status, started_at, heartbeat_at
+                ) VALUES ('attempt-current', 'task-current', ?, 'prepared',
+                          '2026-10-19T00:03:00+00:00',
+                          '2026-10-19T00:03:00+00:00')
+                """,
+                (len(failures) + 1 if same_task else 1,),
+            )
+
+        worker = {
+            "name": "default",
+            "agent": "codex",
+            "command": "codex",
+            "default_model": "model-default",
+            "fallback_model": fallback_model,
+            "default_effort": "high",
+        }
+        calls = []
+        original = run_once.dispatch.dispatch_worker
+
+        def fake_dispatch_worker(**kwargs):
+            calls.append(kwargs)
+            return {"ok": True, "status": "planned", "command": []}
+
+        try:
+            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            run_once._dispatch_queued(
+                db_path,
+                ["repo-1"],
+                [
+                    {
+                        "task_info": {
+                            "task_id": "task-current",
+                            "attempt_id": "attempt-current",
+                            "workstream_id": "stream-1",
+                            "route_id": "new-pr",
+                            "prompt_path": prompt_path,
+                        },
+                        "worktree_result": None,
+                        "repo_id": "repo-1",
+                        "repo": {"max_concurrency": 1},
+                    }
+                ],
+                True,
+                1,
+                workers=[worker],
+                default_worker=worker,
+                route_worker_models={
+                    "new-pr": {
+                        "worker": "default",
+                        "model": "route-model",
+                        "effort": "high",
+                    }
+                },
+            )
+        finally:
+            run_once.dispatch.dispatch_worker = original
+        return calls[0]
+
+    def test_dispatch_uses_fallback_model_after_two_consecutive_timeouts(self):
+        call = self._dispatch_model_after_failures(
+            [
+                {"status": "failed_timeout"},
+                {"status": "failed_timeout"},
+            ]
+        )
+
+        self.assertEqual(call["model"], "model-fallback")
+        self.assertEqual(call["reasoning_effort"], "high")
+
+    def test_dispatch_keeps_primary_model_before_second_consecutive_timeout(self):
+        call = self._dispatch_model_after_failures(
+            [{"status": "failed_timeout"}]
+        )
+
+        self.assertEqual(call["model"], "route-model")
+
+    def test_dispatch_non_timeout_failure_resets_fallback_sequence(self):
+        call = self._dispatch_model_after_failures(
+            [
+                {"status": "failed_timeout"},
+                {"status": "failed_worker_startup"},
+            ]
+        )
+
+        self.assertEqual(call["model"], "route-model")
+
+    def test_dispatch_success_resets_fallback_sequence(self):
+        call = self._dispatch_model_after_failures(
+            [
+                {"status": "failed_timeout"},
+                None,
+            ]
+        )
+
+        self.assertEqual(call["model"], "route-model")
+
+    def test_dispatch_counts_recovered_timeouts_for_fallback(self):
+        call = self._dispatch_model_after_failures(
+            [
+                {
+                    "status": "needs_resume",
+                    "original_status": "failed_timeout",
+                },
+                {"status": "failed_timeout"},
+            ]
+        )
+
+        self.assertEqual(call["model"], "model-fallback")
+
+    def test_dispatch_without_fallback_model_keeps_primary_model(self):
+        call = self._dispatch_model_after_failures(
+            [
+                {"status": "failed_timeout"},
+                {"status": "failed_timeout"},
+            ],
+            fallback_model=None,
+        )
+
+        self.assertEqual(call["model"], "route-model")
+
+    def test_dispatch_same_task_resume_uses_fallback_after_two_timeouts(self):
+        call = self._dispatch_model_after_failures(
+            [
+                {"status": "failed_timeout"},
+                {"status": "failed_timeout"},
+            ],
+            same_task=True,
+        )
+
+        self.assertEqual(call["model"], "model-fallback")
+
     def _new_pr_actions_for_attempt(
         self,
         db_path,

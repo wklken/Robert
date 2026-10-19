@@ -64,6 +64,7 @@ def _isolated_config(source_config, workspace_dir):
             "agent": worker["agent"],
             "command": worker["command"],
             "default_model": worker["default_model"],
+            "fallback_model": worker.get("fallback_model"),
             "default_effort": worker["default_effort"],
         }
         for worker in config["workers"]
@@ -75,7 +76,7 @@ def _isolated_config(source_config, workspace_dir):
         "route_worker_models": config.get("route_worker_models", {}),
         "max_concurrency": 1,
         "stale_after_minutes": config.get("stale_after_minutes", 20),
-        "hard_timeout_minutes": config.get("hard_timeout_minutes", 90),
+        "hard_timeout_minutes": config.get("hard_timeout_minutes", 45),
         "worker_startup_grace_seconds": config.get("worker_startup_grace_seconds", 300),
         "lease_ttl_minutes": config.get("lease_ttl_minutes", 9),
         "repos": config["repos"],
