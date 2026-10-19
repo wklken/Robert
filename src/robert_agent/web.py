@@ -2308,11 +2308,17 @@ def build_http_response(path, db_path, control_context=None):
             )
         return _json_response(payload)
     if route.startswith("/api/work-items/"):
-        suffix = unquote(route[len("/api/work-items/") :])
-        if not suffix or "/" in suffix.removesuffix("/events"):
+        raw_suffix = route[len("/api/work-items/") :]
+        events_route = raw_suffix.endswith("/events")
+        raw_work_item_id = (
+            raw_suffix[: -len("/events")]
+            if events_route
+            else raw_suffix
+        )
+        if not raw_work_item_id or "/" in raw_work_item_id:
             return _json_response({"ok": False, "status": "not_found"}, 404)
-        if suffix.endswith("/events"):
-            work_item_id = suffix[: -len("/events")]
+        work_item_id = unquote(raw_work_item_id)
+        if events_route:
             if board.get_work_item_detail(db_path, work_item_id) is None:
                 return _json_response({"ok": False, "status": "not_found"}, 404)
             query = parse_qs(parsed.query)
@@ -2330,13 +2336,13 @@ def build_http_response(path, db_path, control_context=None):
                 )
             return _json_response(payload)
         try:
-            payload = board.get_work_item_detail(db_path, suffix)
+            payload = board.get_work_item_detail(db_path, work_item_id)
         except sqlite3.OperationalError:
             payload = None
         if payload is not None:
             return _json_response(payload)
         try:
-            payload = workbench.get_work_item(db_path, suffix)
+            payload = workbench.get_work_item(db_path, work_item_id)
         except sqlite3.OperationalError:
             return _json_response(
                 {
@@ -2554,6 +2560,60 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
         )
 
 
+def _handle_task_retrigger_post(route, body, db_path, control_context, headers):
+    request_error = _control_request_error(control_context, headers, json_required=True)
+    if request_error:
+        return request_error
+    if not control_context.writes_enabled:
+        return _json_response(
+            {
+                "ok": False,
+                "status": "unavailable",
+                "safe_error": control_context.write_error or "writes are disabled",
+            },
+            503,
+        )
+    idempotency_key = headers.get("x-idempotency-key")
+    if not idempotency_key:
+        return _json_response(
+            {"ok": False, "status": "failed_validation", "safe_error": "X-Idempotency-Key is required"},
+            422,
+        )
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response(
+            {"ok": False, "status": "failed_validation", "safe_error": "invalid JSON body"},
+            422,
+        )
+    if not isinstance(payload, dict):
+        return _json_response(
+            {"ok": False, "status": "failed_validation", "safe_error": "JSON body must be an object"},
+            422,
+        )
+    task_id = unquote(route[len("/api/tasks/") : -len("/retrigger")])
+    try:
+        result = work_items.retrigger_failed_github_task(
+            db_path,
+            task_id,
+            context=_work_item_context(control_context),
+            idempotency_key=idempotency_key,
+        )
+        return _json_response(result, 202)
+    except work_items.WorkItemNotFoundError:
+        return _json_response({"ok": False, "status": "not_found"}, 404)
+    except work_items.WorkItemValidationError as exc:
+        return _json_response(
+            {"ok": False, "status": "failed_validation", "safe_error": str(exc)},
+            422,
+        )
+    except work_items.WorkItemConflictError as exc:
+        return _json_response(
+            {"ok": False, "status": "conflict", "safe_error": str(exc)},
+            409,
+        )
+
+
 def handle_dashboard_post(path, body, db_path, control_context=None, request_headers=None):
     route = urlsplit(path).path
     if len(body) > 64 * 1024:
@@ -2566,6 +2626,8 @@ def handle_dashboard_post(path, body, db_path, control_context=None, request_hea
         route.startswith("/api/work-items/") and route.endswith("/commands")
     ):
         return _handle_work_item_post(route, body, db_path, control_context, headers)
+    if route.startswith("/api/tasks/") and route.endswith("/retrigger"):
+        return _handle_task_retrigger_post(route, body, db_path, control_context, headers)
     if control_context and route.startswith("/knowledge/"):
         request_error = _control_request_error(control_context, headers, json_required=False)
         if request_error:

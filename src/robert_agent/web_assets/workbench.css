@@ -84,6 +84,7 @@
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .action-button { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; border: 1px solid var(--borderColor-default); border-radius: 6px; color: var(--fgColor-default); background: var(--bgColor-muted); font-size: 12px; font-weight: 600; }
 .action-button:hover { text-decoration: none; }
+.action-button:disabled { cursor: wait; opacity: 0.65; }
 .action-button.primary { color: var(--fgColor-onEmphasis); border-color: rgba(27, 31, 36, 0.15); background: var(--fgColor-success); }
 .artifact-list { display: grid; gap: 6px; }
 .artifact-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border: 1px solid var(--borderColor-default); border-radius: 6px; color: var(--fgColor-default); background: var(--bgColor-muted); }

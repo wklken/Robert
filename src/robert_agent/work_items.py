@@ -580,6 +580,99 @@ def _commit_result(conn, db_path, result, notifier):
     return result
 
 
+def retrigger_failed_github_task(
+    db_path,
+    task_id,
+    *,
+    context,
+    idempotency_key,
+    notifier=None,
+):
+    idempotency_key = _validate_idempotency_key(idempotency_key)
+    db_path = Path(db_path).expanduser()
+    with closing(sqlite3.connect(db_path, isolation_level=None)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                """
+                SELECT t.task_id, t.lifecycle, t.workstream_id, w.repo_id,
+                       w.lifecycle AS workstream_lifecycle, w.active_task_id,
+                       gs.state AS source_state
+                FROM tasks t
+                JOIN workstreams w ON w.workstream_id = t.workstream_id
+                JOIN github_sources gs ON gs.source_id = w.primary_source_id
+                WHERE t.task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if not row or row["repo_id"] not in context.allowed_repo_ids:
+                raise WorkItemNotFoundError("task not found")
+            if row["lifecycle"] != "failed":
+                raise WorkItemConflictError("only a failed GitHub task can be retriggered")
+            if row["source_state"].lower() != "open":
+                raise WorkItemConflictError("retrigger requires an open GitHub source")
+            if row["active_task_id"] is not None:
+                raise WorkItemConflictError("the workstream already has an active task")
+            latest = conn.execute(
+                """
+                SELECT task_id FROM tasks
+                WHERE workstream_id = ?
+                ORDER BY created_at DESC, task_id DESC
+                LIMIT 1
+                """,
+                (row["workstream_id"],),
+            ).fetchone()
+            if not latest or latest[0] != task_id:
+                raise WorkItemConflictError("only the latest failed GitHub task can be retriggered")
+
+            dedupe_key = f"github-retrigger:{idempotency_key}"
+            existing = conn.execute(
+                """
+                SELECT dedupe_key
+                FROM wakeups
+                WHERE repo_id = ?
+                  AND reason = 'manual_operator_request'
+                  AND task_id = ?
+                  AND status = 'pending'
+                  AND json_extract(metadata_json, '$.kind') = 'github_retrigger'
+                """,
+                (row["repo_id"], task_id),
+            ).fetchone()
+            if existing and existing[0] != dedupe_key:
+                raise WorkItemConflictError("a retrigger request is already pending")
+
+            requested = wakeup.request_wakeup(
+                conn,
+                repo_id=row["repo_id"],
+                reason="manual_operator_request",
+                dedupe_key=dedupe_key,
+                task_id=task_id,
+                metadata={
+                    "kind": "github_retrigger",
+                    "parent_task_id": task_id,
+                    "requested_by": context.actor_identity,
+                    "workstream_id": row["workstream_id"],
+                },
+            )
+            should_notify = requested.get("status") != "already_pending"
+            result = {
+                "ok": True,
+                "status": "queued",
+                "task_id": task_id,
+                "wakeup_id": requested["wakeup_id"],
+            }
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    if should_notify:
+        wakeup_notifier.notify(db_path, sender=notifier)
+    return result
+
+
 def _activate(conn, item, context, idempotency_key, now, *, initial_version=None):
     if item["origin_type"] != "web" or item["activated_at"] is not None:
         raise WorkItemConflictError("only a web Backlog item can be started")

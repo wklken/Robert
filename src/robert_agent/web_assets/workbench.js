@@ -12,6 +12,7 @@ const state = {
   hasLoaded: false,
   language: "en",
   theme: "system",
+  session: null,
 };
 
 const translations = {
@@ -54,6 +55,8 @@ const translations = {
     publication: "Publication", handoff: "Handoff", reviewComment: "Review comment",
     prReviewComment: "PR review comment", issueComment: "Issue comment", openPullRequest: "Open pull request",
     createPullRequest: "Create pull request", updatePullRequest: "Update pull request",
+    retriggerTask: "Retrigger task", retriggeringTask: "Retriggering...",
+    retriggerFailed: "Could not retrigger task: {message}",
     published: "Published", failed: "Failed", succeeded: "Succeeded", completed: "Completed",
     pending: "Pending", skipped: "Skipped", running: "Running", canceled: "Canceled",
   },
@@ -94,6 +97,8 @@ const translations = {
     handoff: "交接", reviewComment: "评审评论", prReviewComment: "PR 行级评论",
     issueComment: "Issue 评论", openPullRequest: "创建 Pull Request", createPullRequest: "创建 Pull Request",
     updatePullRequest: "更新 Pull Request",
+    retriggerTask: "重新触发", retriggeringTask: "正在重新触发...",
+    retriggerFailed: "重新触发失败：{message}",
     published: "已发布", failed: "失败", succeeded: "成功", completed: "已完成",
     pending: "待处理", skipped: "已跳过", running: "运行中", canceled: "已取消",
   },
@@ -369,6 +374,40 @@ function timelineRow(label, time, tone = "") {
   ]);
 }
 
+async function loadControlSession() {
+  try {
+    const response = await fetch("/api/session", { cache: "no-store" });
+    state.session = response.ok ? await response.json() : null;
+  } catch (_error) {
+    state.session = null;
+  }
+}
+
+async function retriggerTask(taskId, button) {
+  if (!taskId || !state.session?.writes_enabled) return;
+  const previousText = button.textContent;
+  button.disabled = true;
+  button.textContent = t("retriggeringTask");
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/retrigger`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-robert-csrf-token": state.session.csrf_token || "",
+        "x-idempotency-key": `workbench-retrigger-${taskId}`,
+      },
+      body: "{}",
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.safe_error || payload.status || `HTTP ${response.status}`);
+    await loadWorkItems();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = previousText;
+    window.alert(t("retriggerFailed", { message: error.message }));
+  }
+}
+
 function detailView(detail, titleId) {
   const source = detail.source || {};
   const stateData = detail.operator_state || {};
@@ -393,6 +432,16 @@ function detailView(detail, titleId) {
   const actions = node("div", { className: "detail-actions" });
   if (source.url) actions.append(node("a", { className: "action-button primary", text: t("openGithub"), href: source.url, target: "_blank", rel: "noopener noreferrer" }));
   const taskId = tasks.length ? tasks[tasks.length - 1].task_id : null;
+  if (detail.controls?.can_retrigger && state.session?.writes_enabled && detail.controls.task_id) {
+    const retrigger = node("button", {
+      className: "action-button",
+      text: t("retriggerTask"),
+      type: "button",
+      dataset: { retriggerTask: detail.controls.task_id },
+    });
+    retrigger.addEventListener("click", () => retriggerTask(detail.controls.task_id, retrigger));
+    actions.append(retrigger);
+  }
   if (taskId) {
     const copyTask = node("button", { className: "action-button", text: t("copyTaskId"), type: "button" });
     copyTask.addEventListener("click", () => navigator.clipboard.writeText(taskId));
@@ -557,7 +606,7 @@ function startAutoRefresh() {
   state.refreshTimer = setInterval(() => loadWorkItems({ reason: "auto" }), 30000);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   state.filters = readUrlState();
   state.selectedId = state.filters.selectedId;
   state.language = localStorage.getItem("robertLanguage") || "en";
@@ -565,6 +614,7 @@ document.addEventListener("DOMContentLoaded", () => {
   applyTranslations();
   syncControls();
   applyTheme(state.theme);
+  await loadControlSession();
   let searchTimer = null;
   $("filter-form").addEventListener("submit", (event) => { event.preventDefault(); updateFilters(); });
   $("work-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(updateFilters, 220); });
