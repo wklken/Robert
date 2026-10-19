@@ -59,6 +59,29 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertNotIn("TOKEN", text)
 
+    def test_supervisord_config_runs_remote_web_ui(self):
+        text = render_supervisord_config(
+            Path("/opt/robert/bin/robert"),
+            Path("/home/test/.config/robert/config.yml"),
+            Path("/home/test/.local/share/robert"),
+        )
+        self.assertIn("[program:robert-web]", text)
+        self.assertIn(
+            "command=/opt/robert/bin/robert web run "
+            "--config /home/test/.config/robert/config.yml "
+            "--host 0.0.0.0 --port 8765 --writable --allow-remote",
+            text,
+        )
+        self.assertIn(
+            "stdout_logfile=/home/test/.local/share/robert/logs/web.out.log",
+            text,
+        )
+        self.assertIn(
+            "stderr_logfile=/home/test/.local/share/robert/logs/web.err.log",
+            text,
+        )
+        self.assertEqual(text.count("autorestart=true"), 2)
+
     def test_linux_install_uses_supervisor_when_systemd_user_bus_unavailable(self):
         with mock.patch(
             "robert_agent.service._linux_systemd_user_available",
@@ -80,6 +103,7 @@ class ServiceTests(unittest.TestCase):
             "/home/test/.config/robert/supervisord.conf",
         )
         self.assertIn("[program:robert-daemon]", result["content"])
+        self.assertIn("[program:robert-web]", result["content"])
 
     def test_linux_install_keeps_systemd_when_user_bus_available(self):
         with mock.patch(
