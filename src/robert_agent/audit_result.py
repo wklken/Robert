@@ -59,6 +59,7 @@ WORKSTREAM_MARKER_RE = re.compile(
     r"<!--\s*(?:robert-workstream|dd-workstream)\b.*?-->",
     re.I | re.S,
 )
+SOURCE_ISSUE_RE = re.compile(r"(?m)^\s*source_issue:\s*(\d+)\s*$")
 
 
 def _validate_actions(actions):
@@ -130,6 +131,50 @@ def _audit_publisher_requirements(actions):
             missing = _missing_fields(action, ["worktree_path", "branch"])
             if missing:
                 return f"push_existing_pr action missing fields: {missing}"
+    return None
+
+
+def _audit_issue_linking(actions, action_scope):
+    if not isinstance(action_scope, dict):
+        return None
+    scoped_issues = {
+        source.get("number")
+        for source in action_scope.get("sources", [])
+        if isinstance(source, dict) and source.get("source_type") == "issue"
+    }
+    if not scoped_issues:
+        return None
+    for action in actions:
+        if action.get("type") != "open_pr":
+            continue
+        body = _string_value(action, "body")
+        source_match = SOURCE_ISSUE_RE.search(body)
+        if not source_match:
+            return "issue-sourced open_pr body requires source_issue metadata"
+        issue_number = int(source_match.group(1))
+        if issue_number not in scoped_issues:
+            return f"open_pr source_issue #{issue_number} is outside the workstream"
+        closing_reference = re.compile(
+            rf"(?im)^\s*(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\s+#{issue_number}\b"
+        )
+        resolution = _string_value(action, "issue_resolution")
+        if not resolution and closing_reference.search(body):
+            resolution = "complete"
+        if resolution not in {"complete", "partial"}:
+            return "issue-sourced open_pr requires issue_resolution complete or partial"
+        if resolution == "complete":
+            if not closing_reference.search(body):
+                return (
+                    f"complete issue resolution requires a closing keyword for #{issue_number}"
+                )
+            continue
+        if closing_reference.search(body):
+            return "partial issue resolution must not use a closing keyword"
+        if not _string_value(action, "remaining_scope"):
+            return "partial issue resolution requires remaining_scope"
+        reference = re.compile(rf"(?im)^\s*Refs?\s+#{issue_number}\b")
+        if not reference.search(body):
+            return f"partial issue resolution requires Refs #{issue_number}"
     return None
 
 
@@ -605,6 +650,14 @@ def audit_result(
             "ok": False,
             "status": "failed",
             "safe_error": publisher_error,
+        }
+
+    issue_linking_error = _audit_issue_linking(actions, action_scope)
+    if issue_linking_error:
+        return {
+            "ok": False,
+            "status": "failed",
+            "safe_error": issue_linking_error,
         }
 
     expected_action_error = (

@@ -27,7 +27,7 @@ def _source_issue_number(task, route_result):
 
 def _pr_issue_reference(task, route_result):
     issue_number = _source_issue_number(task, route_result)
-    return f"Refs #{issue_number}" if issue_number else ""
+    return f"Fixes #{issue_number}" if issue_number else ""
 
 
 def _pr_issue_linking_rules(task, route_result):
@@ -36,9 +36,9 @@ def _pr_issue_linking_rules(task, route_result):
         return "No visible source issue reference is required unless this task opens a new PR from an issue."
     return f"""Issue-linking rule for this PR description:
 - This PR is issue-sourced, so the PR description must visibly reference #{issue_number} outside the hidden metadata.
-- Use `Fixes #{issue_number}` or `Closes #{issue_number}` only when this PR resolves every requested item in the source issue.
-- Use `Refs #{issue_number}` when the PR is partial, comment-triggered for only one item, analysis/follow-up work, or you are not certain every source issue item is resolved.
-- If the source issue lists multiple requested items, compare the PR scope with all listed items before choosing a closing keyword."""
+- The default is complete delivery: set `issue_resolution` to `complete` and use `Fixes #{issue_number}`, `Closes #{issue_number}`, or `Resolves #{issue_number}`.
+- Set issue_resolution=partial only when the PR intentionally leaves requested work for a follow-up. Then use `Refs #{issue_number}` and provide a non-empty `remaining_scope` on the open_pr action.
+- A comment-triggered implementation is not partial by itself. Compare the final PR scope with every requested item in the source issue."""
 
 
 def _comment_metadata(task, event_fingerprints):
@@ -151,6 +151,7 @@ def _planned_actions_example(task, route_result, events, event_fingerprints, run
                 "head": runtime_context.get("branch_name") or "<branch>",
                 "base": runtime_context.get("target_base_branch") or "<base>",
                 "title": "<PR title>",
+                "issue_resolution": "complete",
                 "body": "\n".join(
                     item
                     for item in [

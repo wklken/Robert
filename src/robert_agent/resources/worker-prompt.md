@@ -51,10 +51,11 @@ verification or an explicit explanation of reused/skipped checks.
 `push_existing_pr`, then include `origin_workstream_id` and `source_issue` in the
 planned PR body hidden `robert-workstream` metadata block for the follow-up
 `open_pr` action. Issue-sourced PR descriptions must also visibly reference the
-source issue outside hidden metadata. Use `Fixes #123` or `Closes #123` only
-when the PR resolves every requested item in the source issue; use `Refs #123`
-for partial work, comment-triggered subsets, analysis/follow-up work, or any
-uncertain completion scope. `update_existing_pr` and comment-only tasks keep
+source issue outside hidden metadata. Default to `issue_resolution=complete`
+with `Fixes #123`, `Closes #123`, or `Resolves #123`. Use
+`issue_resolution=partial` only for intentionally incomplete delivery; then use
+`Refs #123` and include a non-empty `remaining_scope` on the action. A
+comment-triggered implementation is not partial by itself. `update_existing_pr` and comment-only tasks keep
 task and attempt metadata on planned comments through the hidden `robert-comment`
 block. These hidden blocks are publisher idempotency markers; omitting them can
 make retries unsafe.
