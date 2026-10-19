@@ -1,5 +1,9 @@
 # Robert
 
+<p align="center">
+  <img src="docs/imgs/robert-logo.svg" alt="Robert 标志：机器人、终端提示符和完成勾" width="432">
+</p>
+
 [English](README_EN.md) | [简体中文](README.md)
 
 **Your Repo Teammate**

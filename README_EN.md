@@ -1,5 +1,9 @@
 # Robert
 
+<p align="center">
+  <img src="docs/imgs/robert-logo.svg" alt="Robert logo: a robot, terminal prompt, and completion check" width="432">
+</p>
+
 [English](README_EN.md) | [简体中文](README.md)
 
 **Your Repo Teammate**
