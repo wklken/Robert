@@ -45,3 +45,7 @@ Comment bodies must include the `robert-comment` hidden idempotency marker. New 
 bodies must include the `robert-workstream` hidden metadata block so retries and
 follow-up discovery can match the existing GitHub side effect instead of
 creating another one.
+Issue-sourced `open_pr` actions must set `issue_resolution` to `complete` or
+`partial`. Complete delivery must use a GitHub closing keyword for the source
+issue. Partial delivery must use `Refs #N` and include a non-empty
+`remaining_scope` describing what still needs a follow-up.

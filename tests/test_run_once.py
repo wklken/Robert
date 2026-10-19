@@ -28,7 +28,7 @@ def _dd_pr_body(text, task_id="task-1", issue_number="123"):
         f"source_issue: {issue_number}\n"
         f"task_id: {task_id}\n"
         "created_by: robert\n"
-        "-->\n"
+        f"-->\nFixes #{issue_number}\n\n"
         + text
     )
 
@@ -46,6 +46,7 @@ def _open_pr_action(
         "head": branch,
         "base": "master",
         "title": f"Fix issue {issue_number}",
+        "issue_resolution": "complete",
         "body": _dd_pr_body("Opened PR", task_id=task_id, issue_number=issue_number),
         "url": f"https://github.com/example/backend/pull/{pr_number}",
     }

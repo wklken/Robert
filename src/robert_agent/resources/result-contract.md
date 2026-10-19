@@ -53,7 +53,7 @@ unless the worker ran useful checks.
 Publisher-required fields:
 
 - `comment`: `target_url`, `body` containing the `robert-comment` idempotency marker
-- `open_pr`: `repo`, `head`, `base`, `title`, `body` containing the `robert-workstream` metadata block, optional `draft`
+- `open_pr`: `repo`, `head`, `base`, `title`, `body` containing the `robert-workstream` metadata block, optional `draft`; issue-sourced PRs also require `issue_resolution`, with `remaining_scope` required for partial delivery
 - `push_existing_pr`: `worktree_path`, `branch`, optional `remote`
 
 For `new_pr`, record both a `push_existing_pr` action for the prepared worktree

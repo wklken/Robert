@@ -59,8 +59,8 @@ body = (
     "source_issue: {{}}\\n"
     "task_id: {{}}\\n"
     "created_by: robert\\n"
-    "-->\\nControlled acceptance PR"
-).format(workstream_id, issue_number, fields["task_id"])
+    "-->\\nFixes #{{}}\\n\\nControlled acceptance PR"
+).format(workstream_id, issue_number, fields["task_id"], issue_number)
 payload = {{
     "task_id": fields["task_id"],
     "attempt_id": fields["attempt_id"],
@@ -77,6 +77,7 @@ payload = {{
             "head": fields["branch_name"],
             "base": fields["target_base_branch"],
             "title": "Controlled acceptance PR",
+            "issue_resolution": "complete",
             "body": body,
         }}
     ],

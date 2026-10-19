@@ -464,10 +464,11 @@ class RoutingTests(unittest.TestCase):
 
         self.assertIn("origin_workstream_id: github:example/backend#123", prompt)
         self.assertIn("source_issue: 123", prompt)
-        self.assertIn("Refs #123", prompt)
+        self.assertIn("Fixes #123", prompt)
+        self.assertIn('"issue_resolution": "complete"', prompt)
         self.assertIn("must visibly reference #123 outside the hidden metadata", prompt)
-        self.assertIn("Use `Fixes #123` or `Closes #123` only when", prompt)
-        self.assertIn("comment-triggered for only one item", prompt)
+        self.assertIn("Set issue_resolution=partial only when", prompt)
+        self.assertIn("remaining_scope", prompt)
         self.assertIn('"type": "push_existing_pr"', prompt)
         self.assertNotIn("Classification scope:", prompt)
 

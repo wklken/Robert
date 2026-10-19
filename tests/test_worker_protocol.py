@@ -879,6 +879,98 @@ class WorkerProtocolTests(unittest.TestCase):
 
         self.assertEqual(audit["status"], "accepted")
 
+    def test_issue_sourced_new_pr_rejects_complete_resolution_with_refs(self):
+        from robert_agent import audit_result
+
+        audit = audit_result.audit_result(
+            self._issue_new_pr_result(
+                issue_resolution="complete",
+                issue_reference="Refs #1",
+            ),
+            allowed_github_actions=["push_existing_pr", "open_pr"],
+            action_scope=self._issue_action_scope(),
+        )
+
+        self.assertEqual(audit["status"], "failed")
+        self.assertIn("closing keyword", audit["safe_error"])
+
+    def test_issue_sourced_partial_pr_requires_remaining_scope(self):
+        from robert_agent import audit_result
+
+        audit = audit_result.audit_result(
+            self._issue_new_pr_result(
+                issue_resolution="partial",
+                issue_reference="Refs #1",
+            ),
+            allowed_github_actions=["push_existing_pr", "open_pr"],
+            action_scope=self._issue_action_scope(),
+        )
+
+        self.assertEqual(audit["status"], "failed")
+        self.assertIn("remaining_scope", audit["safe_error"])
+
+    def test_issue_sourced_partial_pr_accepts_refs_with_remaining_scope(self):
+        from robert_agent import audit_result
+
+        audit = audit_result.audit_result(
+            self._issue_new_pr_result(
+                issue_resolution="partial",
+                issue_reference="Refs #1",
+                remaining_scope="Standard-input credential import remains a follow-up.",
+            ),
+            allowed_github_actions=["push_existing_pr", "open_pr"],
+            action_scope=self._issue_action_scope(),
+        )
+
+        self.assertEqual(audit["status"], "accepted")
+
+    def test_issue_sourced_partial_pr_rejects_closing_keyword(self):
+        from robert_agent import audit_result
+
+        audit = audit_result.audit_result(
+            self._issue_new_pr_result(
+                issue_resolution="partial",
+                issue_reference="Refs #1\nFixes #1",
+                remaining_scope="Standard-input credential import remains a follow-up.",
+            ),
+            allowed_github_actions=["push_existing_pr", "open_pr"],
+            action_scope=self._issue_action_scope(),
+        )
+
+        self.assertEqual(audit["status"], "failed")
+        self.assertIn("must not use a closing keyword", audit["safe_error"])
+
+    def test_issue_sourced_complete_pr_accepts_closing_reference(self):
+        from robert_agent import audit_result
+
+        audit = audit_result.audit_result(
+            self._issue_new_pr_result(
+                issue_resolution="complete",
+                issue_reference="Fixes #1",
+            ),
+            allowed_github_actions=["push_existing_pr", "open_pr"],
+            action_scope=self._issue_action_scope(),
+        )
+
+        self.assertEqual(audit["status"], "accepted")
+
+    def test_issue_sourced_closing_reference_infers_complete_for_compatibility(self):
+        from robert_agent import audit_result
+
+        payload = self._issue_new_pr_result(
+            issue_resolution="complete",
+            issue_reference="Fixes #1",
+        )
+        payload["planned_github_actions"][1].pop("issue_resolution")
+
+        audit = audit_result.audit_result(
+            payload,
+            allowed_github_actions=["push_existing_pr", "open_pr"],
+            action_scope=self._issue_action_scope(),
+        )
+
+        self.assertEqual(audit["status"], "accepted")
+
     def test_new_pr_route_policy_rejects_empty_verification(self):
         from robert_agent import audit_result
         from robert_agent.worker import result
@@ -2167,6 +2259,53 @@ class WorkerProtocolTests(unittest.TestCase):
             "created_by: robert\n"
             "-->\n"
             + text
+        )
+
+    def _issue_action_scope(self):
+        return {
+            "repo": "x/y",
+            "base_branch": "master",
+            "worktree_path": "/repo/.worktrees/dd-1",
+            "branch_name": "codex/dd-1",
+            "sources": [{"source_type": "issue", "number": 1}],
+        }
+
+    def _issue_new_pr_result(
+        self,
+        *,
+        issue_resolution,
+        issue_reference,
+        remaining_scope="",
+    ):
+        from robert_agent.worker import result
+
+        open_pr = {
+            "type": "open_pr",
+            "repo": "x/y",
+            "head": "codex/dd-1",
+            "base": "master",
+            "title": "Implement issue",
+            "body": self._dd_pr_body(f"{issue_reference}\n\nImplementation details."),
+            "issue_resolution": issue_resolution,
+        }
+        if remaining_scope:
+            open_pr["remaining_scope"] = remaining_scope
+        return result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="new_pr",
+            planned_github_actions=[
+                {
+                    "type": "push_existing_pr",
+                    "worktree_path": "/repo/.worktrees/dd-1",
+                    "branch": "codex/dd-1",
+                },
+                open_pr,
+            ],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="opened pr",
+            used_skills=[],
         )
 
     def _dd_comment_body(self, text):
