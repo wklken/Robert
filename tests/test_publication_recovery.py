@@ -15,6 +15,49 @@ def completed(stdout=''):
 
 
 class PublicationRecoveryTests(unittest.TestCase):
+    def test_new_branch_push_uses_fully_qualified_destination_ref(self):
+        scope = {
+            "result_head_sha": "result-sha",
+            "sources": [{"source_type": "issue", "number": 37}],
+        }
+        with closing(sqlite3.connect(":memory:")) as conn:
+            conn.execute("CREATE TABLE worker_results(result_id TEXT, metadata_json TEXT)")
+            conn.execute(
+                "INSERT INTO worker_results VALUES (?, ?)",
+                ("r", json.dumps({"audit": {"status": "accepted", "action_scope": scope}})),
+            )
+            action = {
+                "result_id": "r",
+                "target_url": "",
+                "metadata_json": json.dumps(
+                    {
+                        "worktree_path": "/assigned",
+                        "remote": "origin",
+                        "branch": "codex/dd-37-fix",
+                    }
+                ),
+            }
+            commands = []
+
+            def runner(command, **kwargs):
+                commands.append(command)
+                return completed()
+
+            result = publish._publish_push_existing_pr(action, runner, conn)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            commands,
+            [
+                [
+                    "git",
+                    "push",
+                    "origin",
+                    "result-sha:refs/heads/codex/dd-37-fix",
+                ]
+            ],
+        )
+
     def test_retry_recognizes_successful_push_after_transaction_rollback(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / 'db'
@@ -65,7 +108,7 @@ class PublicationRecoveryTests(unittest.TestCase):
             self.assertEqual(result['published_count'], 2)
             self.assertEqual(result['deduplicated_count'], 1)
             self.assertEqual(len(pushes), 1)
-            self.assertEqual(pushes[0][-1], 'result-sha:codex/fix')
+            self.assertEqual(pushes[0][-1], 'result-sha:refs/heads/codex/fix')
 
     def test_leased_push_without_result_revision_fails_before_writing(self):
         scope = {"existing_pr_head_sha": "old-sha"}

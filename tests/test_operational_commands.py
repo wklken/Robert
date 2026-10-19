@@ -3923,7 +3923,10 @@ class OperationalCommandTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 2)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(
+            calls[0][0],
+            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+        )
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
         self.assertEqual(calls[1][0], ["git", "remote", "get-url", "origin"])
         self.assertEqual(calls[2][0][:3], ["gh", "pr", "list"])
@@ -4100,7 +4103,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["published_count"], 0)
         self.assertEqual(result["failed_count"], 1)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(
+            calls[0][0],
+            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+        )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             rows = conn.execute(
                 """
@@ -4614,7 +4620,10 @@ class OperationalCommandTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(
+            calls[0][0],
+            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+        )
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
         self.assertNotIn("shell", calls[0][1])
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -4677,7 +4686,7 @@ class OperationalCommandTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertIn(
-            ["git", "push", "origin", "repair-1:codex/fix"],
+            ["git", "push", "origin", "repair-1:refs/heads/codex/fix"],
             calls,
         )
         with closing(sqlite3.connect(db_path)) as conn:
@@ -4856,7 +4865,7 @@ class OperationalCommandTests(unittest.TestCase):
                 "git",
                 "push",
                 "origin",
-                "repair-1:codex/fix",
+                "repair-1:refs/heads/codex/fix",
             ]:
                 return Completed(
                     returncode=1,
@@ -4977,7 +4986,10 @@ class OperationalCommandTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(
+            calls[0][0],
+            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+        )
 
     def test_publish_ready_push_existing_pr_uses_audited_head_sha_for_lease(self):
         from robert_agent import publish
@@ -5055,7 +5067,7 @@ class OperationalCommandTests(unittest.TestCase):
                 "push",
                 "--force-with-lease=codex/dd-123:audited-sha",
                 "origin",
-                "result-sha:codex/dd-123",
+                "result-sha:refs/heads/codex/dd-123",
             ],
         )
 
@@ -5173,7 +5185,10 @@ class OperationalCommandTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
-        self.assertEqual(calls[0][0], ["git", "push", "origin", "HEAD:codex/dd-123"])
+        self.assertEqual(
+            calls[0][0],
+            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+        )
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
 
     def test_publish_ignores_actions_not_accepted_or_already_published(self):
