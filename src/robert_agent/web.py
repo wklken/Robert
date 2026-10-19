@@ -2308,11 +2308,17 @@ def build_http_response(path, db_path, control_context=None):
             )
         return _json_response(payload)
     if route.startswith("/api/work-items/"):
-        suffix = unquote(route[len("/api/work-items/") :])
-        if not suffix or "/" in suffix.removesuffix("/events"):
+        raw_suffix = route[len("/api/work-items/") :]
+        events_route = raw_suffix.endswith("/events")
+        raw_work_item_id = (
+            raw_suffix[: -len("/events")]
+            if events_route
+            else raw_suffix
+        )
+        if not raw_work_item_id or "/" in raw_work_item_id:
             return _json_response({"ok": False, "status": "not_found"}, 404)
-        if suffix.endswith("/events"):
-            work_item_id = suffix[: -len("/events")]
+        work_item_id = unquote(raw_work_item_id)
+        if events_route:
             if board.get_work_item_detail(db_path, work_item_id) is None:
                 return _json_response({"ok": False, "status": "not_found"}, 404)
             query = parse_qs(parsed.query)
@@ -2330,13 +2336,13 @@ def build_http_response(path, db_path, control_context=None):
                 )
             return _json_response(payload)
         try:
-            payload = board.get_work_item_detail(db_path, suffix)
+            payload = board.get_work_item_detail(db_path, work_item_id)
         except sqlite3.OperationalError:
             payload = None
         if payload is not None:
             return _json_response(payload)
         try:
-            payload = workbench.get_work_item(db_path, suffix)
+            payload = workbench.get_work_item(db_path, work_item_id)
         except sqlite3.OperationalError:
             return _json_response(
                 {

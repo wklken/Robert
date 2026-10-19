@@ -406,6 +406,32 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(headers["content-type"], "application/json; charset=utf-8")
         self.assertEqual(payload["id"], workstream_id)
 
+    def test_web_routes_encoded_github_workstream_id_with_repo_slash(self):
+        from robert_agent import web
+
+        workstream_id, _task_id = self.seed_workstream()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE workstreams SET workstream_id = 'github:Org/repo!1' WHERE workstream_id = ?",
+                (workstream_id,),
+            )
+            conn.execute(
+                "UPDATE tasks SET workstream_id = 'github:Org/repo!1' WHERE workstream_id = ?",
+                (workstream_id,),
+            )
+            conn.execute(
+                "UPDATE workstream_sources SET workstream_id = 'github:Org/repo!1' WHERE workstream_id = ?",
+                (workstream_id,),
+            )
+
+        status, _headers, body = web.build_http_response(
+            "/api/work-items/github%3AOrg%2Frepo%211",
+            self.db_path,
+        )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["id"], "github:Org/repo!1")
+
     def test_web_returns_safe_workbench_errors(self):
         from robert_agent import web
         self.seed_workstream()
