@@ -572,12 +572,53 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
                     "result_head_sha": result_head_sha,
                     "response": {"head_sha": result_head_sha}, "command": lookup_command}
         if current_remote_sha and current_remote_sha != expected_remote_sha:
-            return {
-                "ok": False,
-                "status": "publish_failed",
-                "safe_error": "remote branch changed since audit; refusing to overwrite unreviewed head",
-                "command": lookup_command,
-            }
+            fetch_command = [
+                "git", "fetch", "--no-tags", "--no-write-fetch-head",
+                remote, destination_ref,
+            ]
+            fetched = run_command(
+                fetch_command,
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+            )
+            fetch_error = _command_failure(fetched, "git fetch failed")
+            if fetch_error:
+                return {
+                    "ok": False,
+                    "status": "publish_failed",
+                    "safe_error": f"remote branch refresh failed: {fetch_error}",
+                    "command": fetch_command,
+                }
+            ancestor_command = [
+                "git", "merge-base", "--is-ancestor", current_remote_sha, result_head_sha
+            ]
+            ancestor = run_command(
+                ancestor_command,
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+            )
+            if ancestor.returncode == 0:
+                expected_remote_sha = current_remote_sha
+            elif ancestor.returncode == 1:
+                return {
+                    "ok": True,
+                    "status": "superseded",
+                    "safe_error": "remote branch diverged from audited result; refusing to overwrite unreviewed head",
+                    "command": ancestor_command,
+                }
+            else:
+                safe_error = _command_failure(
+                    ancestor,
+                    "git merge-base --is-ancestor failed",
+                )
+                return {
+                    "ok": False,
+                    "status": "publish_failed",
+                    "safe_error": f"remote branch ancestry check failed: {safe_error}",
+                    "command": ancestor_command,
+                }
         command = [
             "git",
             "push",
@@ -968,10 +1009,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                         result={
                             "ok": True,
                             "status": "superseded",
-                            "safe_error": (
-                                "skipped because the remediation PR "
-                                "snapshot changed"
-                            ),
+                            "safe_error": "skipped because the preceding push was superseded",
                         },
                         now=now,
                     )
