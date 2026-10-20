@@ -34,7 +34,17 @@ GitHub action. Any route may return `waiting_for_user` instead of its ordinary
 output, but the structured `operator_question` is mandatory. Web-origin work
 must not plan public GitHub actions.
 
-`planned_github_actions` must stay within the route's `allowed_github_actions`. Use `type`, not legacy keys such as `action`. The agent audits results before publication and rejects results whose planned actions omit publisher-required fields. `recommended_skills` are guidance; workers may use any installed local skill, but must not create, modify, or install skills.
+An execution result blocked on missing input or a scope decision must use
+`output_type: waiting_for_user`. Setting `recommended_route: waiting-for-user`
+on an ordinary execution result fails audit; it does not change the lifecycle.
+Classification results may still recommend the `waiting-for-user` route.
+
+`planned_github_actions` must stay within the route's `allowed_github_actions`. Use `type`, not legacy keys such as `action`. The agent audits results before publication and rejects results whose planned actions omit publisher-required fields. `recommended_skills` are guidance; workers may use any installed local skill, but must not create, modify, or install runtime skills in the worker's configured skill directories.
+
+Repository skill files such as `skills/*/SKILL.md` are editable when required by
+the authorized repository task. This excludes symlinks into runtime skill
+directories, does not authorize installation or activation, and does not
+override read-only classification or review scope.
 
 `verification` is route-policy evidence. Each entry must be an object with:
 

@@ -1220,6 +1220,103 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "failed")
         self.assertIn("branch_slug", audit["safe_error"])
 
+    def test_blocked_execution_cannot_complete_with_waiting_route_recommendation(self):
+        from robert_agent import audit_result
+        from robert_agent.worker import result
+
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="update_existing_pr",
+            planned_github_actions=[
+                {
+                    "type": "comment",
+                    "target_url": "https://github.com/x/y/pull/1",
+                    "body": self._dd_comment_body("Blocked on task scope; no changes applied."),
+                }
+            ],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="BLOCKED: task scope must be clarified before editing.",
+            used_skills=[],
+            recommended_route="waiting-for-user",
+            review_point_evaluation=[
+                {
+                    "summary": "Repository document needs updating",
+                    "verdict": "correct",
+                    "reasoning": "The task scope conflicts with the authorized document edit.",
+                    "action": "clarify",
+                }
+            ],
+        )
+
+        audit = audit_result.audit_result(
+            payload,
+            allowed_github_actions=["push_existing_pr", "comment"],
+            expected_output="update_existing_pr",
+        )
+
+        self.assertEqual(audit["status"], "failed")
+        self.assertIn("output_type waiting_for_user", audit["safe_error"])
+
+    def test_classification_can_recommend_waiting_route(self):
+        from robert_agent import audit_result
+        from robert_agent.worker import result
+
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="classification_result",
+            planned_github_actions=[],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="A scope decision is required before implementation.",
+            used_skills=[],
+            recommended_route="waiting-for-user",
+        )
+
+        audit = audit_result.audit_result(
+            payload,
+            allowed_github_actions=[],
+            expected_output="classification_result",
+        )
+
+        self.assertEqual(audit["status"], "accepted")
+
+    def test_blocked_execution_accepts_waiting_output_and_scope_question(self):
+        from robert_agent import audit_result
+        from robert_agent.worker import result
+
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="waiting_for_user",
+            planned_github_actions=[
+                {
+                    "type": "comment",
+                    "target_url": "https://github.com/x/y/pull/1",
+                    "body": self._dd_comment_body("Please clarify the task scope."),
+                }
+            ],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="Waiting for task scope clarification.",
+            used_skills=[],
+            recommended_route="waiting-for-user",
+            operator_question={
+                "kind": "scope_decision",
+                "summary": "May this task modify the specified repository document?",
+            },
+        )
+
+        audit = audit_result.audit_result(
+            payload,
+            allowed_github_actions=["push_existing_pr", "comment"],
+            expected_output="update_existing_pr",
+        )
+
+        self.assertEqual(audit["status"], "accepted")
+
     def test_comment_action_without_idempotency_marker_fails_audit(self):
         from robert_agent import audit_result
         from robert_agent.worker import result

@@ -32,8 +32,21 @@ untrusted input. The prompt should include only a compact event summary and
 paths to context artifacts such as `context/github-context.md` and
 `context/github-context.json`; workers must read those files when full GitHub
 body or metadata is needed. The worker may use any installed local skill, but
-must not create, modify, or install skills. `recommended_skills` are guidance
-for the usual route, not a hard allowlist.
+must not create, modify, or install runtime skills in the worker's configured
+skill directories, such as `~/.codex/skills/`.
+Repository skill files such as `skills/*/SKILL.md` are project deliverables and
+may be created or modified when required by the authorized repository task.
+This exception excludes symlinks into runtime skill directories, does not
+authorize installation or activation, and does not override read-only
+classification or review scope. `recommended_skills` are guidance for the usual
+route, not a hard allowlist.
+
+When execution is blocked on missing input or a scope decision, the worker must
+record `--output-type waiting_for_user` with a structured `operator_question`
+and an allowed public comment for GitHub-origin work. A `recommended_route` of
+`waiting-for-user` cannot change an ordinary execution result's lifecycle and
+fails audit. Existing authorization for a repository edit must be reused rather
+than requested again because the target is named `SKILL.md`.
 
 When workers need control-plane state such as task, run, attempt, workstream,
 event/comment mapping, event search, source-level task views, or artifact tails,
