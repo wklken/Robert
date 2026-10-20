@@ -1959,8 +1959,11 @@ def _event_has_terminal_trigger(conn, event_fingerprint):
         JOIN github_events ge ON ge.event_id = te.event_id
         JOIN tasks t ON t.task_id = te.task_id
         WHERE ge.event_fingerprint = ?
-          AND te.relationship IN ('trigger', 'consumed')
-          AND t.lifecycle IN ('completed', 'failed', 'canceled', 'ignored')
+          AND (
+            te.relationship = 'consumed'
+            OR (te.relationship = 'trigger'
+                AND t.lifecycle IN ('completed', 'failed', 'canceled', 'ignored'))
+          )
         LIMIT 1
         """,
         (event_fingerprint,),
