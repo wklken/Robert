@@ -19,6 +19,24 @@ task after a previous attempt made local progress. It must inspect the existing
 worktree first, reuse valid edits and command evidence, and record the final
 structured result under the current attempt id.
 
+The heartbeat wrapper writes an atomic `*.command.json` lifecycle record in the
+task artifact directory, even when `--output-dir` points elsewhere. It records
+process identity and output paths before execution, and exit status before the
+completion snapshot. A busy/locked SQLite write is reported as
+`snapshot_status: deferred`; it does not change the actual command exit code.
+The supervisor replays deferred terminal snapshots idempotently and includes
+the saved command records in recovery context. Missing processes alone do not
+prove a command succeeded. Do not rerun a still-live command, and reuse completed
+verification only when its evidence matches the current worktree.
+
+When a model stream terminates after reconnect attempts are exhausted, Robert
+prepares a continuation of the same task, including its worktree and command
+evidence. Consecutive transport failures wait 30, 60, 120, 240, then 300 seconds
+before redispatch, with at most five automatic continuations. Exhaustion is
+recorded as `failed_transport_retries_exhausted` and requires an operator retry.
+Recorded structured results remain on the existing audit/publication path;
+transport errors after result recording must not create a second delivery.
+
 The final result records:
 
 - output type
