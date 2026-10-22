@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
+import hashlib
 import json
 import os
 import re
@@ -30,12 +31,16 @@ from robert_agent import workstream
 from robert_agent import worktree
 from robert_agent.common import emit
 from robert_agent import project_memory, runtime_knowledge, storage, usage, wakeup, work_items
+from robert_agent.worker import heartbeat as command_heartbeat, snapshot as worker_snapshot
 
 
 ROUTE_POLICIES = {
     policy["id"]: policy
     for policy in route_config.load_route_policies()
 }
+
+MAX_TRANSPORT_RESUMES = 5
+TRANSPORT_RESUME_DELAY_SECONDS = 30
 
 
 def _id(prefix):
@@ -239,7 +244,115 @@ def _latest_worker_phases(conn, attempt_id, limit=8):
     ]
 
 
+def _command_process_status(pid, identity):
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return "not_found"
+        os.kill(pid, 0)
+    except (TypeError, ValueError, ProcessLookupError):
+        return "not_found"
+    except PermissionError:
+        return "unknown"
+    if _process_state(pid) in {"Z", "X", "x"}:
+        return "not_found"
+    current_identity = command_heartbeat.process_identity(pid)
+    if identity and current_identity and identity != current_identity:
+        return "not_found"
+    return "alive" if current_identity else "unknown"
+
+
+def _attempt_command_records(conn, attempt_id, task_id):
+    directories = set()
+    for (path,) in conn.execute("SELECT path FROM artifacts WHERE attempt_id = ?", (attempt_id,)):
+        directories.add(Path(path).parent.resolve())
+    for _seq, name, path in conn.execute("PRAGMA database_list"):
+        if name == "main" and path:
+            directories.add((Path(path).parent / "artifacts" / task_id).resolve())
+    commands = []
+    seen_paths = set()
+    for directory in sorted(directories):
+        for path in sorted(directory.glob(f"{command_heartbeat._safe_filename_part(attempt_id)}.*.command.json")):
+            try:
+                path = path.resolve()
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                if path.stat().st_size > 65536:
+                    continue
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(record, dict) or record.get("task_id") != task_id or record.get("attempt_id") != attempt_id:
+                continue
+            if record.get("phase") not in worker_snapshot.VALID_PHASES:
+                continue
+            record = {**record, "command_record_path": str(path)}
+            terminal = record.get("status") in {"completed", "failed"}
+            if terminal:
+                record["process_status"] = "finished"
+                finished_at = record.get("finished_at")
+                if finished_at and record.get("snapshot_status") == "deferred":
+                    try:
+                        _parse_time(finished_at)
+                    except (ValueError, TypeError, AttributeError):
+                        continue
+                    summary = record.get("summary") or f"Command exited {record.get('returncode')}"
+                    if conn.execute(
+                        "SELECT 1 FROM worker_phases WHERE attempt_id=? AND phase=? AND status=?"
+                        " AND summary=? AND created_at>=? LIMIT 1",
+                        (attempt_id, record["phase"], record["status"], summary, finished_at),
+                    ).fetchone():
+                        commands.append(record)
+                        continue
+                    phase_id = "phase-command-" + hashlib.sha256(str(path).encode()).hexdigest()[:24]
+                    conn.execute(
+                        """INSERT OR IGNORE INTO worker_phases(
+                             phase_id,attempt_id,phase,status,summary,next_step,created_at
+                           ) VALUES (?,?,?,?,?,?,?)""",
+                        (phase_id, attempt_id, record["phase"], record["status"],
+                         summary,
+                         "Inspect saved command output and record result", finished_at),
+                    )
+            else:
+                statuses = [
+                    _command_process_status(record.get("pid"), record.get("process_identity")),
+                    _command_process_status(record.get("wrapper_pid"), record.get("wrapper_identity")),
+                ]
+                record["process_status"] = (
+                    "alive" if "alive" in statuses else "unknown" if "unknown" in statuses else "not_found"
+                )
+            commands.append(record)
+    return commands
+
+
+def _terminal_transport_failure(logs):
+    for payload in logs.values():
+        for line in reversed(payload.get("tail", "").splitlines()):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "turn.completed":
+                break
+            if event.get("type") not in {"error", "turn.failed"}:
+                continue
+            error = event.get("error") or event.get("message") or ""
+            message = error.get("message", "") if isinstance(error, dict) else str(error)
+            if any(marker in message.lower() for marker in (
+                "stream disconnected", "stream closed before response.completed",
+                "reconnecting failed", "connection reset", "transport error",
+            )):
+                return {"type": event["type"], "message": message}
+            if event["type"] == "turn.failed":
+                break
+    return None
+
+
 def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
+    commands = _attempt_command_records(conn, attempt_id, task_id)
     phases = _latest_worker_phases(conn, attempt_id)
     logs = _attempt_log_tails(conn, attempt_id)
     git_summary = _git_recovery_summary(worktree_path)
@@ -248,7 +361,9 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
     latest_summary = (latest_phase.get("summary") or "").lower()
     latest_status = latest_phase.get("status")
     if latest_status == "running" and "command" in latest_summary:
-        signals.append("active_command_snapshot")
+        signals.append("stale_command_snapshot")
+    if commands:
+        signals.append("durable_command_evidence")
     for phase in phases:
         phase_text = " ".join(
             [
@@ -275,7 +390,7 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         else:
             signals.append(f"{artifact_type}_tail_available")
     status = "no_progress"
-    if latest_status == "running" and "command" in latest_summary:
+    if any(command["process_status"] in {"alive", "unknown"} for command in commands):
         status = "orphaned_command_running"
     elif signals:
         status = "recoverable_progress"
@@ -288,6 +403,8 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         "latest_worker_phases": phases,
         "logs": logs,
         "git": git_summary,
+        "commands": commands,
+        "transport_failure": _terminal_transport_failure(logs),
     }
 
 
@@ -674,8 +791,13 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                     (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
                 )
                 continue
+            transport_failure_count = int((metadata.get("resume") or {}).get("transport_failure_count", 0))
+            transport_exhausted = bool(
+                recovery.get("transport_failure") and transport_failure_count >= MAX_TRANSPORT_RESUMES
+            )
             if (
                 recovery["status"] == "recoverable_progress"
+                and not transport_exhausted
                 and data_dir is not None
                 and db_path is not None
                 and repo is not None
@@ -735,13 +857,16 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                         },
                     )
                     continue
-            if status["status"] == "failed_timeout":
+            if status["status"] == "failed_timeout" and not transport_exhausted:
                 status = {**status, "process": process_status, "recovery": recovery}
             else:
                 status = {
                     **process_status,
                     "ok": False,
-                    "status": "failed_worker_process_exited",
+                    "status": (
+                        "failed_transport_retries_exhausted" if transport_exhausted
+                        else "failed_worker_process_exited"
+                    ),
                     "terminate": False,
                 }
         runtime_seconds = (now_dt - _parse_time(started_at)).total_seconds()
@@ -749,6 +874,8 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
             "SELECT 1 FROM worker_phases WHERE attempt_id = ? LIMIT 1",
             (attempt_id,),
         ).fetchone()
+        if not has_worker_phase and runtime_seconds >= startup_grace_seconds:
+            has_worker_phase = bool(_attempt_command_records(conn, attempt_id, task_id))
         if (
             status["status"] in {"running", "stale"}
             and runtime_seconds >= startup_grace_seconds
@@ -988,6 +1115,8 @@ def _supervision_failure_notification_type(status):
         return "worker_startup_failed"
     if status == "failed_worker_process_exited":
         return "worker_process_exited"
+    if status == "failed_transport_retries_exhausted":
+        return "worker_transport_retries_exhausted"
     return "worker_timeout"
 
 
@@ -3418,6 +3547,14 @@ def _create_resume_attempt_and_prompt(
             "recovery_artifact_path": str(recovery_path),
         }
     }
+    if recovery_context.get("transport_failure"):
+        previous_resume = _json_object(previous_metadata_json).get("resume") or {}
+        failure_count = int(previous_resume.get("transport_failure_count", 0)) + 1
+        delay_seconds = min(300, TRANSPORT_RESUME_DELAY_SECONDS * 2 ** (failure_count - 1))
+        attempt_metadata["resume"].update(
+            transport_failure_count=failure_count,
+            not_before_at=(_parse_time(run_now) + timedelta(seconds=delay_seconds)).isoformat(),
+        )
     existing_pr_head_sha = _json_object(previous_metadata_json).get(
         "existing_pr_head_sha"
     )
@@ -3621,11 +3758,18 @@ def _queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
         FROM attempts a
         JOIN tasks t ON t.task_id = a.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
-        JOIN artifacts ar ON ar.task_id = t.task_id
+        JOIN artifacts ar ON ar.task_id = t.task_id AND ar.artifact_id = (
+            SELECT ar2.artifact_id FROM artifacts ar2
+            WHERE ar2.task_id = t.task_id AND ar2.artifact_type = 'prompt'
+              AND (ar2.attempt_id = a.attempt_id OR ar2.attempt_id IS NULL)
+            ORDER BY ar2.created_at DESC, ar2.artifact_id DESC LIMIT 1
+        )
         WHERE w.repo_id = ?
           AND a.status = 'prepared'
           AND t.lifecycle IN ('queued', 'running')
           AND ar.artifact_type = 'prompt'
+          AND (json_extract(a.metadata_json, '$.resume.not_before_at') IS NULL
+               OR julianday(json_extract(a.metadata_json, '$.resume.not_before_at')) <= julianday('now'))
         ORDER BY
           (CASE t.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END)
           - MIN(3, CAST(MAX(0, julianday('now') - julianday(t.created_at)) AS INTEGER)),
@@ -3682,6 +3826,9 @@ def _current_dispatch_target(conn, attempt_id):
           AND a.status = 'prepared'
           AND t.lifecycle IN ('queued', 'running')
           AND ar.artifact_type = 'prompt'
+          AND (ar.attempt_id = a.attempt_id OR ar.attempt_id IS NULL)
+          AND (json_extract(a.metadata_json, '$.resume.not_before_at') IS NULL
+               OR julianday(json_extract(a.metadata_json, '$.resume.not_before_at')) <= julianday('now'))
         ORDER BY ar.created_at DESC, ar.artifact_id DESC
         LIMIT 1
         """,
@@ -3928,6 +4075,20 @@ def _dispatch_queued(
                 **_safe_dispatch_error(exc),
                 "task_id": task_info["task_id"],
                 "attempt_id": task_info["attempt_id"],
+            }
+        if (
+            not dispatch_result.get("ok", True)
+            and dispatch_result.get("pid")
+            and _terminal_transport_failure({
+                kind: {"tail": _tail_file(dispatch_result.get(f"{kind}_path"))}
+                for kind in ("stdout", "stderr")
+            })
+        ):
+            # Even an exit during the startup probe must pass through the same
+            # supervised, bounded continuation path as a later stream failure.
+            dispatch_result = {
+                **dispatch_result, "ok": True, "status": "running",
+                "original_status": dispatch_result.get("status"), "process_exited": True,
             }
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("PRAGMA foreign_keys = ON")

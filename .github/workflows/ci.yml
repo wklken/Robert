@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: python -m pip install --upgrade pip setuptools
+      - run: python -m pip install --upgrade pip setuptools certifi
       - run: python -m pip install -e '.[dev]'
       - run: python -m ruff check src tests
       - run: >-
