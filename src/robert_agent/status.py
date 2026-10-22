@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 from contextlib import closing
 
+from robert_agent.run_history import step_output
 from robert_agent.common import emit
 from robert_agent import web
 
@@ -525,19 +526,22 @@ def build_run(conn, run_id):
     if not run:
         return None
     run["dry_run"] = bool(run["dry_run"])
-    run["summary"] = _compact_json(_decode_json(run.pop("summary_json"), {}) or {})
+    summary = _decode_json(run.pop("summary_json"), {}) or {}
+    run["summary"] = _compact_json(summary)
     run["error"] = _compact_json(_decode_json(run.pop("error_json"), {}) or {})
     run["steps"] = [
         {
             **_row_dict(row),
-            "output": _compact_json(_decode_json(row["output_json"], {}) or {}),
+            "output": _compact_json(step_output(row["step_key"], _decode_json(row["output_json"], {}) or {}, _decode_json(row["referenced_summary_json"], {}) or {})),
             "error": _compact_json(_decode_json(row["error_json"], {}) or {}),
         }
         for row in conn.execute(
             """
-            SELECT step_key, status, started_at, finished_at, output_json, error_json
-            FROM run_steps
-            WHERE run_id = ?
+            SELECT s.step_key, s.status, s.started_at, s.finished_at, s.output_json, s.error_json,
+                   CASE WHEN s.step_key = 'summarize' THEN r.summary_json END AS referenced_summary_json
+            FROM run_steps s
+            JOIN agent_runs r ON r.run_id = s.run_id
+            WHERE s.run_id = ?
             ORDER BY
               CASE step_key
                 WHEN 'validate_config' THEN 0
@@ -563,6 +567,7 @@ def build_run(conn, run_id):
     for step in run["steps"]:
         step.pop("output_json", None)
         step.pop("error_json", None)
+        step.pop("referenced_summary_json", None)
     if _table_exists(conn, "run_repo_steps"):
         repo_steps = [
             dict(row)

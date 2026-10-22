@@ -11,6 +11,7 @@ from robert_agent import __version__
 from robert_agent import daemon
 from robert_agent import diagnostics
 from robert_agent import migrate
+from robert_agent import retention
 from robert_agent import run_once
 from robert_agent import status
 from robert_agent import service
@@ -195,6 +196,16 @@ def build_parser() -> argparse.ArgumentParser:
         _add_output_argument(command_parser)
         if name == "install":
             _add_config_argument(command_parser)
+
+    maintenance_parser = subparsers.add_parser("maintenance", help="Manage diagnostic history.")
+    prune_parser = maintenance_parser.add_subparsers(dest="maintenance_command", required=True).add_parser(
+        "prune", help="Preview one retention batch; --apply deletes expired diagnostics.",
+    )
+    _add_config_argument(prune_parser)
+    _add_output_argument(prune_parser)
+    prune_parser.add_argument("--apply", action="store_true", help="Apply retention (default: read-only preview).")
+    prune_parser.add_argument("--batch-size", type=int, help="Runs, events and leases per transaction (1-500).")
+    prune_parser.add_argument("--batches", type=int, default=1, help="Maximum apply transactions (1-1000); preview always shows one batch.")
 
     diagnostics_parser = subparsers.add_parser(
         "diagnostics",
@@ -401,6 +412,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     dry_run=args.dry_run,
                 )
             return _emit_and_code(result, args.output)
+        if args.command == "maintenance" and args.maintenance_command == "prune":
+            validated = validate_config.validate_config(args.config, skip_external=True)
+            if not validated.get("ok"):
+                return _emit_and_code(validated, args.output)
+            config = validated["daemon"]
+            result = retention.prune_database(
+                validated["db_path"], apply=args.apply,
+                batch_size=args.batch_size if args.batch_size is not None else config["maintenance_batch_size"],
+                max_batches=args.batches,
+                run_retention_days=config["run_retention_days"],
+                failed_run_retention_days=config["failed_run_retention_days"],
+                event_retention_days=config["event_retention_days"],
+            )
+            emit_result(result, output=args.output)
+            if result["ok"]:
+                return exit_codes.SUCCESS
+            return exit_codes.RETRYABLE if result["status"] == "busy" else exit_codes.STATE_FAILURE
         if (
             args.command == "diagnostics"
             and args.diagnostics_command == "export"

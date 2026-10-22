@@ -23,6 +23,7 @@ from robert_agent import remediation
 from robert_agent import render_prompt
 from robert_agent import publish
 from robert_agent import route
+from robert_agent.run_history import SUMMARY_REFERENCE
 from robert_agent import route_config
 from robert_agent import skills
 from robert_agent import supervise
@@ -543,6 +544,8 @@ def _insert_run_step(conn, run_id, key, status="pending"):
 
 def _mark_run_step(conn, run_id, key, status, run_now=None, output=None, error=None):
     run_now = run_now or _now()
+    if key == "summarize" and status == "succeeded" and isinstance(output, dict):
+        output = SUMMARY_REFERENCE
     output_json = json.dumps(output, ensure_ascii=False, sort_keys=True) if output is not None else None
     error_json = json.dumps(error, ensure_ascii=False, sort_keys=True) if error is not None else None
     finished_at = run_now if status in {"succeeded", "failed", "skipped"} else None

@@ -255,19 +255,6 @@ def release_daemon_lease(conn, lease_id, now=None):
     )
 
 
-def cleanup_old_events(conn, retention_days, now=None):
-    now = now or utc_now()
-    cutoff = (_parse_time(now) - timedelta(days=retention_days)).isoformat()
-    cur = conn.execute(
-        """
-        DELETE FROM daemon_events
-        WHERE created_at < ?
-        """,
-        (cutoff,),
-    )
-    return cur.rowcount
-
-
 def running_attempt_count(conn, repo_id):
     return conn.execute(
         """
