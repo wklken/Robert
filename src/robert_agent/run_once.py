@@ -265,14 +265,19 @@ def _command_process_status(pid, identity):
 def _attempt_command_records(conn, attempt_id, task_id):
     directories = set()
     for (path,) in conn.execute("SELECT path FROM artifacts WHERE attempt_id = ?", (attempt_id,)):
-        directories.add(Path(path).parent)
+        directories.add(Path(path).parent.resolve())
     for _seq, name, path in conn.execute("PRAGMA database_list"):
         if name == "main" and path:
-            directories.add(Path(path).parent / "artifacts" / task_id)
+            directories.add((Path(path).parent / "artifacts" / task_id).resolve())
     commands = []
+    seen_paths = set()
     for directory in sorted(directories):
         for path in sorted(directory.glob(f"{command_heartbeat._safe_filename_part(attempt_id)}.*.command.json")):
             try:
+                path = path.resolve()
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
                 if path.stat().st_size > 65536:
                     continue
                 record = json.loads(path.read_text(encoding="utf-8"))

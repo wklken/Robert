@@ -6106,6 +6106,9 @@ repos:
         db_path, task_id, attempt_id = self._interrupted_attempt()
         command_dir = self.data_dir / "artifacts" / task_id
         command_dir.mkdir(parents=True, exist_ok=True)
+        # SQLite and artifacts can name the same directory differently on macOS.
+        alias_dir = self.root / "command-alias"
+        alias_dir.symlink_to(command_dir, target_is_directory=True)
         for index, details in enumerate((
             {"status": "completed", "returncode": 0},
             {"status": "running", "pid": os.getpid(), "process_identity": heartbeat.process_identity(os.getpid())},
@@ -6113,10 +6116,52 @@ repos:
             (command_dir / f"{attempt_id}.verify.{index}.command.json").write_text(json.dumps({
                 "task_id": task_id, "attempt_id": attempt_id, "phase": "verify", **details,
             }))
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at)"
+                " VALUES ('alias-prompt',?,?, 'prompt',?,?)",
+                (task_id, attempt_id, str(alias_dir / "prompt.md"), datetime.now(timezone.utc).isoformat()),
+            )
             recovery = run_once._inspect_attempt_recovery(conn, attempt_id, task_id, None)
         self.assertEqual(recovery["status"], "orphaned_command_running")
         self.assertEqual(len(recovery["commands"]), 2)
+        self.assertEqual(
+            {command["command_record_path"] for command in recovery["commands"]},
+            {str(path.resolve()) for path in command_dir.glob("*.command.json")},
+        )
+
+    def test_recovery_replays_aliased_command_file_exactly_once(self):
+        import hashlib
+        from robert_agent import run_once
+
+        db_path, task_id, attempt_id = self._interrupted_attempt()
+        command_dir = self.data_dir / "artifacts" / task_id
+        command_dir.mkdir(parents=True, exist_ok=True)
+        custom_dir = self.root / "custom-command-output"
+        custom_dir.mkdir()
+        record_path = custom_dir / f"{attempt_id}.verify.1.command.json"
+        record_path.write_text(json.dumps({
+            "task_id": task_id, "attempt_id": attempt_id, "phase": "verify",
+            "status": "completed", "returncode": 0, "summary": "Command exited 0",
+            "finished_at": datetime.now(timezone.utc).isoformat(), "snapshot_status": "deferred",
+        }))
+        (command_dir / record_path.name).symlink_to(record_path)
+        expected_phase_id = "phase-command-" + hashlib.sha256(str(record_path.resolve()).encode()).hexdigest()[:24]
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at)"
+                " VALUES ('custom-command',?,?, 'worker_stdout',?,?)",
+                (task_id, attempt_id, str(custom_dir / "stdout.log"), datetime.now(timezone.utc).isoformat()),
+            )
+            for _ in range(2):
+                recovery = run_once._inspect_attempt_recovery(conn, attempt_id, task_id, None)
+                self.assertEqual(len(recovery["commands"]), 1)
+                self.assertEqual(recovery["status"], "recoverable_progress")
+                self.assertEqual(recovery["commands"][0]["command_record_path"], str(record_path.resolve()))
+                self.assertEqual(recovery["commands"][0]["process_status"], "finished")
+            self.assertEqual(conn.execute(
+                "SELECT phase_id FROM worker_phases WHERE summary='Command exited 0'",
+            ).fetchall(), [(expected_phase_id,)])
 
     def test_transport_exhaustion_takes_precedence_over_hard_timeout(self):
         from unittest.mock import patch
