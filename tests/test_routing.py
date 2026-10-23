@@ -240,7 +240,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("allowed_github_actions", prompt)
         self.assertIn("push_existing_pr", prompt)
         self.assertIn("open_pr", prompt)
-        self.assertIn("must not create, modify, or install skills", prompt)
+        self.assertIn("must not create, modify, or install runtime skills", prompt)
         self.assertIn("recommended_skills", prompt)
         self.assertNotIn("allowed_skills", prompt)
         self.assertIn("/worker/snapshot.py", prompt)
@@ -290,6 +290,56 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('"target_url": "<target GitHub URL>"', prompt)
         self.assertIn('"review_point_evaluation": []', prompt)
         self.assertIn('"used_skills": []', prompt)
+
+    def test_prompt_distinguishes_repository_skill_deliverables_from_runtime_skills(self):
+        from robert_agent import render_prompt, route
+
+        event = {
+            "event_fingerprint": "comment:77",
+            "source_type": "pull_request",
+            "has_open_dd_pr": True,
+            "intent": "bug_fix",
+            "authorization_status": "accepted_context",
+            "body": "@robert-bot allow editing skills/bk-cli-aidev/SKILL.md",
+        }
+        prompt = render_prompt.render_prompt(
+            task={
+                "task_id": "task-1",
+                "attempt_id": "attempt-1",
+                "workstream_id": "github:example/repo!77",
+            },
+            route_result=route.route_task(event),
+            events=[event],
+        )
+
+        self.assertIn("Repository skill files, such as skills/*/SKILL.md", prompt)
+        self.assertIn("may be created or modified when required by the authorized repository task", prompt)
+        self.assertIn("must not create, modify, or install runtime skills", prompt)
+        self.assertIn("~/.codex/skills/", prompt)
+        self.assertIn("other configured runtime skill directories", prompt)
+        self.assertIn("symlinks that resolve into runtime skill directories", prompt)
+        self.assertIn("does not authorize installing or activating them", prompt)
+        self.assertIn("does not override read-only classification or review scope", prompt)
+        self.assertNotIn("You must not create, modify, or install skills.", prompt)
+
+    def test_prompt_requires_waiting_output_for_blocked_execution(self):
+        from robert_agent import render_prompt, route
+
+        prompt = render_prompt.render_prompt(
+            task={
+                "task_id": "task-1",
+                "attempt_id": "attempt-1",
+                "workstream_id": "github:example/repo!77",
+            },
+            route_result=route.route_task({"intent": "bug_fix", "has_open_dd_pr": True}),
+            events=[{"event_fingerprint": "comment:77"}],
+            runtime_context={"result_script": "/agent/result.py"},
+        )
+
+        self.assertIn("--output-type waiting_for_user", prompt)
+        self.assertIn('"kind": "scope_decision"', prompt)
+        self.assertIn('"operator_question"', prompt)
+        self.assertIn("recommended_route does not change an execution result's lifecycle", prompt)
 
     def test_ci_remediation_prompt_uses_evidence_without_review_point_contract(self):
         from robert_agent import render_prompt, route

@@ -46,7 +46,18 @@ The final result records:
 - verification evidence
 - handoff summary
 
-The worker may use any installed local skill and should treat `recommended_skills` as route guidance. It must not create, modify, or install skills, and must not list the internal worker runtime in `used_skills`.
+The worker may use any installed local skill and should treat `recommended_skills` as route guidance. It must not create, modify, or install runtime skills in the worker's configured skill directories, and must not list the internal worker runtime in `used_skills`.
+
+Repository skill files such as `skills/*/SKILL.md` may be created or modified
+when required by the authorized repository task. Symlinks into runtime skill
+directories remain protected. Editing repository deliverables does not
+authorize installation or activation and does not override read-only
+classification or review scope.
+
+If execution needs missing input or a scope decision, record `waiting_for_user`
+with `operator_question` and an allowed GitHub comment instead of the ordinary
+output type. Setting only `recommended_route: waiting-for-user` on an execution
+result fails audit and cannot put the task into a waiting state.
 
 The worker must not create or delete worktrees unless the agent explicitly
 provided that operation. Before recording GitHub-facing text, it must apply the

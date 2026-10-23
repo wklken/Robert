@@ -614,6 +614,15 @@ def audit_result(
 
     output_type = result.get("output_type")
     waiting_alternate = output_type == "waiting_for_user"
+    if (
+        result.get("recommended_route") == "waiting-for-user"
+        and output_type not in {"classification_result", "waiting_for_user"}
+    ):
+        return {
+            "ok": False,
+            "status": "failed",
+            "safe_error": "blocked execution must use output_type waiting_for_user, not recommended_route",
+        }
     if expected_output and output_type != expected_output and not waiting_alternate:
         return {
             "ok": False,
