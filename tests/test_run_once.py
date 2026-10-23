@@ -6029,11 +6029,14 @@ repos:
                 ),
             )
             original_inspect = run_once.worker_identity.inspect_recorded_identity
+            original_group = run_once._live_process_group
             original_recovery = run_once._inspect_attempt_recovery_with_metadata
             original_create = run_once._create_resume_attempt_and_prompt
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
+            # The synthetic PID must not observe an unrelated host process.
+            run_once._live_process_group = lambda _pid: False
             run_once._inspect_attempt_recovery_with_metadata = (
                 lambda *_args, **_kwargs: {
                     "status": "recoverable_progress",
@@ -6056,6 +6059,7 @@ repos:
                 )
             finally:
                 run_once.worker_identity.inspect_recorded_identity = original_inspect
+                run_once._live_process_group = original_group
                 run_once._inspect_attempt_recovery_with_metadata = original_recovery
                 run_once._create_resume_attempt_and_prompt = original_create
             binding = workflow_store.get_binding(conn, "task", task_id)
