@@ -29,17 +29,31 @@ Robert provides those controls without requiring a GitHub App or hosted service.
 
 ## Key Capabilities
 
-- Trusted issue, pull-request, review, assignment, and mention handling.
-- Opt-in per-repository PR self-healing for aggregated CI failures and exact
-  base-snapshot conflict merges, with a head/base compare-and-swap before a
-  non-force push.
-- Multi-repository workstreams stored in SQLite.
-- Per-route worker, required-skill, and recommended-skill configuration.
-- Isolated Git worktrees for analysis, implementation, and source review.
-- Native systemd user services and macOS LaunchAgents.
-- Read-only local web UI with an explicitly enabled writable mode.
-- Optional read-only OpenClaw chat commands.
-- Safe migration from the former `dd-github-agent` state directory.
+- **GitHub collaboration:** handle trusted issues, pull requests, reviews,
+  assignments, mentions, and follow-up comments, from analysis and PR creation
+  through review updates, with one active task per workstream.
+- **Multiple repositories and isolated work:** configure each repository's
+  checkout, worktree root, trusted actors, concurrency, and route overrides.
+  Analysis, implementation, and source review use isolated Git worktrees.
+- **Multiple coding agents:** built-in `codex`, `tcodex`, `claude`, `tclaude`,
+  `opencode`, `cbc`, and generic `command` adapters, with route-specific workers,
+  models, effort, and skills. Missing required skills block before execution.
+- **Execution supervision and recovery:** retain phases, heartbeats, logs, and
+  attempt history; supervise startup, timeouts, and process cleanup; optionally
+  select a fallback model after consecutive timeouts.
+- **Opt-in PR self-healing:** repair allowlisted CI failures and merge exact base
+  snapshots into conflicting PRs within configured attempt and budget limits.
+  Publication rechecks the PR head/base before an ordinary non-force push.
+- **Lifecycle task board:** show intake, queueing, execution, attention, review,
+  completion, and cancellation, with artifacts and publication history. Explicit
+  writable mode enables local tasks, replies, execution/publication retries,
+  and cancellation under permission, state, and idempotency checks.
+- **Unattended operation:** recommended Supervisor management for both daemon
+  and web processes, with restart, status, and logs; native systemd user services
+  and macOS LaunchAgents are also supported.
+- **Durable, auditable state:** SQLite task, attempt, audit, and deduplication
+  records, diagnostic retention, redacted support exports, and optional read-only
+  OpenClaw commands.
 
 ## How It Works
 
@@ -81,16 +95,16 @@ gates. The web UI binds to `127.0.0.1` by default.
 ## Quick Start
 
 ```bash
-pipx install robert-github-agent
+pipx install robert-github-agent --include-deps
 gh auth login
 robert init
+robert config validate
 robert doctor
-robert service install
-robert service start
 ```
 
 The configuration is written to `~/.config/robert/config.yml`. Runtime data is
-stored under `~/.local/share/robert/`.
+stored under `~/.local/share/robert/`. Then follow the
+[Supervisor setup](docs/guides.md#daemon-service) to run both daemon and web.
 
 ## Install with a Coding Agent
 
@@ -109,9 +123,13 @@ confirmation wherever the guide requires it.
 PR self-healing is disabled by default. Enable `pr_automation` on an individual
 repository; CI automation also requires a non-empty `check_allowlist`.
 
-Robert uses versioned YAML. Configure the GitHub account, worker definitions,
-skill search paths, route overrides, and one or more repository checkouts.
-See [docs/reference.md](docs/reference.md#configuration).
+Robert uses `version: 1` YAML at `~/.config/robert/config.yml`. The main sections
+are `github`, `workers`, `skills`, `routes`, `route_worker_models`, `repos`,
+`daemon`, and `workflow_engine`. Keep `workflow_engine.mode: legacy` for normal
+operation; DBOS `shadow` / `active` are migration development capabilities,
+and valid configuration alone does not establish a production cutover.
+See the [configuration reference](docs/reference.md#configuration) for structure,
+defaults, and older configuration updates, and [guides](docs/guides.md) for examples.
 Workers may define `fallback_model`. After two consecutive `failed_timeout`
 attempts in the same workstream, the third run uses that model without changing
 the reasoning effort. The default hard timeout is 45 minutes.
@@ -137,14 +155,19 @@ other repository pipelines in the same cycle.
 
 ## Daemon Service
 
+Use [Supervisor to manage both daemon and web](docs/guides.md#daemon-service).
+After preparing the configuration and checking readiness:
+
 ```bash
-robert service install
-robert service start
-robert service status
+supervisord -c ~/.config/robert/supervisord.conf
+supervisorctl -c ~/.config/robert/supervisord.conf status
 ```
 
-Robert runs in the foreground under systemd user services or launchd. Use
-`robert daemon run` for direct foreground operation.
+Both processes must report `RUNNING` and use the same Robert configuration.
+The web process displays state and submits requests; the daemon schedules work.
+For foreground debugging, use `robert daemon run` and `robert web run`.
+`robert service install` automatically selects systemd, launchd, or the Linux
+Supervisor fallback; see the guide for backend differences.
 
 ## Local Web UI
 
@@ -161,7 +184,8 @@ robert web run --writable --operator "$USER"
 ```
 
 Non-loopback binding also requires `--allow-remote` and an authenticated reverse
-proxy.
+proxy. See the [lifecycle board guide](docs/web-lifecycle-board.md) for progress,
+execution history, cancellation, and recovery controls.
 
 ## OpenClaw
 
@@ -188,8 +212,9 @@ Migration creates a separate backup and preserves legacy deduplication markers.
 
 ## Troubleshooting
 
-Run `robert doctor --output json`, check `robert service status`, and export a
-redacted support archive with:
+Run `robert doctor --output json` and check both programs with
+`supervisorctl -c ~/.config/robert/supervisord.conf status` (or
+`robert service status` for native services). Export a redacted support archive with:
 
 ```bash
 robert diagnostics export --output robert-diagnostics.zip
