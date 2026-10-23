@@ -71,6 +71,11 @@ def init_config(
             "live_run_timeout_seconds": 300,
             "local_drain_timeout_seconds": 180,
             "event_retention_days": 7,
+            "maintenance_enabled": True,
+            "maintenance_interval_seconds": 300,
+            "maintenance_batch_size": 100,
+            "run_retention_days": 7,
+            "failed_run_retention_days": 30,
             "run_on_start": False,
         },
         "workers": {

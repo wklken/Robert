@@ -14,6 +14,7 @@ All commands print one JSON object to stdout. Exit code `0` means success, `2` m
 | `init_config.py` | Create a missing runtime config from `references/config.example.yml` without overwriting an existing config. |
 | `run_once.py` | Execute one agent cycle from `workflow.yml`. |
 | `loop_engine.py` | Execute bounded repeated `run_once.py` cycles while durable local work remains, then stop with a structured reason. |
+| `robert maintenance prune --output json` | Preview a bounded batch of expired diagnostic rows; `--apply` deletes eligible history while preserving task, audit, dedupe and recovery state. No automatic VACUUM. |
 | `daemon.py` | Run the foreground resident Robert daemon. It owns a daemon lease, drains local runnable work through `loop_engine.py --skip-external`, and runs conservative rate-limit-aware live `run_once.py` polls. Use the native user-service commands for unattended operation. |
 | `status.py` | Print compact read-only JSON for global status, recent/latest runs, a task, attempt, workstream, event/comment lookup, event search, source task view, or artifact tail so agents do not need ad hoc SQLite queries. |
 | `chat_status.py` | Format the read-only dashboard payload as chat-ready Markdown inside a JSON envelope for OpenClaw slash commands or keyword triggers. |

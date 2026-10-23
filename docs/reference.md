@@ -31,6 +31,11 @@ daemon:
   live_run_timeout_seconds: 300
   local_drain_timeout_seconds: 180
   event_retention_days: 7
+  maintenance_enabled: true
+  maintenance_interval_seconds: 300
+  maintenance_batch_size: 100
+  run_retention_days: 7
+  failed_run_retention_days: 30
   run_on_start: false
 workers:
   default:
@@ -217,6 +222,74 @@ robert task show TASK_ID --config ~/.config/robert/config.yml --output json
 ```
 
 Diagnostics exports do not include the raw database.
+
+### Diagnostic retention
+
+The daemon prunes diagnostic history on its first decision and every
+`maintenance_interval_seconds` (300 by default), including while it remains
+running. Set `maintenance_enabled: false` to disable automatic pruning. This
+also disables daemon-event cleanup; the manual command remains available.
+
+Each transaction selects up to `maintenance_batch_size` (default 100, maximum
+500) records in each of these categories:
+
+- Completed/skipped `agent_runs` older than `run_retention_days` (7), or failed
+  runs older than `failed_run_retention_days` (30), measured from `finished_at`.
+  Their global and repository steps are deleted in the same transaction.
+- Ordinary daemon events older than `event_retention_days` (7). Failed/degraded
+  events use the longer of this window and `failed_run_retention_days`.
+- Released leases older than `run_retention_days`, and expired leases older
+  than `failed_run_retention_days`, for agent runs and daemons only.
+
+Running or unfinished runs, the latest run, every run referenced by a wakeup,
+active leases, and leases owned by running agents/daemons are preserved. Task,
+attempt, phase, result, audit, GitHub event/action deduplication, workstream,
+work item, and wakeup history is not pruned. Some protected old diagnostics can
+therefore remain beyond the retention window. Counts are bounded per category;
+a selected run can own multiple step rows.
+
+Normal daemon heartbeats update the current lease without appending an event.
+Child completion events retain status, run references and bounded redacted
+errors instead of full subprocess stdout and nested cycle results. Successful
+`summarize` steps refer to `agent_runs.summary_json`; `robert run show` and the
+Web dashboard resolve this reference, while older inline summaries remain
+readable. Repository-pipeline diagnostics are retained for interrupted runs.
+
+Preview a batch without modifying the database or contacting GitHub:
+
+```bash
+robert maintenance prune --config ~/.config/robert/config.yml --output json
+```
+
+After reviewing the preview, apply bounded batches to catch up an existing
+backlog (at most 1,000 transactions per invocation):
+
+```bash
+robert maintenance prune --config ~/.config/robert/config.yml \
+  --apply --batch-size 500 --batches 100 --output json
+```
+
+The result reports committed row counts and batch count. A lock conflict returns
+exit code 2; earlier batches, if any, remain committed, and retrying is safe.
+Other database errors return 5. Preview always inspects one batch regardless
+of `--batches`. It never creates a missing database or applies schema migrations.
+The daemon initializes the supporting indexes on startup after upgrade.
+
+DELETE frees pages for reuse; it does not immediately shrink the SQLite file.
+Robert never runs VACUUM automatically. To obtain a consistent compact copy for
+transfer, use SQLite's explicit export to a new destination (requires SQLite
+3.27 or newer). Do this after the desired retention batches have completed:
+
+```bash
+sqlite3 ~/.local/share/robert/robert.sqlite3 \
+  "VACUUM INTO '/tmp/robert-review-compact.sqlite3';"
+```
+
+The destination must be absent or empty. This operation needs enough disk space
+for the copy and can take time on a large database. The resulting database still
+contains private task history; it is a database backup, unlike the redacted
+`robert diagnostics export` archive. To reclaim space in the live database,
+stop its writers and run VACUUM during a maintenance window.
 
 ## Environment Variables
 

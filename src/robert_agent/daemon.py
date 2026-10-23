@@ -6,13 +6,14 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
 from uuid import uuid4
 
 from robert_agent.common import emit
-from robert_agent import daemon_state, storage, wakeup_notifier
+from robert_agent import daemon_state, redaction, retention, storage, wakeup_notifier
 from robert_agent import loop_engine
 from robert_agent import validate_config
 
@@ -38,6 +39,7 @@ class DaemonContext:
     startup_live_poll_pending: bool = False
     rate_limit_decision_cache: dict | None = None
     rate_limit_cache_expires_at: str | None = None
+    next_maintenance_at: float = 0.0
 
 
 def _script_path(name):
@@ -308,11 +310,6 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
     daemon_config = config_result["daemon"]
     ttl_seconds = _lease_ttl_seconds(daemon_config)
     with closing(daemon_state.connect(db_path)) as conn, conn:
-        daemon_state.cleanup_old_events(
-            conn,
-            daemon_config["event_retention_days"],
-            now=now,
-        )
         lease = daemon_state.acquire_daemon_lease(
             conn,
             resource_key=resource_key,
@@ -359,6 +356,64 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
     ), None
 
 
+def _event_result(result):
+    """Keep links and bounded diagnostics, not another copy of worker output."""
+    payload = {}
+    for key in ("ok", "status", "run_id", "cycles", "stop_reason"):
+        value = result.get(key)
+        if isinstance(value, (str, int, float, bool)):
+            payload[key] = value[:200] if isinstance(value, str) else value
+    cycles = result.get("cycle_results")
+    if isinstance(cycles, list):
+        payload["run_ids"] = [
+            item["run_id"][:128] for item in cycles[:20]
+            if isinstance(item, dict) and isinstance(item.get("run_id"), str)
+        ]
+    child = result.get("child")
+    child = child if isinstance(child, dict) else {}
+    if isinstance(child.get("returncode"), int):
+        payload["returncode"] = child["returncode"]
+    if not result.get("ok", False):
+        error = result.get("safe_error") or child.get("stderr")
+        if not error and isinstance(cycles, list):
+            error = next((item.get("safe_error") for item in cycles
+                          if isinstance(item, dict) and item.get("safe_error")), None)
+        if error:
+            safe = redaction.redact_and_truncate(str(error), 2000)
+            payload["safe_error"] = safe.get("text") if safe["ok"] else "[sensitive diagnostic omitted]"
+    # Status and identifiers also originate in child output. Fail closed if
+    # a malformed response embeds a credential in those otherwise small fields.
+    safe = redaction.redact_text(json.dumps(payload, ensure_ascii=False))
+    return json.loads(safe["text"]) if safe["ok"] else {"status": "omitted_sensitive"}
+
+
+def _maybe_prune(context, *, now):
+    if not context.daemon_config.get("maintenance_enabled", True):
+        return
+    current = time.monotonic()
+    if current < context.next_maintenance_at:
+        return
+    config = context.daemon_config
+    result = retention.prune_database(
+        context.db_path, apply=True, now=now,
+        batch_size=config.get("maintenance_batch_size", 100),
+        run_retention_days=config.get("run_retention_days", 7),
+        failed_run_retention_days=config.get("failed_run_retention_days", 30),
+        event_retention_days=config.get("event_retention_days", 7),
+    )
+    delay = config["local_poll_seconds"] if result["status"] == "busy" else config.get("maintenance_interval_seconds", 300)
+    context.next_maintenance_at = current + delay
+    if any(result["counts"].values()) or (not result["ok"] and result["status"] != "busy"):
+        try:
+            with closing(daemon_state.connect(context.db_path)) as conn, conn:
+                conn.execute("PRAGMA busy_timeout=100")
+                daemon_state.record_event(conn, context.daemon_run_id, "diagnostics_pruned",
+                                          "ok" if result["ok"] else "failed", result, now=now)
+        except sqlite3.OperationalError:
+            # Maintenance must not prevent the next lease renewal or worker poll.
+            pass
+
+
 def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json, now=None):
     command = build_loop_command(
         context.config_path,
@@ -386,7 +441,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
             context.daemon_run_id,
             "local_drain_completed" if result.get("ok") else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
-            result,
+            _event_result(result),
             now=now,
         )
     return result
@@ -417,7 +472,7 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
             context.daemon_run_id,
             "live_poll_completed" if result.get("ok") else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
-            result,
+            _event_result(result),
             now=now,
         )
     return result
@@ -461,6 +516,7 @@ def run_once_decision(
     rate_limit_runner=subprocess.run,
 ):
     now = now or daemon_state.utc_now()
+    _maybe_prune(context, now=now)
     repo_ids = context.repo_ids or [context.repo_id]
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids)
@@ -537,14 +593,7 @@ def _heartbeat(context, now=None):
     ttl_seconds = _lease_ttl_seconds(context.daemon_config)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.heartbeat_daemon_lease(conn, context.lease_id, ttl_seconds, now=now)
-        daemon_state.record_event(
-            conn,
-            context.daemon_run_id,
-            "daemon_heartbeat",
-            "ok",
-            {},
-            now=now,
-        )
+
 
 
 def _resident_loop(

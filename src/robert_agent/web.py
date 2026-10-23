@@ -25,6 +25,7 @@ from robert_agent import (
     work_items,
     workbench,
 )
+from robert_agent.run_history import step_output
 from robert_agent.common import emit
 
 
@@ -1100,15 +1101,17 @@ def build_dashboard_data(db_path, history_limit=20):
             placeholders = ",".join("?" for _run in recent_runs)
             for row in conn.execute(
                 f"""
-                SELECT run_id, step_key, status, started_at, finished_at,
-                       output_json, error_json
-                FROM run_steps
-                WHERE run_id IN ({placeholders})
+                SELECT s.run_id, s.step_key, s.status, s.started_at, s.finished_at,
+                       s.output_json, s.error_json,
+                       CASE WHEN s.step_key = 'summarize' THEN r.summary_json END AS referenced_summary_json
+                FROM run_steps s
+                JOIN agent_runs r ON r.run_id = s.run_id
+                WHERE s.run_id IN ({placeholders})
                 """,
                 [run["run_id"] for run in recent_runs],
             ):
                 step = dict(row)
-                step["output"] = _decode_json(step.pop("output_json"))
+                step["output"] = step_output(step["step_key"], _decode_json(step.pop("output_json")), _decode_json(step.pop("referenced_summary_json")))
                 step["error"] = _decode_json(step.pop("error_json"))
                 steps_by_run[step["run_id"]].append(step)
         repo_steps_by_run = {run["run_id"]: [] for run in recent_runs}

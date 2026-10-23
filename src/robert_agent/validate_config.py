@@ -229,6 +229,11 @@ DAEMON_DEFAULTS = {
     "live_run_timeout_seconds": 300,
     "local_drain_timeout_seconds": 180,
     "event_retention_days": 7,
+    "maintenance_enabled": True,
+    "maintenance_interval_seconds": 300,
+    "maintenance_batch_size": 100,
+    "run_retention_days": 7,
+    "failed_run_retention_days": 30,
     "run_on_start": False,
 }
 DAEMON_FIELDS = set(DAEMON_DEFAULTS)
@@ -236,7 +241,7 @@ DAEMON_LEGACY_FIELDS = {
     f"daemon_{key}": key
     for key in DAEMON_FIELDS
 }
-DAEMON_BOOLEAN_FIELDS = {"enabled", "run_on_start"}
+DAEMON_BOOLEAN_FIELDS = {"enabled", "run_on_start", "maintenance_enabled"}
 
 PR_AUTOMATION_DEFAULTS = {
     "conflict": {
@@ -302,6 +307,8 @@ def _normalize_daemon_config(config):
             daemon[key] = raw_value
         else:
             value = int(raw_value)
+            if key == "maintenance_batch_size" and value > 500:
+                raise ValueError("daemon.maintenance_batch_size must be at most 500")
             if value < 1:
                 label = field_labels.get(key, f"daemon.{key}")
                 raise ValueError(f"{label} must be at least 1")

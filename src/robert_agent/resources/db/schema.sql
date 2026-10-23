@@ -520,3 +520,22 @@ ON runtime_knowledge(repo_id, active, scope_type, scope_value);
 
 INSERT OR IGNORE INTO schema_migrations(version, name, checksum, applied_at)
 VALUES (1, 'robert-initial-schema', 'stage-3-schema', datetime('now'));
+
+-- Retention and run-history lookups. Expression indexes compare timestamp
+-- instants correctly even when older rows use Z or a non-UTC offset.
+CREATE INDEX IF NOT EXISTS idx_agent_runs_retention
+ON agent_runs(status, julianday(finished_at));
+CREATE INDEX IF NOT EXISTS idx_agent_runs_started
+ON agent_runs(started_at DESC, run_id DESC);
+CREATE INDEX IF NOT EXISTS idx_daemon_events_retention
+ON daemon_events(julianday(created_at));
+CREATE INDEX IF NOT EXISTS idx_leases_released_retention
+ON leases(status, julianday(released_at));
+CREATE INDEX IF NOT EXISTS idx_leases_expired_retention
+ON leases(status, julianday(expires_at));
+CREATE INDEX IF NOT EXISTS idx_leases_owner_status
+ON leases(owner_id, status);
+CREATE INDEX IF NOT EXISTS idx_wakeups_source_run
+ON wakeups(source_run_id);
+CREATE INDEX IF NOT EXISTS idx_wakeups_consumed_run
+ON wakeups(consumed_run_id);

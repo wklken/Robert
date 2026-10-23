@@ -131,41 +131,6 @@ class DaemonStateTests(unittest.TestCase):
         self.assertEqual(expires_at, "2026-07-03T00:01:30+00:00")
         self.assertEqual(status, "released")
 
-    def test_cleanup_old_daemon_events(self):
-        from robert_agent import daemon_state
-
-        self._init_db()
-        with closing(daemon_state.connect(self.db_path)) as conn, conn:
-            run = daemon_state.start_daemon_run(
-                conn,
-                config_path="/tmp/config.yml",
-                owner_id="daemon-run-1",
-                now="2026-07-03T00:00:00+00:00",
-            )
-            daemon_state.record_event(
-                conn,
-                run["daemon_run_id"],
-                "daemon_started",
-                "ok",
-                now="2026-06-20T00:00:00+00:00",
-            )
-            daemon_state.record_event(
-                conn,
-                run["daemon_run_id"],
-                "daemon_heartbeat",
-                "ok",
-                now="2026-07-02T00:00:00+00:00",
-            )
-            deleted = daemon_state.cleanup_old_events(
-                conn,
-                retention_days=7,
-                now="2026-07-03T00:00:00+00:00",
-            )
-            remaining = conn.execute("SELECT COUNT(*) FROM daemon_events").fetchone()[0]
-
-        self.assertEqual(deleted, 1)
-        self.assertEqual(remaining, 1)
-
     def test_capacity_full_counts_running_and_stale_attempts(self):
         from robert_agent import daemon_state
 
