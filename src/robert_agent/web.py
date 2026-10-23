@@ -61,6 +61,8 @@ WEB_ASSETS = {
     "/": ("board.html", "text/html; charset=utf-8"),
     "/work": ("index.html", "text/html; charset=utf-8"),
     "/board": ("board.html", "text/html; charset=utf-8"),
+    "/favicon.ico": ("robert-logo.svg", "image/svg+xml"),
+    "/assets/robert-logo.svg": ("robert-logo.svg", "image/svg+xml"),
     "/assets/github-shell.css": ("github-shell.css", "text/css; charset=utf-8"),
     "/assets/operations.css": ("operations.css", "text/css; charset=utf-8"),
     "/assets/board.css": ("board.css", "text/css; charset=utf-8"),
@@ -1372,7 +1374,7 @@ def render_dashboard_html():
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Robert Operations</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2324292f'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='ui-sans-serif' font-size='24' font-weight='700' fill='%23f0f6fc'%3ER%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="/assets/robert-logo.svg">
   <script>
     (function () {
       const savedTheme = localStorage.getItem('robertWorkbenchTheme') || 'system';
@@ -2280,8 +2282,6 @@ def _query_limit(query, default=50):
 def build_http_response(path, db_path, control_context=None):
     parsed = urlsplit(path)
     route = parsed.path
-    if route == "/favicon.ico":
-        return 204, {"content-type": "image/x-icon"}, b""
     if route in WEB_ASSETS:
         asset_route = "/work" if route == "/" and "bucket" in parse_qs(parsed.query) else route
         filename, content_type = WEB_ASSETS[asset_route]
@@ -2850,6 +2850,37 @@ def _upsert_control_repo(conn, repo):
     return repo_id
 
 
+def _allowed_web_origins(host, port, public_origin=None):
+    bind_host = f"[{host}]" if ":" in host else host
+    origins = {f"http://{bind_host}:{port}"}
+    if public_origin is not None:
+        error = "--public-origin must be an HTTP(S) origin without credentials, path, query or fragment"
+        try:
+            parsed = urlsplit(public_origin)
+            # urlsplit strips some control characters; reject them before parsing.
+            if (
+                not public_origin
+                or any(character.isspace() or ord(character) < 32 for character in public_origin)
+                or any(character in public_origin for character in ("\\", "%", "*", "?", "#"))
+                or parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in {"", "/"}
+            ):
+                raise ValueError(error)
+            public_port = parsed.port  # Validate the port, including its range.
+        except ValueError as exc:
+            raise ValueError(error) from exc
+        public_host = parsed.hostname.lower()
+        if ":" in public_host:
+            public_host = f"[{public_host}]"
+        default_port = 443 if parsed.scheme == "https" else 80
+        authority = public_host if public_port in {None, default_port} else f"{public_host}:{public_port}"
+        origins.add(f"{parsed.scheme}://{authority}")
+    return frozenset(origins)
+
+
 def build_control_context_from_config(
     config_path,
     *,
@@ -2857,7 +2888,9 @@ def build_control_context_from_config(
     port,
     operator_identity,
     csrf_token=None,
+    public_origin=None,
 ):
+    allowed_origins = _allowed_web_origins(host, port, public_origin)
     config_result = validate_config.validate_config(config_path, skip_external=True)
     if not config_result["ok"]:
         raise ValueError(config_result["safe_error"])
@@ -2872,20 +2905,20 @@ def build_control_context_from_config(
         operator_identity=operator_identity,
         allowed_repo_ids=allowed_repo_ids,
         allowed_workers=frozenset(worker["name"] for worker in config_result["workers"]),
-        allowed_origins=frozenset({f"http://{host}:{port}"}),
+        allowed_origins=allowed_origins,
         csrf_token=csrf_token or secrets.token_urlsafe(32),
         writes_enabled=True,
         write_error=None,
     )
 
 
-def build_read_only_control_context(db_path, *, host, port):
+def build_read_only_control_context(db_path, *, host, port, public_origin=None):
     return ControlContext(
         db_path=str(db_path),
         operator_identity="local-operator",
         allowed_repo_ids=frozenset(),
         allowed_workers=frozenset(),
-        allowed_origins=frozenset({f"http://{host}:{port}"}),
+        allowed_origins=_allowed_web_origins(host, port, public_origin),
         csrf_token=secrets.token_urlsafe(32),
         writes_enabled=False,
         write_error="Start with --config to enable writes.",
@@ -2909,6 +2942,10 @@ def main(argv=None):
     source.add_argument("--config")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--public-origin",
+        help="Browser-facing HTTP(S) origin for an authenticated reverse proxy.",
+    )
     parser.add_argument("--operator", default="local-operator")
     parser.add_argument("--writable", action="store_true")
     parser.add_argument("--allow-remote", action="store_true")
@@ -2930,6 +2967,10 @@ def main(argv=None):
             },
             3,
         )
+    try:
+        _allowed_web_origins(args.host, args.port, args.public_origin)
+    except ValueError as exc:
+        return emit({"ok": False, "status": "failed_input", "safe_error": str(exc)}, 3)
     if args.config:
         config_result = validate_config.validate_config(
             args.config,
@@ -2945,6 +2986,7 @@ def main(argv=None):
                     host=args.host,
                     port=args.port,
                     operator_identity=args.operator,
+                    public_origin=args.public_origin,
                 )
             except ValueError as exc:
                 return emit(
@@ -2960,6 +3002,7 @@ def main(argv=None):
                 db_path,
                 host=args.host,
                 port=args.port,
+                public_origin=args.public_origin,
             )
     elif args.db:
         db_path = args.db
@@ -2967,6 +3010,7 @@ def main(argv=None):
             db_path,
             host=args.host,
             port=args.port,
+            public_origin=args.public_origin,
         )
     else:
         return emit(

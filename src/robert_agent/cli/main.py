@@ -234,6 +234,10 @@ def build_parser() -> argparse.ArgumentParser:
     web_run.add_argument("--db")
     web_run.add_argument("--host", default="127.0.0.1")
     web_run.add_argument("--port", type=int, default=8765)
+    web_run.add_argument(
+        "--public-origin",
+        help="Browser-facing HTTP(S) origin for an authenticated reverse proxy.",
+    )
     web_run.add_argument("--operator", default="local-operator")
     web_run.add_argument("--writable", action="store_true")
     web_run.add_argument("--allow-remote", action="store_true")
@@ -456,6 +460,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 web_argv.extend(["--db", args.db])
             else:
                 web_argv.extend(["--config", args.config])
+            if args.public_origin is not None:
+                web_argv.extend(["--public-origin", args.public_origin])
             if args.writable:
                 web_argv.append("--writable")
             if args.allow_remote:

@@ -9,10 +9,11 @@
 .summary-counts strong { color: var(--fgColor-default); }
 .summary-counts .danger-text { color: var(--fgColor-danger); }
 
-.filter-bar { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(150px, 210px) 140px 150px 118px; margin-bottom: 12px; }
-.filter-bar input, .filter-bar select { width: 100%; min-height: 34px; border: 1px solid var(--borderColor-default); border-left: 0; color: var(--fgColor-default); background: var(--bgColor-muted); padding: 6px 9px; }
-.filter-bar .search-field input { border-left: 1px solid var(--borderColor-default); border-radius: 6px 0 0 6px; }
-.filter-bar label:last-child select { border-radius: 0 6px 6px 0; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.filter-bar label { flex: 1 1 130px; min-width: 0; }
+.filter-bar .search-field { flex: 2 1 220px; }
+.filter-bar input, .filter-bar select { width: 100%; min-width: 0; min-height: 34px; border: 1px solid var(--borderColor-default); border-radius: 6px; color: var(--fgColor-default); background: var(--bgColor-muted); padding: 6px 9px; }
+.filter-bar input:focus-visible, .filter-bar select:focus-visible { outline-offset: -2px; }
 .filter-bar input::placeholder { color: var(--fgColor-muted); }
 
 .flash { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--borderColor-default); border-radius: 6px; }
@@ -107,9 +108,7 @@ body.drawer-open { overflow: hidden; }
 @keyframes skeleton { to { background-position: -200% 0; } }
 
 @media (max-width: 1040px) {
-  .filter-bar { grid-template-columns: minmax(200px, 1fr) 170px 130px 140px; }
   .filter-bar label:last-child { display: none; }
-  .filter-bar label:nth-last-child(2) select { border-radius: 0 6px 6px 0; }
   .workbench-shell { grid-template-columns: minmax(0, 1fr) 340px; }
 }
 
@@ -123,8 +122,7 @@ body.drawer-open { overflow: hidden; }
 }
 
 @media (max-width: 620px) {
-  .filter-bar { grid-template-columns: 1fr 130px; gap: 8px; }
-  .filter-bar input, .filter-bar select { border: 1px solid var(--borderColor-default); border-radius: 6px !important; }
+  .filter-bar .search-field { flex-basis: 100%; }
   .filter-bar label:nth-child(n+3) { display: none; }
   .work-entry { flex-wrap: wrap; }
   .work-github-link { margin: 0 14px 10px 48px; }

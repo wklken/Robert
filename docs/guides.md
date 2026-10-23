@@ -342,6 +342,22 @@ robert web run \
 ```
 
 Remote binding requires `--allow-remote` and an authenticated reverse proxy.
+When using a proxy domain, set the browser-facing origin explicitly:
+
+```bash
+robert web run \
+  --config ~/.config/robert/config.yml \
+  --host 127.0.0.1 --port 8765 \
+  --writable --operator "$USER" \
+  --public-origin https://robert.example.com
+```
+
+Use your actual scheme, domain and public port (if nonstandard), without a path.
+The proxy must preserve the browser's `Host` and `Origin` headers. Robert does
+not trust `X-Forwarded-Host` or infer permitted origins from incoming requests.
+For Supervisor, add `--public-origin` to the Web command in `supervisord.conf`
+and restart the Web process. This setting grants no operator or repository permissions.
+
 Writable requests require `X-Robert-CSRF-Token`. Artifact previews read only
 paths registered in SQLite.
 
