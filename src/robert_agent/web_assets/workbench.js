@@ -39,10 +39,14 @@ const translations = {
     taskFailed: "task failed", taskCanceled: "task canceled", workerStale: "worker stale",
     actionRejected: "action rejected", workstreamFailed: "workstream failed",
     waitingForInput: "waiting for input", waitingToPublish: "waiting to publish",
-    pendingAudit: "pending audit", active: "active", complete: "complete", publish: "Publish",
+    pendingAudit: "pending audit", active: "active", complete: "Workflow ended", publish: "Publish",
     untitledWorkItem: "Untitled GitHub work item", openedBy: "opened by @{actor}", updated: "updated {time}",
     noMatches: "No work matches these filters", noActiveWork: "No active GitHub work needs attention",
-    adjustFilters: "Adjust the filters or check History for completed work.",
+    adjustFilters: "Adjust filters, check History for ended workflows, or open Board for local tasks and their lifecycle.",
+    scopeNote: "Counts match the repository, actor and search filters. This queue tracks GitHub workflows; Board tracks task lifecycle, including local tasks.",
+    outsideResults: "Shared selection is outside the loaded results. Clear filters or return to the list to change selection.",
+    oldestUpdated: "Oldest update first", workflowState: "Workflow state", taskState: "Task lifecycle", noOutcome: "No delivery summary recorded. Inspect execution history for details.",
+    backlog: "Backlog", todo: "Queued", doing: "In progress", review: "Awaiting review", done: "Completed", history: "Canceled",
     mostRecentlyUpdated: "Most recently updated", actionabilityOrder: "Actionability order",
     workItemsLoaded: "{count} work items loaded", whyAttention: "Why this needs attention",
     currentAgentState: "Current agent state", waitingReason: "What the agent is waiting for", outcome: "Outcome",
@@ -59,7 +63,7 @@ const translations = {
     retriggerFailed: "Could not retrigger task: {message}",
     failed_timeout: "Worker timed out", failed_worker_process_exited: "Worker process exited unexpectedly", failed_worker_startup: "Worker failed to start", needs_resume: "Attempt interrupted; recovery was required",
     published: "Published", failed: "Failed", succeeded: "Succeeded", completed: "Completed",
-    pending: "Pending", skipped: "Skipped", running: "Running", canceled: "Canceled",
+    closed: "Closed", open: "Open", ignored: "Ignored", pending: "Pending", skipped: "Skipped", running: "Running", canceled: "Canceled",
   },
   zh: {
     pageTitle: "Robert 工作台", workbenchControls: "工作台控制", live: "实时",
@@ -83,10 +87,14 @@ const translations = {
     publishFailed: "发布失败", publishSkipped: "已跳过发布", taskFailed: "任务失败",
     taskCanceled: "任务已取消", workerStale: "Worker 心跳过期", actionRejected: "动作被拒绝",
     workstreamFailed: "工作流失败", waitingForInput: "等待输入", waitingToPublish: "等待发布",
-    pendingAudit: "等待审计", active: "活跃", complete: "已完成", publish: "发布",
+    pendingAudit: "等待审计", active: "活跃", complete: "工作流已结束", publish: "发布",
     untitledWorkItem: "未命名的 GitHub 工作项", openedBy: "由 @{actor} 发起", updated: "更新于 {time}",
     noMatches: "没有符合筛选条件的工作", noActiveWork: "暂无需要处理的活跃 GitHub 工作",
-    adjustFilters: "调整筛选条件，或在历史中查看已完成工作。", mostRecentlyUpdated: "按最近更新时间",
+    scopeNote: "数量匹配当前仓库、发起人和搜索条件。此页统计 GitHub 工作流；看板按任务生命周期统计，包含本地任务，两处需要处理的数量可能不同。",
+    adjustFilters: "调整筛选条件，在历史查看已结束的工作流，或进入任务看板查看本地任务与生命周期。", mostRecentlyUpdated: "按最近更新时间",
+    outsideResults: "分享链接中的工作项不在当前已加载结果中，可清除筛选或返回列表重新选择。",
+    oldestUpdated: "按更新时间升序（最早优先）", workflowState: "工作流状态", taskState: "任务生命周期", noOutcome: "暂无交付摘要，请查看执行记录。",
+    backlog: "待整理", todo: "已排队", doing: "执行中", review: "待评审", done: "已完成", history: "已取消",
     actionabilityOrder: "按处理优先级", workItemsLoaded: "已加载 {count} 个工作项",
     whyAttention: "需要处理的原因", currentAgentState: "当前 Agent 状态",
     waitingReason: "Agent 正在等待什么", outcome: "结果", workItem: "工作项",
@@ -102,7 +110,7 @@ const translations = {
     retriggerFailed: "重新触发失败：{message}",
     failed_timeout: "Worker 执行超时", failed_worker_process_exited: "Worker 进程意外退出", failed_worker_startup: "Worker 启动失败", needs_resume: "本次执行中断，进入恢复流程",
     published: "已发布", failed: "失败", succeeded: "成功", completed: "已完成",
-    pending: "待处理", skipped: "已跳过", running: "运行中", canceled: "已取消",
+    closed: "已关闭", open: "进行中", ignored: "已忽略", pending: "待处理", skipped: "已跳过", running: "运行中", canceled: "已取消",
   },
 };
 
@@ -240,7 +248,19 @@ function formatTime(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString(state.language === "zh" ? "zh-CN" : "en");
 }
 
-function reasonLabel(item) { return t(reasonLabels[item.reason_code] || item.reason_code || item.bucket); }
+function reasonLabel(item) {
+  if (item.bucket === "history" && item.lifecycle) return t(item.lifecycle.column === "history" ? "canceled" : item.lifecycle.column);
+  return t(reasonLabels[item.reason_code] || item.reason_code || item.bucket);
+}
+
+function sortDescription() {
+  return t(state.filters.sort === "updated-asc" ? "oldestUpdated" : state.filters.sort === "updated-desc" ? "mostRecentlyUpdated" : "actionabilityOrder");
+}
+
+function sourceLabel(source) {
+  const type = source.type === "issue" ? "Issue" : source.type === "pull_request" ? "PR" : t("workItem");
+  return source.number ? `${type} #${source.number}` : type;
+}
 
 function humanize(value) {
   if (!value) return t("unknown");
@@ -266,10 +286,11 @@ function clearRefreshError() {
   $("refresh-label").textContent = t("live");
 }
 
-function stateIcon(bucket) {
-  const symbol = bucket === "needs_attention" ? "!" : bucket === "waiting" ? "◷" : bucket === "history" ? "✓" : "●";
+function stateIcon(item) {
+  const bucket = item.bucket;
+  const symbol = bucket === "history" ? (item.lifecycle?.column === "done" ? "✓" : item.lifecycle?.column === "history" ? "×" : item.lifecycle ? "◷" : "—") : bucket === "needs_attention" ? "!" : bucket === "waiting" ? "◷" : "●";
   return node("span", {
-    className: `state-icon ${bucket === "needs_attention" ? "attention" : bucket}`,
+    className: `state-icon ${bucket === "needs_attention" ? "attention" : bucket === "history" && item.lifecycle?.column !== "done" ? "" : bucket}`,
     text: symbol,
     attributes: { "aria-hidden": "true" },
   });
@@ -289,7 +310,7 @@ function signalFor(item) {
     signals.append(node("span", { className: "signal attention" }, [node("i"), node("span", { text: t("publish") })]));
   } else if (item.agent.attempt_status) {
     const live = item.agent.attempt_status === "running";
-    signals.append(node("span", { className: `signal ${live ? "success" : ""}` }, [node("i"), node("span", { text: item.agent.attempt_status })]));
+    signals.append(node("span", { className: `signal ${live ? "success" : ""}` }, [node("i"), node("span", { text: humanize(item.agent.attempt_status) })]));
   }
   return signals;
 }
@@ -308,7 +329,7 @@ function workRow(item) {
     type: "button",
     dataset: { workstreamId: item.id },
     attributes: { "aria-pressed": item.id === state.selectedId ? "true" : "false" },
-  }, [stateIcon(item.bucket), node("span", { className: "work-copy" }, [titleLine, meta]), signalFor(item)]);
+  }, [stateIcon(item), node("span", { className: "work-copy" }, [titleLine, meta]), signalFor(item)]);
   row.addEventListener("click", () => selectWorkItem(item.id, row));
   const entry = node("div", { className: "work-entry" }, [row]);
   if (/^https?:\/\//i.test(source.url || "")) {
@@ -340,6 +361,7 @@ function renderWorkItems(payload, { append = false } = {}) {
     list.append(node("div", { className: "empty-state" }, [
       node("h2", { text: state.filters.q || state.filters.repo || state.filters.bucket ? t("noMatches") : t("noActiveWork") }),
       node("p", { text: t("adjustFilters") }),
+      node("a", { text: t("navBoard"), href: "/board" }),
     ]));
   } else {
     const grouped = new Map();
@@ -351,7 +373,7 @@ function renderWorkItems(payload, { append = false } = {}) {
       const box = node("section", { className: "box", dataset: { bucket } });
       box.append(node("header", { className: "box-header" }, [
         node("strong", { text: `${t(bucketLabels[bucket] || bucket)} · ${group.length}` }),
-        node("span", { text: bucket === "history" ? t("mostRecentlyUpdated") : t("actionabilityOrder") }),
+        node("span", { text: sortDescription() }),
       ]));
       group.forEach((item) => box.append(workRow(item)));
       list.append(box);
@@ -423,20 +445,44 @@ function artifactList(items) {
   return artifacts;
 }
 
+function reasonSummary(data) {
+  const labels = {
+    inactive: ["Workflow ended; see task lifecycle below for the delivery outcome.", "工作流已结束，交付结果请查看下方任务生命周期。"],
+    task_failed: ["The current task failed.", "当前任务执行失败。"], task_canceled: ["The current task was canceled.", "当前任务已取消。"],
+    agent_working: ["The agent is processing this work.", "Agent 正在处理该工作。"],
+    active_workstream: ["The workflow is active.", "工作流仍在推进。"],
+    waiting_for_user: ["Waiting for a trusted GitHub user response.", "等待可信 GitHub 用户回复。"],
+    publish_failed: ["Publishing failed; inspect the execution record.", "发布失败，请查看执行记录。"],
+    waiting_publish: ["An accepted action is waiting for publication.", "已接受的动作正在等待发布。"],
+    result_pending_audit: ["The worker result is waiting for audit.", "执行结果正在等待审计。"],
+  };
+  return labels[data.reason_code]?.[state.language === "zh" ? 1 : 0] || data.reason_summary || t("noOperatorAction");
+}
+
 function detailView(detail, titleId) {
   const source = detail.source || {};
   const stateData = detail.operator_state || {};
   const stateHeading = stateData.bucket === "needs_attention" ? t("whyAttention") : stateData.bucket === "working" ? t("currentAgentState") : stateData.bucket === "waiting" ? t("waitingReason") : t("outcome");
   const root = node("div");
+  if (state.outsideResults) root.append(node("p", {className: "reason-flash", text: t("outsideResults"), attributes: {role: "status"}}));
   root.append(node("header", { className: "detail-head" }, [
     node("div", { className: `detail-kicker ${stateData.bucket || ""}`, text: t(bucketLabels[stateData.bucket] || stateData.bucket || "workItem") }),
     node("h2", { text: source.title || t("untitledWorkItem"), attributes: { id: titleId } }),
-    node("p", { text: [source.repo_full_name, source.number ? `PR #${source.number}` : null].filter(Boolean).join(" · ") }),
+    node("p", { text: [source.repo_full_name, source.number ? sourceLabel(source) : null].filter(Boolean).join(" · ") }),
   ]));
   root.append(node("section", { className: "detail-section" }, [
     node("h3", { text: stateHeading }),
-    node("div", { className: `reason-flash ${stateData.bucket || ""}`, text: stateData.reason_summary || t("noOperatorAction") }),
+    node("div", { className: `reason-flash ${stateData.bucket || ""}`, text: reasonSummary(stateData) }),
   ]));
+  const outcome = node("section", { className: "detail-section" });
+  outcome.append(node("h3", { text: t("taskState") }));
+  if (detail.lifecycle) {
+    outcome.append(node("p", { text: t(detail.lifecycle.column === "history" ? "canceled" : detail.lifecycle.column) }));
+    const pr = detail.lifecycle.pr;
+    if (pr?.url) outcome.append(node("a", { text: `PR #${pr.number} · ${humanize(pr.state)}`, href: pr.url, target: "_blank", rel: "noopener noreferrer" }));
+  } else outcome.append(node("p", { text: t("noOutcome") }));
+  if (detail.workstream_lifecycle) outcome.append(node("p", { text: `${t("workflowState")}: ${humanize(detail.workstream_lifecycle)}` }));
+  root.append(outcome);
   const tasks = detail.tasks || [];
   const history = node("details", { className: "detail-section execution-history", dataset: { disclosure: "attempts" } });
   history.append(node("summary", { text: `${t("agentExecution")} · ${(detail.attempts || []).length}` }));
@@ -502,18 +548,27 @@ async function loadWorkItems({ append = false, reason = "manual" } = {}) {
   if (reason === "auto" && document.hidden) return;
   if (!state.hasLoaded) showSkeleton();
   if (state.listController) state.listController.abort();
-  state.listController = new AbortController();
+  const controller = new AbortController();
+  state.listController = controller;
   try {
-    const response = await fetch(listApiUrl(), { cache: "no-store", signal: state.listController.signal });
+    const response = await fetch(listApiUrl(), { cache: "no-store", signal: controller.signal });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.safe_error || `HTTP ${response.status}`);
+    if (controller.signal.aborted) return;
     if (append && state.list) payload.items = state.list.items.concat(payload.items || []);
     state.list = payload;
     state.hasLoaded = true;
     renderWorkItems(payload, { append: false });
     clearRefreshError();
     if (!state.selectedId && payload.items.length) await selectWorkItem(payload.items[0].id, null, { updateHistory: false, showDrawer: false });
-    else if (state.selectedId && payload.items.some((item) => item.id === state.selectedId)) await loadWorkItemDetail(state.selectedId);
+    else if (state.selectedId && payload.items.some((item) => item.id === state.selectedId)) {
+      state.outsideResults = false;
+      await loadWorkItemDetail(state.selectedId);
+    }
+    else if (state.selectedId && state.filters.selectedId === state.selectedId) {
+      state.outsideResults = true;
+      await loadWorkItemDetail(state.selectedId);
+    } else clearWorkItemDetail();
   } catch (error) {
     if (error.name !== "AbortError") showRefreshError(error.message);
   } finally {
@@ -521,15 +576,29 @@ async function loadWorkItems({ append = false, reason = "manual" } = {}) {
   }
 }
 
+function clearWorkItemDetail() {
+  if (state.detailController) state.detailController.abort();
+  state.selectedId = null;
+  state.detail = null;
+  state.lastFocusedRow = null;
+  state.outsideResults = false;
+  closeDetailDrawer();
+  for (const id of ["detail-panel", "drawer-content"]) {
+    $(id).replaceChildren(node("div", { className: "detail-empty" }, [node("h2", { text: t("selectWorkItem") }), node("p", { text: t("selectWorkItemHelp") })]));
+  }
+  writeUrlState();
+}
+
 async function loadWorkItemDetail(workstreamId) {
   if (!workstreamId) return;
   if (state.detailController) state.detailController.abort();
-  state.detailController = new AbortController();
+  const controller = new AbortController();
+  state.detailController = controller;
   try {
-    const response = await fetch(`/api/work-items/${encodeURIComponent(workstreamId)}`, { cache: "no-store", signal: state.detailController.signal });
+    const response = await fetch(`/api/work-items/${encodeURIComponent(workstreamId)}`, { cache: "no-store", signal: controller.signal });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.safe_error || `HTTP ${response.status}`);
-    renderWorkItemDetail(payload);
+    if (state.selectedId === workstreamId && !controller.signal.aborted) renderWorkItemDetail(payload);
   } catch (error) {
     if (error.name === "AbortError") return;
     $("detail-panel").replaceChildren(node("div", { className: "detail-empty" }, [node("h2", { text: t("workItemUnavailable") }), node("p", { text: error.message })]));
@@ -537,6 +606,7 @@ async function loadWorkItemDetail(workstreamId) {
 }
 
 async function selectWorkItem(workstreamId, row, { updateHistory = true, showDrawer = true } = {}) {
+  state.outsideResults = false;
   state.selectedId = workstreamId;
   state.lastFocusedRow = row || document.querySelector(`[data-workstream-id="${CSS.escape(workstreamId)}"]`);
   document.querySelectorAll("[data-workstream-id]").forEach((candidate) => {
@@ -616,8 +686,8 @@ function updateFilters() {
   state.filters.bucket = $("bucket-filter").value;
   state.filters.sort = $("sort-filter").value;
   state.filters.cursor = "";
-  state.selectedId = null;
-  writeUrlState();
+  state.filters.selectedId = null;
+  clearWorkItemDetail();
   syncControls();
   loadWorkItems();
 }

@@ -4,11 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 class Element {
-  constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.events = {}; this.attrs = {}; this.classList = { toggle() {} }; }
+  constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.events = {}; this.attrs = {}; this.classList = { toggle() {}, remove() {}, add() {} }; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   setAttribute(key, value) { this.attrs[key] = value; }
   addEventListener(name, fn) { this.events[name] = fn; }
+  focus() {}
   scrollIntoView() { this.scrolled = (this.scrolled || 0) + 1; }
   querySelectorAll(tag) { return this.children.flatMap(descendants).filter(n => n.tag === tag); }
 }
@@ -16,7 +17,7 @@ function load(name, search = '') {
   const nodes = new Map();
   const get = key => { if (!nodes.has(key)) nodes.set(key, new Element(key)); return nodes.get(key); };
   const context = vm.createContext({ URLSearchParams, location: { search }, localStorage: { getItem: () => null },
-    document: { getElementById: key => get(`#${key}`), createElement: tag => new Element(tag), addEventListener() {}, querySelectorAll: () => [],
+    document: { body:new Element("body"), getElementById: key => get(`#${key}`), createElement: tag => new Element(tag), addEventListener() {}, querySelectorAll: () => [],
       querySelector: key => { if (!nodes.has(key)) nodes.set(key, new Element(key)); return nodes.get(key); } },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/robert_agent/web_assets', name), 'utf8').replace(/start\(\);\s*$/, '');
@@ -129,4 +130,55 @@ test('board positions the initial stage but polling does not reset horizontal br
   assert.equal(vm.runInContext('$(\'.board-column[data-column="waiting"]\').scrolled', context), 1);
   vm.runInContext('renderBoard({items:[],counts:{waiting:1},capacity:{running:0}})', context);
   assert.equal(vm.runInContext('$(\'.board-column[data-column="waiting"]\').scrolled', context), 1);
+});
+
+
+test('source identity and linked delivery stay distinct in workbench detail', () => {
+  const context = load('workbench.js');
+  context.detail = {source:{type:'issue',number:3404,url:'https://github.com/org/repo/issues/3404'},
+    operator_state:{bucket:'history'}, lifecycle:{column:'done',reason_code:'completed',pr:{number:3405,url:'https://github.com/org/repo/pull/3405',state:'closed'}}, tasks:[]};
+  const tree = vm.runInContext('detailView(detail,"title")',context);
+  const text = descendants(tree).map(n => n.textContent || '').join('\n');
+  assert.match(text,/Issue #3404/);
+  assert.doesNotMatch(text,/PR #3404/);
+  assert.ok(descendants(tree).some(n => n.href === 'https://github.com/org/repo/pull/3405' && n.textContent.includes('PR #3405')));
+});
+
+test('archived workflow is not presented as successful task completion', () => {
+  const context = load('workbench.js');
+  for (const [lifecycle,label,icon] of [[{column:'history',reason_code:'canceled'},'Canceled','×'],[{column:'review',reason_code:'open_pr'},'Awaiting review','◷'],[null,'Workflow ended','—']]) {
+    context.item = {bucket:'history',reason_code:'inactive',lifecycle};
+    assert.equal(vm.runInContext('reasonLabel(item)',context),label);
+    assert.equal(vm.runInContext('stateIcon(item).textContent',context),icon);
+  }
+});
+
+test('sort description follows all three sort choices', () => {
+  const context = load('workbench.js');
+  for (const [sort,label] of [['priority','Actionability order'],['updated-desc','Most recently updated'],['updated-asc','Oldest update first']]) {
+    vm.runInContext(`state.filters = {sort:${JSON.stringify(sort)}}`,context);
+    assert.equal(vm.runInContext('sortDescription()',context),label);
+  }
+});
+
+test('empty results clear both detail surfaces and invalidate pending detail requests', async () => {
+  const context = load('workbench.js');
+  const window = {scrollY:0,scrollTo(){},location:{pathname:'/work'},history:{replaceState(){}}};
+  Object.assign(context,{window,AbortController,fetch:async()=>({ok:true,json:async()=>({items:[],counts:{}})})});
+  vm.runInContext('state.hasLoaded=true;state.filters={bucket:"history",q:"missing"};state.selectedId="old";state.detail={id:"old"};state.detailController=new AbortController()',context);
+  await vm.runInContext('loadWorkItems()',context);
+  assert.equal(vm.runInContext('state.detail',context),null);
+  assert.equal(vm.runInContext('state.selectedId',context),null);
+  assert.equal(vm.runInContext('state.detailController.signal.aborted',context),true);
+  for (const id of ['detail-panel','drawer-content']) {
+    assert.ok(descendants(vm.runInContext(`$("${id}")`,context)).some(n=>n.textContent==='Select a PR or issue'));
+  }
+});
+
+test('loading a shared item into the result page removes its outside-results notice', async () => {
+  const context=load('workbench.js');
+  Object.assign(context,{AbortController,window:{scrollY:0,scrollTo(){}},fetch:async()=>({ok:true,json:async()=>({items:[{id:'shared',bucket:'history',source:{},agent:{},signals:{}}],counts:{}})})});
+  vm.runInContext('state.hasLoaded=true;state.filters={bucket:"history",selectedId:"shared"};state.selectedId="shared";state.outsideResults=true;loadWorkItemDetail=async()=>{}',context);
+  await vm.runInContext('loadWorkItems()',context);
+  assert.equal(vm.runInContext('state.outsideResults',context),false);
 });

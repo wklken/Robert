@@ -133,6 +133,7 @@
       <p class="column-purpose" data-i18n="historyHint">Stopped tasks and their history remain available.</p><div class="card-stack" data-cards="history"></div>
     </section>
   </main>
+  <p class="scope-note" data-i18n="boardScope">Task counts follow task lifecycle; Work counts GitHub workflows.</p>
   <footer class="board-footer"><span id="loaded-count"></span><button id="load-more" class="quiet-button" type="button" data-i18n="loadMore" hidden>Load more tasks</button></footer>
 
   <dialog id="work-item-drawer" class="drawer" aria-labelledby="drawer-title">
@@ -156,11 +157,12 @@
         </div>
         <button class="icon-button" type="button" data-close-new-task aria-label="Close new task" data-i18n="close" data-i18n-aria="closeNewTask">Close</button>
       </div>
+      <p data-i18n="requiredHelp">Repository, title and requirement are required.</p>
       <div id="form-feedback" class="feedback" role="alert" hidden></div>
       <div class="form-grid">
-        <label><span data-i18n="repository">Repository</span><select name="repo_id" id="new-task-repo" required></select></label>
-        <label class="wide"><span data-i18n="title">Title</span><input name="title" maxlength="200" required></label>
-        <label class="wide"><span data-i18n="requirement">Requirement</span><textarea name="description" rows="5" maxlength="20000" required></textarea></label>
+        <label><span data-i18n="repository">Repository</span><select name="repo_id" id="new-task-repo" required aria-describedby="new-task-repo-error"></select><span id="new-task-repo-error" role="alert"></span></label>
+        <label class="wide"><span data-i18n="title">Title</span><span data-i18n="requiredMark">(required)</span><input name="title" maxlength="200" required aria-describedby="new-task-title-error"><span id="new-task-title-error" role="alert"></span></label>
+        <label class="wide"><span data-i18n="requirement">Requirement</span><span data-i18n="requiredMark">(required)</span><textarea name="description" rows="5" maxlength="20000" required aria-describedby="new-task-description-error"></textarea><span id="new-task-description-error" role="alert"></span></label>
         <label><span data-i18n="priority">Priority</span><select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
         <label><span data-i18n="routing">Routing</span><select name="routing_mode" id="routing-mode"><option value="auto" data-i18n="auto">Auto</option><option value="manual" data-i18n="specificAgent">Specific agent</option></select></label>
         <label id="worker-field" hidden><span data-i18n="agent">Agent</span><select name="requested_worker" id="worker-select"></select></label>
