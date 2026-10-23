@@ -8,6 +8,7 @@ const translations = {
     boardTitle: "Repository task board",
     primaryNavigation: "Primary navigation",
     navWorkbench: "Workbench",
+    requiredHelp: "Repository, title and requirement are required.", requiredField: "Required: {field}", requiredMark: "(required)", boardScope: "Task lifecycle includes local tasks and GitHub work. Needs attention counts tasks; the Work queue counts GitHub workflows.",
     navWork: "Work",
     navBoard: "Board",
     navHistory: "History",
@@ -114,6 +115,7 @@ const translations = {
     boardTitle: "仓库任务看板",
     primaryNavigation: "一级导航",
     navWorkbench: "工作台",
+    requiredHelp: "仓库、标题和需求描述为必填项。", requiredField: "请填写{field}", requiredMark: "（必填）", boardScope: "看板按任务生命周期统计，包含本地任务和 GitHub 工作；工作队列按 GitHub 工作流统计，两处需要处理的数量可能不同。",
     navWork: "工作",
     navBoard: "任务看板",
     navHistory: "历史",
@@ -239,7 +241,7 @@ Object.assign(translations.en, {
   zombie: "Worker exited but its process has not been reaped",
   boardTitle: "Task board",
   boardHint: "Track execution, resolve blockers, and finish work.",
-  navWork: "All GitHub work",
+  navWork: "Work",
   view: "View",
   canceledTasks: "Canceled",
   historyHint: "Stopped tasks and their history remain available.",
@@ -357,7 +359,7 @@ Object.assign(translations.zh, {
   filtersToggle: "筛选",
   boardTitle: "任务看板",
   boardHint: "跟踪执行，处理阻塞，让每个任务走到完成。",
-  navWork: "全部 GitHub 工作",
+  navWork: "工作",
   view: "视图",
   canceledTasks: "已取消",
   historyHint: "保留已停止任务及其处理记录。",
@@ -1590,6 +1592,19 @@ function bindControls() {
     });
   });
   $("#new-task-form").addEventListener("submit", createTask);
+  $("#new-task-form").addEventListener("invalid", (event) => {
+    const field = event.target;
+    const label = field.name === "title" ? t("title") : field.name === "description" ? t("requirement") : t("repository");
+    field.setCustomValidity(t("requiredField", { field: label }));
+    field.setAttribute("aria-invalid", "true");
+    document.getElementById(field.getAttribute("aria-describedby")).textContent = field.validationMessage;
+  }, true);
+  $("#new-task-form").addEventListener("input", (event) => {
+    event.target.setCustomValidity("");
+    event.target.removeAttribute("aria-invalid");
+    const error = document.getElementById(event.target.getAttribute("aria-describedby"));
+    if (error) error.textContent = "";
+  });
   $("#routing-mode").addEventListener("change", (event) => {
     $("#worker-field").hidden = event.target.value !== "manual";
   });

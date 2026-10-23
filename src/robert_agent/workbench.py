@@ -9,6 +9,7 @@ from pathlib import Path
 import shlex
 import sqlite3
 
+from robert_agent import board
 from robert_agent.board_execution import safe_text
 
 
@@ -206,6 +207,10 @@ def _load_state(conn):
     )
     return {
         "workstreams": workstreams,
+        "workstreams_by_id": {row["workstream_id"]: row for row in workstreams},
+        "board_items": board.workstream_projections(conn) if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'"
+        ).fetchone() else {},
         "tasks": tasks,
         "attempts": attempts,
         "phases": phases,
@@ -440,8 +445,24 @@ def _item_from_workstream(state, workstream):
         for action in actions
         if action["publish_status"] != "published" and _publish_error(action)
     )
+    board_item = state["board_items"].get(workstream["workstream_id"])
+    ancestor = workstream
+    seen = set()
+    streams = state["workstreams_by_id"]
+    while board_item is None and ancestor.get("origin_workstream_id") not in seen:
+        origin = ancestor.get("origin_workstream_id")
+        if not origin:
+            break
+        seen.add(origin)
+        board_item = state["board_items"].get(origin)
+        ancestor = streams.get(origin, {})
+    lifecycle = {key: board_item[key] for key in (
+        "work_item_id", "column", "reason_code", "reason_summary", "pr"
+    )} if board_item else None
     item = {
         "id": workstream["workstream_id"],
+        "workstream_lifecycle": workstream["workstream_lifecycle"],
+        "lifecycle": lifecycle,
         "bucket": bucket,
         "reason_code": reason_code,
         "reason_summary": reason_summary,
@@ -771,8 +792,10 @@ def get_work_item(db_path, workstream_id):
     artifacts = [row for task_id in task_ids for row in state["artifacts"].get(task_id, [])]
     return {
         "id": workstream_id,
-        "work_item_id": board_item[0] if board_item else None,
+        "work_item_id": item["lifecycle"]["work_item_id"] if item["lifecycle"] else (board_item[0] if board_item else None),
         "source": item["source"],
+        "workstream_lifecycle": item["workstream_lifecycle"],
+        "lifecycle": item["lifecycle"],
         "related_sources": related_sources,
         "operator_state": {
             "bucket": item["bucket"],

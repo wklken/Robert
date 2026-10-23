@@ -127,6 +127,38 @@ class WorkbenchTests(unittest.TestCase):
             )
         return workstream_id, task_id
 
+    def test_history_exposes_board_lifecycle_without_changing_workflow_bucket(self):
+        from robert_agent import board, workbench
+
+        self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE github_sources SET state = 'closed'")
+            conn.execute("""
+                INSERT INTO work_items(
+                  work_item_id, repo_id, title, origin_type, origin_source_id,
+                  workstream_id, creation_idempotency_key, canceled_at, created_by, created_at, updated_at
+                ) VALUES ('wi-1', 'repo-1', 'Canceled item', 'github', 'source-1',
+                          'workstream-1', 'create-1', '2026-07-20T00:00:00Z', 'tester',
+                          '2026-07-19T00:00:00Z', '2026-07-20T00:00:00Z')
+            """)
+        history = workbench.list_work_items(self.db_path, bucket="history")["items"][0]
+        detail = workbench.get_work_item(self.db_path, "workstream-1")
+        expected = board.get_work_item_detail(self.db_path, "wi-1")
+        self.assertEqual(history["bucket"], "history")
+        self.assertEqual(history["workstream_lifecycle"], "completed")
+        for item in (history, detail):
+            self.assertEqual(item["lifecycle"]["column"], expected["column"])
+            self.assertEqual(item["lifecycle"]["reason_code"], "canceled")
+            self.assertEqual(item["lifecycle"]["work_item_id"], "wi-1")
+
+    def test_workflow_without_board_item_does_not_invent_delivery(self):
+        from robert_agent import workbench
+
+        self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
+        item = workbench.list_work_items(self.db_path, bucket="history")["items"][0]
+        self.assertIsNone(item["lifecycle"])
+        self.assertEqual(item["workstream_lifecycle"], "completed")
+
     def test_operations_task_link_falls_back_to_workstream_source(self):
         from robert_agent import web
 

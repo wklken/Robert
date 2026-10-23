@@ -321,6 +321,18 @@ def _all_projections(conn):
     return [_project_item(conn, row) for row in rows]
 
 
+def workstream_projections(conn):
+    """Share board lifecycle facts with the workbench without changing its buckets."""
+    rows = conn.execute(
+        """
+        SELECT wi.*, r.full_name AS repo_full_name
+        FROM work_items wi JOIN repos r ON r.repo_id = wi.repo_id
+        WHERE wi.workstream_id IS NOT NULL
+        """
+    )
+    return {row["workstream_id"]: _project_item(conn, row) for row in rows}
+
+
 def _matches(item, *, repo, agent, priority, attention, query):
     if repo and repo not in {item["repo_id"], item["repo_full_name"]}:
         return False
