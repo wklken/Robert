@@ -21,22 +21,26 @@ Robert 是一个自托管的 GitHub 队友。它把可信的 Issue、提及、�
 `0.1.0b2` 是公开 Beta，当前只使用轮询获取 GitHub 事件，稳定版之前接口仍
 可能调整。
 
-## 核心能力
+## 功能特性
 
-- 处理可信的 Issue、PR、评审、指派和提及。
-- 可按仓库显式开启 PR 自修复：聚合当前 head SHA 的 CI 失败，或把精确
-  base 快照合入冲突 PR；发布前会再次校验 PR head/base，且不会 rebase 或
-  force-push。
-- 使用 SQLite 管理多仓库工作流；每个仓库有独立 checkout、worktree 根目录、
-  可信 Actor、并发限制和路由覆盖。
-- 内置 `codex`、`tcodex`、`claude`、`tclaude`、`opencode`、`cbc` 和通用
-  `command` Worker 适配器。
-- 按路由配置 Worker、必需 Skill 和推荐 Skill；缺少必需 Skill 时会在创建
-  worktree 和启动 Worker 前阻止任务。
-- 使用隔离的 Git worktree 进行分析、实现和源码评审。
-- 支持 systemd 用户服务和 macOS LaunchAgent。
-- 默认只读的本地 Web UI。
-- 可选的 OpenClaw 只读聊天命令。
+- **GitHub 协作闭环**：处理可信的 Issue、PR、评审、指派、提及和后续评论，
+  从需求分析、创建 PR 到评审修改持续跟进；同一 workstream 串行执行并保留上下文。
+- **多仓库与隔离执行**：每个仓库独立配置 checkout、worktree 根目录、可信 Actor、
+  并发限制和路由覆盖，通过 Git worktree 隔离分析、实现与源码评审。
+- **多种编码 Agent**：内置 `codex`、`tcodex`、`claude`、`tclaude`、`opencode`、
+  `cbc` 和通用 `command` 适配器。可按路由选择 Worker、模型、推理 effort 和 Skill；
+  缺少必需 Skill 时，在创建 worktree 和启动 Worker 前阻止任务。
+- **执行监督与恢复**：记录执行阶段、心跳、日志和每次尝试，监督启动、超时与进程清理；
+  可配置连续超时后的备用模型，失败后保留原因与恢复入口。
+- **PR 自修复**：按仓库显式开启 CI 失败修复和冲突合并，限制检查名称、重试次数及预算。
+  发布前再次核对 PR head/base，只允许普通 push。
+- **任务生命周期看板**：从待整理、排队、执行、需要处理到待评审、完成和取消，
+  展示阶段、执行历史、产物及发布记录。显式开启写入后，可提交本地任务、回复、
+  重试执行、重试发布和取消；操作仍受权限、状态与幂等校验约束。
+- **无人值守运行**：推荐 Supervisor 分别管理 daemon 和 Web，提供自动重启、状态查询和日志；
+  也支持 systemd 用户服务及 macOS LaunchAgent。
+- **可审计的持久状态**：SQLite 保存任务、尝试、审核结果和发布去重记录；提供诊断历史保留策略、
+  脱敏诊断导出，以及可选的 OpenClaw 只读查询。
 
 ## 工作流程
 
@@ -80,9 +84,14 @@ confirmation wherever the guide requires it.
 
 ## 配置
 
-Robert 使用带版本号的 YAML。配置包括 GitHub 账号、Worker、Skill 搜索路径、
-路由覆盖和一个或多个本地仓库。详见
-[docs/reference.md](docs/reference.md#configuration)。
+Robert 使用 `version: 1` 的 YAML，默认位于 `~/.config/robert/config.yml`。
+`github` 配置监听账号，`workers` 定义编码 Agent，`routes` 与 `route_worker_models`
+配置路由及模型，`repos` 定义仓库与信任关系，`daemon` 配置轮询及诊断保留策略。
+`workflow_engine` 默认使用 `legacy`；DBOS 的 `shadow` / `active` 仍属于迁移开发能力，
+不能仅凭配置校验通过就切换生产调度。
+
+完整结构、字段默认值与旧配置调整见[配置参考](docs/reference.md#configuration)，
+安装与多仓库示例见[操作指引](docs/guides.md)。
 Worker 可配置 `fallback_model`；同一 workstream 连续两次
 `failed_timeout` 后，第三次运行切换到该模型，推理 effort 保持不变。默认硬超时为
 45 分钟。
@@ -91,14 +100,18 @@ CI 还必须配置非空 `check_allowlist`。
 
 ## 守护进程
 
+推荐使用 [Supervisor 同时管理 daemon 和 Web](docs/guides.md#daemon-service)。
+完成配置和检查后启动，并确认两个进程都为 `RUNNING`：
+
 ```bash
-robert service install
-robert service start
-robert service status
+supervisord -c ~/.config/robert/supervisord.conf
+supervisorctl -c ~/.config/robert/supervisord.conf status
 ```
 
-无人值守运行使用 systemd 用户服务或 launchd。前台调试使用
-`robert daemon run`。
+两个进程共用同一份 Robert 配置。Web 负责展示与提交操作，后台 daemon 负责调度执行。
+前台调试分别使用 `robert daemon run` 和 `robert web run`。
+`robert service install` 会自动选择 systemd、launchd 或 Linux 的 Supervisor 后端，
+具体差异见操作指引。
 
 ## 本地 Web UI
 
@@ -133,8 +146,9 @@ robert openclaw status
 
 ## 故障排查
 
-先运行 `robert doctor --output json` 和 `robert service status`。需要提供诊断
-信息时，生成经过脱敏的压缩包：
+先运行 `robert doctor --output json`，并用
+`supervisorctl -c ~/.config/robert/supervisord.conf status` 检查两个进程。
+使用原生服务时检查 `robert service status`。需要提供诊断信息时，生成经过脱敏的压缩包：
 
 ```bash
 robert diagnostics export --output robert-diagnostics.zip

@@ -57,9 +57,15 @@ Workers cannot publish directly. They record structured planned actions.
 Robert checks route permissions, verification evidence, skill evidence,
 idempotency markers, and redaction before publication.
 
-The web UI is read-only on `127.0.0.1` by default. Writable mode requires an
-operator identity and CSRF token. Remote binding requires explicit
-acknowledgement and an authenticated reverse proxy.
+Direct `robert web run` is read-only on `127.0.0.1:8765` by default. Writable
+mode uses an operator identity and CSRF token. Remote binding requires explicit
+acknowledgement and an authenticated reverse proxy. Service templates can pass
+different flags; inspect the [Supervisor setup](guides.md#daemon-service).
+
+The [lifecycle board](web-lifecycle-board.md) projects durable tasks, attempts,
+phases, heartbeats, and publication receipts. Writable controls submit guarded
+requests; the daemon must be running to schedule work. Historical worker
+completion, successful publication, and observed PR merge are separate facts.
 
 ## Workstreams
 

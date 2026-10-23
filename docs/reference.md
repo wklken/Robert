@@ -2,7 +2,31 @@
 
 ## Configuration
 
-Default path: `~/.config/robert/config.yml`.
+Default path: `~/.config/robert/config.yml`. Use `robert config path` to resolve
+`ROBERT_CONFIG`, or pass `--config` explicitly.
+
+The public configuration is `version: 1` YAML. `robert init` creates a starting
+file; the [packaged example](../src/robert_agent/resources/config.example.yml)
+and [schema](../src/robert_agent/resources/schemas/config.schema.json) describe
+the supported structure. The example has `repos: []` as a template: add at least
+one real local Git checkout before validation or operation.
+
+| Section | Purpose |
+| --- | --- |
+| `version`, `data_dir`, `database` | Format version, runtime directory, and SQLite filename. `database` must be a filename, not a path. |
+| `github` | Listening account and poll interval; uses the existing authenticated `gh` session. |
+| `workers` | Mapping of named adapters, commands, models, effort, timeouts, and environment allowlists. |
+| `skills` | Local skill search paths; Robert validates skills but does not install them. |
+| `routes` | Global worker and required/recommended skill overrides. |
+| `route_worker_models` | Per-route model/effort overrides, separate from route permissions. |
+| `repos` | Real checkouts, worktree roots, base branches, trusted actors, concurrency, route overrides, and opt-in PR automation. |
+| `daemon` | Local/GitHub polling, rate-limit thresholds, cycle timeouts, and diagnostic retention. |
+| `workflow_engine` | Workflow migration mode; normal operation uses `legacy`. |
+
+The following is an extended example, not the generated defaults. Replace the
+accounts, paths, branch names, commands, and model names for your environment.
+The example explicitly enables PR automation on `example/backend`; omit that
+block to keep automation disabled.
 
 ```yaml
 version: 1
@@ -37,6 +61,9 @@ daemon:
   run_retention_days: 7
   failed_run_retention_days: 30
   run_on_start: false
+workflow_engine:
+  mode: legacy
+  system_database_url_env: ROBERT_DBOS_SYSTEM_DATABASE_URL
 workers:
   default:
     adapter: codex
@@ -105,9 +132,35 @@ repos:
       - maintainer
 ```
 
+### Workers, routes, and repository overrides
+
+`workers` is a mapping keyed by worker name. Each entry defines `adapter`,
+`command`, `model`, and `effort`; optional fields are `fallback_model`,
+`prompt_transport` (only `stdin`), `timeout_seconds` (default 5400), and
+`environment_allowlist` (default empty). Built-in adapters are `codex`,
+`tcodex`, `claude`, `tclaude`, `opencode`, `cbc`, and `command`.
+
 `github` accepts only `account` and `poll_seconds`; credentials are rejected.
 The `command` adapter requires a YAML sequence. Repository route overrides may
-set `worker`, `required_skills`, and `recommended_skills` only.
+set `worker`, `required_skills`, and `recommended_skills` only. They replace
+only fields explicitly supplied; a supplied skill list replaces that list.
+Repository overrides take precedence over global `routes`, then packaged
+policy defaults. With no selected worker, the first configured worker is used.
+
+Use `routes.<route>.worker` to select the worker for `version: 1`. Set
+`route_worker_models.<route>.model` and `.effort` for per-route model overrides;
+these do not belong inside `routes` or repository route overrides.
+`route_worker_models` also accepts `worker`, which supplies defaults when its
+model/effort are omitted; public versioned configuration still selects the
+executed worker through `routes`. For manual worker selection on a local task,
+the selected worker's own model/effort apply instead of the route model override.
+
+A repository's `github_account` overrides the global listening account without
+changing `gh` authentication. Its `max_concurrency` must be between 1 and the
+global `max_concurrency` (default 3). The checkout must already exist as a Git
+repository, `default_branch` must name its actual base branch, and
+`trusted_actors` must be non-empty.
+
 The default hard worker timeout is 45 minutes. When a worker defines
 `fallback_model`, Robert uses it on the third run after the two immediately
 preceding terminal attempts in the same workstream both end in
@@ -122,6 +175,78 @@ only after the current remote PR head and base match the audited snapshot.
 ```bash
 robert config validate --config ~/.config/robert/config.yml --output json
 ```
+
+### Scheduling and timeout defaults
+
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `max_concurrency` | 3 | Global active-worker limit. |
+| `stale_after_minutes` | 20 | Worker heartbeat staleness threshold. |
+| `hard_timeout_minutes` | 45 | Supervision wall-time limit, independent of worker adapter timeout. |
+| `worker_startup_grace_seconds` | 300 | Grace period for a starting worker. |
+| `lease_ttl_minutes` | 9 | Task lease duration. |
+| `python_bin` | `python3` | Python executable used for child commands. |
+| `daemon.local_poll_seconds` | 5 | Local state/supervision polling. |
+| `daemon.github_poll_seconds` | 300 | Daemon GitHub polling interval; configured independently of `github.poll_seconds`. |
+| `daemon.github_poll_when_full_seconds` | 600 | GitHub polling while worker capacity is full. |
+| `daemon.rate_limit_cache_seconds` | 300 | Rate-limit cache duration. |
+| `daemon.min_search_remaining` / `min_core_remaining` | 10 / 500 | Minimum GitHub quota thresholds. |
+| `daemon.live_run_timeout_seconds` / `local_drain_timeout_seconds` | 300 / 180 | Bounded live-poll/local-drain child cycle timeouts. |
+| `daemon.enabled` / `run_on_start` | `true` / `false` | Daemon enablement and immediate startup poll. |
+
+Increasing only `workers.<name>.timeout_seconds` does not raise the global
+hard timeout. Retention defaults and protected history are described under
+[Diagnostic retention](#diagnostic-retention).
+
+### Workflow engine
+
+```yaml
+workflow_engine:
+  mode: legacy
+  system_database_url_env: ROBERT_DBOS_SYSTEM_DATABASE_URL
+```
+
+`legacy` is the default and does not require a DBOS database URL. The validator
+also accepts `shadow` and `active`; both require the named environment variable
+to contain a `postgresql://` URL. Store only the environment variable's **name**
+in YAML. This PostgreSQL system database is separate from Robert's SQLite task
+and audit database.
+
+DBOS runtime, bindings, durable workflows, and recovery foundations are present,
+but production dispatch still retains legacy ownership and active production
+drivers are not wired in. Keep `legacy` for unattended operation. A valid
+`active` configuration is not evidence of a supported production cutover. See
+[the lifecycle integration notes](web-lifecycle-board.md#与主工作区已有恢复逻辑的集成).
+
+### Updating an existing configuration
+
+Preserve the current file and runtime data before editing. `robert init` refuses
+to overwrite an existing file without `--force`; it does not migrate or merge
+custom settings. Prefer editing the existing YAML and validating it.
+
+For the public `version: 1` layout, use `github.account`, named `workers`,
+nested `daemon` settings, and repository keys `checkout`, `worktrees`, and
+`default_branch`. Do not combine named workers with old top-level
+`worker_agent` / `worker_command`, or copy normalized output keys such as
+`github_account`, `repo_root`, `worktree_root`, and `default_base_branch` into
+public configuration. Validation/show output includes internal normalized
+fields; it is not a round-trip configuration template.
+
+Missing `workflow_engine` defaults to `legacy`, and omitted optional daemon
+settings receive their defaults. Keep PR automation disabled unless explicitly
+wanted. After editing:
+
+```bash
+robert config validate --config ~/.config/robert/config.yml --output json
+robert doctor --config ~/.config/robert/config.yml --output json
+```
+
+Then restart both daemon and web using the [Supervisor guide](guides.md#daemon-service).
+Supervisor process definitions, Web flags, and autostart belong in
+`supervisord.conf`, not in Robert YAML. Web bind/port/write settings are CLI
+flags, not a `web:` configuration section.
+
+### Skill examples
 
 If Superpowers skills are installed locally, add their skill root to
 `skills.search_paths` and then reference the skill names in route overrides:
@@ -177,11 +302,15 @@ Operations:
 
 ```bash
 robert daemon run --config ~/.config/robert/config.yml
-robert service install --config ~/.config/robert/config.yml
-robert service start
+supervisord -c ~/.config/robert/supervisord.conf
+supervisorctl -c ~/.config/robert/supervisord.conf status
 robert web run --config ~/.config/robert/config.yml
 robert diagnostics export --output robert-diagnostics.zip
 ```
+
+Prepare Supervisor configuration using the [operations guide](guides.md#daemon-service).
+`robert service install` and `robert service start` remain alternatives with
+automatic backend selection; systemd/launchd only manage the daemon.
 
 Integrations and migration:
 
@@ -303,7 +432,7 @@ stop its writers and run VACUUM during a maintenance window.
 | Variable | Purpose |
 | --- | --- |
 | `ROBERT_CONFIG` | Override `~/.config/robert/config.yml`. |
-| `ROBERT_DATA_DIR` | Override `~/.local/share/robert/`. |
+| `ROBERT_DATA_DIR` | Override the default data directory used by initialization and service runtime paths; existing YAML `data_dir` must be kept consistent. |
 
 Worker subprocesses receive `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`,
 `SHELL`, and `USER`. Additional names must be listed in
@@ -314,6 +443,10 @@ ROBERT_CONFIG=/etc/robert/config.yml \
 ROBERT_DATA_DIR=/var/lib/robert \
 robert doctor --output json
 ```
+
+`--config` takes precedence over `ROBERT_CONFIG`. An existing configuration's
+`data_dir` determines its task database; setting `ROBERT_DATA_DIR` does not
+rewrite that YAML. Keep both processes on the same configuration and data paths.
 
 Do not place GitHub tokens or OpenClaw credentials in configuration.
 
