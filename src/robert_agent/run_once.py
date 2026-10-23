@@ -679,7 +679,7 @@ def _insert_run_step(conn, run_id, key, status="pending"):
     )
 
 
-_STEP_CLOCKS = {}
+_STEP_CLOCKS: dict[tuple[str, str | None, str], float] = {}
 
 
 def _step_duration(identity, status, output):

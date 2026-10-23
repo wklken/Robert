@@ -66,6 +66,37 @@ class WorkerIdentityTests(unittest.TestCase):
             with self.assertRaises(worker_identity.IdentityReadError):
                 worker_identity.capture_process_identity(77, proc_root=tmp)
 
+    def test_exited_proc_with_empty_cmdline_is_dead(self):
+        from unittest.mock import patch
+        from robert_agent import worker_identity
+
+        recorded = {
+            "pid": 77,
+            "process_group_id": 77,
+            "process_start_token": "123",
+            "command_fingerprint": "f" * 64,
+            "identity_source": "proc",
+        }
+        for states, expected in ((["Z"], "dead"), (["S", "Z"], "dead"), (["S", "S"], "unknown")):
+            with self.subTest(states=states):
+                stats = ["77 (worker) " + " ".join([state, "1", "77"] + ["0"] * 16 + ["123"]) for state in states]
+                with patch.object(worker_identity.os, "kill"), \
+                     patch.object(Path, "read_text", side_effect=stats), \
+                     patch.object(Path, "read_bytes", return_value=b""):
+                    self.assertEqual(worker_identity.inspect_recorded_identity(recorded), expected)
+
+    def test_capturing_exited_proc_does_not_fall_back_to_ps(self):
+        from unittest.mock import patch
+        from robert_agent import worker_identity
+
+        stat = "77 (worker) " + " ".join(["Z", "1", "77"] + ["0"] * 16 + ["123"])
+        with patch.object(Path, "read_text", return_value=stat), \
+             patch.object(Path, "read_bytes", return_value=b""):
+            with self.assertRaises(worker_identity.ZombieProcess):
+                worker_identity.capture_process_identity(
+                    77, ps_runner=lambda *_args, **_kwargs: self.fail("must not capture a zombie")
+                )
+
     def test_proc_disappearance_rechecks_pid_before_calling_it_dead(self):
         from robert_agent import worker_identity
 

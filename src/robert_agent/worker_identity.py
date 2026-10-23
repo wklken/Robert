@@ -119,10 +119,18 @@ def read_proc_identity(
     read_text = read_text or (lambda path: Path(path).read_text(encoding="utf-8"))
     read_bytes = read_bytes or (lambda path: Path(path).read_bytes())
     identity = parse_proc_stat(read_text(stat_path), pid=pid)
+    if identity["process_state"] in _ZOMBIE_STATES:
+        raise ZombieProcess("process is a zombie")
     command_bytes = read_bytes(cmdline_path)
     if not isinstance(command_bytes, (bytes, bytearray, memoryview)):
         raise IdentityReadError("process cmdline is not bytes")
     if not command_bytes:
+        # Linux clears cmdline on exit. The process may have exited between
+        # the two reads; confirm its terminal state instead of treating an
+        # empty command line alone as proof of death.
+        terminal = parse_proc_stat(read_text(stat_path), pid=pid)
+        if terminal["process_state"] in _ZOMBIE_STATES:
+            raise ZombieProcess("process is a zombie")
         raise EmptyCommandline("process cmdline is empty")
     identity.update(
         {
@@ -285,6 +293,8 @@ def _observe_recorded_identity(recorded, *, proc_root="/proc", ps_runner=None):
             observed = read_proc_identity(pid, proc_root=proc_root)
         else:
             observed = read_ps_identity(pid, ps_runner=ps_runner)
+    except ZombieProcess:
+        return "dead"
     except (ProcessIdentityMissing, FileNotFoundError, ProcessLookupError):
         # A proc entry can disappear after the initial existence check.  If
         # the PID is genuinely gone it is dead; if it remains visible, the
