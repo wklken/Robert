@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from tests.support import PACKAGE_ROOT
 
 
@@ -172,6 +173,11 @@ class ConfigAndSchemaTests(unittest.TestCase):
         "project_memory_terms",
         "knowledge_candidates",
         "runtime_knowledge",
+        "workflow_bindings",
+        "workflow_outbox",
+        "workflow_signal_receipts",
+        "workflow_shadow_observations",
+        "publication_intents",
     }
 
     def setUp(self):
@@ -433,6 +439,103 @@ repos:
                 "run_on_start": False,
             },
         )
+
+    def test_workflow_engine_defaults_to_legacy_without_reading_environment(self):
+        from robert_agent import validate_config
+
+        normalized = validate_config._normalize_workflow_engine(
+            {},
+            environ={},
+        )
+
+        self.assertEqual(
+            normalized,
+            {
+                "mode": "legacy",
+                "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
+                "system_database_scheme": None,
+                "configured": False,
+            },
+        )
+
+    def test_workflow_engine_rejects_invalid_mode_and_unknown_fields(self):
+        from robert_agent import validate_config
+
+        cases = {
+            "invalid mode": (
+                {"workflow_engine": {"mode": "disabled"}},
+                "workflow_engine.mode must be one of: legacy, shadow, active",
+            ),
+            "unknown field": (
+                {"workflow_engine": {"unknown": True}},
+                "workflow_engine contains unsupported fields: workflow_engine.unknown",
+            ),
+        }
+        for label, (config, expected_error) in cases.items():
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    validate_config._normalize_workflow_engine(
+                        config,
+                        environ={},
+                    )
+
+    def test_workflow_engine_shadow_and_active_require_postgresql_url(self):
+        from robert_agent import validate_config
+
+        for mode in ("shadow", "active"):
+            with self.subTest(mode=mode, case="missing"):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "ROBERT_DBOS_SYSTEM_DATABASE_URL must be set",
+                ):
+                    validate_config._normalize_workflow_engine(
+                        {"workflow_engine": {"mode": mode}},
+                        environ={},
+                    )
+            with self.subTest(mode=mode, case="non-postgresql"):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "must contain a PostgreSQL URL",
+                ):
+                    validate_config._normalize_workflow_engine(
+                        {"workflow_engine": {"mode": mode}},
+                        environ={
+                            "ROBERT_DBOS_SYSTEM_DATABASE_URL": "sqlite:///dbos.sqlite3"
+                        },
+                    )
+
+    def test_workflow_engine_accepts_postgresql_and_redacts_url(self):
+        from robert_agent import validate_config
+
+        url = "postgresql://user:secret@example.test:5432/dbos"
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "workflow_engine:\n  mode: active\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"ROBERT_DBOS_SYSTEM_DATABASE_URL": url},
+            clear=True,
+        ):
+            result = validate_config.validate_config(
+                config_path,
+                skip_external=True,
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            result["workflow_engine"],
+            {
+                "mode": "active",
+                "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
+                "system_database_scheme": "postgresql",
+                "configured": True,
+            },
+        )
+        self.assertNotIn(url, json.dumps(result))
 
     def test_config_accepts_python_bin(self):
         from robert_agent import validate_config

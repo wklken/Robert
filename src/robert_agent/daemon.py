@@ -13,9 +13,10 @@ import time
 from uuid import uuid4
 
 from robert_agent.common import emit
-from robert_agent import daemon_state, redaction, retention, storage, wakeup_notifier
+from robert_agent import daemon_state, dbos_runtime, redaction, retention, storage, wakeup_notifier
 from robert_agent import loop_engine
 from robert_agent import validate_config
+from robert_agent import workflow_signals
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -40,6 +41,7 @@ class DaemonContext:
     rate_limit_decision_cache: dict | None = None
     rate_limit_cache_expires_at: str | None = None
     next_maintenance_at: float = 0.0
+    workflow_engine: dict | None = None
 
 
 def _script_path(name):
@@ -353,6 +355,7 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
         repo_ids=repo_ids,
         dry_run=dry_run,
         startup_live_poll_pending=daemon_config.get("run_on_start", False),
+        workflow_engine=config_result.get("workflow_engine"),
     ), None
 
 
@@ -508,6 +511,28 @@ def _rate_limit_decision(context, rate_limit_runner, *, now=None):
     return {**decision, "cached": False}
 
 
+def _relay_due_signals(context, *, now):
+    mode = (context.workflow_engine or {}).get("mode", "legacy")
+    runtime = dbos_runtime.current_runtime()
+    if mode not in {"shadow", "active"} or runtime is None or runtime.dbos is None:
+        return {
+            "ok": True,
+            "processed": 0,
+            "sent": 0,
+            "delivered": 0,
+            "failed": 0,
+            "retried": 0,
+            "attention": 0,
+        }
+    return workflow_signals.relay_due_signals(
+        context.db_path,
+        runtime.dbos.send,
+        limit=100,
+        now=now,
+        repo_ids=context.repo_ids or [context.repo_id],
+    )
+
+
 def run_once_decision(
     context,
     *,
@@ -518,6 +543,7 @@ def run_once_decision(
     now = now or daemon_state.utc_now()
     _maybe_prune(context, now=now)
     repo_ids = context.repo_ids or [context.repo_id]
+    relay_result = _relay_due_signals(context, now=now)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids)
         capacity_full = daemon_state.capacity_full_for_repos(
@@ -550,6 +576,7 @@ def run_once_decision(
                 "ok": True,
                 "decision": "live_poll_skipped_rate_limit",
                 "rate_limit": rate_decision,
+                "relay_result": relay_result,
             }
         live_result = _run_live_poll(context, child_runner=child_runner, now=now)
         drain_result = _run_local_drain(context, child_runner=child_runner, now=now)
@@ -558,6 +585,7 @@ def run_once_decision(
             "decision": "live_poll",
             "live_result": live_result,
             "drain_result": drain_result,
+            "relay_result": relay_result,
         }
     if local_work:
         rate_decision = _rate_limit_decision(context, rate_limit_runner, now=now)
@@ -572,8 +600,9 @@ def run_once_decision(
             "decision": "local_drain",
             "result": result,
             "rate_limit": rate_decision,
+            "relay_result": relay_result,
         }
-    return {"ok": True, "decision": "idle"}
+    return {"ok": True, "decision": "idle", "relay_result": relay_result}
 
 
 def _finish_context(context, status, *, summary=None, error=None, now=None):
@@ -670,7 +699,19 @@ def run_daemon(
     )
     if error:
         return error
+    runtime = None
+    runtime_startup_failed = False
     try:
+        workflow_engine = context.workflow_engine or {}
+        if workflow_engine.get("mode", "legacy") in {"shadow", "active"}:
+            try:
+                runtime = dbos_runtime.configure_runtime(
+                    {"workflow_engine": workflow_engine}
+                )
+                dbos_runtime.launch_runtime(runtime)
+            except Exception:
+                runtime_startup_failed = True
+                raise
         if once:
             result = run_once_decision(
                 context,
@@ -682,9 +723,20 @@ def run_daemon(
             return {**result, "status": "stopped", "daemon_run_id": context.daemon_run_id}
         return _resident_loop(context)
     except Exception as exc:
-        error_payload = {"status": "failed", "safe_error": str(exc), "error_type": type(exc).__name__}
+        error_payload = {
+            "status": "failed",
+            "safe_error": (
+                "DBOS runtime startup failed"
+                if runtime_startup_failed
+                else str(exc)
+            ),
+            "error_type": type(exc).__name__,
+        }
         _finish_context(context, "failed", error=error_payload, now=now)
         return {"ok": False, **error_payload}
+    finally:
+        if runtime is not None:
+            dbos_runtime.destroy_runtime()
 
 
 def main(argv=None):

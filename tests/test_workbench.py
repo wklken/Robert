@@ -208,6 +208,38 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(active_payload["items"], [])
         self.assertEqual(active_payload["counts"]["history"], 1)
 
+    def test_closed_completed_source_keeps_old_failures_in_history(self):
+        from robert_agent import workbench
+
+        self.seed_workstream(task_lifecycle="failed", workstream_lifecycle="completed")
+        self.seed_publish_action(publish_status="skipped")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE github_sources SET state='closed'")
+            conn.execute("UPDATE attempts SET status='failed'")
+        payload = workbench.list_work_items(self.db_path, bucket="history")
+        self.assertEqual(payload["counts"]["needs_attention"], 0)
+        self.assertEqual(payload["items"][0]["bucket"], "history")
+
+        # A closed source must not hide work that is still running or publishing.
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE attempts SET status='running'")
+        self.assertEqual(workbench.list_work_items(self.db_path)["counts"]["history"], 0)
+
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE attempts SET status='failed'")
+            conn.execute("UPDATE github_actions SET publish_status='not_published'")
+        self.assertEqual(workbench.list_work_items(self.db_path)["counts"]["history"], 0)
+
+    def test_legacy_read_only_detail_without_board_table_remains_available(self):
+        from robert_agent import workbench
+
+        workstream_id, _task_id = self.seed_workstream()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("DROP TABLE work_items")
+        detail = workbench.get_work_item(self.db_path, workstream_id)
+        self.assertEqual(detail['id'], workstream_id)
+        self.assertIsNone(detail['work_item_id'])
+
     def test_exhausted_remediation_episode_is_operator_attention(self):
         from robert_agent import workbench
 

@@ -213,3 +213,51 @@ class CliTests(unittest.TestCase):
             [step["status"] for step in result["steps"]],
             ["ready", "written", "installed", "restarted", "verified"],
         )
+
+    def test_doctor_json_keeps_workflow_database_url_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / ".git").mkdir()
+            config_path = root / "config.yml"
+            init_config(
+                config_path,
+                {
+                    "repo": "example/backend",
+                    "repo_path": str(repo),
+                    "worker": "codex",
+                    "github_account": "robert-bot",
+                    "trusted_actor": "maintainer",
+                },
+                non_interactive=True,
+            )
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["workflow_engine"] = {
+                "mode": "shadow",
+                "system_database_url_env": "ROBERT_DBOS_CLI_URL",
+            }
+            config_path.write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            secret_url = "postgresql://operator:secret@example.invalid/robert"
+            output = io.StringIO()
+            with mock.patch.dict(
+                os.environ,
+                {"ROBERT_DBOS_CLI_URL": secret_url},
+                clear=False,
+            ), redirect_stdout(output):
+                code = main(
+                    [
+                        "doctor",
+                        "--config",
+                        str(config_path),
+                        "--skip-external",
+                        "--output",
+                        "json",
+                    ]
+                )
+
+        self.assertNotEqual(code, 0)
+        self.assertNotIn(secret_url, output.getvalue())

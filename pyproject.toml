@@ -14,6 +14,8 @@ dependencies = [
   "PyYAML>=6.0,<7",
   # Supervisor provides restart/status control when Linux user systemd is unavailable.
   "supervisor>=4.2,<5",
+  # DBOS provides durable replay, step checkpoints, and workflow messaging unavailable in current dependencies.
+  "dbos>=2.29,<3",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",

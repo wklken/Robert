@@ -58,11 +58,13 @@ REPO_STEP_ORDER = [
 
 WEB_ASSET_ROOT = files("robert_agent").joinpath("web_assets")
 WEB_ASSETS = {
-    "/": ("index.html", "text/html; charset=utf-8"),
+    "/": ("board.html", "text/html; charset=utf-8"),
+    "/work": ("index.html", "text/html; charset=utf-8"),
     "/board": ("board.html", "text/html; charset=utf-8"),
     "/assets/github-shell.css": ("github-shell.css", "text/css; charset=utf-8"),
     "/assets/operations.css": ("operations.css", "text/css; charset=utf-8"),
     "/assets/board.css": ("board.css", "text/css; charset=utf-8"),
+    "/assets/board-client.js": ("board-client.js", "text/javascript; charset=utf-8"),
     "/assets/board.js": ("board.js", "text/javascript; charset=utf-8"),
     "/assets/workbench.css": ("workbench.css", "text/css; charset=utf-8"),
     "/assets/workbench.js": (
@@ -1302,7 +1304,7 @@ def _knowledge_tables_available(conn):
     )
 
 
-def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536):
+def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, artifact_id=None):
     if not task_id or not artifact_type:
         return None
     with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -1312,10 +1314,11 @@ def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536):
             SELECT artifact_type, path, bytes
             FROM artifacts
             WHERE task_id = ? AND artifact_type = ?
+              AND (? IS NULL OR artifact_id = ?)
             ORDER BY created_at DESC, artifact_id DESC
             LIMIT 1
             """,
-            (task_id, artifact_type),
+            (task_id, artifact_type, artifact_id, artifact_id),
         ).fetchone()
     if not row:
         return None
@@ -1957,8 +1960,8 @@ def render_dashboard_html():
   <main id="dashboard-app" class="mission-shell" data-state="loading">
     <header class="global-bar">
       <a class="brand" href="/" aria-label="Robert Workbench">
-        <span class="brand-mark" aria-hidden="true">R</span>
-        <span>GitHub Agent</span>
+        <span class="brand-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 7.5v9M18 8.5v2a6 6 0 0 1-6 6H6"/></svg></span>
+        <span>Robert</span>
       </a>
       <div class="global-actions" aria-label="Dashboard controls" data-i18n-aria="dashboardControls">
         <span class="live-indicator"><i aria-hidden="true"></i><span class="responsive-label" id="last-updated" data-i18n="loading">Loading</span></span>
@@ -1990,13 +1993,13 @@ def render_dashboard_html():
       </div>
     </header>
     <header class="repo-header">
-      <div class="repo-context"><a href="/">Robert</a><span>/</span><strong id="repo-context">operations</strong><span class="counter-label">Private</span></div>
+      <div class="repo-context"><a href="/">Robert</a><span>/</span><strong id="repo-context">operations</strong></div>
       <nav class="underline-nav" aria-label="Workbench" data-i18n-aria="primaryNavigation">
-        <a class="underline-nav-item" href="/"><span aria-hidden="true">⌁</span> <span data-i18n="primaryWork">Work</span></a>
-        <a class="underline-nav-item" href="/board"><span aria-hidden="true">▦</span> <span data-i18n="navBoard">Board</span></a>
-        <a class="underline-nav-item" href="/?bucket=history"><span aria-hidden="true">◷</span> <span data-i18n="navHistory">History</span></a>
-        <a class="underline-nav-item selected" data-primary-view="operations" href="/operations"><span aria-hidden="true">▣</span> <span data-i18n="navOperations">Operations</span></a>
-        <a class="underline-nav-item" data-primary-view="knowledge" href="/operations#knowledge"><span aria-hidden="true">◇</span> <span data-i18n="navKnowledge">Knowledge</span></a>
+        <a class="underline-nav-item" href="/work"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4v5m0 2v1"/></svg> <span data-i18n="primaryWork">Work</span></a>
+        <a class="underline-nav-item" href="/board"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 2v12M10 2v12"/></svg> <span data-i18n="navBoard">Board</span></a>
+        <a class="underline-nav-item" href="/work?bucket=history"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg> <span data-i18n="navHistory">History</span></a>
+        <a class="underline-nav-item selected" data-primary-view="operations" href="/operations"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg> <span data-i18n="navOperations">Operations</span></a>
+        <a class="underline-nav-item" data-primary-view="knowledge" href="/operations#knowledge"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 3v11M2 2l6 1 6-1v10l-6 1-6-1z"/></svg> <span data-i18n="navKnowledge">Knowledge</span></a>
       </nav>
     </header>
     <nav class="mission-nav" aria-label="Dashboard sections" data-i18n-aria="diagnosticNavigation">
@@ -2118,12 +2121,12 @@ def render_dashboard_html():
       en: {
         navWorkbench: 'Workbench', primaryWork: 'Work', navBoard: 'Board', navHistory: 'History', navOperations: 'Operations', navKnowledge: 'Knowledge',
         primaryNavigation: 'Primary navigation', diagnosticNavigation: 'Operations sections', repositoryContext: 'Repository context', dashboardControls: 'Dashboard controls',
-        productSubtitle: 'Your Repo Teammate', loadingState: 'Loading local control-plane state.', theme: 'Theme', themeSystem: 'System', themeLight: 'Light', themeDark: 'Dark', language: 'Language', languageEnglish: 'English', languageChinese: 'Chinese', loading: 'Loading', autoRefresh: 'Auto refresh', off: 'Off', refresh: 'Refresh', settings: 'Settings', viewJson: 'View JSON', navCommand: 'Command', navWork: 'Work', navDaemon: 'Daemon', navTimeline: 'Timeline', navKnowledge: 'Knowledge', navNotifications: 'Notifications', commandHeadline: 'Robert Command Center', commandLead: 'Built for collaborators and maintainers who need an unattended GitHub agent they can actually trust.', commandInspector: 'Runtime inspector', systemSnapshot: 'System snapshot', operatorNextSteps: 'Operator Inbox', currentWork: 'Active workstreams', recentActivity: 'Event stream', tasks: 'Tasks', workItems: 'PR / Issue', workTasks: 'Tasks in source', taskDetail: 'Task detail', logsArtifacts: 'Logs and artifacts', daemonHealth: 'Daemon health', daemonEvents: 'Daemon events', timeline: 'Timeline', timelineFilters: 'Timeline filters', knowledgeReview: 'Knowledge review', knowledgeBoundary: 'Local approval only. This page writes only to local runtime knowledge tables.', generateCandidates: 'Generate candidates', generateCandidatesHelp: 'Read local project memory and create pending candidates for human review.', repository: 'Repository', generate: 'Generate', activeKnowledge: 'Active runtime knowledge', notificationCenter: 'Notification center', artifactPreview: 'Artifact preview', closePreview: 'Close', selectArtifact: 'Select an artifact preview.', updated: 'Updated', every: 'Every', open: 'open', recent: 'recent', pending: 'pending', active: 'active', inspect: 'Inspect', preview: 'Preview', openGithub: 'Open GitHub', metadata: 'Metadata', noOperatorAction: 'No operator action is waiting.', noWorkItems: 'No PR or issue work recorded.', noTasks: 'No tasks recorded.', noActivity: 'No recent activity recorded.', noDaemon: 'No daemon run recorded.', noDaemonEvents: 'No daemon events recorded.', noTimeline: 'No timeline evidence recorded.', noNotifications: 'No notifications recorded.', noKnowledgeTables: 'Knowledge tables are not available in this database yet.', noPendingKnowledge: 'No pending knowledge candidates.', noActiveKnowledge: 'No active runtime knowledge.', noArtifacts: 'No artifacts for this task.', artifactLoading: 'Loading artifact preview.', artifactUnavailable: 'Preview unavailable', failedLoad: 'Failed to load dashboard data', approve: 'Approve', reject: 'Reject', scopeType: 'Scope type', scopeValue: 'Scope value', approvedBy: 'Approved by', reviewer: 'Reviewer', rejectReason: 'Reject reason', allowedActions: 'Allowed GitHub actions', recommendedSkills: 'Recommended skills', latestNotification: 'Latest notification', source: 'Source', daemon: 'Daemon', queue: 'Queue', attention: 'Attention', publish: 'Publish', latestRun: 'Latest run', idleHealthy: 'Idle and healthy', needsReview: 'Needs review', workSearch: 'Search work', workProject: 'Project', workSearchPlaceholder: 'Search PR title or task ID', allProjects: 'All projects'
+        productSubtitle: 'Your Repo Teammate', loadingState: 'Loading local control-plane state.', theme: 'Theme', themeSystem: 'System', themeLight: 'Light', themeDark: 'Dark', language: 'Language', languageEnglish: 'English', languageChinese: 'Chinese', loading: 'Loading', autoRefresh: 'Auto refresh', off: 'Off', refresh: 'Refresh', settings: 'Settings', viewJson: 'View JSON', navCommand: 'Command', navWork: 'Work', navDaemon: 'Daemon', navTimeline: 'Timeline', navKnowledge: 'Knowledge', navNotifications: 'Notifications', commandHeadline: 'Robert Command Center', commandLead: 'Runtime, queue, publication and recent activity.', commandInspector: 'Runtime inspector', systemSnapshot: 'System snapshot', operatorNextSteps: 'Operator Inbox', currentWork: 'Active workstreams', recentActivity: 'Event stream', tasks: 'Tasks', workItems: 'PR / Issue', workTasks: 'Tasks in source', taskDetail: 'Task detail', logsArtifacts: 'Logs and artifacts', daemonHealth: 'Daemon health', daemonEvents: 'Daemon events', timeline: 'Timeline', timelineFilters: 'Timeline filters', knowledgeReview: 'Knowledge review', knowledgeBoundary: 'Local approval only. This page writes only to local runtime knowledge tables.', generateCandidates: 'Generate candidates', generateCandidatesHelp: 'Read local project memory and create pending candidates for human review.', repository: 'Repository', generate: 'Generate', activeKnowledge: 'Active runtime knowledge', notificationCenter: 'Notification center', artifactPreview: 'Artifact preview', closePreview: 'Close', selectArtifact: 'Select an artifact preview.', updated: 'Updated', every: 'Every', open: 'open', recent: 'recent', pending: 'pending', active: 'active', inspect: 'Inspect', preview: 'Preview', openGithub: 'Open GitHub', metadata: 'Metadata', noOperatorAction: 'No operator action is waiting.', noWorkItems: 'No PR or issue work recorded.', noTasks: 'No tasks recorded.', noActivity: 'No recent activity recorded.', noDaemon: 'No daemon run recorded.', noDaemonEvents: 'No daemon events recorded.', noTimeline: 'No timeline evidence recorded.', noNotifications: 'No notifications recorded.', noKnowledgeTables: 'Knowledge tables are not available in this database yet.', noPendingKnowledge: 'No pending knowledge candidates.', noActiveKnowledge: 'No active runtime knowledge.', noArtifacts: 'No artifacts for this task.', artifactLoading: 'Loading artifact preview.', artifactUnavailable: 'Preview unavailable', failedLoad: 'Failed to load dashboard data', approve: 'Approve', reject: 'Reject', scopeType: 'Scope type', scopeValue: 'Scope value', approvedBy: 'Approved by', reviewer: 'Reviewer', rejectReason: 'Reject reason', allowedActions: 'Allowed GitHub actions', recommendedSkills: 'Recommended skills', latestNotification: 'Latest notification', source: 'Source', daemon: 'Daemon', queue: 'Queue', attention: 'Attention', publish: 'Publish', latestRun: 'Latest run', idleHealthy: 'Idle and healthy', needsReview: 'Needs review', workSearch: 'Search work', workProject: 'Project', workSearchPlaceholder: 'Search PR title or task ID', allProjects: 'All projects'
       },
       zh: {
         navWorkbench: '工作台', primaryWork: '工作', navBoard: '任务看板', navHistory: '历史', navOperations: '运行状态', navKnowledge: '知识',
         primaryNavigation: '一级导航', diagnosticNavigation: '运行状态分区', repositoryContext: '仓库上下文', dashboardControls: '控制台控制',
-        productSubtitle: 'Your Repo Teammate', loadingState: '正在读取本地控制面状态。', theme: '主题', themeSystem: '跟随系统', themeLight: '浅色', themeDark: '深色', language: '语言', languageEnglish: 'English', languageChinese: '中文', loading: '加载中', autoRefresh: '自动刷新', off: '关闭', refresh: '刷新', settings: '设置', viewJson: '查看 JSON', navCommand: '指挥台', navWork: '工作流', navDaemon: '守护进程', navTimeline: '时间线', navKnowledge: '知识', navNotifications: '通知中心', commandHeadline: 'Robert 指挥中心', commandLead: '给协作者和维护者使用：让无人值守的 GitHub Agent 变得可理解、可信任。', commandInspector: '运行检查器', systemSnapshot: '系统快照', operatorNextSteps: '操作收件箱', currentWork: '活跃工作流', recentActivity: '事件流', tasks: '任务', workItems: 'PR / Issue', workTasks: '来源下的任务', taskDetail: '任务详情', logsArtifacts: '日志和产物', daemonHealth: '守护进程健康度', daemonEvents: '守护进程事件', timeline: '时间线', timelineFilters: '时间线过滤', knowledgeReview: '知识审核', knowledgeBoundary: '仅本地审批。此页面只写入本地 runtime knowledge 表。', generateCandidates: '生成候选知识', generateCandidatesHelp: '读取本地项目记忆，生成待人工审核的候选项。', repository: '仓库', generate: '生成', activeKnowledge: '已生效知识', notificationCenter: '通知中心', artifactPreview: '产物预览', closePreview: '关闭', selectArtifact: '选择一个产物预览。', updated: '已更新', every: '每', open: '未处理', recent: '最近', pending: '待处理', active: '活跃', inspect: '查看', preview: '预览', openGithub: '打开 GitHub', metadata: '元数据', noOperatorAction: '暂无需要操作的事项。', noWorkItems: '暂无 PR 或 Issue 工作记录。', noTasks: '暂无任务记录。', noActivity: '暂无最近动态。', noDaemon: '暂无守护进程运行记录。', noDaemonEvents: '暂无守护进程事件。', noTimeline: '暂无时间线证据。', noNotifications: '暂无通知。', noKnowledgeTables: '当前数据库还没有 knowledge 表。', noPendingKnowledge: '暂无待审核知识。', noActiveKnowledge: '暂无已生效知识。', noArtifacts: '这个任务暂无产物。', artifactLoading: '正在加载产物预览。', artifactUnavailable: '无法预览', failedLoad: '加载 dashboard 数据失败', approve: '批准', reject: '拒绝', scopeType: '作用域类型', scopeValue: '作用域值', approvedBy: '批准人', reviewer: '审核人', rejectReason: '拒绝原因', allowedActions: '允许的 GitHub 动作', recommendedSkills: '推荐技能', latestNotification: '最近通知', source: '来源', daemon: '守护', queue: '队列', attention: '关注', publish: '发布', latestRun: '最近运行', idleHealthy: '空闲且健康', needsReview: '需要查看', workSearch: '搜索工作流', workProject: '项目', workSearchPlaceholder: '搜索 PR 标题或 task ID', allProjects: '全部项目'
+        productSubtitle: 'Your Repo Teammate', loadingState: '正在读取本地控制面状态。', theme: '主题', themeSystem: '跟随系统', themeLight: '浅色', themeDark: '深色', language: '语言', languageEnglish: 'English', languageChinese: '中文', loading: '加载中', autoRefresh: '自动刷新', off: '关闭', refresh: '刷新', settings: '设置', viewJson: '查看 JSON', navCommand: '指挥台', navWork: '工作流', navDaemon: '守护进程', navTimeline: '时间线', navKnowledge: '知识', navNotifications: '通知中心', commandHeadline: 'Robert 指挥中心', commandLead: '查看运行状态、调度队列、结果发布与最近事件。', commandInspector: '运行检查器', systemSnapshot: '系统快照', operatorNextSteps: '操作收件箱', currentWork: '活跃工作流', recentActivity: '事件流', tasks: '任务', workItems: 'PR / Issue', workTasks: '来源下的任务', taskDetail: '任务详情', logsArtifacts: '日志和产物', daemonHealth: '守护进程健康度', daemonEvents: '守护进程事件', timeline: '时间线', timelineFilters: '时间线过滤', knowledgeReview: '知识审核', knowledgeBoundary: '仅本地审批。此页面只写入本地 runtime knowledge 表。', generateCandidates: '生成候选知识', generateCandidatesHelp: '读取本地项目记忆，生成待人工审核的候选项。', repository: '仓库', generate: '生成', activeKnowledge: '已生效知识', notificationCenter: '通知中心', artifactPreview: '产物预览', closePreview: '关闭', selectArtifact: '选择一个产物预览。', updated: '已更新', every: '每', open: '未处理', recent: '最近', pending: '待处理', active: '活跃', inspect: '查看', preview: '预览', openGithub: '打开 GitHub', metadata: '元数据', noOperatorAction: '暂无需要操作的事项。', noWorkItems: '暂无 PR 或 Issue 工作记录。', noTasks: '暂无任务记录。', noActivity: '暂无最近动态。', noDaemon: '暂无守护进程运行记录。', noDaemonEvents: '暂无守护进程事件。', noTimeline: '暂无时间线证据。', noNotifications: '暂无通知。', noKnowledgeTables: '当前数据库还没有 knowledge 表。', noPendingKnowledge: '暂无待审核知识。', noActiveKnowledge: '暂无已生效知识。', noArtifacts: '这个任务暂无产物。', artifactLoading: '正在加载产物预览。', artifactUnavailable: '无法预览', failedLoad: '加载 dashboard 数据失败', approve: '批准', reject: '拒绝', scopeType: '作用域类型', scopeValue: '作用域值', approvedBy: '批准人', reviewer: '审核人', rejectReason: '拒绝原因', allowedActions: '允许的 GitHub 动作', recommendedSkills: '推荐技能', latestNotification: '最近通知', source: '来源', daemon: '守护', queue: '队列', attention: '关注', publish: '发布', latestRun: '最近运行', idleHealthy: '空闲且健康', needsReview: '需要查看', workSearch: '搜索工作流', workProject: '项目', workSearchPlaceholder: '搜索 PR 标题或 task ID', allProjects: '全部项目'
       }
     };
     const state = { data: null, selectedTaskId: null, selectedWorkItemId: null, currentView: 'command', autoRefreshTimer: null, autoRefreshIntervalMs: 30000, language: 'en', theme: 'system', searchQuery: '', workSearchQuery: '', workRepoFilter: '', timelineHiddenTypes: new Set(['daemon_heartbeat']) };
@@ -2250,6 +2253,15 @@ def render_dashboard_html():
     applyPreferences();
     applyHash();
     initAutoRefresh();
+    controlSession().then((session) => {
+      if (!session.writes_enabled) {
+        const notice = document.createElement('p');
+        notice.className = 'snapshot-notice';
+        notice.setAttribute('role', 'status');
+        notice.textContent = session.write_error || 'Read-only mode';
+        document.querySelector('.mission-workspace').prepend(notice);
+      }
+    }).catch(() => {});
     loadDashboard();
   </script>
 </body>
@@ -2271,7 +2283,8 @@ def build_http_response(path, db_path, control_context=None):
     if route == "/favicon.ico":
         return 204, {"content-type": "image/x-icon"}, b""
     if route in WEB_ASSETS:
-        filename, content_type = WEB_ASSETS[route]
+        asset_route = "/work" if route == "/" and "bucket" in parse_qs(parsed.query) else route
+        filename, content_type = WEB_ASSETS[asset_route]
         try:
             payload = (WEB_ASSET_ROOT / filename).read_bytes()
         except OSError:
@@ -2410,6 +2423,7 @@ def build_http_response(path, db_path, control_context=None):
             db_path,
             (query.get("task_id") or [""])[0],
             (query.get("artifact_type") or [""])[0],
+            artifact_id=(query.get("artifact_id") or [None])[0],
         )
         if not preview:
             return 404, {"content-type": "text/plain; charset=utf-8"}, b"artifact not found\n"
@@ -2535,6 +2549,7 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
             context=_work_item_context(control_context),
             command=payload.get("command"),
             expected_version=payload.get("expected_version"),
+            expected_event_id=payload.get("expected_event_id"),
             idempotency_key=idempotency_key,
             body=payload.get("body", ""),
             routing_mode=payload.get("routing_mode"),

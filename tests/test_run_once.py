@@ -381,6 +381,16 @@ repos:
 
         self.assertEqual(call["model"], "model-fallback")
 
+    @staticmethod
+    def _recorded_identity(pid, source="ps"):
+        return {
+            "pid": pid,
+            "process_group_id": pid,
+            "process_start_token": f"start-{pid}",
+            "command_fingerprint": "a" * 64,
+            "identity_source": source,
+        }
+
     def _new_pr_actions_for_attempt(
         self,
         db_path,
@@ -3225,6 +3235,7 @@ repos:
                 """,
                 (workstream_id,),
             )
+            run_once._close_task_binding_if_terminal(conn, parent_task_id, '2026-10-19T00:01:00+00:00')
         context = work_items.CommandContext(
             actor_kind="operator",
             actor_identity="owner",
@@ -3239,6 +3250,13 @@ repos:
             notifier=lambda _path: None,
         )
         self.assertEqual(queued["status"], "queued")
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id))
+            self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
+            self.assertTrue(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            conn.execute("UPDATE workflow_bindings SET owner_engine='dbos', workflow_id='fixture-retrigger' WHERE subject_id=?", (parent_task_id,))
+            self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            conn.execute("UPDATE workflow_bindings SET owner_engine='legacy', workflow_id=NULL WHERE subject_id=?", (parent_task_id,))
         followup_fixture = self.root / "retrigger-followup.json"
         followup_fixture.write_text(
             json.dumps(
@@ -5343,6 +5361,173 @@ repos:
         self.assertEqual(lease_status, "released")
         self.assertEqual(publish_step, "failed")
 
+    def test_dbos_owned_prepared_task_is_not_queued_or_dispatch_target(self):
+        from robert_agent import run_once, workflow_store
+
+        db_path, task_id, attempt_id = self._seed_active_pr_task(990)
+        prompt_path = self.data_dir / "prompt.md"
+        prompt_path.write_text("prompt", encoding="utf-8")
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO artifacts(
+                  artifact_id, task_id, attempt_id, artifact_type,
+                  path, created_at
+                ) VALUES ('artifact-990', ?, ?, 'prompt', ?, ?)
+                """,
+                (task_id, attempt_id, str(prompt_path), "2026-08-02T00:00:00Z"),
+            )
+            workflow_store.bind_subject(
+                conn,
+                "task",
+                task_id,
+                "human_request",
+                "dbos",
+                "2026-08-02T00:00:00Z",
+            )
+            queue = []
+            queued = run_once._queue_prepared_attempts(
+                conn,
+                "repo:example/backend",
+                {"full_name": "example/backend"},
+                queue,
+                1,
+            )
+            target = run_once._current_dispatch_target(conn, attempt_id)
+
+        self.assertEqual(queued, 0)
+        self.assertEqual(queue, [])
+        self.assertIsNone(target)
+
+    def test_dbos_owned_running_task_is_not_supervised_or_failed(self):
+        from robert_agent import run_once, workflow_store
+
+        db_path, task_id, attempt_id = self._seed_active_pr_task(991)
+        old = "2026-08-01T00:00:00+00:00"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                """
+                UPDATE attempts
+                SET status = 'running', started_at = ?, heartbeat_at = ?
+                WHERE attempt_id = ?
+                """,
+                (old, old, attempt_id),
+            )
+            workflow_store.bind_subject(
+                conn,
+                "task",
+                task_id,
+                "human_request",
+                "dbos",
+                "2026-08-02T00:00:00Z",
+            )
+            supervised = run_once._supervise_running_attempts(
+                conn,
+                "repo:example/backend",
+                {
+                    "worker_startup_grace_seconds": 300,
+                    "stale_after_minutes": 20,
+                    "hard_timeout_minutes": 90,
+                },
+                "2026-08-02T01:00:00+00:00",
+            )
+            state = conn.execute(
+                "SELECT lifecycle FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()[0]
+            attempt_state = conn.execute(
+                "SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)
+            ).fetchone()[0]
+
+        self.assertEqual(supervised, 0)
+        self.assertEqual(state, "running")
+        self.assertEqual(attempt_state, "running")
+
+    def test_dbos_owned_task_is_not_finalized_by_legacy_failure_path(self):
+        from robert_agent import run_once, workflow_store
+
+        db_path, task_id, _attempt_id = self._seed_active_pr_task(992)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            workflow_store.bind_subject(
+                conn,
+                "task",
+                task_id,
+                "human_request",
+                "dbos",
+                "2026-08-02T00:00:00Z",
+            )
+            finalized = run_once._finalize_failed_task(
+                conn,
+                task_id,
+                "github:example/backend!992",
+                "2026-08-02T00:00:00Z",
+                {"status": "worker_failed"},
+            )
+            lifecycle = conn.execute(
+                "SELECT lifecycle FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()[0]
+
+        self.assertFalse(finalized)
+        self.assertEqual(lifecycle, "queued")
+
+    def test_dispatch_process_status_requires_complete_recorded_identity(self):
+        from robert_agent import run_once
+
+        status = run_once._dispatch_process_status(
+            {"dispatch": {"pid": 43210, "status": "running"}}
+        )
+
+        self.assertEqual(status["status"], "unknown")
+        self.assertEqual(status["reason"], "identity_unverified")
+
+    def test_unknown_worker_identity_marks_binding_attention_without_mutation(self):
+        from robert_agent import run_once, workflow_store
+
+        db_path, task_id, attempt_id = self._seed_active_pr_task(993)
+        now = "2026-08-02T01:00:00+00:00"
+        dispatch_metadata = {
+            "pid": 43211,
+            "process_group_id": 43211,
+            "process_start_token": "start",
+            "command_fingerprint": "a" * 64,
+            "identity_source": "ps",
+        }
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,))
+            conn.execute(
+                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                (now, now, json.dumps({"dispatch": dispatch_metadata}), attempt_id),
+            )
+            workflow_store.bind_subject(
+                conn, "task", task_id, "human_request", "legacy", now
+            )
+            original = run_once.worker_identity.inspect_recorded_identity
+            run_once.worker_identity.inspect_recorded_identity = lambda _identity: "unknown"
+            try:
+                supervised = run_once._supervise_running_attempts(
+                    conn,
+                    "repo:example/backend",
+                    {
+                        "worker_startup_grace_seconds": 300,
+                        "stale_after_minutes": 20,
+                        "hard_timeout_minutes": 90,
+                    },
+                    now,
+                )
+            finally:
+                run_once.worker_identity.inspect_recorded_identity = original
+            binding = workflow_store.get_binding(conn, "task", task_id)
+            attempt_state = conn.execute(
+                "SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)
+            ).fetchone()[0]
+
+        self.assertEqual(supervised, 1)
+        self.assertEqual(binding["binding_status"], "attention")
+        self.assertEqual(attempt_state, "running")
+
     def test_supervise_marks_stale_running_attempt_and_notifies(self):
         from robert_agent import run_once
         first = run_once.run_once(
@@ -5364,8 +5549,8 @@ repos:
                 (task_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ? WHERE attempt_id = ?",
-                (old, old, attempt_id),
+                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
             conn.execute(
                 """
@@ -5377,12 +5562,19 @@ repos:
                 (attempt_id, old),
             )
 
-        second = run_once.run_once(
-            self.config_path,
-            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            dry_run=True,
-            skip_external=True,
-        )
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        try:
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
+            second = run_once.run_once(
+                self.config_path,
+                workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+                dry_run=True,
+                skip_external=True,
+            )
+        finally:
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5425,16 +5617,28 @@ repos:
                 (task_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ? WHERE attempt_id = ?",
-                (old, old, attempt_id),
+                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
 
-        second = run_once.run_once(
-            self.config_path,
-            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            dry_run=True,
-            skip_external=True,
-        )
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_terminate = run_once.worker_identity.terminate_recorded_identity
+        try:
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
+            run_once.worker_identity.terminate_recorded_identity = (
+                lambda _identity: {"status": "attention", "reason": "invalid_identity"}
+            )
+            second = run_once.run_once(
+                self.config_path,
+                workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+                dry_run=True,
+                skip_external=True,
+            )
+        finally:
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            run_once.worker_identity.terminate_recorded_identity = original_terminate
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5487,21 +5691,16 @@ repos:
                 (
                     now,
                     now,
-                    json.dumps({"dispatch": {"pid": 987654, "status": "running"}}),
+                    json.dumps({"dispatch": self._recorded_identity(987654)}),
                     attempt_id,
                 ),
             )
 
-        original_kill = run_once.os.kill
-
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, 987654)
-            if sig == 0:
-                raise ProcessLookupError()
-            raise ProcessLookupError()
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
         try:
-            run_once.os.kill = fake_kill
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5509,7 +5708,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5567,7 +5766,7 @@ repos:
                     now,
                     json.dumps(
                         {
-                            "dispatch": {"pid": 987654, "status": "running"},
+                            "dispatch": self._recorded_identity(987654),
                             "existing_pr_head_sha": "worker-base-sha",
                         }
                     ),
@@ -5593,16 +5792,11 @@ repos:
                 (task_id, attempt_id, str(stdout_path), now),
             )
 
-        original_kill = run_once.os.kill
-
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, 987654)
-            if sig == 0:
-                raise ProcessLookupError()
-            raise ProcessLookupError()
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
         try:
-            run_once.os.kill = fake_kill
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5610,9 +5804,50 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
+        second_now = datetime.now(timezone.utc).isoformat()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            resume_attempt_id, resume_metadata_json = conn.execute(
+                "SELECT attempt_id, metadata_json FROM attempts WHERE attempt_no = 2"
+            ).fetchone()
+            resume_metadata = json.loads(resume_metadata_json)
+            resume_metadata["dispatch"] = self._recorded_identity(987655)
+            conn.execute(
+                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                (
+                    second_now,
+                    second_now,
+                    json.dumps(resume_metadata, sort_keys=True),
+                    resume_attempt_id,
+                ),
+            )
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_recovery = run_once._inspect_attempt_recovery_with_metadata
+        try:
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
+            run_once._inspect_attempt_recovery_with_metadata = (
+                lambda *_args, **_kwargs: {
+                    "status": "recoverable_progress",
+                    "task_id": task_id,
+                    "previous_attempt_id": resume_attempt_id,
+                    "progress_signals": ["dirty_worktree"],
+                }
+            )
+            third = run_once.run_once(
+                self.config_path,
+                workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+                dry_run=True,
+                skip_external=True,
+            )
+        finally:
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            run_once._inspect_attempt_recovery_with_metadata = original_recovery
+
+        self.assertTrue(third["ok"], third)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempts = conn.execute(
                 """
@@ -5638,13 +5873,17 @@ repos:
                 (task_id,),
             ).fetchall()
             notification = conn.execute(
-                "SELECT notification_type, status FROM notifications ORDER BY created_at DESC LIMIT 1"
+                "SELECT notification_type, status FROM notifications WHERE notification_type = 'worker_identity_attention'"
             ).fetchone()
+            binding = conn.execute(
+                "SELECT binding_status FROM workflow_bindings WHERE subject_type = 'task' AND subject_id = ?",
+                (task_id,),
+            ).fetchone()[0]
 
         self.assertEqual(len(attempts), 2)
         self.assertEqual(attempts[0][0], attempt_id)
         self.assertEqual(attempts[0][2], "failed")
-        self.assertEqual(attempts[1][1:5], (2, "prepared", worktree_path, branch_name))
+        self.assertEqual(attempts[1][1:5], (2, "running", worktree_path, branch_name))
         resumed_attempt_metadata = json.loads(attempts[1][5])
         resume_metadata = resumed_attempt_metadata["resume"]
         self.assertEqual(resume_metadata["previous_attempt_id"], attempt_id)
@@ -5654,7 +5893,8 @@ repos:
         )
         self.assertEqual(task_lifecycle, "running")
         self.assertEqual(workstream, ("active", task_id))
-        self.assertEqual(notification, ("worker_resume_prepared", "recorded"))
+        self.assertEqual(notification, ("worker_identity_attention", "recorded"))
+        self.assertEqual(binding, "attention")
         artifact_types = [row[0] for row in artifacts]
         self.assertIn("recovery_context", artifact_types)
         prompt_path = Path([row[1] for row in artifacts if row[0] == "prompt"][-1])
@@ -5663,6 +5903,170 @@ repos:
         self.assertIn(attempt_id, prompt)
         self.assertIn("Command exited 0", prompt)
         self.assertIn("git_status_short", prompt)
+
+    def test_recovery_creation_failure_marks_attempt_and_binding_attention(self):
+        from robert_agent import run_once, workflow_store
+
+        db_path, task_id, attempt_id = self._seed_active_pr_task(987)
+        now = "2026-08-02T01:00:00+00:00"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                (
+                    now,
+                    now,
+                    json.dumps({"dispatch": self._recorded_identity(987)}),
+                    attempt_id,
+                ),
+            )
+            workflow_store.bind_subject(
+                conn,
+                "task",
+                task_id,
+                "human_request",
+                "legacy",
+                now,
+            )
+            original_group = run_once._live_process_group
+            run_once._live_process_group = lambda _pid: False
+            original_inspect = run_once.worker_identity.inspect_recorded_identity
+            original_recovery = run_once._inspect_attempt_recovery_with_metadata
+            original_create = run_once._create_resume_attempt_and_prompt
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
+            run_once._inspect_attempt_recovery_with_metadata = (
+                lambda *_args, **_kwargs: {
+                    "status": "recoverable_progress",
+                    "task_id": task_id,
+                    "previous_attempt_id": attempt_id,
+                    "progress_signals": ["dirty_worktree"],
+                }
+            )
+            run_once._create_resume_attempt_and_prompt = (
+                lambda *_args, **_kwargs: None
+            )
+            try:
+                supervised = run_once._supervise_running_attempts(
+                    conn,
+                    "repo:example/backend",
+                    {
+                        "worker_startup_grace_seconds": 300,
+                        "stale_after_minutes": 20,
+                        "hard_timeout_minutes": 90,
+                    },
+                    now,
+                    data_dir=self.data_dir,
+                    db_path=db_path,
+                    repo={},
+                )
+            finally:
+                run_once._live_process_group = original_group
+                run_once.worker_identity.inspect_recorded_identity = original_inspect
+                run_once._inspect_attempt_recovery_with_metadata = original_recovery
+                run_once._create_resume_attempt_and_prompt = original_create
+            binding = workflow_store.get_binding(conn, "task", task_id)
+            attempt_metadata = json.loads(
+                conn.execute(
+                    "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()[0]
+            )
+            notification = conn.execute(
+                "SELECT notification_type, status FROM notifications"
+            ).fetchone()
+
+        self.assertEqual(supervised, 1)
+        self.assertEqual(binding["binding_status"], "attention")
+        self.assertEqual(
+            attempt_metadata["supervise"]["reason"],
+            "recovery_attempt_creation_failed",
+        )
+        self.assertEqual(notification, ("worker_identity_attention", "recorded"))
+
+    def test_failed_timeout_recovery_creation_failure_marks_attention(self):
+        from robert_agent import run_once, workflow_store
+
+        db_path, task_id, attempt_id = self._seed_active_pr_task(988)
+        now = "2026-08-02T01:00:00+00:00"
+        old = "2026-08-01T00:00:00+00:00"
+        failure = {"status": "failed_timeout", "terminate": True}
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            workflow_store.bind_subject(
+                conn,
+                "task",
+                task_id,
+                "human_request",
+                "legacy",
+                old,
+            )
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE workstreams SET lifecycle = 'failed', active_task_id = NULL WHERE workstream_id = ?",
+                ("github:example/backend!988",),
+            )
+            conn.execute(
+                "UPDATE attempts SET status = 'failed', started_at = ?, heartbeat_at = ?, finished_at = ?, failure_json = ?, metadata_json = ? WHERE attempt_id = ?",
+                (
+                    old,
+                    old,
+                    old,
+                    json.dumps(failure),
+                    json.dumps({"dispatch": self._recorded_identity(988)}),
+                    attempt_id,
+                ),
+            )
+            original_inspect = run_once.worker_identity.inspect_recorded_identity
+            original_recovery = run_once._inspect_attempt_recovery_with_metadata
+            original_create = run_once._create_resume_attempt_and_prompt
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
+            run_once._inspect_attempt_recovery_with_metadata = (
+                lambda *_args, **_kwargs: {
+                    "status": "recoverable_progress",
+                    "task_id": task_id,
+                    "previous_attempt_id": attempt_id,
+                    "progress_signals": ["dirty_worktree"],
+                }
+            )
+            run_once._create_resume_attempt_and_prompt = (
+                lambda *_args, **_kwargs: None
+            )
+            try:
+                recovered = run_once._recover_failed_timeout_attempts(
+                    conn,
+                    "repo:example/backend",
+                    now,
+                    data_dir=self.data_dir,
+                    db_path=db_path,
+                    repo={},
+                )
+            finally:
+                run_once.worker_identity.inspect_recorded_identity = original_inspect
+                run_once._inspect_attempt_recovery_with_metadata = original_recovery
+                run_once._create_resume_attempt_and_prompt = original_create
+            binding = workflow_store.get_binding(conn, "task", task_id)
+            metadata = json.loads(
+                conn.execute(
+                    "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()[0]
+            )
+
+        self.assertEqual(recovered, 0)
+        self.assertEqual(binding["binding_status"], "attention")
+        self.assertEqual(
+            metadata["supervise"]["reason"],
+            "recovery_attempt_creation_failed",
+        )
 
     def test_supervise_prepares_resume_attempt_when_timeout_pid_is_gone_after_progress(self):
         from robert_agent import run_once
@@ -5702,7 +6106,7 @@ repos:
                     old,
                     old,
                     json.dumps(
-                        {"dispatch": {"pid": missing_pid, "status": "running"}},
+                        {"dispatch": self._recorded_identity(missing_pid)},
                         sort_keys=True,
                     ),
                     attempt_id,
@@ -5730,16 +6134,11 @@ repos:
                 (task_id, attempt_id, str(stdout_path), old),
             )
 
-        signals = []
-        original_kill = run_once.os.kill
-
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, missing_pid)
-            signals.append((pid, sig))
-            raise ProcessLookupError()
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
         try:
-            run_once.os.kill = fake_kill
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5747,10 +6146,9 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
-        self.assertEqual(signals, [(missing_pid, 0)])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempts = conn.execute(
                 """
@@ -5842,7 +6240,7 @@ repos:
                     old,
                     json.dumps(failure, sort_keys=True),
                     json.dumps(
-                        {"dispatch": {"pid": missing_pid, "status": "running"}},
+                        {"dispatch": self._recorded_identity(missing_pid)},
                         sort_keys=True,
                     ),
                     attempt_id,
@@ -5878,16 +6276,11 @@ repos:
                 (task_id, attempt_id, str(stdout_path), old),
             )
 
-        signals = []
-        original_kill = run_once.os.kill
-
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, missing_pid)
-            signals.append((pid, sig))
-            raise ProcessLookupError()
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
         try:
-            run_once.os.kill = fake_kill
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5895,10 +6288,9 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
-        self.assertEqual(signals, [(missing_pid, 0)])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempts = conn.execute(
                 """
@@ -5980,7 +6372,7 @@ repos:
                 (
                     now,
                     now,
-                    json.dumps({"dispatch": {"pid": 987654, "status": "running"}}),
+                    json.dumps({"dispatch": self._recorded_identity(987654)}),
                     attempt_id,
                 ),
             )
@@ -5994,8 +6386,7 @@ repos:
                 (attempt_id, now),
             )
 
-        original_kill = run_once.os.kill
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
@@ -6007,13 +6398,10 @@ repos:
             "process_identity": heartbeat.process_identity(proc.pid),
         }))
 
-        def fake_kill(pid, sig):
-            if pid == 987654:
-                raise ProcessLookupError()
-            return original_kill(pid, sig)
-
         try:
-            run_once.os.kill = fake_kill
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -6021,7 +6409,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6049,7 +6437,7 @@ repos:
             conn.execute("UPDATE tasks SET lifecycle = 'running'")
             conn.execute(
                 "UPDATE attempts SET status='running', started_at=?, heartbeat_at=?, metadata_json=?",
-                (now, now, json.dumps({"dispatch": {"pid": 987654}})),
+                (now, now, json.dumps({"dispatch": self._recorded_identity(987654)})),
             )
             if phase:
                 conn.execute(
@@ -6075,7 +6463,7 @@ repos:
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6125,7 +6513,7 @@ repos:
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6145,9 +6533,9 @@ repos:
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET metadata_json=?", (json.dumps({
-                "dispatch": {"pid": 987654}, "resume": {"transport_failure_count": 5},
+                "dispatch": self._recorded_identity(987654), "resume": {"transport_failure_count": 5},
             }),))
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6172,7 +6560,7 @@ repos:
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
@@ -6193,7 +6581,7 @@ repos:
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
@@ -6226,7 +6614,7 @@ repos:
                 False, 3, workers=[worker],
             )
         self.assertTrue(dispatched[0]["ok"], dispatched)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6249,7 +6637,7 @@ repos:
         )
         worker_result.record_result(db_path, payload)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+            with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
                 run_once._supervise_running_attempts(
                     conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
                     data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"},
@@ -6276,20 +6664,20 @@ repos:
             "status": "running", "pid": os.getpid(),
             "process_identity": heartbeat.process_identity(os.getpid()),
         }))
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "alive"}), \
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "alive_same"}), \
              patch.object(run_once, "_terminate_attempt_process", return_value={"status": "terminated"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
 
-    def test_multiple_transport_resumes_increase_backoff_and_keep_same_worktree(self):
+    def test_bound_transport_resume_keeps_worktree_and_stops_at_recovery_quota(self):
         from unittest.mock import patch
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
-        for expected_count, expected_delay in ((1, 30), (2, 60), (3, 120)):
-            with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        for expected_count, expected_delay in ((1, 30),):
+            with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
                 result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
             self.assertTrue(result["ok"], result)
             with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6315,9 +6703,15 @@ repos:
                     (f"log-{expected_count}", task_id, current_id, str(log), started_at),
                 )
                 updated_metadata = json.loads(metadata)
-                updated_metadata["dispatch"] = {"pid": 987654}
+                updated_metadata["dispatch"] = self._recorded_identity(987654)
                 conn.execute("UPDATE attempts SET status='running',metadata_json=? WHERE attempt_id=?",
                              (json.dumps(updated_metadata), current_id))
+
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+            run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT binding_status FROM workflow_bindings WHERE subject_id=?", (task_id,)).fetchone()[0], 'attention')
 
     def test_completed_command_does_not_hide_another_live_command(self):
         import os
@@ -6392,9 +6786,9 @@ repos:
         old = (datetime.now(timezone.utc) - timedelta(minutes=95)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET started_at=?,heartbeat_at=?,metadata_json=?", (old, old, json.dumps({
-                "dispatch": {"pid": 987654}, "resume": {"transport_failure_count": 5},
+                "dispatch": self._recorded_identity(987654), "resume": {"transport_failure_count": 5},
             })))
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "not_found"}):
+        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
             for _ in range(2):
                 result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
                 self.assertTrue(result["ok"], result)
@@ -6405,34 +6799,19 @@ repos:
 
     def test_dispatch_process_status_treats_zombie_pid_as_not_found(self):
         from robert_agent import run_once
-        original_kill = run_once.os.kill
-        original_read_text = run_once.Path.read_text
-
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, 43210)
-            self.assertEqual(sig, 0)
-
-        def fake_read_text(path_obj, encoding="utf-8"):
-            self.assertEqual(str(path_obj), "/proc/43210/stat")
-            return "43210 (cbc) Z 1 2 3 4 5"
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
         try:
-            run_once.os.kill = fake_kill
-            run_once.Path.read_text = fake_read_text
-            status = run_once._dispatch_process_status({"dispatch": {"pid": 43210}})
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
+            status = run_once._dispatch_process_status(
+                {"dispatch": self._recorded_identity(43210)}
+            )
         finally:
-            run_once.os.kill = original_kill
-            run_once.Path.read_text = original_read_text
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
-        self.assertEqual(
-            status,
-            {
-                "status": "not_found",
-                "pid": 43210,
-                "reason": "zombie",
-                "process_state": "Z",
-            },
-        )
+        self.assertEqual(status["status"], "dead")
+        self.assertEqual(status["reason"], "process_missing_or_zombie")
 
     def test_blocked_worktree_is_not_dispatched(self):
         from unittest.mock import patch
@@ -6480,85 +6859,33 @@ repos:
             self.assertEqual(json.loads(metadata)["dispatch"]["pid"], 12345)
 
     def test_terminate_attempt_process_skips_sigterm_for_zombie_pid(self):
+        from unittest.mock import patch
         from robert_agent import run_once
-        kill_calls = []
-        original_kill = run_once.os.kill
-        original_read_text = run_once.Path.read_text
 
-        def fake_kill(pid, sig):
-            kill_calls.append((pid, sig))
+        with patch.object(
+            run_once.worker_identity, "terminate_recorded_identity",
+            return_value={"status": "already_dead", "pid": 24680},
+        ), patch.object(run_once, "_live_process_group", return_value=False):
+            result = run_once._terminate_attempt_process(
+                {"dispatch": self._recorded_identity(24680)}
+            )
 
-        def fake_read_text(path_obj, encoding="utf-8"):
-            self.assertEqual(str(path_obj), "/proc/24680/stat")
-            return "24680 (cbc) Z 1 2 3 4 5"
-
-        try:
-            run_once.os.kill = fake_kill
-            run_once.Path.read_text = fake_read_text
-            result = run_once._terminate_attempt_process({"dispatch": {"pid": 24680}})
-        finally:
-            run_once.os.kill = original_kill
-            run_once.Path.read_text = original_read_text
-
-        self.assertEqual(kill_calls, [])
-        self.assertEqual(
-            result,
-            {
-                "status": "not_found",
-                "reason": "zombie",
-                "pid": 24680,
-                "process_state": "Z",
-                "signal": "SIGTERM",
-            },
-        )
+        self.assertEqual(result["status"], "already_dead")
+        self.assertEqual(result["pid"], 24680)
 
     def test_dispatch_process_status_detects_zombie_pid_without_proc_stat(self):
+        from unittest.mock import patch
         from robert_agent import run_once
-        original_kill = run_once.os.kill
-        original_read_text = run_once.Path.read_text
-        original_run = run_once.subprocess.run
 
-        class Completed:
-            returncode = 0
-            stdout = "Z    \n"
-            stderr = ""
+        with patch.object(
+            run_once.worker_identity, "inspect_recorded_identity", return_value="dead",
+        ), patch.object(run_once, "_live_process_group", return_value=False):
+            status = run_once._dispatch_process_status(
+                {"dispatch": self._recorded_identity(13579)}
+            )
 
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, 13579)
-            self.assertEqual(sig, 0)
-
-        def fake_read_text(path_obj, encoding="utf-8"):
-            raise FileNotFoundError(str(path_obj))
-
-        def fake_run(command, **kwargs):
-            if command == ["ps", "-axo", "pid=,pgid=,stat="]:
-                result = Completed()
-                result.stdout = "13579 13579 Z\n"
-                return result
-            self.assertEqual(command, ["ps", "-o", "stat=", "-p", "13579"])
-            self.assertTrue(kwargs["capture_output"])
-            self.assertTrue(kwargs["text"])
-            return Completed()
-
-        try:
-            run_once.os.kill = fake_kill
-            run_once.Path.read_text = fake_read_text
-            run_once.subprocess.run = fake_run
-            status = run_once._dispatch_process_status({"dispatch": {"pid": 13579}})
-        finally:
-            run_once.os.kill = original_kill
-            run_once.Path.read_text = original_read_text
-            run_once.subprocess.run = original_run
-
-        self.assertEqual(
-            status,
-            {
-                "status": "not_found",
-                "pid": 13579,
-                "reason": "zombie",
-                "process_state": "Z",
-            },
-        )
+        self.assertEqual(status["status"], "dead")
+        self.assertEqual(status["reason"], "process_missing_or_zombie")
 
     def test_supervise_keeps_started_worker_with_prepare_snapshot_running(self):
         from robert_agent import run_once
@@ -6589,8 +6916,8 @@ repos:
                 (task_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ? WHERE attempt_id = ?",
-                (old, old, attempt_id),
+                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
             conn.execute(
                 """
@@ -6602,12 +6929,19 @@ repos:
                 (attempt_id, old),
             )
 
-        second = run_once.run_once(
-            self.config_path,
-            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            dry_run=True,
-            skip_external=True,
-        )
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        try:
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
+            second = run_once.run_once(
+                self.config_path,
+                workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+                dry_run=True,
+                skip_external=True,
+            )
+        finally:
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6641,12 +6975,13 @@ repos:
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'stale', heartbeat_at = ?, started_at = ?
+                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = ?
                 WHERE attempt_id = ?
                 """,
                 (
                     now.isoformat(),
                     (now - timedelta(minutes=10)).isoformat(),
+                    json.dumps({"dispatch": self._recorded_identity(987654)}),
                     attempt_id,
                 ),
             )
@@ -6660,12 +6995,19 @@ repos:
                 (attempt_id, (now - timedelta(minutes=10)).isoformat()),
             )
 
-        second = run_once.run_once(
-            self.config_path,
-            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            dry_run=True,
-            skip_external=True,
-        )
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        try:
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
+            second = run_once.run_once(
+                self.config_path,
+                workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+                dry_run=True,
+                skip_external=True,
+            )
+        finally:
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6706,7 +7048,7 @@ repos:
                     now.isoformat(),
                     (now - timedelta(minutes=10)).isoformat(),
                     json.dumps(
-                        {"dispatch": {"pid": missing_pid, "status": "running"}},
+                        {"dispatch": self._recorded_identity(missing_pid)},
                         sort_keys=True,
                     ),
                     attempt_id,
@@ -6722,16 +7064,11 @@ repos:
                 (attempt_id, (now - timedelta(minutes=10)).isoformat()),
             )
 
-        signals = []
-        original_kill = run_once.os.kill
-
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, missing_pid)
-            signals.append((pid, sig))
-            raise ProcessLookupError()
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
         try:
-            run_once.os.kill = fake_kill
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "dead"
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -6739,10 +7076,9 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
-        self.assertIn((missing_pid, 0), signals)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempt_status, failure_json, metadata_json = conn.execute(
                 "SELECT status, failure_json, metadata_json FROM attempts WHERE attempt_id = ?",
@@ -6751,8 +7087,8 @@ repos:
             notification = conn.execute(
                 "SELECT notification_type, status FROM notifications"
             ).fetchone()
-        failure = json.loads(failure_json)
         metadata = json.loads(metadata_json)
+        failure = json.loads(failure_json)
         self.assertEqual(attempt_status, "failed")
         self.assertEqual(failure["status"], "failed_worker_process_exited")
         self.assertEqual(
@@ -6793,7 +7129,7 @@ repos:
                     json.dumps(
                         {
                             "dispatch": {
-                                "pid": 12345,
+                                **self._recorded_identity(12345),
                                 "worker_launch": {"timeout_seconds": 60},
                             }
                         },
@@ -6812,19 +7148,15 @@ repos:
                 (attempt_id, old),
             )
 
-        signals = []
-        original_kill = run_once.os.kill
-        original_killpg = run_once.os.killpg
-        original_group = run_once._live_process_group
-        group_checks = iter((True, False))
-
-        def fake_kill(pid, sig):
-            signals.append((pid, sig))
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_terminate = run_once.worker_identity.terminate_recorded_identity
         try:
-            run_once.os.kill = fake_kill
-            run_once.os.killpg = fake_kill
-            run_once._live_process_group = lambda pid: next(group_checks)
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
+            run_once.worker_identity.terminate_recorded_identity = (
+                lambda _identity: {"status": "terminated", "pid": 12345}
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -6832,12 +7164,10 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
-            run_once.os.killpg = original_killpg
-            run_once._live_process_group = original_group
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            run_once.worker_identity.terminate_recorded_identity = original_terminate
 
         self.assertTrue(second["ok"], second)
-        self.assertEqual(signals, [(12345, 0), (12345, run_once.signal.SIGTERM)])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempt_status, failure_json = conn.execute(
                 "SELECT status, failure_json FROM attempts WHERE attempt_id = ?",
@@ -6876,7 +7206,7 @@ repos:
                 (
                     old,
                     old,
-                    json.dumps({"dispatch": {"pid": 12345}}, sort_keys=True),
+                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
                     attempt_id,
                 ),
             )
@@ -6890,19 +7220,15 @@ repos:
                 (attempt_id, old),
             )
 
-        signals = []
-        original_kill = run_once.os.kill
-        original_killpg = run_once.os.killpg
-        original_group = run_once._live_process_group
-        group_checks = iter((True, False))
-
-        def fake_kill(pid, sig):
-            signals.append((pid, sig))
-
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_terminate = run_once.worker_identity.terminate_recorded_identity
         try:
-            run_once.os.kill = fake_kill
-            run_once.os.killpg = fake_kill
-            run_once._live_process_group = lambda pid: next(group_checks)
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
+            run_once.worker_identity.terminate_recorded_identity = (
+                lambda _identity: {"status": "terminated", "pid": 12345}
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -6910,12 +7236,10 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.os.kill = original_kill
-            run_once.os.killpg = original_killpg
-            run_once._live_process_group = original_group
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            run_once.worker_identity.terminate_recorded_identity = original_terminate
 
         self.assertTrue(second["ok"], second)
-        self.assertEqual(signals, [(12345, 0), (12345, run_once.signal.SIGTERM)])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempt_status = conn.execute(
                 "SELECT status FROM attempts WHERE attempt_id = ?",
@@ -6971,7 +7295,7 @@ repos:
                 (
                     old,
                     old,
-                    json.dumps({"dispatch": {"pid": 12345}}, sort_keys=True),
+                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
                     attempt_id,
                 ),
             )
@@ -7003,21 +7327,23 @@ repos:
             encoding="utf-8",
         )
         calls = []
-        signals = []
         original_dispatch = run_once.dispatch.dispatch_worker
-        original_kill = run_once.os.kill
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
-            return {"ok": True, "status": "running", "pid": 123, "command": ["cbc"]}
-
-        def fake_kill(pid, sig):
-            self.assertEqual(pid, 12345)
-            signals.append((pid, sig))
+            return {
+                "ok": True,
+                "status": "running",
+                **self._recorded_identity(123),
+                "command": ["cbc"],
+            }
 
         try:
             run_once.dispatch.dispatch_worker = fake_dispatch_worker
-            run_once.os.kill = fake_kill
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7027,10 +7353,9 @@ repos:
             )
         finally:
             run_once.dispatch.dispatch_worker = original_dispatch
-            run_once.os.kill = original_kill
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
-        self.assertEqual(signals, [(12345, 0)])
         self.assertEqual(len(calls), 1)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             statuses = conn.execute(
@@ -7069,21 +7394,15 @@ repos:
                 (
                     old,
                     old,
-                    json.dumps({"dispatch": {"pid": 12345}}, sort_keys=True),
+                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
                     attempt_id,
                 ),
             )
 
-        signals = []
-        original_kill = run_once.os.kill
-        original_killpg = run_once.os.killpg
-        original_group = run_once._live_process_group
-        group_checks = iter((True, False))
+        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_terminate = run_once.worker_identity.terminate_recorded_identity
         original_collect_notifications = run_once.discover.collect_account_notifications
         original_collect = run_once.discover.collect_live_events
-
-        def fake_kill(pid, sig):
-            signals.append((pid, sig))
 
         def fake_collect_notifications(_repos, runner=None):
             return {}
@@ -7100,9 +7419,12 @@ repos:
             raise subprocess.CalledProcessError(1, ["gh", "search", "issues"])
 
         try:
-            run_once.os.kill = fake_kill
-            run_once.os.killpg = fake_kill
-            run_once._live_process_group = lambda pid: next(group_checks)
+            run_once.worker_identity.inspect_recorded_identity = (
+                lambda _identity: "alive_same"
+            )
+            run_once.worker_identity.terminate_recorded_identity = (
+                lambda _identity: {"status": "terminated", "pid": 12345}
+            )
             run_once.discover.collect_account_notifications = fake_collect_notifications
             run_once.discover.collect_live_events = fake_collect
             second = run_once.run_once(
@@ -7112,15 +7434,13 @@ repos:
                 skip_external=False,
             )
         finally:
-            run_once.os.kill = original_kill
-            run_once.os.killpg = original_killpg
-            run_once._live_process_group = original_group
+            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            run_once.worker_identity.terminate_recorded_identity = original_terminate
             run_once.discover.collect_account_notifications = original_collect_notifications
             run_once.discover.collect_live_events = original_collect
 
         self.assertFalse(second["ok"], second)
         self.assertEqual(second["status"], "failed_discovery")
-        self.assertEqual(signals, [(12345, 0), (12345, run_once.signal.SIGTERM)])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempt_status = conn.execute(
                 "SELECT status FROM attempts WHERE attempt_id = ?",

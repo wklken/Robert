@@ -2,7 +2,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from robert_agent import validate_config
+from robert_agent import dbos_runtime, validate_config
 from robert_agent.route_config import (
     load_route_policies,
     resolve_route_config,
@@ -27,6 +27,30 @@ def doctor(config_path, skip_external=False):
             "checks": checks,
             "safe_error": validated.get("safe_error"),
         }
+
+    workflow_engine = validated.get("workflow_engine") or {}
+    if workflow_engine.get("mode", "legacy") == "legacy":
+        checks["workflow_engine"] = {
+            "status": "passed",
+            "mode": "legacy",
+            "configured": False,
+            "skipped": True,
+        }
+    else:
+        try:
+            checks["workflow_engine"] = dbos_runtime.check_connectivity(
+                validated
+            )
+        except Exception:
+            checks["workflow_engine"] = {
+                "status": "failed",
+                "mode": workflow_engine.get("mode"),
+                "configured": bool(workflow_engine.get("configured")),
+                "system_database_scheme": workflow_engine.get(
+                    "system_database_scheme"
+                ),
+                "safe_error": "DBOS system database connectivity check failed",
+            }
 
     worker = validated["default_worker"]
     worker_command = worker["command_argv"][0]

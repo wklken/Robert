@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from robert_agent import worker_adapters
+from robert_agent import worker_identity
 from robert_agent.common import emit
 
 
@@ -183,6 +184,58 @@ def dispatch_worker(
             "worker_agent": launch.agent,
             "worker_launch": launch.metadata(),
         }
+    try:
+        identity = worker_identity.capture_process_identity(proc.pid)
+    except Exception as exc:
+        # The child is in hand, so it can be cleaned up without trusting a
+        # possibly reused PID.  Never record an untracked running Worker.
+        worker_identity.cleanup_new_process(proc)
+        return {
+            "ok": False,
+            "status": "failed_dispatch",
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "pid": proc.pid,
+            "safe_error": "worker process identity could not be captured",
+            "error_type": type(exc).__name__,
+            "identity_capture_failed": True,
+            "command": command,
+            "prompt_path": str(prompt_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "worker_agent": launch.agent,
+            "worker_launch": launch.metadata(),
+        }
+    required_identity_fields = (
+        "pid",
+        "process_group_id",
+        "process_start_token",
+        "command_fingerprint",
+        "identity_source",
+    )
+    if (
+        not isinstance(identity, dict)
+        or any(identity.get(field) in (None, "") for field in required_identity_fields)
+        or identity.get("process_state") in {"Z", "X", "x"}
+        or not worker_identity.validate_identity(identity)
+    ):
+        worker_identity.cleanup_new_process(proc)
+        return {
+            "ok": False,
+            "status": "failed_dispatch",
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "pid": proc.pid,
+            "safe_error": "worker process identity was incomplete",
+            "error_type": "IdentityReadError",
+            "identity_capture_failed": True,
+            "command": command,
+            "prompt_path": str(prompt_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "worker_agent": launch.agent,
+            "worker_launch": launch.metadata(),
+        }
     _BACKGROUND_PROCESSES[proc.pid] = proc
     return {
         "ok": True,
@@ -190,6 +243,11 @@ def dispatch_worker(
         "task_id": task_id,
         "attempt_id": attempt_id,
         "pid": proc.pid,
+        "process_group_id": identity["process_group_id"],
+        "process_start_token": identity["process_start_token"],
+        "command_fingerprint": identity["command_fingerprint"],
+        "identity_source": identity["identity_source"],
+        "process_state": identity.get("process_state"),
         "command": command,
         "prompt_path": str(prompt_path),
         "stdout_path": str(stdout_path),

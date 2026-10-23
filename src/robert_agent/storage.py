@@ -15,6 +15,18 @@ WORK_ITEM_MIGRATION_NAME = "robert-work-item-control-v1"
 WORK_ITEM_MIGRATION_CHECKSUM = hashlib.sha256(
     WORK_ITEM_MIGRATION_NAME.encode("utf-8")
 ).hexdigest()
+WORKFLOW_MIGRATION_VERSION = 3
+WORKFLOW_MIGRATION_NAME = "robert-dbos-workflow-v1"
+WORKFLOW_MIGRATION_CHECKSUM = hashlib.sha256(
+    WORKFLOW_MIGRATION_NAME.encode("utf-8")
+).hexdigest()
+
+
+def _migration_version(conn, preferred):
+    # Legacy DD installations may already use this ordinal for another name.
+    # Names and checksums identify migrations; retain their historical ordinals.
+    latest = conn.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0]
+    return max(preferred, latest + 1)
 
 
 def _ensure_column(conn, table, column_name, ddl):
@@ -401,9 +413,113 @@ def _migrate_work_item_control(conn):
         VALUES (?, ?, ?, datetime('now'))
         """,
         (
-            WORK_ITEM_MIGRATION_VERSION,
+            _migration_version(conn, WORK_ITEM_MIGRATION_VERSION),
             WORK_ITEM_MIGRATION_NAME,
             WORK_ITEM_MIGRATION_CHECKSUM,
+        ),
+    )
+
+
+def _migrate_workflow_storage(conn):
+    marker = conn.execute(
+        "SELECT checksum FROM schema_migrations WHERE name = ?",
+        (WORKFLOW_MIGRATION_NAME,),
+    ).fetchone()
+    if marker:
+        if marker[0] != WORKFLOW_MIGRATION_CHECKSUM:
+            raise RuntimeError("workflow migration checksum mismatch")
+        return
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS workflow_bindings (
+          subject_type TEXT NOT NULL
+            CHECK (subject_type IN ('task', 'remediation_episode')),
+          subject_id TEXT NOT NULL,
+          workflow_kind TEXT NOT NULL
+            CHECK (workflow_kind IN ('human_request', 'pr_remediation')),
+          owner_engine TEXT NOT NULL CHECK (owner_engine IN ('legacy', 'dbos')),
+          definition_version TEXT NOT NULL DEFAULT 'v1',
+          workflow_id TEXT UNIQUE,
+          shadow_workflow_id TEXT UNIQUE,
+          binding_status TEXT NOT NULL
+            CHECK (binding_status IN ('active', 'terminal', 'attention')),
+          recovery_attempts INTEGER NOT NULL DEFAULT 0
+            CHECK (recovery_attempts BETWEEN 0 AND 1),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          terminal_at TEXT,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          PRIMARY KEY (subject_type, subject_id),
+          CHECK ((owner_engine = 'legacy' AND workflow_id IS NULL)
+              OR (owner_engine = 'dbos' AND workflow_id IS NOT NULL))
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_bindings_active
+        ON workflow_bindings(owner_engine, subject_type, updated_at)
+        WHERE binding_status = 'active';
+        CREATE TABLE IF NOT EXISTS workflow_outbox (
+          signal_id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          topic TEXT NOT NULL,
+          dedupe_key TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'delivered', 'attention')),
+          attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+          not_before_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          delivered_at TEXT,
+          last_error_json TEXT,
+          UNIQUE (workflow_id, topic, dedupe_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_outbox_pending_due
+        ON workflow_outbox(not_before_at, created_at) WHERE status = 'pending';
+        CREATE TABLE IF NOT EXISTS workflow_signal_receipts (
+          signal_id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          topic TEXT NOT NULL,
+          consumed_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workflow_shadow_observations (
+          observation_id TEXT PRIMARY KEY,
+          subject_type TEXT NOT NULL,
+          subject_id TEXT NOT NULL,
+          legacy_decision_json TEXT NOT NULL,
+          shadow_decision_json TEXT NOT NULL,
+          matched INTEGER NOT NULL CHECK (matched IN (0, 1)),
+          mismatch_code TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_shadow_observations_mismatch
+        ON workflow_shadow_observations(created_at) WHERE matched = 0;
+        CREATE TABLE IF NOT EXISTS publication_intents (
+          publication_id TEXT PRIMARY KEY,
+          action_id TEXT NOT NULL UNIQUE
+            REFERENCES github_actions(action_id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          request_fingerprint TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN (
+            'prepared', 'executing', 'published', 'confirmed_absent',
+            'failed', 'attention'
+          )),
+          started_at TEXT,
+          finished_at TEXT,
+          remote_evidence_json TEXT NOT NULL DEFAULT '{}',
+          error_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO schema_migrations(version, name, checksum, applied_at)
+        VALUES (?, ?, ?, datetime('now'))
+        """,
+        (
+            _migration_version(conn, WORKFLOW_MIGRATION_VERSION),
+            WORKFLOW_MIGRATION_NAME,
+            WORKFLOW_MIGRATION_CHECKSUM,
         ),
     )
 
@@ -428,6 +544,7 @@ def init_database(db_path, schema_path=None):
         _migrate_github_action_publish_status(conn)
         _migrate_route_recommended_skills(conn)
         _migrate_work_item_control(conn)
+        _migrate_workflow_storage(conn)
         _migrate_project_memory_fts(conn)
         _migrate_pr_remediation(conn)
         tables = sorted(

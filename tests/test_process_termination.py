@@ -8,11 +8,11 @@ import time
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import run_once
+from robert_agent import run_once, worker_identity
 
 
 class ProcessTerminationTests(unittest.TestCase):
-    def test_timeout_terminates_descendants_even_after_leader_exits(self):
+    def test_timeout_terminates_verified_group_and_refuses_unverified_orphans(self):
         for leader_exits in (False, True):
             with self.subTest(leader_exits=leader_exits), tempfile.TemporaryDirectory() as tmp:
                 ready = Path(tmp) / 'ready'
@@ -32,9 +32,13 @@ class ProcessTerminationTests(unittest.TestCase):
                     child_pid = int(ready.read_text())
                     if leader_exits:
                         proc.wait(timeout=5)
-                        self.assertEqual(run_once._dispatch_process_status(
-                            {"dispatch": {"pid": proc.pid}})["status"], "alive")
-                    run_once._terminate_attempt_process({'dispatch': {'pid': proc.pid}})
+                        outcome = run_once._terminate_attempt_process({'dispatch': {'pid': proc.pid}})
+                        self.assertEqual(outcome['status'], 'attention')
+                        self.assertNotIn(run_once._process_state(child_pid), (None, 'Z', 'X', 'x'))
+                        continue
+                    identity = worker_identity.capture_process_identity(proc.pid)
+                    outcome = run_once._terminate_attempt_process({'dispatch': identity})
+                    self.assertEqual(outcome['status'], 'terminated')
                     deadline = time.monotonic() + 1
                     while run_once._process_state(child_pid) not in (None, 'Z', 'X', 'x') and time.monotonic() < deadline:
                         time.sleep(.01)
@@ -45,6 +49,14 @@ class ProcessTerminationTests(unittest.TestCase):
                     except (ProcessLookupError, PermissionError):
                         pass
                     proc.wait(timeout=5)
+
+    def test_dead_leader_with_live_group_does_not_allow_automatic_resume(self):
+        from unittest.mock import patch
+        with patch.object(worker_identity, 'inspect_recorded_identity', return_value='dead'), \
+             patch.object(run_once, '_live_process_group', return_value=True):
+            result = run_once._dispatch_process_status({'dispatch': {'pid': 1234}})
+        self.assertEqual(result['status'], 'unknown')
+        self.assertEqual(result['reason'], 'unverified_descendants_running')
 
     def test_timeout_escalates_when_worker_ignores_sigterm(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -58,7 +70,8 @@ class ProcessTerminationTests(unittest.TestCase):
                 while not ready.exists() and time.monotonic() < deadline:
                     time.sleep(.01)
                 self.assertTrue(ready.exists())
-                run_once._terminate_attempt_process({'dispatch': {'pid': proc.pid}})
+                identity = worker_identity.capture_process_identity(proc.pid)
+                run_once._terminate_attempt_process({'dispatch': identity})
                 self.assertIsNotNone(proc.poll())
             finally:
                 try:

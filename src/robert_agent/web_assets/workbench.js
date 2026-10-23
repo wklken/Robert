@@ -57,6 +57,7 @@ const translations = {
     createPullRequest: "Create pull request", updatePullRequest: "Update pull request",
     retriggerTask: "Retrigger task", retriggeringTask: "Retriggering...",
     retriggerFailed: "Could not retrigger task: {message}",
+    failed_timeout: "Worker timed out", failed_worker_process_exited: "Worker process exited unexpectedly", failed_worker_startup: "Worker failed to start", needs_resume: "Attempt interrupted; recovery was required",
     published: "Published", failed: "Failed", succeeded: "Succeeded", completed: "Completed",
     pending: "Pending", skipped: "Skipped", running: "Running", canceled: "Canceled",
   },
@@ -99,6 +100,7 @@ const translations = {
     updatePullRequest: "更新 Pull Request",
     retriggerTask: "重新触发", retriggeringTask: "正在重新触发...",
     retriggerFailed: "重新触发失败：{message}",
+    failed_timeout: "Worker 执行超时", failed_worker_process_exited: "Worker 进程意外退出", failed_worker_startup: "Worker 启动失败", needs_resume: "本次执行中断，进入恢复流程",
     published: "已发布", failed: "失败", succeeded: "成功", completed: "已完成",
     pending: "待处理", skipped: "已跳过", running: "运行中", canceled: "已取消",
   },
@@ -234,7 +236,7 @@ function formatRelative(value) {
 
 function formatTime(value) {
   if (!value) return "—";
-  const date = new Date(value);
+  const date = new Date(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(value) ? value.replace(" ", "T") + "Z" : value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString(state.language === "zh" ? "zh-CN" : "en");
 }
 
@@ -282,6 +284,7 @@ function labelFor(item) {
 
 function signalFor(item) {
   const signals = node("div", { className: "work-signals" });
+  if (item.bucket === "history") return signals;
   if (item.signals.failed_publish_actions) {
     signals.append(node("span", { className: "signal attention" }, [node("i"), node("span", { text: t("publish") })]));
   } else if (item.agent.attempt_status) {
@@ -299,7 +302,6 @@ function workRow(item) {
   ]);
   const meta = node("div", { className: "work-meta" });
   [source.repo_full_name, source.number ? `#${source.number}` : null, source.author_login ? t("openedBy", { actor: source.author_login }) : null].filter(Boolean).forEach((value) => meta.append(node("span", { text: value })));
-  if (item.agent.task_id) meta.append(node("code", { text: item.agent.task_id }));
   meta.append(node("span", { text: t("updated", { time: formatRelative(item.updated_at) }) }));
   const row = node("button", {
     className: `work-row ${item.id === state.selectedId ? "selected" : ""}`,
@@ -408,6 +410,19 @@ async function retriggerTask(taskId, button) {
   }
 }
 
+function artifactList(items) {
+  const artifacts = node("div", { className: "artifact-list" });
+  items.forEach((artifact) => {
+    if (!artifact.preview_available) {
+      artifacts.append(node("p", { text: `${artifact.artifact_type} — ${state.language === "zh" ? "当前机器没有此文件，数据库仅保存了文件引用。" : "File absent on this host; only its database reference is available."}` }));
+      return;
+    }
+    const href = `/artifact.txt?${new URLSearchParams({ task_id: artifact.task_id, artifact_type: artifact.artifact_type, artifact_id: artifact.artifact_id })}`;
+    artifacts.append(node("a", { className: "artifact-link", href, target: "_blank", rel: "noopener noreferrer" }, [node("span", { text: artifact.artifact_type }), node("small", { text: artifact.bytes ? t("bytes", { count: artifact.bytes }) : t("preview") })]));
+  });
+  return artifacts;
+}
+
 function detailView(detail, titleId) {
   const source = detail.source || {};
   const stateData = detail.operator_state || {};
@@ -422,14 +437,28 @@ function detailView(detail, titleId) {
     node("h3", { text: stateHeading }),
     node("div", { className: `reason-flash ${stateData.bucket || ""}`, text: stateData.reason_summary || t("noOperatorAction") }),
   ]));
-  const timeline = node("div", { className: "timeline" });
   const tasks = detail.tasks || [];
-  if (tasks.length) timeline.append(timelineRow(t("discoveredAuthorized"), tasks[0].created_at, "done"));
-  (detail.phases || []).forEach((phase) => timeline.append(timelineRow(`${t(phaseLabels[phase.phase] || phase.phase)}: ${phase.summary}`, phase.created_at, phase.status === "completed" || phase.status === "succeeded" ? "done" : phase.status === "failed" ? "failed" : "current")));
-  (detail.actions || []).forEach((action) => timeline.append(timelineRow(`${t(actionLabels[action.action_type] || action.action_type)}: ${humanize(action.publish_status)}`, action.created_at, action.publish_status === "published" ? "done" : action.safe_error ? "failed" : "current")));
-  if (!timeline.children.length) timeline.append(timelineRow(t("workstreamRecorded"), source.updated_at));
-  root.append(node("section", { className: "detail-section" }, [node("h3", { text: t("agentExecution") }), timeline]));
+  const history = node("details", { className: "detail-section execution-history", dataset: { disclosure: "attempts" } });
+  history.append(node("summary", { text: `${t("agentExecution")} · ${(detail.attempts || []).length}` }));
+  [...(detail.attempts || [])].sort((a, b) => (b.started_at || "").localeCompare(a.started_at || "") || b.attempt_no - a.attempt_no).forEach((attempt) => {
+    const run = node("details", { className: "detail-section", dataset: { disclosure: attempt.attempt_id } });
+    run.append(node("summary", { text: `${attempt.task_id} · #${attempt.attempt_no} · ${humanize(attempt.status)} · ${formatTime(attempt.started_at)}` }));
+    if (attempt.failure_summary) run.append(node("p", { className: "reason-flash needs_attention", text: t(attempt.failure_summary) === attempt.failure_summary ? attempt.failure_summary : `${t(attempt.failure_summary)} (${attempt.failure_summary})` }));
+    const timeline = node("div", { className: "timeline" });
+    (detail.phases || []).filter((phase) => phase.attempt_id === attempt.attempt_id)
+      .sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""))
+      .forEach((phase) => timeline.append(timelineRow(`${t(phaseLabels[phase.phase] || phase.phase)}: ${phase.summary}`, phase.created_at, phase.status === "completed" || phase.status === "succeeded" ? "done" : phase.status === "failed" ? "failed" : "current")));
+    run.append(timeline, artifactList((detail.artifacts || []).filter((artifact) => artifact.attempt_id === attempt.attempt_id)));
+    history.append(run);
+  });
+  root.append(history);
+  if (detail.actions?.length) {
+    const publications = node("details", { className: "detail-section", dataset: { disclosure: "publications" } }, [node("summary", { text: `${t("actions")} · ${detail.actions.length}` })]);
+    detail.actions.forEach((action) => publications.append(timelineRow(`${t(actionLabels[action.action_type] || action.action_type)}: ${humanize(action.publish_status)}`, action.created_at, action.publish_status === "published" ? "done" : action.safe_error ? "failed" : "current")));
+    root.append(publications);
+  }
   const actions = node("div", { className: "detail-actions" });
+  if (detail.work_item_id) actions.append(node("a", { className: "action-button", text: state.language === "zh" ? "在看板查看完整生命周期" : "View lifecycle on board", href: `/board?item=${encodeURIComponent(detail.work_item_id)}` }));
   if (source.url) actions.append(node("a", { className: "action-button primary", text: t("openGithub"), href: source.url, target: "_blank", rel: "noopener noreferrer" }));
   const taskId = tasks.length ? tasks[tasks.length - 1].task_id : null;
   if (detail.controls?.can_retrigger && state.session?.writes_enabled && detail.controls.task_id) {
@@ -451,21 +480,21 @@ function detailView(detail, titleId) {
   copyLink.addEventListener("click", () => navigator.clipboard.writeText(window.location.href));
   actions.append(copyLink);
   root.append(node("section", { className: "detail-section" }, [node("h3", { text: t("actions") }), actions]));
-  if ((detail.artifacts || []).length) {
-    const artifacts = node("div", { className: "artifact-list" });
-    detail.artifacts.forEach((artifact) => {
-      const href = `/artifact.txt?task_id=${encodeURIComponent(artifact.task_id)}&artifact_type=${encodeURIComponent(artifact.artifact_type)}`;
-      artifacts.append(node("a", { className: "artifact-link", href, target: "_blank", rel: "noopener noreferrer" }, [node("span", { text: artifact.artifact_type }), node("small", { text: artifact.bytes ? t("bytes", { count: artifact.bytes }) : t("preview") })]));
-    });
-    root.append(node("section", { className: "detail-section" }, [node("h3", { text: t("artifacts") }), artifacts]));
-  }
+  const otherArtifacts = (detail.artifacts || []).filter((artifact) => !artifact.attempt_id);
+  if (otherArtifacts.length) root.append(node("details", { className: "detail-section", dataset: { disclosure: "artifacts" } }, [node("summary", { text: t("artifacts") }), artifactList(otherArtifacts)]));
   return root;
 }
 
 function renderWorkItemDetail(detail) {
+  const sameItem = state.detail?.id === detail.id;
+  for (const [panelId, titleId] of [["detail-panel", "detail-title"], ["drawer-content", "drawer-detail-title"]]) {
+    const panel = $(panelId);
+    const expanded = new Set(sameItem ? [...panel.querySelectorAll("details")].filter((el) => el.open).map((el) => el.dataset.disclosure) : []);
+    const view = detailView(detail, titleId);
+    view.querySelectorAll("details").forEach((el) => { el.open = expanded.has(el.dataset.disclosure); });
+    panel.replaceChildren(view);
+  }
   state.detail = detail;
-  $("detail-panel").replaceChildren(detailView(detail, "detail-title"));
-  $("drawer-content").replaceChildren(detailView(detail, "drawer-detail-title"));
   $("drawer-title").textContent = t("workItemDetail");
 }
 
@@ -576,6 +605,7 @@ function syncControls() {
   document.querySelector('[data-nav="work"]').classList.toggle("selected", state.filters.bucket !== "history");
   document.querySelector('[data-nav="history"]').classList.toggle("selected", state.filters.bucket === "history");
   $("work-title").textContent = state.filters.bucket === "history" ? t("historyTitle") : t("workTitle");
+  document.querySelector(".summary-counts").hidden = state.filters.bucket === "history";
   $("work-subtitle").textContent = state.filters.bucket === "history" ? t("historySubtitle") : t("workSubtitle");
 }
 
@@ -615,6 +645,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   syncControls();
   applyTheme(state.theme);
   await loadControlSession();
+  if (state.session && !state.session.writes_enabled) {
+    $("workbench-app").prepend(node("p", { className: "snapshot-notice", text: state.session.write_error || t("retriggerFailed"), attributes: { role: "status" } }));
+  }
   let searchTimer = null;
   $("filter-form").addEventListener("submit", (event) => { event.preventDefault(); updateFilters(); });
   $("work-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(updateFilters, 220); });

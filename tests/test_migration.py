@@ -124,3 +124,57 @@ class MigrationTests(unittest.TestCase):
             }
         self.assertEqual(event_columns["actor_kind"], "'github_user'")
         self.assertEqual(task_columns["task_kind"], "'human_request'")
+
+    def test_database_init_marks_dbos_workflow_migration_and_detects_checksum_drift(self):
+        db_path = self.root / "workflow.sqlite3"
+        storage.init_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            marker = conn.execute(
+                "SELECT version, checksum FROM schema_migrations WHERE name = ?",
+                (storage.WORKFLOW_MIGRATION_NAME,),
+            ).fetchone()
+            indexes = {
+                row[1]
+                for row in conn.execute("PRAGMA index_list(workflow_bindings)")
+            }
+        self.assertEqual(
+            (storage.WORKFLOW_MIGRATION_VERSION, storage.WORKFLOW_MIGRATION_CHECKSUM),
+            marker,
+        )
+        self.assertIn("idx_workflow_bindings_active", indexes)
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE schema_migrations SET checksum = 'wrong' WHERE name = ?",
+                (storage.WORKFLOW_MIGRATION_NAME,),
+            )
+            conn.commit()
+        with self.assertRaisesRegex(RuntimeError, "workflow migration checksum mismatch"):
+            storage.init_database(db_path)
+
+    def test_database_init_preserves_legacy_migration_versions(self):
+        db_path = self.root / "legacy-markers.sqlite3"
+        storage.init_database(db_path)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("DELETE FROM schema_migrations WHERE version > 1")
+            conn.execute(
+                "INSERT INTO schema_migrations VALUES (2, ?, 'legacy-checksum', '2026-07-19')",
+                ("dd-github-agent-work-item-control-v1",),
+            )
+            conn.execute(
+                "INSERT INTO schema_migrations VALUES (3, ?, ?, '2026-07-23')",
+                (storage.WORK_ITEM_MIGRATION_NAME, storage.WORK_ITEM_MIGRATION_CHECKSUM),
+            )
+
+        storage.init_database(db_path)
+        storage.init_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            markers = conn.execute(
+                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        self.assertEqual(markers[1], (2, "dd-github-agent-work-item-control-v1", "legacy-checksum"))
+        self.assertEqual(markers[2][0], 3)
+        self.assertEqual(markers[3], (4, storage.WORKFLOW_MIGRATION_NAME, storage.WORKFLOW_MIGRATION_CHECKSUM))
+        self.assertEqual(len(markers), 4)

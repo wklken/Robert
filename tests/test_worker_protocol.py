@@ -4,6 +4,7 @@ import sys
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
@@ -1669,6 +1670,175 @@ class WorkerProtocolTests(unittest.TestCase):
         metadata = json.loads(row[7])
         self.assertEqual(metadata["recorded_by"], "robert.worker")
         self.assertEqual(metadata["output_type"], "comment_analysis")
+
+    def test_dbos_owned_worker_result_queues_one_subject_signal(self):
+        from unittest.mock import Mock, patch
+        from robert_agent import durable_workflows, workflow_operations, workflow_signals, workflow_store
+        from robert_agent.worker import result
+
+        db_path = self._init_attempt_db()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            workflow_store.bind_subject(
+                conn, "task", "task-1", "human_request", "dbos", "2026-08-02T00:00:00+00:00"
+            )
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="comment_analysis",
+            planned_github_actions=[],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="done",
+            used_skills=["fast-code-path"],
+        )
+
+        record = result.record_result(db_path, payload)
+
+        self.assertTrue(record["ok"], record)
+        with closing(sqlite3.connect(db_path)) as conn:
+            rows = conn.execute(
+                "SELECT workflow_id, topic, dedupe_key, payload_json FROM workflow_outbox"
+            ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0:3], ("robert:v1:task:task-1", "worker_result", record["result_id"]))
+        self.assertEqual(json.loads(rows[0][3])["fact_id"], record["result_id"])
+
+        messages = []
+        relayed = workflow_signals.relay_due_signals(
+            db_path,
+            lambda _workflow_id, message, **_kwargs: messages.append(message),
+            limit=10,
+            now="2099-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(relayed["delivered"], 1)
+        driver = Mock()
+        driver.next_transition.side_effect = [
+            {"transition_id": "wait-1", "operation": "wait", "wait_seconds": 1,
+             "terminal": False, "state": {}},
+            {"transition_id": "terminal-1", "operation": "terminal", "wait_seconds": None,
+             "terminal": True, "state": {"status": "canceled"}},
+        ]
+        driver.consume_signal.return_value = {
+            "signal_id": messages[0]["signal_id"], "status": "consumed", "state": {},
+        }
+        driver.mark_attention.return_value = {"state": {}}
+        with patch.object(workflow_operations, "current_human_request_driver", return_value=driver), \
+             patch.object(durable_workflows.DBOS, "recv", return_value=messages[0]):
+            outcome = durable_workflows.human_request_workflow_v1.__wrapped__("task-1")
+        self.assertEqual(outcome["status"], "canceled", outcome)
+        driver.consume_signal.assert_called_once_with("task-1", messages[0])
+        driver.mark_attention.assert_not_called()
+        repeated = workflow_signals.relay_due_signals(
+            db_path,
+            lambda _workflow_id, message, **_kwargs: messages.append(message),
+            limit=10,
+            now="2099-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(repeated["delivered"], 0)
+        self.assertEqual(len(messages), 1)
+
+    def test_legacy_worker_result_does_not_queue_subject_signal(self):
+        from robert_agent import workflow_store
+        from robert_agent.worker import result
+
+        db_path = self._init_attempt_db()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            workflow_store.bind_subject(
+                conn, "task", "task-1", "human_request", "legacy", "2026-08-02T00:00:00+00:00"
+            )
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="comment_analysis",
+            planned_github_actions=[],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="done",
+            used_skills=["fast-code-path"],
+        )
+
+        record = result.record_result(db_path, payload)
+
+        self.assertTrue(record["ok"], record)
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0],
+                0,
+            )
+
+    def test_worker_result_and_subject_signal_roll_back_together(self):
+        from robert_agent import workflow_signals, workflow_store
+        from robert_agent.worker import result
+
+        db_path = self._init_attempt_db()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            workflow_store.bind_subject(
+                conn, "task", "task-1", "human_request", "dbos", "2026-08-02T00:00:00+00:00"
+            )
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="comment_analysis",
+            planned_github_actions=[],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="done",
+            used_skills=["fast-code-path"],
+        )
+        with mock.patch.object(
+            workflow_signals,
+            "record_subject_signal",
+            side_effect=RuntimeError("forced signal failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "forced signal failure"):
+                result.record_result(db_path, payload)
+
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT status FROM attempts WHERE attempt_id = 'attempt-1'").fetchone()[0],
+                "running",
+            )
+
+    def test_non_active_dbos_binding_rejects_worker_result_transaction(self):
+        from robert_agent import workflow_store
+        from robert_agent.worker import result
+
+        db_path = self._init_attempt_db()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            workflow_store.bind_subject(
+                conn, "task", "task-1", "human_request", "dbos", "2026-08-02T00:00:00+00:00"
+            )
+            conn.execute(
+                """
+                UPDATE workflow_bindings
+                SET binding_status = 'attention'
+                WHERE subject_type = 'task' AND subject_id = 'task-1'
+                """
+            )
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="comment_analysis",
+            planned_github_actions=[],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="done",
+            used_skills=["fast-code-path"],
+        )
+
+        record = result.record_result(db_path, payload)
+
+        self.assertFalse(record["ok"], record)
+        self.assertEqual(record["status"], "rejected_by_workflow_owner")
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT status FROM attempts WHERE attempt_id = 'attempt-1'").fetchone()[0],
+                "running",
+            )
 
     def test_result_notifies_only_after_transaction_commits(self):
         from robert_agent.worker import result

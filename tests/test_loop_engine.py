@@ -92,6 +92,73 @@ repos:
         self.assertEqual(result["cycles"], 0)
         self.assertEqual(result["stop_reason"], "no_runnable_work")
 
+    def test_due_workflow_signal_counts_as_runnable_work(self):
+        from robert_agent import loop_engine
+
+        db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
+        now = "2026-08-02T00:00:00+00:00"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO workflow_outbox(
+                  signal_id, workflow_id, topic, dedupe_key, payload_json,
+                  not_before_at, created_at
+                ) VALUES ('signal-1', 'robert:v1:task:task-1', 'worker_result',
+                          'result-1', '{}', ?, ?)
+                """,
+                (now, now),
+            )
+
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=[]))
+
+    def test_workflow_signal_is_scoped_to_configured_repo(self):
+        from robert_agent import loop_engine, workflow_signals, workflow_store
+
+        db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
+        now = "2026-08-02T00:00:00+00:00"
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO repos(
+                  repo_id, full_name, github_account, default_base_branch,
+                  repo_root, worktree_root
+                ) VALUES ('repo-a', 'example/a', 'robot', 'main', '/a', '/a/.worktrees'),
+                         ('repo-b', 'example/b', 'robot', 'main', '/b', '/b/.worktrees')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO workstreams(
+                  workstream_id, repo_id, lifecycle, active_task_id, created_at, updated_at
+                ) VALUES ('ws-b', 'repo-b', 'active', 'task-b', ?, ?)
+                """,
+                (now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO tasks(
+                  task_id, workstream_id, task_kind, lifecycle, created_at, updated_at
+                ) VALUES ('task-b', 'ws-b', 'human_request', 'running', ?, ?)
+                """,
+                (now, now),
+            )
+            binding = workflow_store.bind_subject(
+                conn, "task", "task-b", "human_request", "dbos", now
+            )
+            workflow_signals.record_subject_signal(
+                conn,
+                binding,
+                "worker_result",
+                "result-b",
+                {"fact_id": "result-b"},
+                now,
+            )
+
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo-a"]))
+            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["repo-b"]))
+
     def test_loop_stops_when_cycle_makes_no_progress(self):
         from robert_agent import loop_engine
         db_path = self._init_runnable_db()

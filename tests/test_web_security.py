@@ -8,6 +8,27 @@ from robert_agent.web import build_http_response, validate_server_options
 
 
 class WebSecurityTests(unittest.TestCase):
+    def test_artifact_preview_selects_the_requested_historical_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / 'review.sqlite3'
+            storage.init_database(db)
+            with sqlite3.connect(db) as conn:
+                for number in (1, 2):
+                    path = root / f'attempt-{number}.log'
+                    path.write_text(f'output from attempt {number}')
+                    conn.execute(
+                        'INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES (?,?,?,?,?)',
+                        (f'log-{number}', 'task-1', 'worker_stdout', str(path), f'2026-10-2{number}'),
+                    )
+            url = '/artifact.txt?task_id=task-1&artifact_type=worker_stdout&artifact_id=log-1'
+            status, _, body = build_http_response(url, db)
+            self.assertEqual(status, 200)
+            self.assertIn(b'output from attempt 1', body)
+            self.assertNotIn(b'output from attempt 2', body)
+            self.assertEqual(build_http_response(url.replace('task-1', 'unrelated-task'), db)[0], 404)
+            self.assertEqual(build_http_response(url.replace('log-1', 'unknown'), db)[0], 404)
+
     def test_default_loopback_read_only_is_allowed(self):
         result = validate_server_options(
             host="127.0.0.1",

@@ -7,6 +7,9 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import urlsplit
 
+from robert_agent import work_items, work_item_control
+from robert_agent.board_execution import execution_summary, attempt_history, publication_history, safe_text
+
 
 COLUMNS = (
     ("backlog", "Backlog"),
@@ -127,7 +130,7 @@ def _unresolved_attention(conn, work_item_id):
         {
             "event_id": row["event_id"],
             "type": row["event_type"],
-            "summary": row["body"][:500],
+            "summary": safe_text(row["body"], 500),
             "created_at": row["created_at"],
             "metadata": _safe_event_metadata(row["metadata_json"]),
         }
@@ -135,32 +138,18 @@ def _unresolved_attention(conn, work_item_id):
     ]
 
 
-def _latest_task(conn, workstream_id):
-    return conn.execute(
-        """
-        SELECT task_id, lifecycle, priority, route_id, expected_output,
-               routing_mode, requested_worker, created_at, updated_at
-        FROM tasks
-        WHERE workstream_id = ?
-        ORDER BY created_at DESC, task_id DESC
-        LIMIT 1
-        """,
-        (workstream_id,),
-    ).fetchone()
-
-
-def _latest_attempt(conn, workstream_id):
+def _latest_attempt(conn, task_id):
     return conn.execute(
         """
         SELECT a.attempt_id, a.status, a.branch_name, a.worktree_path,
                a.started_at, a.finished_at
         FROM attempts a
         JOIN tasks t ON t.task_id = a.task_id
-        WHERE t.workstream_id = ?
-        ORDER BY a.started_at DESC, a.attempt_id DESC
+        WHERE t.task_id = ?
+        ORDER BY a.attempt_no DESC
         LIMIT 1
         """,
-        (workstream_id,),
+        (task_id,),
     ).fetchone()
 
 
@@ -179,25 +168,34 @@ def _derived_pr(conn, root_workstream_id):
     ).fetchone()
 
 
-def _valid_commands(item, column, attention, *, running=False):
-    if column == "backlog":
-        return ["edit", "start", "cancel"]
-    if column == "waiting":
-        if attention and attention[0]["type"] == "operator_decision_required":
-            return ["approve"] if running else ["approve", "cancel"]
-        commands = ["approve", "request_changes", "cancel"]
-        if any(signal["type"] in {"operator_question", "completion_acceptance_requested"} for signal in attention):
-            commands.insert(1, "reply")
-        if any(signal["type"] in ATTENTION_EVENTS - {"operator_question", "completion_acceptance_requested", "operator_decision_required"} for signal in attention):
-            commands.insert(-1, "retry")
-        return commands
-    if column == "review":
-        return ["request_changes", "cancel"] if attention else ["request_changes"]
+def _valid_commands(column, attention, *, running=False, publishing=False):
+    if column == "history":
+        return []
     if column == "done":
         return ["reopen"]
+    if publishing:
+        return ["cancel"]
+    if running:
+        return ["approve", "cancel"] if attention and attention[0]["type"] == "operator_decision_required" else ["cancel"]
     if column == "todo":
         return ["cancel"]
-    return []
+    if column == "backlog":
+        return ["start", "edit", "cancel"]
+    if attention:
+        types = {signal["type"] for signal in attention}
+        commands = []
+        if types & work_items.FAILURE_EVENTS:
+            commands.append("retry")
+        if types & work_items.QUESTION_EVENTS:
+            commands.append("reply")
+        if types & (work_items.DECISION_EVENTS | {"completion_acceptance_requested"}):
+            commands.append("approve")
+        if types & (work_items.QUESTION_EVENTS | work_items.FAILURE_EVENTS):
+            commands.append("request_changes")
+        return commands + ["cancel"]
+    if column == "review":
+        return ["request_changes", "cancel"]
+    return ["cancel"]
 
 
 def _project_item(conn, row):
@@ -208,46 +206,41 @@ def _project_item(conn, row):
         "SELECT source_type, number, html_url FROM github_sources WHERE source_id = ?",
         (row["origin_source_id"],),
     ).fetchone()
-    task = _latest_task(conn, workstream_id) if workstream_id else None
-    attempt = _latest_attempt(conn, workstream_id) if workstream_id else None
+    facts = work_item_control.lifecycle_facts(conn, row)
+    task = work_item_control.current_task(conn, facts["streams"])
+    attempt = _latest_attempt(conn, task["task_id"]) if task else None
+    execution = execution_summary(conn, task["task_id"]) if task else None
     pr = _derived_pr(conn, workstream_id) if workstream_id else None
-    running = bool(
-        workstream_id
-        and conn.execute(
-            """
-            SELECT 1 FROM attempts a
-            JOIN tasks t ON t.task_id = a.task_id
-            WHERE t.workstream_id = ? AND a.status = 'running'
-            LIMIT 1
-            """,
-            (workstream_id,),
-        ).fetchone()
-    )
-    publication_in_progress = bool(
-        workstream_id
-        and conn.execute(
-            """
-            SELECT 1 FROM github_actions ga
-            JOIN tasks t ON t.task_id = ga.task_id
-            WHERE t.workstream_id = ?
-              AND (ga.audit_status = 'pending'
-                   OR (ga.audit_status = 'accepted' AND ga.publish_status = 'not_published'))
-            LIMIT 1
-            """,
-            (workstream_id,),
-        ).fetchone()
-    )
+    running = bool(facts["running"])
+    publication_in_progress = bool(facts["actions"])
+    failures = facts["publish_failures"]
+    unavailable = next((a for a in attention if a["type"] == "manual_worker_unavailable"
+                        and task and a["metadata"].get("task_id") == task["task_id"]), None)
 
     if row["canceled_at"]:
         column, reason_code, reason_summary = "history", "canceled", "Canceled by the operator"
     elif row["completed_at"]:
         column, reason_code, reason_summary = "done", "completed", "Completion is satisfied"
-    elif attention and not (pr and attention[0]["type"] in {"publication_failed", "unmerged_pr_closed", "review_attention"}):
+    elif facts["source_closed"] and running:
+        column, reason_code, reason_summary = "waiting", "closed_source_running", "Source closed; the worker still needs to be stopped."
+    elif facts["cleanup_pending"]:
+        column, reason_code, reason_summary = "waiting", "worker_cleanup_pending", "Worker cleanup is incomplete: " + facts["cleanup_pending"][0]
+    elif failures and not running:
+        column, reason_code, reason_summary = "waiting", "publication_failed", failures[0]["reason"] or "Publication failed; retry the existing result."
+    elif unavailable and not running and not publication_in_progress:
+        column, reason_code, reason_summary = "waiting", "manual_worker_unavailable", unavailable["summary"]
+    elif task and task["lifecycle"] in {"detected", "authorized", "classified", "queued"} and not running and not publication_in_progress and not any(a["type"] == "operator_decision_required" for a in attention):
+        column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
+    elif attention and (not running or attention[0]["type"] == "operator_decision_required") and not publication_in_progress and not (pr and attention[0]["type"] in {"publication_failed", "unmerged_pr_closed", "review_attention"}):
         column, reason_code, reason_summary = "waiting", attention[0]["type"], attention[0]["summary"] or "Operator input is required"
     elif running or publication_in_progress:
-        column, reason_code, reason_summary = "doing", "running", "Agent execution or publication is in progress"
+        column, reason_code, reason_summary = "doing", ("publishing" if publication_in_progress and not running else "running"), "Agent execution or publication is in progress"
     elif pr and attention and attention[0]["type"] in {"publication_failed", "unmerged_pr_closed", "review_attention"}:
         column, reason_code, reason_summary = "review", attention[0]["type"], attention[0]["summary"] or "Pull request review needs attention"
+    elif task and task["lifecycle"] == "failed":
+        column, reason_code, reason_summary = "waiting", "execution_failed", (execution or {}).get("failure") or "Execution failed; inspect the attempt and retry."
+    elif facts["source_closed"]:
+        column, reason_code, reason_summary = "waiting", "source_closed", "Source closed; cancel this item to finish its lifecycle."
     elif task and task["lifecycle"] in {"detected", "authorized", "classified", "queued", "running"}:
         column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
     elif pr and (pr["state"] or "open").lower() == "open":
@@ -273,6 +266,9 @@ def _project_item(conn, row):
         "agent": requested_worker if routing_mode == "manual" else "Auto",
         "task_id": task["task_id"] if task else None,
         "task_lifecycle": task["lifecycle"] if task else None,
+        "execution": execution,
+        "publication": {"failures": failures, "pending": len(facts["actions"]), "retry_pending": facts["publication_retry_pending"], "blocked_reason": "Publication reconciliation is blocked by the audit or ownership boundary. Cancel this task and resolve the reported cause before creating new work." if facts["publication_retry_blocked"] else None},
+        "action_blocked_reason": "publication_in_progress" if publication_in_progress and not failures else None,
         "branch": attempt["branch_name"] if attempt else None,
         "worktree_label": Path(attempt["worktree_path"]).name if attempt and attempt["worktree_path"] else None,
         "source": (
@@ -294,7 +290,22 @@ def _project_item(conn, row):
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
-    card["valid_commands"] = _valid_commands(row, column, attention, running=running)
+    card["valid_commands"] = _valid_commands(column, attention, running=running, publishing=publication_in_progress)
+    if not row["canceled_at"] and not row["completed_at"]:
+        if facts["source_closed"] or facts["cleanup_pending"]:
+            card["valid_commands"] = ["cancel"]
+        elif unavailable and not running and not publication_in_progress:
+            card["valid_commands"] = ["retry", "cancel"]
+        elif failures and not running:
+            card["valid_commands"] = (["retry_publish"] if not facts["publication_retry_pending"] and not facts["publication_retry_blocked"] else []) + ["cancel"]
+        elif task and task["lifecycle"] == "failed" and not running and not publication_in_progress:
+            if row["origin_type"] != "web":
+                binding = conn.execute("SELECT owner_engine,binding_status FROM workflow_bindings WHERE subject_type='task' AND subject_id=?", (task['task_id'],)).fetchone()
+                ownership_blocked = binding and (binding[0] != 'legacy' or binding[1] == 'attention')
+                pending = conn.execute("SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json, '$.kind')='github_retrigger'", (task["task_id"],)).fetchone()
+                card["valid_commands"] = ([] if pending or ownership_blocked else ["retrigger"]) + ["cancel"]
+            else:
+                card["valid_commands"] = ["retry", "cancel"]
     return card
 
 
@@ -319,7 +330,7 @@ def _matches(item, *, repo, agent, priority, attention, query):
         return False
     if attention is not None:
         wanted = attention in {True, "true", "1", "yes"}
-        if bool(item["attention_signals"]) != wanted:
+        if (item["column"] == "waiting" or bool(item["attention_signals"])) != wanted:
             return False
     if query:
         haystack = " ".join(
@@ -371,7 +382,7 @@ def list_board(
         ]
         counts = {
             column_id: sum(1 for item in projections if item["column"] == column_id)
-            for column_id, _label in COLUMNS
+            for column_id in [name for name, _label in COLUMNS] + ["history"]
         }
         if cursor_value:
             projections = [
@@ -440,19 +451,21 @@ def get_work_item_detail(db_path, work_item_id):
         card = _project_item(conn, row)
         tasks = []
         if row["workstream_id"]:
+            streams = work_item_control.related_workstreams(conn, row["workstream_id"])
+            placeholders = ",".join("?" for _ in streams)
             task_rows = conn.execute(
-                """
+                f"""
                 SELECT task_id, parent_task_id, lifecycle, priority, route_id,
                        expected_output, routing_mode, requested_worker, created_at, updated_at
-                FROM tasks WHERE workstream_id = ?
+                FROM tasks WHERE workstream_id IN ({placeholders})
                 ORDER BY created_at, task_id
                 """,
-                (row["workstream_id"],),
+                streams,
             ).fetchall()
             for task in task_rows:
                 attempts = [
                     {
-                        "attempt_id": attempt["attempt_id"],
+                        **attempt_history(conn, attempt),
                         "status": attempt["status"],
                         "branch": attempt["branch_name"],
                         "worktree_label": Path(attempt["worktree_path"]).name if attempt["worktree_path"] else None,
@@ -461,8 +474,7 @@ def get_work_item_detail(db_path, work_item_id):
                     }
                     for attempt in conn.execute(
                         """
-                        SELECT attempt_id, status, branch_name, worktree_path,
-                               started_at, finished_at
+                        SELECT *
                         FROM attempts WHERE task_id = ? ORDER BY attempt_no
                         """,
                         (task["task_id"],),
@@ -481,6 +493,7 @@ def get_work_item_detail(db_path, work_item_id):
                         "created_at": task["created_at"],
                         "updated_at": task["updated_at"],
                         "attempts": attempts,
+                        "publication_actions": publication_history(conn, task["task_id"]),
                     }
                 )
         timeline = list_work_item_events(db_path, work_item_id, limit=20)
@@ -532,7 +545,7 @@ def list_work_item_events(db_path, work_item_id, *, limit=50, cursor=None):
                 "event_type": row["event_type"],
                 "actor_kind": row["actor_kind"],
                 "actor_identity": row["actor_identity"],
-                "body": row["body"],
+                "body": safe_text(row["body"], 8000),
                 "resolves_event_id": row["resolves_event_id"],
                 "created_at": row["created_at"],
                 "metadata": _safe_event_metadata(row["metadata_json"]),

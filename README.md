@@ -116,6 +116,9 @@ robert web run --writable --operator "$USER"
 
 非回环地址还必须使用 `--allow-remote`，并部署经过认证的反向代理。
 
+首页以看板展示任务生命周期。执行进度、失败恢复、取消和发布重试见
+[任务生命周期看板](docs/web-lifecycle-board.md)。
+
 ## OpenClaw 集成
 
 ![OpenClaw 中的 Robert 状态](docs/imgs/openclaw-robert-status.png)

@@ -805,7 +805,7 @@ class WorkItemCommandTests(unittest.TestCase):
 
         waiting = board.get_work_item_detail(self.db_path, item["work_item_id"])
         self.assertEqual(waiting["column"], "waiting")
-        self.assertEqual(waiting["valid_commands"], ["approve"])
+        self.assertEqual(waiting["valid_commands"], ["approve", "cancel"])
 
         approved = work_items.execute_command(
             self.db_path,

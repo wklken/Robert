@@ -1,5 +1,8 @@
+import json
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
 
@@ -16,6 +19,54 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
 
     def test_publish_dedupe_acceptance_reuses_existing_comment_and_pr_markers(self):
         from robert_agent import publish_dedupe_acceptance
+
+        original_insert = publish_dedupe_acceptance._insert_fixture
+
+        def insert_with_audit_scope(db_path):
+            original_insert(db_path)
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute(
+                    "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-comment'",
+                    (
+                        json.dumps(
+                            {
+                                "audit": {
+                                    "status": "accepted",
+                                    "action_scope": {
+                                        "repo": "x/y",
+                                        "sources": [{"source_type": "issue", "number": 1}],
+                                    },
+                                }
+                            },
+                            sort_keys=True,
+                        ),
+                    ),
+                )
+                conn.execute(
+                    "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-pr'",
+                    (
+                        json.dumps(
+                            {
+                                "audit": {
+                                    "status": "accepted",
+                                    "action_scope": {
+                                        "repo": "x/y",
+                                        "sources": [{"source_type": "issue", "number": 1}],
+                                    },
+                                }
+                            },
+                            sort_keys=True,
+                        ),
+                    ),
+                )
+
+        publish_dedupe_acceptance._insert_fixture = insert_with_audit_scope
+        self.addCleanup(
+            setattr,
+            publish_dedupe_acceptance,
+            "_insert_fixture",
+            original_insert,
+        )
         result = publish_dedupe_acceptance.publish_dedupe_acceptance(
             workspace_dir=self.root / "publish-dedupe"
         )

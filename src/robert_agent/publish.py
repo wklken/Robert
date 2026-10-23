@@ -9,8 +9,18 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from robert_agent import audit_result, pr_health, remediation
+from robert_agent import (
+    audit_result,
+    pr_health,
+    publication_reconcile,
+    remediation,
+    workflow_operations,
+    workflow_store,
+)
 from robert_agent.common import emit
+from robert_agent.publication_lock import task_publication_lock
+
+PUBLISH_COMMAND_TIMEOUT_SECONDS = 60
 
 
 COMMENT_MARKER_RE = re.compile(
@@ -186,7 +196,7 @@ def _find_existing_comment(endpoint, marker, run_command):
     return {"ok": True, "status": "not_found", "command": command}
 
 
-def _publish_comment(action, run_command):
+def _publish_comment(action, run_command, conn=None):
     metadata = _decode_json(action["metadata_json"])
     body = metadata.get("body")
     if not isinstance(body, str) or not body:
@@ -212,6 +222,9 @@ def _publish_comment(action, run_command):
     existing = _find_existing_comment(endpoint, marker, run_command)
     if not existing["ok"] or existing["status"] == "published":
         return existing
+    scope_guard = _publication_scope_guard(conn, action)
+    if scope_guard:
+        return scope_guard
     command = ["gh", "api", endpoint, "-f", f"body={body}"]
     completed = run_command(command, capture_output=True, text=True)
     safe_error = _command_failure(completed, "gh api failed")
@@ -341,6 +354,8 @@ def _find_existing_open_pr(repo, head, marker, run_command, base="", head_owner=
             continue
         body = existing.get("body") if isinstance(existing.get("body"), str) else ""
         existing_owner = _pr_head_owner(existing) or _pr_head_owner(pr)
+        if head_owner and not _owners_match(head_owner, existing_owner):
+            continue
         dedupe_reason = ""
         if head_owner and not _owners_match(head_owner, existing_owner):
             continue
@@ -432,6 +447,28 @@ def _head_owner_for_action(metadata, head, action, conn, run_command):
     return owner
 
 
+def _trusted_head_owner_for_intent(conn, action, action_scope, run_command):
+    """Resolve the immutable PR head owner without trusting Worker metadata."""
+
+    scoped_owner = (
+        action_scope.get("head_owner") if isinstance(action_scope, dict) else ""
+    )
+    if isinstance(scoped_owner, str) and scoped_owner:
+        return scoped_owner
+    metadata = _decode_json(action.get("metadata_json"))
+    head = _metadata_value(metadata, "head", "head_branch", "branch")
+    if ":" in head:
+        return head.split(":", 1)[0]
+    push_metadata = _sibling_push_metadata(conn, action, head)
+    if push_metadata:
+        try:
+            return _head_owner_from_push_metadata(push_metadata, head, run_command)
+        except Exception:
+            return ""
+    repo = action_scope.get("repo") if isinstance(action_scope, dict) else ""
+    return repo.split("/", 1)[0] if isinstance(repo, str) and "/" in repo else ""
+
+
 def _head_for_pr_create(repo, head, owner):
     if ":" in head:
         return head
@@ -441,7 +478,7 @@ def _head_for_pr_create(repo, head, owner):
     return f"{owner}:{head}" if owner else head
 
 
-def _publish_open_pr(action, run_command, conn=None):
+def _publish_open_pr(action, run_command, conn=None, trusted_head_owner=None):
     metadata = _decode_json(action["metadata_json"])
     repo = _metadata_value(metadata, "repo", "repository")
     head = _metadata_value(metadata, "head", "head_branch", "branch")
@@ -472,10 +509,17 @@ def _publish_open_pr(action, run_command, conn=None):
             "status": "publish_failed",
             "safe_error": "open_pr action body requires robert-workstream metadata",
         }
-    head_owner = _head_owner_for_action(metadata, head, action, conn, run_command)
+    head_owner = (
+        trusted_head_owner
+        if trusted_head_owner is not None
+        else _head_owner_for_action(metadata, head, action, conn, run_command)
+    )
     existing = _find_existing_open_pr(repo, head, marker, run_command, base=base, head_owner=head_owner)
     if not existing["ok"] or existing["status"] == "published":
         return existing
+    scope_guard = _publication_scope_guard(conn, action)
+    if scope_guard:
+        return scope_guard
     create_head = _head_for_pr_create(repo, head, head_owner)
     command = [
         "gh",
@@ -547,7 +591,7 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
         }
     action_scope = _trusted_action_scope(conn, action) or {}
     expected_remote_sha = action_scope.get("existing_pr_head_sha", "")
-    result_head_sha = action_scope.get("result_head_sha")
+    result_head_sha = action_scope.get("result_head_sha") or (source_ref if source_ref != "HEAD" else None)
     source_ref = result_head_sha or source_ref
     destination_ref = f"refs/heads/{branch}"
     if action_scope and not result_head_sha:
@@ -628,6 +672,9 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
         ]
     else:
         command = ["git", "push", remote, f"{source_ref}:{destination_ref}"]
+    scope_guard = _publication_scope_guard(conn, action)
+    if scope_guard:
+        return scope_guard
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
     safe_error = _command_failure(completed, "git push failed")
     if safe_error:
@@ -671,6 +718,34 @@ def _publish_scope_violation(conn, action):
         payload["target_url"] = action["target_url"]
         payload["url"] = action["target_url"]
     return audit_result.action_scope_violation([payload], action_scope)
+
+
+def _publication_scope_guard(conn, action):
+    """Recheck the durable binding immediately before an external write."""
+
+    if conn is None:
+        return None
+    scope = _trusted_action_scope(conn, action)
+    if scope is None or workflow_operations.publication_scope_is_current(
+        conn, action.get("task_id"), scope
+    ):
+        return None
+    now = _now()
+    intent = _load_intent(conn, action["action_id"])
+    reconciliation = {
+        "status": "unknown",
+        "reason_code": "publication_scope_stale",
+        "evidence": {},
+    }
+    _mark_attention(conn, action, intent, scope, reconciliation, now)
+    conn.commit()
+    return {
+        "ok": False,
+        "status": "publish_failed",
+        "reason_code": "publication_scope_stale",
+        "safe_error": "publication scope is no longer active",
+        "command": [],
+    }
 
 
 def _publish_remediation_push(action, run_command, action_scope, conn=None):
@@ -760,7 +835,13 @@ def _publish_remediation_push(action, run_command, action_scope, conn=None):
     return result
 
 
-def _publish_action(action, run_command, conn=None):
+def _publish_action(
+    action,
+    run_command,
+    conn=None,
+    source_sha=None,
+    trusted_head_owner=None,
+):
     scope_violation = _publish_scope_violation(conn, action)
     if scope_violation:
         return {
@@ -768,10 +849,18 @@ def _publish_action(action, run_command, conn=None):
             "status": "publish_failed",
             "safe_error": f"action scope validation failed: {scope_violation}",
         }
+    scope_guard = _publication_scope_guard(conn, action)
+    if scope_guard:
+        return scope_guard
     if action["action_type"] == "comment":
-        return _publish_comment(action, run_command)
+        return _publish_comment(action, run_command, conn=conn)
     if action["action_type"] == "open_pr":
-        return _publish_open_pr(action, run_command, conn=conn)
+        return _publish_open_pr(
+            action,
+            run_command,
+            conn=conn,
+            trusted_head_owner=trusted_head_owner,
+        )
     if action["action_type"] == "push_existing_pr":
         action_scope = _trusted_action_scope(conn, action)
         if (
@@ -785,7 +874,12 @@ def _publish_action(action, run_command, conn=None):
                 action_scope,
                 conn=conn,
             )
-        return _publish_push_existing_pr(action, run_command, conn=conn)
+        return _publish_push_existing_pr(
+            action,
+            run_command,
+            conn=conn,
+            source_ref=source_sha or "HEAD",
+        )
     return {
         "ok": False,
         "status": "unsupported_action",
@@ -793,7 +887,7 @@ def _publish_action(action, run_command, conn=None):
     }
 
 
-def _mark_published(conn, action, result, now):
+def _mark_published(conn, action, result, now, intent=None):
     metadata = _decode_json(action["metadata_json"])
     metadata["publish"] = {
         "status": "published",
@@ -818,6 +912,242 @@ def _mark_published(conn, action, result, now):
         ),
     )
     _resolve_action_notification(conn, action, "github_publish_failed", result, now)
+    if intent:
+        current = intent["status"]
+        if current in {"executing", "failed"}:
+            if current == "failed":
+                workflow_store.transition_publication_intent(
+                    conn, intent["publication_id"], "executing", now
+                )
+            workflow_store.transition_publication_intent(
+                conn,
+                intent["publication_id"],
+                "published",
+                now,
+                remote_evidence={
+                    "status": "confirmed_effect",
+                    "reason_code": "publisher_success",
+                },
+            )
+
+
+def _derive_push_source_sha(action, action_scope, run_command):
+    """Read the exact local source SHA for a non-remediation push."""
+
+    if action.get("action_type") != "push_existing_pr":
+        return action_scope, None
+    scope = dict(action_scope or {})
+    if scope.get("result_head_sha"):
+        return scope, scope.get("result_head_sha")
+    metadata = _decode_json(action.get("metadata_json"))
+    worktree_path = _metadata_value(metadata, "worktree_path") or scope.get("worktree_path")
+    source_ref = _metadata_value(metadata, "source_ref") or "HEAD"
+    if not worktree_path:
+        return scope, None
+    command = ["git", "rev-parse", source_ref]
+    try:
+        completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
+    except Exception:
+        return scope, None
+    if _command_failure(completed, "git rev-parse failed"):
+        return scope, None
+    source_sha = (getattr(completed, "stdout", "") or "").strip().splitlines()
+    source_sha = source_sha[0].strip() if source_sha else ""
+    if not re.fullmatch(r"[0-9a-fA-F]{7,64}", source_sha):
+        return scope, None
+    scope["result_head_sha"] = source_sha
+    return scope, source_sha
+
+
+def _load_intent(conn, action_id):
+    row = conn.execute(
+        "SELECT * FROM publication_intents WHERE action_id = ?", (action_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _insert_workflow_attention_notification(conn, action, reason_code, now):
+    notification_id = f"notification-workflow-attention-{action['action_id']}"
+    metadata = {
+        "action_id": action["action_id"],
+        "action_type": action["action_type"],
+        "reason_code": str(reason_code)[:96],
+    }
+    conn.execute(
+        """
+        INSERT INTO notifications(
+          notification_id, task_id, notification_type, channel, status,
+          created_at, metadata_json
+        ) VALUES (?, ?, 'workflow_attention_required', 'local', 'recorded', ?, ?)
+        ON CONFLICT(notification_id) DO UPDATE SET
+          status = 'recorded', created_at = excluded.created_at,
+          metadata_json = excluded.metadata_json
+        """,
+        (notification_id, action.get("task_id"), now, _encode_json(metadata)),
+    )
+
+
+def _mark_attention(conn, action, intent, scope, reconciliation, now):
+    reason_code = reconciliation.get("reason_code", "publication_unknown")
+    _record_failure(conn, action, {"status": "publish_failed", "safe_error": f"Publication requires attention: {reason_code}", "retryable": False}, now)
+    if intent and intent["status"] in {"prepared", "executing", "failed"}:
+        if intent["status"] == "prepared":
+            workflow_store.transition_publication_intent(
+                conn, intent["publication_id"], "executing", now
+            )
+        elif intent["status"] == "failed":
+            workflow_store.transition_publication_intent(
+                conn, intent["publication_id"], "executing", now
+            )
+        workflow_store.transition_publication_intent(
+            conn,
+            intent["publication_id"],
+            "attention",
+            now,
+            remote_evidence=reconciliation.get("evidence", {}),
+            error={"reason_code": reason_code},
+        )
+    workflow_operations.mark_publication_attention(
+        conn, action.get("task_id"), scope, reason_code, now=now
+    )
+    _insert_workflow_attention_notification(conn, action, reason_code, now)
+
+
+def _prepare_publication_intent(db_path, action_id, run_command):
+    """Prepare and execute an intent in committed local transactions."""
+
+    now = _now()
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        action_row = conn.execute(
+            """
+            SELECT action_id, result_id, task_id, action_type, target_url, external_id,
+                   audit_status, publish_status, created_at, metadata_json
+            FROM github_actions WHERE action_id = ?
+            """,
+            (action_id,),
+        ).fetchone()
+        if not action_row:
+            return {"state": "missing", "action": None, "intent": None, "scope": None}
+        action = dict(action_row)
+        if action["publish_status"] != "not_published" or action["audit_status"] != "accepted":
+            return {"state": "missing", "action": action, "intent": None, "scope": None}
+        scope = _trusted_action_scope(conn, action)
+        intent = _load_intent(conn, action_id)
+    source_sha = None
+    head_owner = None
+    if intent is None and (scope is None or not isinstance(scope, dict)):
+        return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
+    if intent is not None and intent["status"] == "prepared" and not isinstance(scope, dict):
+        return {"state": "scope_missing", "action": action, "intent": intent, "scope": scope}
+    if intent is not None:
+        persisted_evidence = _decode_json(intent.get("remote_evidence_json"))
+        source_sha = persisted_evidence.get("source_sha") or None
+        head_owner = persisted_evidence.get("head_owner") or None
+    # Source SHA is read before deriving the fingerprint and before the
+    # prepared/executing commits.  On retries only the immutable value from
+    # the existing intent is trusted; mutable local HEAD is never re-read.
+    if intent is None or intent["status"] == "prepared":
+        if isinstance(scope, dict):
+            scope, source_sha = _derive_push_source_sha(action, scope, run_command)
+            if action.get("action_type") == "open_pr":
+                with closing(sqlite3.connect(db_path)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    head_owner = _trusted_head_owner_for_intent(
+                        conn,
+                        action,
+                        scope,
+                        run_command,
+                    )
+                if head_owner:
+                    scope = {**scope, "head_owner": head_owner}
+    if (
+        action.get("action_type") == "push_existing_pr"
+        and isinstance(scope, dict)
+        and not scope.get("result_head_sha")
+        and not source_sha
+    ):
+        return {"state": "source_sha_missing", "action": action, "intent": intent, "scope": scope}
+    if action.get("action_type") == "open_pr" and not head_owner:
+        return {
+            "state": "head_owner_missing",
+            "action": action,
+            "intent": intent,
+            "scope": scope,
+        }
+    if intent is None:
+        if scope is None or not isinstance(scope, dict):
+            return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
+        try:
+            idempotency_key, request_fingerprint = publication_reconcile.derive_publication_keys(
+                action, scope
+            )
+        except ValueError:
+            return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            intent = dict(
+                workflow_store.prepare_publication_intent(
+                    conn,
+                    action_id,
+                    idempotency_key,
+                    request_fingerprint,
+                    now,
+                )
+            )
+    # A terminal published intent is replay success.  Backfill the action if
+    # a process crashed after intent completion but before the action update.
+    if intent["status"] == "published":
+        return {"state": "published", "action": action, "intent": intent, "scope": scope}
+    if intent["status"] == "attention":
+        return {"state": "attention", "action": action, "intent": intent, "scope": scope}
+
+    if intent["status"] == "executing":
+        return {
+            "state": "reconcile",
+            "action": action,
+            "intent": intent,
+            "scope": scope,
+            "source_sha": source_sha,
+            "head_owner": head_owner,
+        }
+
+    evidence = {}
+    if source_sha:
+        evidence["source_sha"] = source_sha
+    if head_owner:
+        evidence["head_owner"] = head_owner
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        latest = _load_intent(conn, action_id)
+        if latest["status"] == "prepared":
+            latest = dict(
+                workflow_store.transition_publication_intent(
+                    conn,
+                    latest["publication_id"],
+                    "executing",
+                    now,
+                    remote_evidence=evidence or None,
+                )
+            )
+        elif latest["status"] == "failed":
+            latest = dict(
+                workflow_store.transition_publication_intent(
+                    conn,
+                    latest["publication_id"],
+                    "executing",
+                    now,
+                    remote_evidence=evidence or None,
+                )
+            )
+    return {
+        "state": "ready",
+        "action": action,
+        "intent": latest,
+        "scope": scope,
+        "source_sha": source_sha,
+        "head_owner": head_owner,
+    }
 
 
 def _mark_skipped(conn, action, result, now):
@@ -870,6 +1200,7 @@ def _record_failure(conn, action, result, now):
     metadata["publish"] = {
         "status": "publish_failed",
         "failed_at": now,
+        "retryable": result.get("retryable", True),
         "safe_error": result.get("safe_error", ""),
         "command": result.get("command", []),
     }
@@ -939,103 +1270,351 @@ def _ready_actions(conn, limit, repo_id=None):
 
 
 def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subprocess.run, repo_id=None):
-    with closing(sqlite3.connect(db_path)) as conn, conn:
+    def bounded_command(*args, **kwargs):
+        kwargs["timeout"] = min(kwargs.get("timeout") or PUBLISH_COMMAND_TIMEOUT_SECONDS, PUBLISH_COMMAND_TIMEOUT_SECONDS)
+        return run_command(*args, **kwargs)
+
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         actions = _ready_actions(conn, limit, repo_id=repo_id)
-        if dry_run:
-            return {
-                "ok": True,
-                "status": "dry_run",
-                "pending_count": len(actions),
-                "published_count": 0,
-                "deduplicated_count": 0,
-                "skipped_count": 0,
-                "failed_count": 0,
-            }
-        published_count = 0
-        deduplicated_count = 0
-        skipped_count = 0
-        failed_count = 0
-        failures = []
-        failed_result_ids = set()
-        failed_remediation_result_ids = set()
-        for action in actions:
-            result_id = action["result_id"]
-            now = _now()
-            current_status = conn.execute(
-                """
-                SELECT publish_status
-                FROM github_actions
-                WHERE action_id = ?
-                """,
-                (action["action_id"],),
-            ).fetchone()
-            if not current_status or current_status[0] != "not_published":
+    if dry_run:
+        return {
+            "ok": True,
+            "status": "dry_run",
+            "pending_count": len(actions),
+            "published_count": 0,
+            "deduplicated_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+        }
+    published_count = 0
+    deduplicated_count = 0
+    skipped_count = 0
+    failed_count = 0
+    failures = []
+    failed_result_ids = set()
+    failed_remediation_result_ids = set()
+    busy_task_ids = set()
+    for action in actions:
+        if action["task_id"] in busy_task_ids:
+            continue
+        with task_publication_lock(db_path, action["task_id"]) as acquired:
+            if not acquired:
+                busy_task_ids.add(action["task_id"])
                 continue
-            if result_id and result_id in failed_result_ids:
-                if result_id in failed_remediation_result_ids:
-                    result = {
-                        "ok": False,
-                        "status": "publish_failed",
-                        "safe_error": (
-                            "skipped because the preceding remediation "
-                            "push failed"
-                        ),
-                    }
-                    _mark_skipped(conn, action, result, now)
-                    skipped_count += 1
-                continue
-            result = _publish_action(action, run_command, conn=conn)
-            _record_remediation_publish_outcome(
-                conn,
-                action,
-                result,
-                now,
-            )
-            if result["status"] == "published":
-                _mark_published(conn, action, result, now)
-                published_count += 1
-                if result.get("deduplicated"):
-                    deduplicated_count += 1
-                continue
-            if result["status"] in {"unsupported_action", "superseded"}:
-                _mark_skipped(conn, action, result, now)
-                skipped_count += 1
-                if result["status"] == "superseded" and result_id:
-                    skipped_count += _skip_pending_result_actions(
-                        conn,
-                        result_id=result_id,
-                        excluding_action_id=action["action_id"],
-                        result={
+            # Consume the request before this pass, including reconciliation
+            # failures, so a failed attempt never leaves retry disabled.
+            with closing(sqlite3.connect(db_path)) as retry_conn, retry_conn:
+                retry_conn.execute(
+                    """UPDATE wakeups SET status='consumed', updated_at=?
+                    WHERE task_id=? AND status='pending'
+                    AND json_extract(metadata_json, '$.kind')='publication_retry'""",
+                    (_now(), action["task_id"]),
+                )
+            try:
+                result_id = action["result_id"]
+                now = _now()
+                if result_id and result_id in failed_result_ids:
+                    if result_id in failed_remediation_result_ids:
+                        result = {
+                            "ok": False,
+                            "status": "publish_failed",
+                            "safe_error": (
+                                "skipped because the preceding remediation "
+                                "push failed"
+                            ),
+                        }
+                        with closing(sqlite3.connect(db_path)) as conn, conn:
+                            conn.row_factory = sqlite3.Row
+                            _mark_skipped(conn, action, result, now)
+                        skipped_count += 1
+                    continue
+                current = _prepare_publication_intent(db_path, action["action_id"], bounded_command)
+                if current["state"] == "missing":
+                    continue
+                action = current["action"]
+                intent = current["intent"]
+                scope = current.get("scope")
+
+                if current["state"] == "published":
+                    # A completed intent is replay success.  Normally the action was
+                    # committed in the same transaction; this branch repairs an old
+                    # partial local update without contacting GitHub again.
+                    if action.get("publish_status") == "not_published":
+                        result = {
                             "ok": True,
-                            "status": "superseded",
-                            "safe_error": "skipped because the preceding push was superseded",
-                        },
-                        now=now,
+                            "status": "published",
+                            "deduplicated": True,
+                            "response": {"replayed_intent": True},
+                        }
+                        with closing(sqlite3.connect(db_path)) as conn, conn:
+                            conn.row_factory = sqlite3.Row
+                            _mark_published(conn, action, result, now)
+                    published_count += 1
+                    deduplicated_count += 1
+                    continue
+
+                if current["state"] == "attention":
+                    failed_count += 1
+                    failures.append(
+                        {
+                            "action_id": action["action_id"],
+                            "safe_error": "publication intent requires operator attention",
+                            "command": [],
+                        }
                     )
-                continue
-            _record_failure(conn, action, result, now)
-            if result_id:
-                failed_result_ids.add(result_id)
-                action_scope = _trusted_action_scope(conn, action)
-                if (
-                    action["action_type"] == "push_existing_pr"
-                    and isinstance(action_scope, dict)
-                    and action_scope.get("task_kind")
-                    in {
-                        "ci_remediation",
-                        "merge_conflict_remediation",
+                    failed_result_ids.add(result_id) if result_id else None
+                    continue
+
+                if current["state"] in {
+                    "scope_missing",
+                    "source_sha_missing",
+                    "head_owner_missing",
+                }:
+                    # There is no safe idempotency key without the accepted audit
+                    # scope.  Protect the action with one deterministic local
+                    # notification and stop before any remote query or write.
+                    with closing(sqlite3.connect(db_path)) as conn, conn:
+                        conn.row_factory = sqlite3.Row
+                        reason_code = (
+                            "audited_scope_missing"
+                            if current["state"] == "scope_missing"
+                            else (
+                                "source_sha_unavailable"
+                                if current["state"] == "source_sha_missing"
+                                else "head_owner_unavailable"
+                            )
+                        )
+                        _record_failure(conn, action, {"status": "publish_failed", "safe_error": f"Publication requires attention: {reason_code}", "retryable": False}, now)
+                        workflow_operations.mark_publication_attention(
+                            conn,
+                            action.get("task_id"),
+                            scope,
+                            reason_code,
+                            now=now,
+                        )
+                        _insert_workflow_attention_notification(
+                            conn,
+                            action,
+                            reason_code,
+                            now,
+                        )
+                    failed_count += 1
+                    failures.append(
+                        {
+                            "action_id": action["action_id"],
+                            "safe_error": (
+                                "publication reconciliation: audited_scope_missing"
+                                if current["state"] == "scope_missing"
+                                else (
+                                    "publication reconciliation: source_sha_unavailable"
+                                    if current["state"] == "source_sha_missing"
+                                    else "publication reconciliation: head_owner_unavailable"
+                                )
+                            ),
+                            "command": [],
+                        }
+                    )
+                    if result_id:
+                        failed_result_ids.add(result_id)
+                    continue
+
+                if current["state"] == "reconcile":
+                    reconcile_scope = dict(scope or {})
+                    evidence = _decode_json(intent.get("remote_evidence_json"))
+                    if evidence.get("source_sha") and not reconcile_scope.get("result_head_sha"):
+                        reconcile_scope["result_head_sha"] = evidence["source_sha"]
+                    if evidence.get("head_owner"):
+                        reconcile_scope["head_owner"] = evidence["head_owner"]
+                    reconciliation = publication_reconcile.classify_remote_state(
+                        action,
+                        reconcile_scope if scope is not None else None,
+                        bounded_command,
+                    )
+                    if reconciliation["status"] == "confirmed_effect":
+                        result = {
+                            "ok": True,
+                            "status": "published",
+                            "deduplicated": True,
+                            "external_id": reconciliation["evidence"].get("external_id", ""),
+                            "target_url": reconciliation["evidence"].get("target_url", ""),
+                            "response": {"reconciliation": reconciliation["evidence"]},
+                        }
+                        with closing(sqlite3.connect(db_path)) as conn, conn:
+                            conn.row_factory = sqlite3.Row
+                            latest = _load_intent(conn, action["action_id"])
+                            _mark_published(conn, action, result, now, intent=latest)
+                            _record_remediation_publish_outcome(conn, action, result, now)
+                        published_count += 1
+                        deduplicated_count += 1
+                        continue
+                    if reconciliation["status"] == "unknown":
+                        current = {**current, "state": "attention"}
+                    if reconciliation["status"] == "confirmed_absent" and scope is not None:
+                        with closing(sqlite3.connect(db_path)) as conn, conn:
+                            conn.row_factory = sqlite3.Row
+                            if not workflow_operations.publication_scope_is_current(
+                                conn, action.get("task_id"), scope
+                            ):
+                                reconciliation = {
+                                    "status": "unknown",
+                                    "reason_code": "publication_scope_stale",
+                                    "evidence": {},
+                                }
+                            else:
+                                latest = _load_intent(conn, action["action_id"])
+                                persisted = _decode_json(latest.get("remote_evidence_json"))
+                                source_sha = persisted.get("source_sha") or current.get(
+                                    "source_sha"
+                                )
+                                head_owner = persisted.get("head_owner") or current.get(
+                                    "head_owner"
+                                )
+                                absent_evidence = dict(reconciliation.get("evidence", {}))
+                                if source_sha:
+                                    absent_evidence["source_sha"] = source_sha
+                                if head_owner:
+                                    absent_evidence["head_owner"] = head_owner
+                                workflow_store.transition_publication_intent(
+                                    conn,
+                                    latest["publication_id"],
+                                    "confirmed_absent",
+                                    now,
+                                    remote_evidence=absent_evidence,
+                                )
+                                retry_evidence = {"retry_after_absence": True}
+                                if source_sha:
+                                    retry_evidence["source_sha"] = source_sha
+                                if head_owner:
+                                    retry_evidence["head_owner"] = head_owner
+                                workflow_store.transition_publication_intent(
+                                    conn,
+                                    latest["publication_id"],
+                                    "executing",
+                                    now,
+                                    remote_evidence=retry_evidence,
+                                )
+                        if reconciliation["status"] == "confirmed_absent":
+                            current = {**current, "state": "ready", "intent": latest}
+                        else:
+                            current = {**current, "state": "attention"}
+                    if current["state"] == "attention":
+                        with closing(sqlite3.connect(db_path)) as conn, conn:
+                            conn.row_factory = sqlite3.Row
+                            latest = _load_intent(conn, action["action_id"])
+                            _mark_attention(conn, action, latest, scope, reconciliation, now)
+                        failed_count += 1
+                        failures.append(
+                            {
+                                "action_id": action["action_id"],
+                                "safe_error": f"publication reconciliation: {reconciliation.get('reason_code', 'unknown')}",
+                                "command": [],
+                            }
+                        )
+                        if result_id:
+                            failed_result_ids.add(result_id)
+                        continue
+
+                if current.get("state") == "ready" and scope is None:
+                    reconciliation = {
+                        "status": "unknown",
+                        "reason_code": "audited_scope_missing",
+                        "evidence": {},
                     }
-                ):
-                    failed_remediation_result_ids.add(result_id)
-            failed_count += 1
-            failures.append(
-                {
-                    "action_id": action["action_id"],
-                    "safe_error": result.get("safe_error", ""),
-                    "command": result.get("command", []),
-                }
-            )
+                    with closing(sqlite3.connect(db_path)) as conn, conn:
+                        conn.row_factory = sqlite3.Row
+                        latest = _load_intent(conn, action["action_id"])
+                        _mark_attention(conn, action, latest, scope, reconciliation, now)
+                    failed_count += 1
+                    failures.append(
+                        {
+                            "action_id": action["action_id"],
+                            "safe_error": "publication reconciliation: audited_scope_missing",
+                            "command": [],
+                        }
+                    )
+                    if result_id:
+                        failed_result_ids.add(result_id)
+                    continue
+
+                # The intent is committed as executing before this call.  No SQLite
+                # transaction spans the remote effect, so a crash leaves an executing
+                # intent for the next publisher pass to reconcile.
+                with closing(sqlite3.connect(db_path)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    result = _publish_action(
+                        action,
+                        bounded_command,
+                        conn=conn,
+                        source_sha=current.get("source_sha"),
+                        trusted_head_owner=current.get("head_owner"),
+                    )
+                now = _now()
+                if result["status"] == "published":
+                    with closing(sqlite3.connect(db_path)) as conn, conn:
+                        conn.row_factory = sqlite3.Row
+                        latest = _load_intent(conn, action["action_id"])
+                        _mark_published(conn, action, result, now, intent=latest)
+                        _record_remediation_publish_outcome(conn, action, result, now)
+                    published_count += 1
+                    if result.get("deduplicated"):
+                        deduplicated_count += 1
+                    continue
+                if result["status"] in {"unsupported_action", "superseded"}:
+                    with closing(sqlite3.connect(db_path)) as conn, conn:
+                        conn.row_factory = sqlite3.Row
+                        _record_remediation_publish_outcome(conn, action, result, now)
+                        _mark_skipped(conn, action, result, now)
+                        skipped_count += 1
+                        if result["status"] == "superseded" and result_id:
+                            skipped_count += _skip_pending_result_actions(
+                                conn,
+                                result_id=result_id,
+                                excluding_action_id=action["action_id"],
+                                result={
+                                    "ok": True,
+                                    "status": "superseded",
+                                    "safe_error": (
+                                        "skipped because the preceding push was superseded"
+                                    ),
+                                },
+                                now=now,
+                            )
+                    continue
+                # A non-zero/raised remote command is ambiguous.  Keep the intent in
+                # executing and let the next pass reconcile before any retry.
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.row_factory = sqlite3.Row
+                    _record_remediation_publish_outcome(conn, action, result, now)
+                    _record_failure(conn, action, result, now)
+                if result_id:
+                    failed_result_ids.add(result_id)
+                    action_scope = scope
+                    if (
+                        action["action_type"] == "push_existing_pr"
+                        and isinstance(action_scope, dict)
+                        and action_scope.get("task_kind")
+                        in {"ci_remediation", "merge_conflict_remediation"}
+                    ):
+                        failed_remediation_result_ids.add(result_id)
+                failed_count += 1
+                failures.append(
+                    {
+                        "action_id": action["action_id"],
+                        "safe_error": result.get("safe_error", ""),
+                        "command": result.get("command", []),
+                    }
+                )
+            except subprocess.TimeoutExpired:
+                result = {"ok": False, "status": "publish_failed",
+                          "safe_error": "Publication command timed out after 60 seconds. Check connectivity and retry publication."}
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.row_factory = sqlite3.Row
+                    _record_failure(conn, action, result, _now())
+                failed_count += 1
+                failures.append({"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []})
+                if action["result_id"]:
+                    failed_result_ids.add(action["result_id"])
     return {
         "ok": failed_count == 0,
         "status": "published" if failed_count == 0 else "publish_failed",

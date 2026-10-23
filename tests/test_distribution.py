@@ -35,5 +35,10 @@ class DistributionTests(unittest.TestCase):
             [
                 "PyYAML>=6.0,<7",
                 "supervisor>=4.2,<5",
+                "dbos>=2.29,<3",
             ],
         )
+
+    def test_dbos_dependency_documents_why_it_is_required(self):
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn("durable replay, step checkpoints, and workflow messaging", text)

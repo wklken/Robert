@@ -125,10 +125,30 @@ def _insert_canary_fixture(db_path, target, marker_id):
             VALUES (
               'result-production-canary', 'task-production-canary',
               'attempt-production-canary', 'comment_analysis',
-              ?, '[]', 'production write canary', ?, '{}'
+              ?, '[]', 'production write canary', ?, ?
             )
             """,
-            (json.dumps([f"production-canary:{marker_id}"]), now),
+            (
+                json.dumps([f"production-canary:{marker_id}"]),
+                now,
+                json.dumps(
+                    {
+                        "audit": {
+                            "status": "accepted",
+                            "action_scope": {
+                                "repo": target["repo"],
+                                "sources": [
+                                    {
+                                        "source_type": target["source_type"],
+                                        "number": target["number"],
+                                    }
+                                ],
+                            },
+                        }
+                    },
+                    sort_keys=True,
+                ),
+            ),
         )
         conn.execute(
             """

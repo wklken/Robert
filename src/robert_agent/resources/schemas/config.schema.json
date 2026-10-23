@@ -97,6 +97,14 @@
       },
       "additionalProperties": false
     },
+    "workflow_engine": {
+      "type": "object",
+      "properties": {
+        "mode": {"type": "string", "enum": ["legacy", "shadow", "active"]},
+        "system_database_url_env": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
     "workers": {
       "type": "object",
       "minProperties": 1,

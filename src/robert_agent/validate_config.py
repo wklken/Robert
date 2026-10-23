@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -268,6 +270,64 @@ DAEMON_LEGACY_FIELDS = {
 }
 DAEMON_BOOLEAN_FIELDS = {"enabled", "run_on_start", "maintenance_enabled"}
 
+WORKFLOW_ENGINE_DEFAULTS = {
+    "mode": "legacy",
+    "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
+}
+WORKFLOW_ENGINE_MODES = {"legacy", "shadow", "active"}
+
+
+def _normalize_workflow_engine(config, environ=None):
+    raw = config.get("workflow_engine")
+    if raw in (None, ""):
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("workflow_engine must be a mapping")
+    unsupported_fields = sorted(set(raw) - set(WORKFLOW_ENGINE_DEFAULTS))
+    if unsupported_fields:
+        raise ValueError(
+            "workflow_engine contains unsupported fields: "
+            + ", ".join(
+                f"workflow_engine.{field}" for field in unsupported_fields
+            )
+        )
+
+    mode = str(raw.get("mode", WORKFLOW_ENGINE_DEFAULTS["mode"])).strip()
+    if mode not in WORKFLOW_ENGINE_MODES:
+        raise ValueError(
+            "workflow_engine.mode must be one of: legacy, shadow, active"
+        )
+    env_name = str(
+        raw.get(
+            "system_database_url_env",
+            WORKFLOW_ENGINE_DEFAULTS["system_database_url_env"],
+        )
+    ).strip()
+    if not env_name:
+        raise ValueError("workflow_engine.system_database_url_env must not be empty")
+    if mode == "legacy":
+        return {
+            "mode": mode,
+            "system_database_url_env": env_name,
+            "system_database_scheme": None,
+            "configured": False,
+        }
+
+    url = (environ if environ is not None else os.environ).get(env_name, "")
+    parsed = urlsplit(str(url))
+    if not url:
+        raise ValueError(f"{env_name} must be set for workflow_engine.mode {mode}")
+    if parsed.scheme != "postgresql":
+        raise ValueError(
+            f"{env_name} must contain a PostgreSQL URL for workflow_engine.mode {mode}"
+        )
+    return {
+        "mode": mode,
+        "system_database_url_env": env_name,
+        "system_database_scheme": parsed.scheme,
+        "configured": True,
+    }
+
 PR_AUTOMATION_DEFAULTS = {
     "conflict": {
         "enabled": False,
@@ -485,6 +545,7 @@ def validate_config(config_path, skip_external=False):
         default_worker = workers[0]
         route_worker_models = _normalize_route_worker_models(config, workers)
         daemon_config = _normalize_daemon_config(config)
+        workflow_engine = _normalize_workflow_engine(config)
         skills_config = config.get("skills", {"search_paths": []})
         if not isinstance(skills_config, dict):
             raise ValueError("skills must be a mapping")
@@ -769,6 +830,7 @@ def validate_config(config_path, skip_external=False):
             ],
         },
         "daemon": daemon_config,
+        "workflow_engine": workflow_engine,
         "skip_external": bool(skip_external),
     }
 

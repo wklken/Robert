@@ -197,6 +197,10 @@ class _PublishRunner:
             def __init__(self, stdout):
                 self.stdout = stdout
 
+        if command == ["git", "rev-parse", "HEAD"]:
+            return Completed("a" * 40 + "\n")
+        if command == ["git", "remote", "get-url", "origin"]:
+            return Completed("https://github.com/example/repo.git\n")
         if command[:3] == ["git", "ls-remote", "--heads"]:
             return Completed("")
         if command[:2] == ["git", "push"]:

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from robert_agent.common import emit
-from robert_agent import wakeup_notifier
+from robert_agent import wakeup_notifier, workflow_signals, workflow_store
 
 
 def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
@@ -288,6 +288,23 @@ def record_result(db_path, payload, *, notifier=None):
         if cur.rowcount == 0:
             conn.rollback()
             return {"ok": False, "status": "rejected_by_supervisor", "result_id": result_id}
+        binding = workflow_store.get_binding(conn, "task", payload["task_id"])
+        if binding and binding["owner_engine"] == "dbos":
+            if binding["binding_status"] != "active":
+                conn.rollback()
+                return {
+                    "ok": False,
+                    "status": "rejected_by_workflow_owner",
+                    "result_id": result_id,
+                }
+            workflow_signals.record_subject_signal(
+                conn,
+                binding,
+                "worker_result",
+                result_id,
+                {"fact_id": result_id},
+                result_created_at,
+            )
         _insert_worker_result_wakeup(conn, payload, result_id, result_created_at)
     wakeup_notifier.notify(db_path, sender=notifier)
     return {"ok": True, "status": "recorded", "result_id": result_id}

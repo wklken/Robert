@@ -56,9 +56,10 @@ body { background: var(--bgColor-default); }
 }
 .nav-button:hover { color: var(--fgColor-default); background: var(--bgColor-default); }
 .nav-button.active {
-  border-color: color-mix(in srgb, var(--fgColor-accent) 24%, var(--borderColor-muted));
-  color: var(--fgColor-accent);
-  background: var(--bgColor-accent-muted);
+  border-color: transparent;
+  border-left: 2px solid var(--fgColor-accent);
+  color: var(--fgColor-default);
+  background: var(--bgColor-inset);
   box-shadow: none;
 }
 .nav-icon { border-radius: 4px; background: transparent; }
@@ -66,7 +67,7 @@ body { background: var(--bgColor-default); }
 .nav-button.active .nav-count { border-color: color-mix(in srgb, var(--fgColor-accent) 32%, var(--borderColor-default)); color: var(--fgColor-accent); background: var(--bgColor-accent-muted); }
 
 .command-header { padding: 2px 0 4px; }
-.command-title h1 { font-size: 22px; font-weight: 400; }
+.command-title h1 { font-size: 20px; font-weight: 600; }
 .command-title p { color: var(--fgColor-muted); }
 .panel,
 .health-grid {
@@ -91,7 +92,7 @@ body { background: var(--bgColor-default); }
 .notification-card,
 .artifact-row { padding: 11px 12px; border-color: var(--borderColor-muted); background: var(--bgColor-default); }
 .task-card:hover,
-.task-card.active { background: var(--bgColor-accent-muted); box-shadow: inset 3px 0 0 var(--fgColor-accent); }
+.task-card.active { background: var(--bgColor-muted); box-shadow: inset 2px 0 0 var(--fgColor-accent); }
 .item-title { font-weight: 600; }
 .state-icon { border-color: currentColor; border-radius: 50%; }
 .badge { border-radius: 999px; font-size: 11px; line-height: 18px; }
@@ -166,3 +167,7 @@ body { background: var(--bgColor-default); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+
+.mission-workspace > .snapshot-notice { padding: 0 0 12px; margin-bottom: 16px; }
+.command-title p { font-size: 13px; }
+.nav-label { text-transform: none; letter-spacing: normal; }

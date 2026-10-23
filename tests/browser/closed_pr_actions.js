@@ -48,10 +48,11 @@ async page => {
     if (await cancel.count() !== 1) throw new Error('A closed PR card must expose Cancel without opening its detail.');
     if (await page.locator('.task-card[data-work-item-id="wi-browser-open-pr"] button[data-command="cancel"]').count()) throw new Error('Open PR cards must retain their existing actions.');
     await cancel.click();
-    await page.waitForFunction(() => document.querySelector('#status-message').textContent === 'invalid Origin');
-    await page.locator(`${card} .card-open`).click();
+    await page.locator('.command-composer button[type="submit"]').click();
+    await page.waitForFunction(() => document.querySelector('#drawer-feedback').textContent.includes('invalid Origin'));
     await page.locator(dialogCancel).click();
-    await page.waitForFunction(() => document.querySelector('#status-message').textContent === 'invalid Origin');
+    await page.locator('.command-composer button[type="submit"]').click();
+    await page.waitForFunction(() => document.querySelector('#drawer-feedback').textContent.includes('invalid Origin'));
     await page.locator('#work-item-drawer #status-message.visible').waitFor();
     await page.locator('[data-close-drawer]').click();
     await page.waitForFunction(() => !!document.querySelector('body > #status-message'));
@@ -63,6 +64,7 @@ async page => {
     rejectCommand = false;
     await page.reload();
     await cancel.click();
+    await page.locator('.command-composer button[type="submit"]').click();
     await page.locator(card).waitFor({state:'detached'});
     return 'Closed PR card cancellation, modal errors, read-only controls, and successful board removal passed.';
   } finally {

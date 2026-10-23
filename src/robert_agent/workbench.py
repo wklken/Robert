@@ -5,8 +5,11 @@ import binascii
 from collections import Counter, defaultdict
 from contextlib import closing
 import json
+from pathlib import Path
 import shlex
 import sqlite3
+
+from robert_agent.board_execution import safe_text
 
 
 ACTIVE_TASK_LIFECYCLES = {"detected", "authorized", "classified", "queued", "running"}
@@ -415,6 +418,23 @@ def _item_from_workstream(state, workstream):
         actions,
         remediation_episodes,
     )
+    if (
+        workstream["workstream_lifecycle"] in {"completed", "canceled"}
+        and str(workstream.get("source_state") or "").lower() in {"closed", "merged"}
+        and not any(t["lifecycle"] in ACTIVE_TASK_LIFECYCLES | {"waiting_for_user"} for t in tasks)
+        and not any(
+            a["status"] in {"running", "stale"}
+            for t in tasks for a in state["attempts"].get(t["task_id"], [])
+        )
+        and not any(
+            a["audit_status"] == "accepted" and a["publish_status"] == "not_published"
+            for t in tasks for a in state["actions"].get(t["task_id"], [])
+        )
+        and not any(e["status"] in {"open", "queued", "remediating", "waiting_for_signal"} for e in remediation_episodes)
+    ):
+        bucket, reason_code, reason_summary = (
+            "history", "inactive", "The source is closed and its workstream has ended; previous failures remain in execution history."
+        )
     failed_publish_actions = sum(
         1
         for action in actions
@@ -632,7 +652,7 @@ def _safe_failure(value):
     failure = _decode_json(value, {}) or {}
     if not isinstance(failure, dict):
         return None
-    return failure.get("safe_error") or failure.get("message") or failure.get("reason")
+    return safe_text(failure.get("safe_error") or failure.get("message") or failure.get("reason") or failure.get("original_status") or failure.get("status"))
 
 
 def _safe_result(row):
@@ -691,6 +711,12 @@ def get_work_item(db_path, workstream_id):
         if not workstream:
             return None
         item = _item_from_workstream(state, workstream)
+        board_item = None
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'").fetchone():
+            board_item = conn.execute(
+                "SELECT work_item_id FROM work_items WHERE workstream_id IN (?, ?) ORDER BY workstream_id = ? DESC LIMIT 1",
+                (workstream_id, workstream.get("origin_workstream_id"), workstream_id),
+            ).fetchone()
         related_sources = [
             {
                 "relationship": row["relationship"],
@@ -745,6 +771,7 @@ def get_work_item(db_path, workstream_id):
     artifacts = [row for task_id in task_ids for row in state["artifacts"].get(task_id, [])]
     return {
         "id": workstream_id,
+        "work_item_id": board_item[0] if board_item else None,
         "source": item["source"],
         "related_sources": related_sources,
         "operator_state": {
@@ -802,7 +829,7 @@ def get_work_item(db_path, workstream_id):
                 "artifact_type": row["artifact_type"],
                 "bytes": row["bytes"],
                 "created_at": row["created_at"],
-                "preview_available": True,
+                "preview_available": Path(row["path"]).expanduser().is_file(),
             }
             for row in artifacts
         ],

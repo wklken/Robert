@@ -684,6 +684,92 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(Path(result["stdout_path"]).exists())
         self.assertTrue(Path(result["stderr_path"]).exists())
 
+    def test_dispatch_records_observed_process_identity(self):
+        from robert_agent import dispatch
+
+        prompt_path = self.root / "task" / "prompt.md"
+        prompt_path.parent.mkdir()
+        prompt_path.write_text("hello", encoding="utf-8")
+        original_popen = dispatch.subprocess.Popen
+        original_capture = dispatch.worker_identity.capture_process_identity
+
+        class RunningProcess:
+            pid = 23457
+
+            def poll(self):
+                return None
+
+        def fake_popen(_command, **_kwargs):
+            return RunningProcess()
+
+        try:
+            dispatch.subprocess.Popen = fake_popen
+            dispatch.worker_identity.capture_process_identity = lambda _pid: {
+                "pid": 23457,
+                "process_state": "S",
+                "process_group_id": 23457,
+                "process_start_token": "start-token",
+                "command_fingerprint": "a" * 64,
+                "identity_source": "ps",
+            }
+            result = dispatch.dispatch_worker(
+                task_id="task-identity",
+                attempt_id="attempt-identity",
+                prompt_path=prompt_path,
+                worktree_path=self.root / "worktree",
+                dry_run=False,
+                startup_probe_seconds=0,
+            )
+        finally:
+            dispatch.subprocess.Popen = original_popen
+            dispatch.worker_identity.capture_process_identity = original_capture
+            dispatch._BACKGROUND_PROCESSES.pop(23457, None)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["process_group_id"], 23457)
+        self.assertEqual(result["process_start_token"], "start-token")
+        self.assertEqual(result["identity_source"], "ps")
+
+    def test_dispatch_cleans_up_when_identity_capture_fails(self):
+        from robert_agent import dispatch
+
+        prompt_path = self.root / "task" / "prompt.md"
+        prompt_path.parent.mkdir()
+        prompt_path.write_text("hello", encoding="utf-8")
+        original_popen = dispatch.subprocess.Popen
+        original_capture = dispatch.worker_identity.capture_process_identity
+        original_cleanup = dispatch.worker_identity.cleanup_new_process
+        cleanup = []
+
+        class RunningProcess:
+            pid = 23458
+
+            def poll(self):
+                return None
+
+        try:
+            dispatch.subprocess.Popen = lambda _command, **_kwargs: RunningProcess()
+            dispatch.worker_identity.capture_process_identity = lambda _pid: (_ for _ in ()).throw(
+                RuntimeError("identity unavailable")
+            )
+            dispatch.worker_identity.cleanup_new_process = lambda proc: cleanup.append(proc.pid)
+            result = dispatch.dispatch_worker(
+                task_id="task-identity-failed",
+                attempt_id="attempt-identity-failed",
+                prompt_path=prompt_path,
+                worktree_path=self.root / "worktree",
+                dry_run=False,
+                startup_probe_seconds=0,
+            )
+        finally:
+            dispatch.subprocess.Popen = original_popen
+            dispatch.worker_identity.capture_process_identity = original_capture
+            dispatch.worker_identity.cleanup_new_process = original_cleanup
+
+        self.assertFalse(result["ok"], result)
+        self.assertTrue(result["identity_capture_failed"])
+        self.assertEqual(cleanup, [23458])
+
     def test_acceptance_preflight_reports_live_gate_statuses(self):
         from robert_agent import acceptance
         config_path = self._write_acceptance_config()
@@ -1912,7 +1998,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn('class="global-bar"', operations_html)
         self.assertIn('class="brand"', operations_html)
         self.assertIn('class="underline-nav"', operations_html)
-        self.assertIn('class="underline-nav-item" href="/"', operations_html)
+        self.assertIn('class="underline-nav-item" href="/work"', operations_html)
         self.assertIn('class="underline-nav-item" href="/board"', operations_html)
         self.assertIn('class="underline-nav-item selected" data-primary-view="operations" href="/operations"', operations_html)
         self.assertIn('data-i18n="primaryWork"', operations_html)
@@ -1934,7 +2020,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn(b'href="/assets/github-shell.css"', board_html)
         self.assertIn(b'class="brand"', board_html)
         self.assertIn(b'class="underline-nav"', board_html)
-        self.assertIn(b'class="underline-nav-item" href="/"', board_html)
+        self.assertIn(b'class="underline-nav-item" href="/work"', board_html)
         self.assertIn(b'class="underline-nav-item selected" href="/board"', board_html)
         self.assertIn(b'class="underline-nav-item" href="/operations"', board_html)
         self.assertIn(b'data-i18n="navWork"', board_html)
@@ -1945,7 +2031,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn(b'data-i18n="newTask"', board_html)
         self.assertNotIn(b'id="global-search"', board_html)
 
-        status, _headers, workbench_html = web.build_http_response("/", db_path)
+        status, _headers, workbench_html = web.build_http_response("/work", db_path)
         self.assertEqual(status, 200)
         self.assertIn(b'id="language-select"', workbench_html)
         self.assertIn(b'id="theme-select"', workbench_html)
@@ -2005,7 +2091,7 @@ class OperationalCommandTests(unittest.TestCase):
         status, headers, body = web.build_http_response("/", db_path)
         self.assertEqual(status, 200)
         self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
-        self.assertIn(b'<main id="workbench-app"', body)
+        self.assertIn(b'<main id="board-app"', body)
 
         status, headers, body = web.build_http_response("/operations", db_path)
         self.assertEqual(status, 200)
@@ -2297,7 +2383,7 @@ class OperationalCommandTests(unittest.TestCase):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        status, headers, body = web.build_http_response("/", db_path)
+        status, headers, body = web.build_http_response("/work", db_path)
         html = body.decode("utf-8")
         self.assertEqual(status, 200)
         self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
@@ -3723,7 +3809,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(result["deduplicated_count"], 1)
-        self.assertEqual(calls, [(["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"], {"capture_output": True, "text": True})])
+        self.assertEqual(calls, [(["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"], {"capture_output": True, "text": True, "timeout": 60})])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             action = conn.execute(
                 """
@@ -3938,7 +4024,12 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["published_count"], 2)
         self.assertEqual(
             calls[0][0],
-            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+            [
+                "git",
+                "push",
+                "origin",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:refs/heads/codex/dd-123",
+            ],
         )
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
         self.assertEqual(calls[1][0], ["git", "remote", "get-url", "origin"])
@@ -4011,6 +4102,27 @@ class OperationalCommandTests(unittest.TestCase):
                             "base": "master",
                             "title": "Fix array string value bug",
                             "body": self._dd_pr_body("Implements the fix"),
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            conn.execute(
+                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                (
+                    json.dumps(
+                        {
+                            "audit": {
+                                "status": "accepted",
+                                "action_scope": {
+                                    "repo": "example/backend",
+                                    "sources": [],
+                                    "base_branch": "master",
+                                    "branch_name": branch,
+                                    "worktree_path": str(worktree),
+                                    "remote": "origin",
+                                },
+                            }
                         },
                         sort_keys=True,
                     ),
@@ -4118,7 +4230,12 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             calls[0][0],
-            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+            [
+                "git",
+                "push",
+                "origin",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:refs/heads/codex/dd-123",
+            ],
         )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             rows = conn.execute(
@@ -4179,7 +4296,7 @@ class OperationalCommandTests(unittest.TestCase):
                                     "branch_name": "codex/dd-123",
                                     "remote": "origin",
                                     "existing_pr_head_sha": "audited-sha",
-                                    "result_head_sha": "result-sha",
+                                    "result_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                                 },
                             }
                         },
@@ -4256,6 +4373,7 @@ class OperationalCommandTests(unittest.TestCase):
                                 "url": "https://github.com/x/y/pull/42",
                                 "baseRefName": "master",
                                 "headRefName": "codex/dd-123",
+                                "headRepositoryOwner": {"login": "x"},
                             }
                         ]
                     )
@@ -4268,6 +4386,7 @@ class OperationalCommandTests(unittest.TestCase):
                         "url": "https://github.com/x/y/pull/42",
                         "baseRefName": "master",
                         "headRefName": "codex/dd-123",
+                        "headRepositoryOwner": {"login": "x"},
                         "body": self._dd_pr_body("Existing DD PR"),
                     },
                     sort_keys=True,
@@ -4414,6 +4533,26 @@ class OperationalCommandTests(unittest.TestCase):
                     ),
                 ),
             )
+            conn.execute(
+                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                (
+                    json.dumps(
+                        {
+                            "audit": {
+                                "status": "accepted",
+                                "action_scope": {
+                                    "repo": "x/y",
+                                    "sources": [
+                                        {"source_type": "issue", "number": 1}
+                                    ],
+                                    "head_owner": "robert-bot",
+                                },
+                            }
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
         calls = []
 
         class Completed:
@@ -4486,7 +4625,7 @@ class OperationalCommandTests(unittest.TestCase):
                         {
                             "repo": "x/y",
                             "head": "codex/dd-123",
-                            "head_owner": "robert-bot",
+                            "head_owner": "x",
                             "base": "master",
                             "title": "Fix timeout",
                             "body": self._dd_pr_body("Implements the fix"),
@@ -4528,7 +4667,7 @@ class OperationalCommandTests(unittest.TestCase):
                             "baseRefName": "master",
                             "headRefName": "codex/dd-123",
                             "headRepositoryOwner": {"login": "someone-else"},
-                            "body": "Manual PR on the same branch name",
+                            "body": self._dd_pr_body("Implements the fix"),
                         },
                         sort_keys=True,
                     )
@@ -4542,7 +4681,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(result["deduplicated_count"], 0)
         self.assertEqual([call[0][:3] for call in calls], [["gh", "pr", "list"], ["gh", "pr", "view"], ["gh", "pr", "create"]])
-        self.assertEqual(calls[2][0][calls[2][0].index("--head") + 1], "robert-bot:codex/dd-123")
+        self.assertEqual(calls[2][0][calls[2][0].index("--head") + 1], "codex/dd-123")
 
     def test_publish_ready_open_pr_empty_stdout_does_not_crash(self):
         from robert_agent import publish
@@ -4635,7 +4774,12 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(
             calls[0][0],
-            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+            [
+                "git",
+                "push",
+                "origin",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:refs/heads/codex/dd-123",
+            ],
         )
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
         self.assertNotIn("shell", calls[0][1])
@@ -5001,7 +5145,12 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(
             calls[0][0],
-            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+            [
+                "git",
+                "push",
+                "origin",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:refs/heads/codex/dd-123",
+            ],
         )
 
     def test_publish_ready_push_existing_pr_uses_audited_head_sha_for_lease(self):
@@ -5045,7 +5194,7 @@ class OperationalCommandTests(unittest.TestCase):
                                     "branch_name": "codex/dd-123",
                                     "remote": "origin",
                                     "existing_pr_head_sha": "audited-sha",
-                                    "result_head_sha": "result-sha",
+                                    "result_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                                 },
                             }
                         },
@@ -5080,7 +5229,7 @@ class OperationalCommandTests(unittest.TestCase):
                 "push",
                 "--force-with-lease=codex/dd-123:audited-sha",
                 "origin",
-                "result-sha:refs/heads/codex/dd-123",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/codex/dd-123",
             ],
         )
 
@@ -5127,7 +5276,7 @@ class OperationalCommandTests(unittest.TestCase):
                                     "branch_name": "codex/dd-123",
                                     "remote": "origin",
                                     "existing_pr_head_sha": "audited-sha",
-                                    "result_head_sha": "result-sha",
+                                    "result_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                                 },
                             }
                         },
@@ -5187,7 +5336,7 @@ class OperationalCommandTests(unittest.TestCase):
                 "git", "fetch", "--no-tags", "--no-write-fetch-head",
                 "origin", "refs/heads/codex/dd-123",
             ],
-            ["git", "merge-base", "--is-ancestor", "manual-sha", "result-sha"],
+            ["git", "merge-base", "--is-ancestor", "manual-sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
         ])
         with closing(sqlite3.connect(db_path)) as conn:
             actions = conn.execute(
@@ -5423,7 +5572,12 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(
             calls[0][0],
-            ["git", "push", "origin", "HEAD:refs/heads/codex/dd-123"],
+            [
+                "git",
+                "push",
+                "origin",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:refs/heads/codex/dd-123",
+            ],
         )
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
 
@@ -5852,11 +6006,29 @@ class OperationalCommandTests(unittest.TestCase):
                 """
                 INSERT INTO worker_results(
                   result_id, task_id, attempt_id, output_type,
-                  consumed_event_fingerprints_json, verification_json, handoff, created_at
+                  consumed_event_fingerprints_json, verification_json, handoff,
+                  created_at, metadata_json
                 )
-                VALUES ('result-1', 'task-1', 'attempt-1', 'comment_analysis', '["comment:1"]', '[]', 'ready', ?)
+                VALUES ('result-1', 'task-1', 'attempt-1', 'comment_analysis', '["comment:1"]', '[]', 'ready', ?, ?)
                 """,
-                (now,),
+                (
+                    now,
+                    json.dumps(
+                        {
+                            "audit": {
+                                "status": "accepted",
+                                "action_scope": {
+                                    "repo": "x/y",
+                                    "sources": [
+                                        {"source_type": "issue", "number": 1}
+                                    ],
+                                    "result_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                },
+                            }
+                        },
+                        sort_keys=True,
+                    ),
+                ),
             )
             conn.execute(
                 """
