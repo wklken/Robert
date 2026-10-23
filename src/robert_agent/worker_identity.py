@@ -337,7 +337,8 @@ def terminate_recorded_identity(
 
     The identity is checked before TERM and on every observation after TERM.
     KILL is only sent when the exact same identity remains alive.  Any
-    visibility loss/mismatch returns ``attention`` without another signal.
+    visibility loss/mismatch only waits for confirmed exit within the current
+    deadline, then returns ``attention`` without another signal.
     """
 
     inspect = inspect or inspect_recorded_identity
@@ -363,6 +364,19 @@ def terminate_recorded_identity(
         return {"status": "already_dead", "pid": pid}
     if initial != "alive_same":
         return {"status": "attention", "reason": "identity_not_verified", "pid": pid}
+
+    def wait_for_exit_after_identity_loss(deadline, sent_signal):
+        # Linux can clear cmdline before publishing zombie state. After a
+        # signal, wait out that transition, but never use a regained identity
+        # to authorize another signal once observation has been ambiguous.
+        while True:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return {"status": "attention", "reason": "identity_changed", "pid": pid}
+            sleep(max(0.0, min(float(poll_interval), remaining)))
+            if inspect(recorded) == "dead":
+                return {"status": "terminated", "pid": pid, "signal": sent_signal}
+
     try:
         signal_group(process_group_id, signal.SIGTERM)
     except ProcessLookupError:
@@ -380,7 +394,7 @@ def terminate_recorded_identity(
         if observed == "dead":
             return {"status": "terminated", "pid": pid, "signal": "SIGTERM"}
         if observed != "alive_same":
-            return {"status": "attention", "reason": "identity_changed", "pid": pid}
+            return wait_for_exit_after_identity_loss(deadline, "SIGTERM")
         current = clock()
         if current >= deadline:
             break
@@ -402,7 +416,7 @@ def terminate_recorded_identity(
         if observed == "dead":
             return {"status": "terminated", "pid": pid, "signal": "SIGKILL"}
         if observed != "alive_same":
-            return {"status": "attention", "reason": "identity_changed", "pid": pid}
+            return wait_for_exit_after_identity_loss(kill_deadline, "SIGKILL")
         current = clock()
         if current >= kill_deadline:
             return {"status": "attention", "reason": "termination_timeout", "pid": pid}

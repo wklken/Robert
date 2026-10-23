@@ -208,6 +208,47 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(signals[0][0], 7)
         self.assertEqual(signals[0][1], getattr(__import__("signal"), "SIGTERM"))
 
+    def test_termination_waits_for_confirmed_exit_after_identity_loss(self):
+        from robert_agent import worker_identity
+
+        recorded = {
+            "pid": 7, "process_group_id": 7, "process_start_token": "123",
+            "command_fingerprint": "f" * 64, "identity_source": "proc",
+        }
+        states = iter(["alive_same", "unknown", "dead"])
+        signals = []
+        result = worker_identity.terminate_recorded_identity(
+            recorded, inspect=lambda _: next(states),
+            signal_group=lambda *args: signals.append(args),
+            supervisor_process_group_id=99, sleep=lambda _: None,
+        )
+        self.assertEqual(result["status"], "terminated")
+        self.assertEqual(len(signals), 1)
+
+    def test_identity_loss_never_escalates_even_if_identity_returns(self):
+        from robert_agent import worker_identity
+
+        recorded = {
+            "pid": 7, "process_group_id": 7, "process_start_token": "123",
+            "command_fingerprint": "f" * 64, "identity_source": "proc",
+        }
+        states = iter(["alive_same", "unknown"])
+        elapsed = [0.0]
+        signals = []
+
+        def sleep(seconds):
+            elapsed[0] += seconds
+
+        result = worker_identity.terminate_recorded_identity(
+            recorded, inspect=lambda _: next(states, "alive_same"),
+            signal_group=lambda *args: signals.append(args),
+            supervisor_process_group_id=99, clock=lambda: elapsed[0],
+            sleep=sleep, timeout_seconds=.1,
+        )
+        self.assertEqual(result["status"], "attention")
+        self.assertEqual(len(signals), 1)
+        self.assertGreaterEqual(elapsed[0], .1)
+
     def test_db_backed_identity_operations_load_only_attempt_dispatch_metadata(self):
         from robert_agent import storage, workflow_operations
 
