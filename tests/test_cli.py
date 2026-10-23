@@ -15,6 +15,16 @@ from robert_agent.init_config import init_config
 
 
 class CliTests(unittest.TestCase):
+    def test_web_run_forwards_public_origin(self):
+        with mock.patch("robert_agent.cli.main.web.main", return_value=0) as run:
+            code = main([
+                "web", "run", "--db", "/tmp/unused.sqlite3",
+                "--public-origin", "https://robert.example.com",
+            ])
+        self.assertEqual(code, 0)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[argv.index("--public-origin") + 1], "https://robert.example.com")
+
     def test_root_help_lists_public_commands(self):
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(SystemExit) as raised:

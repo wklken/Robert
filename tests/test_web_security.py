@@ -1,13 +1,93 @@
 from pathlib import Path
+import json
 import sqlite3
 import tempfile
 import unittest
 
 from robert_agent import storage
-from robert_agent.web import build_http_response, validate_server_options
+from robert_agent.web import (
+    build_http_response, build_read_only_control_context, handle_dashboard_post,
+    validate_server_options,
+)
 
 
 class WebSecurityTests(unittest.TestCase):
+    def test_proxy_origin_passes_host_origin_and_csrf_checks(self):
+        context = build_read_only_control_context(
+            "unused.sqlite3", host="0.0.0.0", port=8765,
+            public_origin="https://robert.example.com/",
+        )
+        headers = {
+            "Host": "robert.example.com", "Origin": "https://robert.example.com",
+            "Content-Type": "application/json", "X-Robert-CSRF-Token": context.csrf_token,
+        }
+        status, _, body = handle_dashboard_post(
+            "/api/work-items", b"{}", "unused.sqlite3",
+            control_context=context, request_headers=headers,
+        )
+        self.assertEqual(status, 503, body)
+        self.assertIn("--config", json.loads(body)["safe_error"])
+        for changes, error in (
+            ({"Host": "attacker.example.com"}, "invalid Host"),
+            ({"Origin": "https://attacker.example.com"}, "invalid Origin"),
+            ({"X-Robert-CSRF-Token": "wrong"}, "invalid CSRF token"),
+            ({"Origin": "http://robert.example.com"}, "invalid Origin"),
+            ({"Host": "attacker.example.com", "X-Forwarded-Host": "robert.example.com"}, "invalid Host"),
+        ):
+            with self.subTest(changes=changes):
+                status, _, body = handle_dashboard_post(
+                    "/api/work-items", b"{}", "unused.sqlite3",
+                    control_context=context, request_headers={**headers, **changes},
+                )
+                self.assertEqual(status, 403)
+                self.assertEqual(json.loads(body)["safe_error"], error)
+
+    def test_public_origin_must_be_an_explicit_http_origin(self):
+        for origin in (
+            "robert.example.com", "ftp://robert.example.com", "https://*.example.com",
+            "https://user:password@robert.example.com", "https://robert.example.com/path",
+            "https://robert.example.com?query=1", "https://robert.example.com#fragment",
+            "https://robert.example.com:invalid", "https://robert.example.com:99999",
+            "https://robert.example.com\\attacker", "https://robert.example.com\n",
+        ):
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                build_read_only_control_context(
+                    "unused.sqlite3", host="127.0.0.1", port=8765, public_origin=origin,
+                )
+
+    def test_public_origin_uses_browser_serialization(self):
+        for origin, expected in (
+            ("HTTPS://ROBERT.EXAMPLE.COM:443/", "https://robert.example.com"),
+            ("http://robert.example.com:80", "http://robert.example.com"),
+            ("http://[::1]:9000/", "http://[::1]:9000"),
+        ):
+            with self.subTest(origin=origin):
+                context = build_read_only_control_context(
+                    "unused.sqlite3", host="127.0.0.1", port=8765, public_origin=origin,
+                )
+                self.assertIn(expected, context.allowed_origins)
+
+    def test_custom_public_port_is_preserved(self):
+        context = build_read_only_control_context(
+            "unused.sqlite3", host="127.0.0.1", port=8765,
+            public_origin="https://robert.example.com:9443",
+        )
+        self.assertIn("https://robert.example.com:9443", context.allowed_origins)
+        self.assertIn("http://127.0.0.1:8765", context.allowed_origins)
+
+    def test_pages_share_readme_logo_favicon(self):
+        logo = (Path(__file__).resolve().parents[1] / "docs/imgs/robert-logo.svg").read_bytes()
+        for route in ("/assets/robert-logo.svg", "/favicon.ico"):
+            status, headers, body = build_http_response(route, "unused.sqlite3")
+            self.assertEqual(status, 200, route)
+            self.assertEqual(headers["content-type"], "image/svg+xml")
+            self.assertEqual(body, logo)
+        for route in ("/", "/board", "/work", "/operations"):
+            status, _, body = build_http_response(route, "unused.sqlite3")
+            self.assertEqual(status, 200, route)
+            self.assertIn(b'<link rel="icon" type="image/svg+xml" href="/assets/robert-logo.svg">', body)
+            self.assertEqual(body.count(b'rel="icon"'), 1, route)
+
     def test_artifact_preview_selects_the_requested_historical_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

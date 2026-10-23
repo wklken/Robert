@@ -423,12 +423,13 @@ Bundled non-Python web assets:
 - `github-shell.css`
 - `index.html`
 - `operations.css`
+- `robert-logo.svg`
 - `workbench.css`
 - `workbench.js`
 
 These files are Robert project source, contain no vendored JavaScript or CSS
 library, and are distributed under the repository's Apache-2.0 license. The
-inline favicon is project-authored SVG markup.
+favicon uses the same project-authored SVG logo as the README.
 
 Runtime dependency:
 

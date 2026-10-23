@@ -13,6 +13,7 @@
 .filter-bar input, .filter-bar select { width: 100%; min-height: 34px; border: 1px solid var(--borderColor-default); min-width: 0; color: var(--fgColor-default); background: var(--bgColor-muted); padding: 6px 9px; }
 .filter-bar label { min-width: 0; }
 .filter-bar input, .filter-bar select { border-radius: 6px; }
+.filter-bar input:focus-visible, .filter-bar select:focus-visible { outline-offset: -2px; }
 .filter-bar input::placeholder { color: var(--fgColor-muted); }
 
 .flash { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--borderColor-default); border-radius: 6px; }

@@ -241,7 +241,6 @@ Object.assign(translations.en, {
   zombie: "Worker exited but its process has not been reaped",
   boardTitle: "Task board",
   boardHint: "Track execution, resolve blockers, and finish work.",
-  navWork: "Work",
   view: "View",
   canceledTasks: "Canceled",
   historyHint: "Stopped tasks and their history remain available.",
@@ -359,7 +358,6 @@ Object.assign(translations.zh, {
   filtersToggle: "筛选",
   boardTitle: "任务看板",
   boardHint: "跟踪执行，处理阻塞，让每个任务走到完成。",
-  navWork: "工作",
   view: "视图",
   canceledTasks: "已取消",
   historyHint: "保留已停止任务及其处理记录。",
@@ -943,7 +941,7 @@ function renderActions(detail) {
         ? t("stopTask")
         : commandLabel(command),
       () => composeOrExecute(command),
-      index === 0 && command !== "cancel"
+      index === 0 && !["cancel", "request_changes"].includes(command)
         ? "primary-button command-button"
         : "command-button",
     );

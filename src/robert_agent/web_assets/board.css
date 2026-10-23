@@ -516,8 +516,7 @@ dialog::backdrop {
   flex-wrap: wrap;
   gap: 7px;
 }
-.command-button[data-command="cancel"],
-.command-button[data-command="request_changes"] {
+.command-button[data-command="cancel"] {
   color: var(--red);
 }
 .command-composer {

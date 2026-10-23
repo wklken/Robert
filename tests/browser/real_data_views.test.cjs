@@ -182,3 +182,21 @@ test('loading a shared item into the result page removes its outside-results not
   await vm.runInContext('loadWorkItems()',context);
   assert.equal(vm.runInContext('state.outsideResults',context),false);
 });
+test('review changes use secondary emphasis while approval remains primary', () => {
+  const context = load('board.js');
+  vm.runInContext('state.session = {writes_enabled:true,allowed_repo_ids:["repo"]}', context);
+  for (const command of ['request_changes', 'approve']) {
+    context.detail = {repo_id:'repo', valid_commands:[command, 'cancel']};
+    const actions = descendants(vm.runInContext('renderActions(detail)', context));
+    const action = actions.find(n => n.dataset.command === command);
+    assert.equal(action.className.split(' ').includes('primary-button'), command === 'approve');
+  }
+});
+
+test('board and workbench keep the same first navigation tab in both languages', () => {
+  const board = load('board.js');
+  const work = load('workbench.js');
+  for (const language of ['en', 'zh']) {
+    assert.equal(vm.runInContext(`translations.${language}.navWork`, board), vm.runInContext(`translations.${language}.navWork`, work));
+  }
+});

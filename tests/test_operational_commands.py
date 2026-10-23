@@ -2153,8 +2153,8 @@ class OperationalCommandTests(unittest.TestCase):
         favicon_status, _headers, favicon_body = web.build_http_response(
             "/favicon.ico", db_path
         )
-        self.assertEqual(favicon_status, 204)
-        self.assertEqual(favicon_body, b"")
+        self.assertEqual(favicon_status, 200)
+        self.assertIn(b"<svg", favicon_body)
 
         traversal_status, _headers, _body = web.build_http_response(
             "/assets/../web.py", db_path
@@ -2310,6 +2310,50 @@ class OperationalCommandTests(unittest.TestCase):
             },
         )
         self.assertEqual(knowledge_status, 503)
+
+    def test_reverse_proxy_can_create_and_cancel_with_config_context(self):
+        import http.client
+        import threading
+        from robert_agent import web
+
+        context = web.build_control_context_from_config(
+            self._write_acceptance_config(), host="0.0.0.0", port=8765,
+            operator_identity="local-owner", public_origin="https://robert.example.com",
+        )
+        server = web.ThreadingHTTPServer(
+            ("127.0.0.1", 0), web.make_handler(context.db_path, context),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        self.addCleanup(connection.close)
+        connection.request("GET", "/api/session", headers={"Host": "robert.example.com"})
+        response = connection.getresponse()
+        session = json.loads(response.read())
+        self.assertEqual(response.status, 200)
+        headers = {
+            "Host": "robert.example.com", "Origin": "https://robert.example.com",
+            "Content-Type": "application/json", "X-Robert-CSRF-Token": session["csrf_token"],
+            "X-Idempotency-Key": "proxy-create",
+        }
+        connection.request("POST", "/api/work-items", json.dumps({
+            "repo_id": "repo:x/y", "title": "Proxy control", "mode": "backlog",
+        }), headers)
+        response = connection.getresponse()
+        detail = json.loads(response.read())
+        self.assertEqual(response.status, 201, detail)
+        path = f"/api/work-items/{detail['work_item_id']}/commands"
+        headers["X-Idempotency-Key"] = "proxy-cancel"
+        connection.request("POST", path, json.dumps({
+            "command": "cancel", "expected_version": detail["version"],
+        }), headers)
+        response = connection.getresponse()
+        canceled = json.loads(response.read())
+        self.assertEqual(response.status, 200, canceled)
+        self.assertEqual(canceled["column"], "history")
+        self.assertIsNotNone(canceled["canceled_at"])
 
     def test_web_config_mode_initializes_control_context_and_repos(self):
         from robert_agent import web
