@@ -6,7 +6,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from typing import Protocol
 
-from robert_agent import worker_identity
+from robert_agent import worker_identity, retry_policy
 from robert_agent import workflow_store
 
 
@@ -1067,6 +1067,16 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     binding = workflow_store.get_binding(conn, subject_type, subject_id)
     attempt = _attempt_dispatch_identity(conn, attempt_id)
     identity_status = _recovery_identity_status(evidence)
+    logs = evidence.get("logs", {}) if isinstance(evidence, dict) else {}
+    terminal_error = "\n".join(str(v.get("tail", "")) for k, v in logs.items() if "stderr" in k and isinstance(v, dict))
+    category = retry_policy.error_class(terminal_error)
+    if category != "transient_failure":
+        _mark_recovery_attention(conn, binding, now)
+        if binding:
+            conn.execute("UPDATE workflow_bindings SET metadata_json=? WHERE subject_type=? AND subject_id=?",
+                (json.dumps({**_json_object(binding.get("metadata_json")), "reason_code": category, "required_action": "Repair the reported cause, then retry the task."}), subject_type, subject_id))
+        evidence["reason_code"] = category
+        return "attention"
     valid_progress = (
         isinstance(evidence, dict)
         and evidence.get("status") == "recoverable_progress"

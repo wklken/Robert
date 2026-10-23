@@ -223,6 +223,8 @@ def _project_item(conn, row):
         column, reason_code, reason_summary = "done", "completed", "Completion is satisfied"
     elif facts["source_closed"] and running:
         column, reason_code, reason_summary = "waiting", "closed_source_running", "Source closed; the worker still needs to be stopped."
+    elif facts["workflow_attention"]:
+        column, reason_code, reason_summary = "waiting", "workflow_attention", "Automatic execution stopped: " + facts["workflow_attention"][0]
     elif facts["cleanup_pending"]:
         column, reason_code, reason_summary = "waiting", "worker_cleanup_pending", "Worker cleanup is incomplete: " + facts["cleanup_pending"][0]
     elif failures and not running:

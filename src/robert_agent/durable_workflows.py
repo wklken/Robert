@@ -525,3 +525,28 @@ def pr_remediation_workflow_v1(episode_id: str) -> dict:
         # The next loop iteration records the next durable transition.  No
         # clock, filesystem, SQLite, process, config, or external API is read
         # from this workflow body.
+
+
+@DBOS.step(name='robert.v2.advance_subject', retries_allowed=True, max_attempts=3, interval_seconds=1, backoff_rate=2)
+def advance_subject_v2_step(subject_type, subject_id):
+    from robert_agent.workflow_driver import current_driver
+    return current_driver().advance(subject_type, subject_id)
+
+
+def _run_subject_v2(subject_type, subject_id):
+    while True:
+        outcome = advance_subject_v2_step(subject_type, subject_id)
+        if outcome['status'] != 'waiting':
+            return outcome
+        # Notifications are hints; the domain outbox/receipts remain authoritative.
+        DBOS.recv('subject-events', timeout_seconds=5)
+
+
+@DBOS.workflow(name='robert.human_request.v2')
+def human_request_workflow_v2(task_id):
+    return _run_subject_v2('task', task_id)
+
+
+@DBOS.workflow(name='robert.pr_remediation.v2')
+def pr_remediation_workflow_v2(episode_id):
+    return _run_subject_v2('remediation_episode', episode_id)

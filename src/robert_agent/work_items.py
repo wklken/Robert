@@ -613,8 +613,6 @@ def retrigger_failed_github_task(
                 raise WorkItemNotFoundError("task not found")
             from robert_agent import workflow_store
             binding = workflow_store.get_binding(conn, "task", task_id)
-            if binding and (binding['owner_engine'] != 'legacy' or binding['binding_status'] == 'attention'):
-                raise WorkItemConflictError("This task is controlled by a workflow requiring operator attention. Cancel it before starting new work.")
             if row["lifecycle"] != "failed":
                 raise WorkItemConflictError("only a failed GitHub task can be retriggered")
             if row["source_state"].lower() != "open":
@@ -632,6 +630,22 @@ def retrigger_failed_github_task(
             ).fetchone()
             if not latest or latest[0] != task_id:
                 raise WorkItemConflictError("only the latest failed GitHub task can be retriggered")
+
+            # Explicit recovery creates a new subject; never reopen or transfer
+            # ownership of the old workflow, nor overlap an uncertain process.
+            if conn.execute("SELECT 1 FROM attempts WHERE task_id=? AND status IN ('prepared','running','stale')", (task_id,)).fetchone():
+                raise WorkItemConflictError("worker termination must be confirmed before retry")
+            if conn.execute("SELECT 1 FROM github_actions WHERE task_id=? AND audit_status='accepted' AND publish_status='not_published'", (task_id,)).fetchone():
+                raise WorkItemConflictError("pending publication must be reconciled or canceled before retry")
+            failed_attempt = conn.execute("SELECT metadata_json FROM attempts WHERE task_id=? ORDER BY attempt_no DESC LIMIT 1", (task_id,)).fetchone()
+            if failed_attempt:
+                process_metadata = json.loads(failed_attempt[0] or '{}')
+                if process_metadata.get('dispatch'):
+                    from robert_agent.run_once import _dispatch_process_status
+                    if _dispatch_process_status(process_metadata)['status'] != 'dead':
+                        raise WorkItemConflictError("worker termination must be confirmed before retry")
+            if binding and binding['binding_status'] != 'terminal':
+                workflow_store.close_binding(conn, "task", task_id, utc_now())
 
             dedupe_key = f"github-retrigger:{idempotency_key}"
             existing = conn.execute(

@@ -180,6 +180,9 @@ def launch_runtime(runtime: DBOSRuntime | None) -> None:
         raise ValueError("DBOS runtime is not the configured process runtime")
     if runtime.launched:
         return None
+    if runtime.mode == 'active':
+        from robert_agent.workflow_driver import current_driver
+        current_driver()  # Refuse an apparently active runtime without a production adapter.
     dbos_logger = logging.getLogger("dbos")
     previous_disabled = dbos_logger.disabled
     previous_level = dbos_logger.level
@@ -209,12 +212,13 @@ def destroy_runtime() -> None:
     # when this process was running in legacy mode or had no DBOS instance.
     from robert_agent import workflow_operations
 
+    if runtime is not None and runtime.mode != "legacy":
+        DBOS.destroy()
+        runtime.launched = False
     workflow_operations.reset_human_request_driver()
     workflow_operations.reset_remediation_driver()
-    if runtime is None or runtime.mode == "legacy":
-        return None
-    DBOS.destroy()
-    runtime.launched = False
+    from robert_agent import workflow_driver
+    workflow_driver.reset_driver()
     return None
 
 
@@ -222,14 +226,17 @@ def _workflow_for_binding(binding):
     subject_type = binding.get("subject_type")
     subject_id = binding.get("subject_id")
     workflow_kind = binding.get("workflow_kind")
+    version = binding.get('definition_version', 'v1')
+    if version not in {'v1','v2'}:
+        raise ValueError("unsupported workflow definition version")
     expected = {
         ("task", "human_request"): (
-            f"robert:v1:task:{subject_id}",
-            "human_request_workflow_v1",
+            f"robert:{version}:task:{subject_id}",
+            f"human_request_workflow_{version}",
         ),
         ("remediation_episode", "pr_remediation"): (
-            f"robert:v1:remediation:{subject_id}",
-            "pr_remediation_workflow_v1",
+            f"robert:{version}:remediation:{subject_id}",
+            f"pr_remediation_workflow_{version}",
         ),
     }.get((subject_type, workflow_kind))
     if expected is None:
@@ -237,8 +244,6 @@ def _workflow_for_binding(binding):
     workflow_id, function_name = expected
     if binding.get("workflow_id") != workflow_id:
         raise ValueError("workflow binding has a conflicting durable workflow ID")
-    if binding.get("definition_version", "v1") != "v1":
-        raise ValueError("unsupported workflow definition version")
     from robert_agent import durable_workflows
 
     return workflow_id, subject_id, getattr(durable_workflows, function_name)

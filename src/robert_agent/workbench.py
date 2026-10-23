@@ -205,7 +205,16 @@ def _load_state(conn):
         """,
         "workstream_id",
     )
+    attention = {}
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='workflow_bindings'").fetchone():
+        for row in conn.execute("""SELECT t.workstream_id, b.metadata_json FROM workflow_bindings b JOIN tasks t
+            ON (b.subject_type='task' AND b.subject_id=t.task_id)
+            OR (b.subject_type='remediation_episode' AND b.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))
+            WHERE b.binding_status='attention'"""):
+            metadata = _decode_json(row['metadata_json'], {}) or {}
+            attention[row['workstream_id']] = safe_text(metadata.get('reason_code') or 'workflow_attention_required')
     return {
+        "workflow_attention": attention,
         "workstreams": workstreams,
         "workstreams_by_id": {row["workstream_id"]: row for row in workstreams},
         "board_items": board.workstream_projections(conn) if conn.execute(
@@ -264,7 +273,7 @@ def _derive_operator_state(
             return (
                 "needs_attention",
                 "publish_failed",
-                "Publishing the accepted GitHub action failed.",
+                safe_text(publish.get('required_action') or (f"Publication failed; retry at {publish['next_retry_at']}." if publish.get('next_retry_at') else "Publishing the accepted GitHub action failed.")),
             )
         if (
             action["audit_status"] == "accepted"
@@ -423,6 +432,8 @@ def _item_from_workstream(state, workstream):
         actions,
         remediation_episodes,
     )
+    if workstream['workstream_id'] in state.get('workflow_attention', {}):
+        bucket, reason_code, reason_summary = ('needs_attention', state['workflow_attention'][workstream['workstream_id']], 'Automatic execution stopped. Inspect the failure, resolve its cause, then explicitly retry or cancel.')
     if (
         workstream["workstream_lifecycle"] in {"completed", "canceled"}
         and str(workstream.get("source_state") or "").lower() in {"closed", "merged"}
@@ -711,7 +722,8 @@ def _safe_action(row):
         "external_id": row["external_id"],
         "audit_status": row["audit_status"],
         "publish_status": row["publish_status"],
-        "safe_error": publish.get("safe_error") if isinstance(publish, dict) else None,
+        "safe_error": safe_text(publish.get("safe_error")) if isinstance(publish, dict) else None,
+        "retry": {key: publish.get(key) for key in ('attempt_count','max_attempts','reason_code','next_retry_at','required_action')} if isinstance(publish, dict) else {},
         "created_at": row["created_at"],
     }
 

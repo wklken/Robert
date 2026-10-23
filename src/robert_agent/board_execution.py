@@ -36,6 +36,11 @@ def publication_history(conn, task_id):
             "created_at": row["created_at"],
             "published_at": safe_text(publication.get("published_at")),
             "safe_error": safe_text(publication.get("safe_error")),
+            "reason_code": safe_text(publication.get("reason_code")),
+            "attempt_count": publication.get("attempt_count", 0),
+            "max_attempts": publication.get("max_attempts"),
+            "next_retry_at": safe_text(publication.get("next_retry_at")),
+            "required_action": safe_text(publication.get("required_action")),
         })
     return actions
 

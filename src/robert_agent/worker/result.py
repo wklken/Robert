@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from robert_agent.common import emit
-from robert_agent import wakeup_notifier, workflow_signals, workflow_store
+from robert_agent import wakeup_notifier, workflow_signals, workflow_store, result_spool
 
 
 def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
@@ -170,6 +170,16 @@ def build_result(
 
 
 def record_result(db_path, payload, *, notifier=None):
+    return result_spool.submit(db_path, payload, _record_result_db, notifier)
+
+
+def replay_pending_results(db_path, limit=100):
+    def ingest(path, payload, *, notifier=None):
+        return _record_result_db(path, payload, notifier=notifier, busy_timeout_ms=100)
+    return result_spool.replay(db_path, ingest, limit)
+
+
+def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
     if "planned_github_actions" not in payload:
         return {
             "ok": False,
@@ -225,12 +235,41 @@ def record_result(db_path, payload, *, notifier=None):
     if isinstance(branch_slug, str) and branch_slug:
         metadata["branch_slug"] = branch_slug
 
+    metadata["submission_fingerprint"] = result_spool.fingerprint(payload)
     created_at = datetime.now(timezone.utc)
     result_created_at = created_at.isoformat()
     result_id = f"result-{uuid4().hex[:12]}"
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute("SELECT result_id, metadata_json FROM worker_results WHERE attempt_id=?", (payload["attempt_id"],)).fetchone()
+        if existing:
+            if json.loads(existing[1] or '{}').get('submission_fingerprint') == metadata['submission_fingerprint']:
+                return {"ok": True, "status": "recorded", "result_id": existing[0], "deduplicated": True}
+            return {"ok": False, "status": "result_conflict", "safe_error": "A different result was already recorded for this attempt."}
+        task = conn.execute("SELECT lifecycle, task_kind, metadata_json FROM tasks WHERE task_id=?", (payload["task_id"],)).fetchone()
+        if task and task[0] in {'canceled', 'failed', 'ignored'}:
+            return {"ok": False, "status": "rejected_by_supervisor"}
+        if payload.get('output_type') == 'waiting_for_user':
+            origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=(SELECT workstream_id FROM tasks WHERE task_id=?)",(payload['task_id'],)).fetchone()
+            error = None
+            if operator_question is None:
+                error = 'waiting_for_user requires operator_question'
+            elif (not origin or origin[0] == 'github') and not any(a.get('type') == 'comment' for a in actions):
+                error = 'GitHub waiting_for_user requires a public comment action'
+            if error:
+                conn.execute("INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json) VALUES (?,?,'worker_result_validation_failed','local','recorded',?,?)",
+                    ('notification-result-validation-' + payload['attempt_id'], payload['task_id'], result_created_at, json.dumps({'reason_code':'question_not_deliverable','safe_error':error,'required_action':'Correct the result and submit the question again.'})))
+                return {'ok':False,'status':'failed_validation','safe_error':error}
+        subject_type, subject_id = 'task', payload['task_id']
+        if task and task[1] in {'ci_remediation', 'merge_conflict_remediation'}:
+            episode_id = json.loads(task[2] or '{}').get('remediation_episode_id')
+            if episode_id:
+                subject_type, subject_id = 'remediation_episode', episode_id
+        owner = workflow_store.get_binding(conn, subject_type, subject_id)
+        if owner and owner['binding_status'] != 'active':
+            return {"ok": False, "status": "rejected_by_workflow_owner"}
         conn.execute(
             """
             INSERT INTO worker_results(
@@ -280,10 +319,10 @@ def record_result(db_path, payload, *, notifier=None):
             """
             UPDATE attempts
             SET status = 'completed', finished_at = ?
-            WHERE attempt_id = ?
+            WHERE attempt_id = ? AND task_id = ?
               AND status IN ('running', 'prepared', 'stale')
             """,
-            (result_created_at, payload["attempt_id"]),
+            (result_created_at, payload["attempt_id"], payload["task_id"]),
         )
         if cur.rowcount == 0:
             conn.rollback()

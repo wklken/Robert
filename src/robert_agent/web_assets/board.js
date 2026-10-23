@@ -994,7 +994,7 @@ function renderJourney(detail) {
     milestones.push({
       title: `${t(key) === key ? action.action_type : t(key)} · ${t(action.status)}`,
       at: action.published_at || action.created_at,
-      body: action.safe_error || (action.audit_status === "accepted" ? t("auditAccepted") : action.audit_status),
+      body: [action.safe_error || (action.audit_status === "accepted" ? t("auditAccepted") : action.audit_status), action.attempt_count ? `${action.attempt_count}/${action.max_attempts || "?"}` : "", action.next_retry_at ? formatTime(action.next_retry_at) : "", action.required_action].filter(Boolean).join(" · "),
     });
   });
   // Event timestamps record when Robert observed the change, not necessarily

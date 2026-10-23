@@ -37,12 +37,12 @@ def signal_id_for(workflow_id, topic, dedupe_key):
     return _id("signal", workflow_id, topic, dedupe_key)
 
 
-def _workflow_ids(subject_type, subject_id, owner_engine):
+def _workflow_ids(subject_type, subject_id, owner_engine, version="v1"):
     if subject_type == "task":
-        active = f"robert:v1:task:{subject_id}"
+        active = f"robert:{version}:task:{subject_id}"
     else:
-        active = f"robert:v1:remediation:{subject_id}"
-    shadow = f"robert:shadow:v1:{subject_type}:{subject_id}"
+        active = f"robert:{version}:remediation:{subject_id}"
+    shadow = f"robert:shadow:{version}:{subject_type}:{subject_id}"
     return (active if owner_engine == "dbos" else None), shadow
 
 
@@ -80,7 +80,9 @@ def get_binding(conn, subject_type, subject_id):
     )
 
 
-def bind_subject(conn, subject_type, subject_id, workflow_kind, owner_engine, now):
+def bind_subject(conn, subject_type, subject_id, workflow_kind, owner_engine, now, *, definition_version="v1"):
+    if definition_version not in {"v1", "v2"}:
+        raise ValueError("unsupported workflow definition version")
     if owner_engine not in {"legacy", "dbos"}:
         raise ValueError("unknown workflow owner engine")
     if (subject_type, workflow_kind) not in {
@@ -89,7 +91,7 @@ def bind_subject(conn, subject_type, subject_id, workflow_kind, owner_engine, no
     }:
         raise ValueError("illegal workflow subject and kind pairing")
     existing = get_binding(conn, subject_type, subject_id)
-    workflow_id, shadow_workflow_id = _workflow_ids(subject_type, subject_id, owner_engine)
+    workflow_id, shadow_workflow_id = _workflow_ids(subject_type, subject_id, owner_engine, definition_version)
     if existing:
         if (
             existing["workflow_kind"] == workflow_kind
@@ -104,8 +106,8 @@ def bind_subject(conn, subject_type, subject_id, workflow_kind, owner_engine, no
         """
         INSERT INTO workflow_bindings(
           subject_type, subject_id, workflow_kind, owner_engine, workflow_id,
-          shadow_workflow_id, binding_status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+          shadow_workflow_id, binding_status, created_at, updated_at, definition_version
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
         """,
         (
             subject_type,
@@ -116,6 +118,7 @@ def bind_subject(conn, subject_type, subject_id, workflow_kind, owner_engine, no
             shadow_workflow_id,
             now,
             now,
+            definition_version,
         ),
     )
     return get_binding(conn, subject_type, subject_id)
@@ -283,6 +286,15 @@ def mark_signal_retry(conn, signal_id, now, exception_class):
         """,
         (attempt_count, not_before_at, error_json, signal_id),
     )
+    if attempt_count >= 3 or (parsed_now - datetime.fromisoformat(signal["created_at"].replace('Z', '+00:00'))).total_seconds() >= 600:
+        signal = mark_signal_attention(conn, signal_id, now, exception_class)
+        binding = _row(conn.execute("SELECT * FROM workflow_bindings WHERE workflow_id=?", (signal["workflow_id"],)))
+        if binding and binding['binding_status'] != 'terminal':
+            mark_binding_attention(conn, binding['subject_type'], binding['subject_id'], now)
+            task_id = binding['subject_id'] if binding['subject_type'] == 'task' else None
+            conn.execute("INSERT OR IGNORE INTO notifications(notification_id, task_id, notification_type, channel, status, created_at, metadata_json) VALUES (?,?,'workflow_delivery_exhausted','local','recorded',?,?)",
+                ('notification-' + signal_id, task_id, now, _json({'signal_id': signal_id, 'reason_code':'retry_budget_exhausted', 'attempt_count':attempt_count, 'required_action':'Restore workflow connectivity and explicitly recover this task.'})))
+        return signal
     return _row(conn.execute("SELECT * FROM workflow_outbox WHERE signal_id = ?", (signal_id,)))
 
 

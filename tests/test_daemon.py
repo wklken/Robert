@@ -1231,7 +1231,7 @@ repos:
     def test_dbos_runtime_lifecycle_surrounds_once_decision(self):
         from robert_agent import daemon
 
-        context = mock.Mock(workflow_engine={"mode": "shadow"})
+        context = mock.Mock(workflow_engine={"mode": "shadow"}, dry_run=False)
         events = []
         runtime = object()
 
@@ -1287,9 +1287,9 @@ repos:
     def test_dbos_startup_failure_redacts_exception_details(self):
         from robert_agent import daemon
 
-        context = mock.Mock(workflow_engine={"mode": "active"})
+        context = mock.Mock(workflow_engine={"mode": "active"}, dry_run=False)
         secret = "postgresql://operator:secret@example.invalid/robert"
-        with mock.patch.object(
+        with mock.patch("robert_agent.workflow_driver.configure_driver"), mock.patch.object(
             daemon,
             "_load_context",
             return_value=(context, None),

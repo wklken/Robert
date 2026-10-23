@@ -54,14 +54,22 @@ def lifecycle_facts(conn, item):
             publication = {'status': 'publish_failed', 'safe_error': 'Publication reconciliation requires operator attention.'}
         if isinstance(publication, dict) and publication.get('status') == 'publish_failed':
             failed.append({'action_id': action['action_id'], 'type': action['action_type'],
-                           'reason': safe_text(publication.get('safe_error')), 'failed_at': publication.get('failed_at')})
+                           'reason': safe_text(publication.get('safe_error')) + ' ' + safe_text(publication.get('required_action') or (('Next retry: ' + publication['next_retry_at']) if publication.get('next_retry_at') else '')), 'failed_at': publication.get('failed_at'),
+                           **{key: publication.get(key) for key in ('reason_code','attempt_count','max_attempts','retryable','next_retry_at','required_action')}})
+    attention = []
+    for binding in conn.execute(f"""SELECT DISTINCT wb.metadata_json FROM workflow_bindings wb JOIN tasks t ON
+        (wb.subject_type='task' AND wb.subject_id=t.task_id) OR
+        (wb.subject_type='remediation_episode' AND wb.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))
+        WHERE t.workstream_id IN ({placeholders}) AND wb.binding_status='attention'""", streams):
+        metadata = json.loads(binding[0] or '{}')
+        attention.append(safe_text(metadata.get('reason_code') or 'Workflow requires operator attention.'))
     source = conn.execute("SELECT state FROM github_sources WHERE source_id=?", (item['origin_source_id'],)).fetchone()
     pending = conn.execute(
         """SELECT 1 FROM wakeups WHERE work_item_id=? AND status='pending'
         AND json_extract(metadata_json, '$.kind')='publication_retry' LIMIT 1""", (item['work_item_id'],),
     ).fetchone()
     return {'streams': streams, 'running': attempts, 'actions': actions, 'publish_failures': failed,
-            'publication_retry_pending': bool(pending), 'publication_retry_blocked': retry_blocked, 'cleanup_pending': cleanup,
+            'workflow_attention': attention, 'publication_retry_pending': bool(pending), 'publication_retry_blocked': retry_blocked, 'cleanup_pending': cleanup,
             'source_closed': bool(source and (source[0] or '').lower() == 'closed') or any((a['source_state'] or '').lower() == 'closed' for a in attempts)}
 
 

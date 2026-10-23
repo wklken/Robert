@@ -176,14 +176,16 @@ def relay_due_signals(db_path, dbos_sender, *, limit, now, repo_ids=None):
             )
         except Exception as exc:
             with closing(_connect(db_path)) as conn, conn:
-                workflow_store.mark_signal_retry(
+                updated = workflow_store.mark_signal_retry(
                     conn,
                     signal["signal_id"],
                     now,
                     type(exc).__name__,
                 )
             result["failed"] += 1
-            result["retried"] += 1
+            result["attention" if updated["status"] == "attention" else "retried"] += 1
+            if updated["status"] == "attention":
+                result["ok"] = False
             continue
         try:
             with closing(_connect(db_path)) as conn, conn:

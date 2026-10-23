@@ -477,3 +477,62 @@ result snapshot. A new head or base may start a new remediation episode.
 Configured required skills also apply to classification follow-ups, pending
 context children, prepared-task reroutes, and local work items. Canceled work items cannot be started
 or resumed by later commands; completed items must be reopened first.
+
+### Bounded recovery and delivery
+
+Worker authentication failures (`401`, `Unauthorized`, expired credentials) stop
+recovery immediately and expose an operator action. Other dead-worker recovery
+keeps the existing one-shot quota. A stopped, confirmed-dead GitHub task can be
+retried explicitly from the workbench; this creates a new task and keeps the old
+workflow terminal. Uncertain processes or unreconciled publication require
+inspection/cancellation first.
+
+GitHub publication retries transient failures at most three times over a maximum
+10-minute retry window, with persisted exponential backoff. Permanent credential,
+permission, and branch-conflict failures stop immediately. The budget is charged
+before the external effect, including an ambiguous crash. Later actions from the
+same result wait for earlier failed publication. Retry state and required actions
+are available on the board and workbench. Do not force-push to recover a rejected
+diverged-branch action; obtain a fresh audited result against the current branch.
+
+Final Worker results are atomically spooled in `<database>.results/` before SQLite
+ingestion. The daemon and task cycle replay pending files; identical submissions
+are deduplicated by attempt and payload. Canceled or obsolete results cannot
+resume execution. Rejected and corrupt files are retained for inspection, with
+operator notifications; they are not automatically deleted. Keep this directory
+with the database during backup or migration. Waiting-for-user results require a
+structured question, and GitHub tasks additionally require a public comment action.
+
+Set `ROBERT_NOTIFICATION_COMMAND` in the daemon service environment to enable
+external operator delivery. It is parsed as an argument vector (no shell), receives
+one redacted JSON object on stdin, and must exit zero on success within five
+seconds. The payload includes a stable `delivery_id`; receivers must deduplicate
+it because a crash after send can cause redelivery. Failures have a persisted
+three-attempt/10-minute budget. Without configuration, notifications remain local;
+recording a notification does not mean it was delivered. Delivery attempts run
+outside database transactions with a bounded per-cycle time budget. Health events
+report whether delivery is configured; notification metadata records its outcome.
+
+Maintenance records `reliability_health` events containing database/WAL/reusable
+bytes and bounded samples of delayed tasks, pending notifications and stale runs.
+Queue/publication delays over 10 minutes produce one local notice per task.
+These are diagnostics, not automatic deletion of potentially live work. Existing
+retention and offline compaction instructions above still apply. Run-step times
+now use actual boundary timestamps and monotonic durations; Codex
+`turn.completed` usage is recognized.
+
+### DBOS production v2
+
+With `workflow_engine.mode: active`, new eligible GitHub tasks and remediation
+episodes bind to v2 before any legacy dispatch. The daemon installs a production
+driver before launching DBOS; it supervises Workers, audits results, publishes
+through existing intents, and finalizes the domain state. Existing legacy subjects
+continue to drain under legacy ownership. Web-origin work remains on its existing
+path. No subject changes owner during rollout.
+
+v1 workflow definitions and IDs remain intact. Existing active DBOS v1 subjects
+must drain with their original driver before this production v2 mode can start;
+the readiness check refuses to reinterpret their recorded history. A persisted
+ambiguous dispatch fence stops the v2 subject for inspection instead of spawning
+a second Worker. Validate rollout against a staging database and the intended
+Worker/service configuration before enabling active mode in production.

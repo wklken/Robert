@@ -1,3 +1,4 @@
+from unittest import mock
 import json
 import sqlite3
 import tempfile
@@ -239,6 +240,12 @@ class PublicationReconcileTests(unittest.TestCase):
             return Failed()
 
         first = publish.publish_ready_actions(self.db_path, run_command=runner)
+        # Advance to the persisted retry deadline; immediate retry is now forbidden.
+        with closing(sqlite3.connect(self.db_path)) as retry_conn:
+            due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
+        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock.start()
+        self.addCleanup(retry_clock.stop)
         second = publish.publish_ready_actions(self.db_path, run_command=runner)
         # Keep the durable outcomes visible when this focused regression fails.
         self.assertIn(first["status"], {"publish_failed"})
@@ -355,7 +362,8 @@ class PublicationReconcileTests(unittest.TestCase):
         second = publish.publish_ready_actions(self.db_path, run_command=runner)
 
         self.assertFalse(first["ok"])
-        self.assertFalse(second["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["pending_count"], 0)
         self.assertEqual(calls, [])
         with closing(sqlite3.connect(self.db_path)) as conn:
             intent_status = conn.execute(
@@ -531,6 +539,12 @@ class PublicationReconcileTests(unittest.TestCase):
 
         first = publish.publish_ready_actions(self.db_path, run_command=runner)
         self.assertFalse(first["ok"])
+        # Advance to the persisted retry deadline; immediate retry is now forbidden.
+        with closing(sqlite3.connect(self.db_path)) as retry_conn:
+            due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
+        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock.start()
+        self.addCleanup(retry_clock.stop)
         with self.assertRaisesRegex(RuntimeError, "confirmed-absent retry"):
             publish.publish_ready_actions(self.db_path, run_command=runner)
 
@@ -594,6 +608,12 @@ class PublicationReconcileTests(unittest.TestCase):
             raise AssertionError(command)
 
         first = publish.publish_ready_actions(self.db_path, run_command=runner)
+        # Advance to the persisted retry deadline; immediate retry is now forbidden.
+        with closing(sqlite3.connect(self.db_path)) as retry_conn:
+            due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
+        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock.start()
+        self.addCleanup(retry_clock.stop)
         second = publish.publish_ready_actions(self.db_path, run_command=runner)
         self.assertFalse(first["ok"])
         self.assertTrue(second["ok"], second)

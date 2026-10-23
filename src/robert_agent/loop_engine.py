@@ -7,7 +7,7 @@ import sqlite3
 import time
 
 from robert_agent.common import emit
-from robert_agent import storage, wakeup, workflow_store
+from robert_agent import storage, wakeup, workflow_store, retry_policy, workflow_ownership
 from robert_agent import run_once as run_once_module
 from robert_agent import validate_config
 
@@ -129,6 +129,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE a.status IN ('running', 'stale')
           AND t.lifecycle IN ('queued', 'running')
+          AND {workflow_ownership.legacy_runnable_sql()}
           {workstream_repo_clause}
         LIMIT 1
         """,
@@ -144,6 +145,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE a.status = 'prepared'
           AND t.lifecycle IN ('queued', 'running')
+          AND {workflow_ownership.legacy_runnable_sql()}
           {workstream_repo_clause}
         LIMIT 1
         """,
@@ -157,12 +159,12 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         FROM github_actions ga
         JOIN tasks t ON t.task_id = ga.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
-        WHERE ga.audit_status = 'accepted'
-          AND ga.publish_status = 'not_published'
+        WHERE {retry_policy.publication_ready_sql('ga')}
+          AND {workflow_ownership.legacy_runnable_sql()}
           {workstream_repo_clause}
         LIMIT 1
         """,
-        workstream_repo_params,
+        [now] + workstream_repo_params,
     ).fetchone()
     return bool(publishable)
 

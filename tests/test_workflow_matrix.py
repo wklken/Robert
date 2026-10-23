@@ -761,6 +761,7 @@ repos:
                 "consumed_event_fingerprints": ["assigned:assign-issue-101"],
                 "verification": [],
                 "handoff": "waiting for trusted user clarification",
+                "operator_question": {"kind":"clarification", "summary":"Please confirm the desired behavior.", "choices":[]},
                 "used_skills": [],
             },
         )

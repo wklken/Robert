@@ -8,6 +8,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -29,7 +30,7 @@ from robert_agent import validate_config
 from robert_agent import workstream
 from robert_agent import worktree
 from robert_agent import workflow_operations
-from robert_agent import workflow_store
+from robert_agent import workflow_store, workflow_ownership
 from robert_agent import worker_identity
 from robert_agent import workflow_events
 from robert_agent.common import emit
@@ -678,8 +679,22 @@ def _insert_run_step(conn, run_id, key, status="pending"):
     )
 
 
+_STEP_CLOCKS = {}
+
+
+def _step_duration(identity, status, output):
+    if status == 'running':
+        _STEP_CLOCKS.setdefault(identity, time.monotonic())
+    if status in {'succeeded', 'failed', 'skipped'}:
+        started = _STEP_CLOCKS.pop(identity, None)
+        if started is not None:
+            output = {**(output if isinstance(output, dict) else {}), 'duration_seconds': max(0, time.monotonic() - started)}
+    return output
+
+
 def _mark_run_step(conn, run_id, key, status, run_now=None, output=None, error=None):
-    run_now = run_now or _now()
+    run_now = _now()
+    output = _step_duration((run_id, None, key), status, output)
     if key == "summarize" and status == "succeeded" and isinstance(output, dict):
         output = SUMMARY_REFERENCE
     output_json = json.dumps(output, ensure_ascii=False, sort_keys=True) if output is not None else None
@@ -711,7 +726,8 @@ def _insert_repo_run_step(conn, run_id, repo_id, key, status="pending"):
 
 
 def _mark_repo_run_step(conn, run_id, repo_id, key, status, run_now=None, output=None, error=None):
-    run_now = run_now or _now()
+    run_now = _now()
+    output = _step_duration((run_id, repo_id, key), status, output)
     finished_at = run_now if status in {"succeeded", "failed", "skipped"} else None
     output_json = json.dumps(output, ensure_ascii=False, sort_keys=True) if output is not None else None
     error_json = json.dumps(error, ensure_ascii=False, sort_keys=True) if error is not None else None
@@ -995,10 +1011,15 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 )
                 if recovery_decision == "attention":
                     supervised += 1
+                    reason = recovery.get('reason_code') or 'recovery_budget_exhausted'
+                    conn.execute("UPDATE attempts SET status='failed',finished_at=?,failure_json=? WHERE attempt_id=?",(run_now,json.dumps({'status':reason}),attempt_id))
+                    conn.execute("UPDATE tasks SET lifecycle='failed',updated_at=? WHERE task_id=?",(run_now,task_id))
+                    conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",(run_now,workstream_id))
                     metadata["supervise"] = {
                         **status,
                         "status": "worker_identity_attention",
                         "recovery_decision": recovery_decision,
+                        "reason": recovery.get("reason_code") or "Automatic recovery quota exhausted; inspect and cancel this execution before retrying.",
                     }
                     conn.execute(
                         "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
@@ -1280,6 +1301,7 @@ def _recover_failed_timeout_attempts(
                 **status,
                 "status": "worker_identity_attention",
                 "recovery_decision": recovery_decision,
+                        "reason": recovery.get("reason_code") or "Automatic recovery quota exhausted; inspect and cancel this execution before retrying.",
             }
             conn.execute(
                 "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
@@ -2320,6 +2342,18 @@ def _collect_pr_remediation_decisions(
             "limits": repo["pr_automation"][policy_key],
             "usage": decision["budget"],
         }
+        binding = workflow_store.get_binding(conn, 'remediation_episode', episode_id)
+        if binding and binding['owner_engine'] == 'dbos':
+            if binding['binding_status'] == 'active' and binding['definition_version'] == 'v2':
+                # Only the health collector, after budget/snapshot validation,
+                # can issue a new remediation decision. The same GitHub fact
+                # may authorize another bounded attempt, with a new generation.
+                episode = remediation._load_episode(conn, episode_id)
+                from robert_agent import workflow_signals
+                workflow_signals.record_subject_signal(conn, binding, 'remediation_decision',
+                    f"{event['event_fingerprint']}:{episode['attempt_count']}",
+                    {'fact_id':event['event_fingerprint']}, run_now)
+            continue
         events.append(event)
     for (episode_id,) in conn.execute(
         """
@@ -2796,6 +2830,7 @@ def _refresh_prepared_task(
     ):
         return None
 
+    conn.commit()  # External Git I/O must not retain the SQLite writer lock.
     worktree_result = _prepare_worktree(repo, event, route_result, dry_run=dry_run)
     related_events = _task_related_events(conn, state["task_id"])
     repo_id = _repo_id(repo["full_name"])
@@ -3277,6 +3312,7 @@ def _prepare_detected_local_tasks(
             "title": title,
             "base_branch": repo["default_base_branch"],
         }
+        conn.commit()  # External Git I/O must not retain the SQLite writer lock.
         worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
         skill_status = route_result.get("skill_status") or {"runnable": True}
         if not skill_status["runnable"] or (worktree_result and not worktree_result.get("ok", True)):
@@ -3470,6 +3506,7 @@ def _prepare_github_retrigger_tasks(
             route_id=parent_route_id,
         )
         try:
+            conn.commit()  # External Git I/O must not retain the SQLite writer lock.
             worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
         except (subprocess.CalledProcessError, FileNotFoundError):
             continue
@@ -3687,7 +3724,21 @@ def _create_task_attempt_and_prompt(
             ),
         ),
     )
-    if not _legacy_task_subject_active(conn, task_id, run_now):
+    durable_created = False
+    if workflow_ownership.creation_mode.get() == 'active':
+        episode_id = remediation_context.get('episode_id')
+        origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=?", (workstream_id,)).fetchone()
+        if episode_id:
+            binding = workflow_store.get_binding(conn, 'remediation_episode', episode_id)
+            if not binding:
+                workflow_store.bind_subject(conn, 'remediation_episode', episode_id, 'pr_remediation', 'dbos', run_now, definition_version='v2')
+                durable_created = True
+            else:
+                durable_created = workflow_ownership.allows(conn, 'remediation_episode', episode_id)
+        elif event.get('task_kind', 'human_request') == 'human_request' and not (origin and origin[0] == 'web'):
+            workflow_store.bind_subject(conn, 'task', task_id, 'human_request', 'dbos', run_now, definition_version='v2')
+            durable_created = True
+    if not durable_created and not _legacy_task_subject_active(conn, task_id, run_now):
         conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         return None
     if blocked and event.get("task_kind", "human_request") == "human_request":
@@ -4129,6 +4180,10 @@ def _legacy_task_subject_active(conn, task_id, run_now=None):
         return False
     run_now = run_now or _now()
     task_kind, metadata_json = row
+    subject_type = 'remediation_episode' if task_kind in {'ci_remediation','merge_conflict_remediation'} else 'task'
+    subject_id = _json_object(metadata_json).get('remediation_episode_id') if subject_type == 'remediation_episode' else task_id
+    if workflow_ownership.subject.get() is not None:
+        return workflow_ownership.allows(conn, subject_type, subject_id)
     if task_kind == "human_request":
         origin = conn.execute(
             "SELECT origin_type FROM work_items WHERE workstream_id = "
@@ -4161,6 +4216,10 @@ def _legacy_task_subject_active(conn, task_id, run_now=None):
 def _legacy_episode_subject_active(conn, episode_id, run_now=None):
     if not episode_id:
         return False
+    if workflow_ownership.subject.get() is not None:
+        return workflow_ownership.allows(conn, 'remediation_episode', episode_id)
+    if workflow_ownership.creation_mode.get() == 'active' and not workflow_store.get_binding(conn, 'remediation_episode', episode_id):
+        return True
     return (
         workflow_operations.claim_legacy_subject(
             conn,
@@ -4176,6 +4235,8 @@ def _legacy_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=Non
     if not parent_task_id:
         return True
     binding = workflow_store.get_binding(conn, "task", parent_task_id)
+    if workflow_ownership.allows(conn, 'task', parent_task_id, terminal=True):
+        return True
     if retrigger_wakeup_id is not None:
         # An audited operator request starts a new subject. It never reopens
         # the failed parent or transfers a DBOS-owned subject to legacy.
@@ -4191,7 +4252,7 @@ def _legacy_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=Non
               AND lower(gs.state)='open'""", (retrigger_wakeup_id, parent_task_id),
         ).fetchone()
         return bool(requested) and (not binding or (
-            binding['owner_engine'] == 'legacy' and binding['binding_status'] in {'active', 'terminal'}
+            binding['binding_status'] == 'terminal' or (binding['owner_engine'] == 'legacy' and binding['binding_status'] == 'active')
         ))
     return not binding or (
         binding["owner_engine"] == "legacy" and binding["binding_status"] == "active"
@@ -4289,7 +4350,7 @@ def _queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
     if capacity <= 0:
         return 0
     rows = conn.execute(
-        """
+        f"""
         SELECT a.attempt_id, a.task_id, t.workstream_id, t.route_id, a.worktree_path,
                ar.path, t.routing_mode, t.requested_worker
         FROM attempts a
@@ -4303,6 +4364,7 @@ def _queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
         )
         WHERE w.repo_id = ?
           AND a.status = 'prepared'
+          AND {workflow_ownership.legacy_runnable_sql()}
           AND t.lifecycle IN ('queued', 'running')
           AND ar.artifact_type = 'prompt'
           AND (json_extract(a.metadata_json, '$.resume.not_before_at') IS NULL
@@ -5172,6 +5234,7 @@ def _create_child_task_for_pending_events(
         "source_relationship": workstream.source_relationship(child_event),
     }
     route_result = _effective_route(config_result, repo, child_event)
+    conn.commit()  # External Git I/O must not retain the SQLite writer lock.
     worktree_result = _prepare_worktree(repo, child_event, route_result, dry_run)
     task_info = _create_task_attempt_and_prompt(
         conn,
@@ -5290,6 +5353,7 @@ def _create_child_task_for_recommended_route(
         )
         if branch_name:
             worktree_event["existing_pr_head_branch"] = branch_name
+    conn.commit()  # External Git I/O must not retain the SQLite writer lock.
     worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
     task_info = _create_task_attempt_and_prompt(
         conn,
@@ -5707,6 +5771,7 @@ def _audit_completed_results(
                     "failure_signature": episode.get("failure_signature"),
                 }
             if payload["output_type"] != "waiting_for_user":
+                conn.commit()
                 remediation_attestation = (
                     remediation.attest_remediation_worktree(
                         task_kind=task_kind,
@@ -5716,6 +5781,8 @@ def _audit_completed_results(
                         ),
                     )
                 )
+        if not _legacy_task_subject_active(conn, payload["task_id"], run_now):
+            continue
         audit = audit_result.audit_result(
             payload,
             allowed_actions,
@@ -5909,6 +5976,7 @@ def _aggregate_repo_step_status(conn, run_id, step_key):
     return "pending"
 
 
+@workflow_ownership.creation_scope
 def _run_repo_pipeline(
     conn,
     *,
@@ -6248,6 +6316,7 @@ def _run_repo_pipeline(
             )
         else:
             _mark_repo_run_step(conn, run_id, repo_id, "reconcile", "running", run_now)
+            conn.commit()
             reconciled_source_count = _reconcile_remote_source_states(
                 conn,
                 repo_id,
@@ -6487,6 +6556,7 @@ def _run_repo_pipeline(
                         event,
                     )
                     try:
+                        conn.commit()  # External Git I/O must not retain the SQLite writer lock.
                         worktree_result = _prepare_worktree(repo, event, route_result, dry_run)
                     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                         route_failures.append({
@@ -6591,6 +6661,7 @@ def _run_repo_pipeline(
                     task_event,
                 )
                 try:
+                    conn.commit()  # External Git I/O must not retain the SQLite writer lock.
                     worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
                 except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                     route_failures.append({
@@ -6660,6 +6731,7 @@ def _run_repo_pipeline(
                 event,
             )
             try:
+                conn.commit()  # External Git I/O must not retain the SQLite writer lock.
                 worktree_result = _prepare_worktree(repo, event, route_result, dry_run)
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 route_failures.append({
@@ -6773,6 +6845,9 @@ def run_once(
     data_dir = Path(config_result["data_dir"])
     db_path = Path(config_result["db_path"])
     storage.init_database(db_path)
+    from robert_agent.worker.result import replay_pending_results
+    if not dry_run:
+        replay_pending_results(db_path)
     run_id = _id("run")
     run_now = _now()
     prompt_paths = []
@@ -6825,6 +6900,7 @@ def run_once(
         notification_buckets = {}
         if not fixture_path and not skip_external:
             _mark_run_step(conn, run_id, "discover_notifications", "running", run_now)
+            conn.commit()
             try:
                 notification_buckets = discover.collect_account_notifications(
                     [repo for _repo_id, repo in repos],

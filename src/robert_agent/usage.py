@@ -41,7 +41,7 @@ def parse_cbc_stream_json_lines(lines):
             event = json.loads(text)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("type") == "result":
+        if isinstance(event, dict) and event.get("type") in {"result", "turn.completed"}:
             final_result = event
     if not final_result:
         return {"usage_available": False, "source": "no_result_event"}
@@ -60,7 +60,7 @@ def parse_cbc_stream_json_lines(lines):
     )
     return {
         "usage_available": bool(available),
-        "source": "cbc_stream_json",
+        "source": "codex_json" if final_result.get("type") == "turn.completed" else "cbc_stream_json",
         "usage": usage if isinstance(usage, dict) else {},
         "provider_usage": provider_usage if isinstance(provider_usage, dict) else {},
         "provider_raw_usage": provider_raw_usage if isinstance(provider_raw_usage, dict) else {},

@@ -1,3 +1,4 @@
+from unittest import mock
 from contextlib import closing, redirect_stdout
 import io
 import json
@@ -5707,14 +5708,14 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(publish_metadata["safe_error"], "network unavailable")
         self.assertEqual(
             publish_metadata["command"],
-            ["gh", "api", "repos/x/y/issues/1/comments", "-f", f"body={self._dd_comment_body('ready')}"],
+            [],  # Do not persist command bodies in failure notifications.
         )
         self.assertEqual(notification[:2], ("github_publish_failed", "recorded"))
         notification_metadata = json.loads(notification[2])
         self.assertEqual(notification_metadata["action_id"], "action-1")
         self.assertEqual(
             notification_metadata["command"],
-            ["gh", "api", "repos/x/y/issues/1/comments", "-f", f"body={self._dd_comment_body('ready')}"],
+            [],  # Do not persist command bodies in failure notifications.
         )
 
     def test_repeated_publish_failure_updates_existing_notification(self):
@@ -5742,6 +5743,12 @@ class OperationalCommandTests(unittest.TestCase):
             return Failed(next(errors))
 
         first = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        # Advance to the persisted retry deadline; immediate retry is now forbidden.
+        with closing(sqlite3.connect(db_path)) as retry_conn:
+            due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
+        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock.start()
+        self.addCleanup(retry_clock.stop)
         second = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertEqual(first["status"], "publish_failed")
@@ -5761,7 +5768,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(metadata["safe_error"], "gh auth expired")
         self.assertEqual(
             metadata["command"],
-            ["gh", "api", "repos/x/y/issues/1/comments", "-f", f"body={self._dd_comment_body('ready')}"],
+            [],  # Do not persist command bodies in failure notifications.
         )
 
     def test_publish_success_resolves_previous_failure_notification(self):
@@ -5797,6 +5804,12 @@ class OperationalCommandTests(unittest.TestCase):
             return next(create_results)
 
         failed = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        # Advance to the persisted retry deadline; immediate retry is now forbidden.
+        with closing(sqlite3.connect(db_path)) as retry_conn:
+            due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
+        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock.start()
+        self.addCleanup(retry_clock.stop)
         published = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertEqual(failed["status"], "publish_failed")

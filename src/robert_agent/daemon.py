@@ -16,7 +16,7 @@ from robert_agent.common import emit
 from robert_agent import daemon_state, dbos_runtime, redaction, retention, storage, wakeup_notifier
 from robert_agent import loop_engine
 from robert_agent import validate_config
-from robert_agent import workflow_signals
+from robert_agent import workflow_signals, notify
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -42,6 +42,7 @@ class DaemonContext:
     rate_limit_cache_expires_at: str | None = None
     next_maintenance_at: float = 0.0
     workflow_engine: dict | None = None
+    execution_config: dict | None = None
 
 
 def _script_path(name):
@@ -356,6 +357,7 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
         dry_run=dry_run,
         startup_live_poll_pending=daemon_config.get("run_on_start", False),
         workflow_engine=config_result.get("workflow_engine"),
+        execution_config=config_result,
     ), None
 
 
@@ -406,6 +408,15 @@ def _maybe_prune(context, *, now):
     )
     delay = config["local_poll_seconds"] if result["status"] == "busy" else config.get("maintenance_interval_seconds", 300)
     context.next_maintenance_at = current + delay
+    if result['status'] != 'busy':
+        try:
+            from robert_agent import reliability_health
+            health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+            with closing(daemon_state.connect(context.db_path)) as conn, conn:
+                conn.execute("PRAGMA busy_timeout=100")
+                daemon_state.record_event(conn, context.daemon_run_id, "reliability_health", "ok", health, now=now)
+        except sqlite3.OperationalError:
+            pass
     if any(result["counts"].values()) or (not result["ok"] and result["status"] != "busy"):
         try:
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
@@ -542,7 +553,14 @@ def run_once_decision(
 ):
     now = now or daemon_state.utc_now()
     _maybe_prune(context, now=now)
+    if not context.dry_run:
+        from robert_agent.worker.result import replay_pending_results
+        replay_pending_results(context.db_path)
+        notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
     repo_ids = context.repo_ids or [context.repo_id]
+    if not context.dry_run and (context.workflow_engine or {}).get('mode') == 'active':
+        from robert_agent.workflow_driver import current_driver
+        current_driver().start_pending()
     relay_result = _relay_due_signals(context, now=now)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids)
@@ -703,8 +721,11 @@ def run_daemon(
     runtime_startup_failed = False
     try:
         workflow_engine = context.workflow_engine or {}
-        if workflow_engine.get("mode", "legacy") in {"shadow", "active"}:
+        if not context.dry_run and workflow_engine.get("mode", "legacy") in {"shadow", "active"}:
             try:
+                if workflow_engine.get('mode') == 'active' and not context.dry_run:
+                    from robert_agent.workflow_driver import configure_driver
+                    configure_driver(context.execution_config or {})
                 runtime = dbos_runtime.configure_runtime(
                     {"workflow_engine": workflow_engine}
                 )

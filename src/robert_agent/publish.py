@@ -14,8 +14,10 @@ from robert_agent import (
     pr_health,
     publication_reconcile,
     remediation,
+    retry_policy,
     workflow_operations,
     workflow_store,
+    workflow_ownership,
 )
 from robert_agent.common import emit
 from robert_agent.publication_lock import task_publication_lock
@@ -60,6 +62,7 @@ def _notification_metadata(action, result):
         "action_type": action["action_type"],
         "safe_error": result.get("safe_error", ""),
         "command": result.get("command", []),
+        **{key: result.get(key) for key in ("reason_code", "error_class", "attempt_count", "max_attempts", "next_retry_at", "required_action", "retryable") if key in result},
     }
 
 
@@ -85,6 +88,10 @@ def _insert_notification(conn, action, notification_type, result, now):
     metadata = _notification_metadata(action, result)
     notification_id = _existing_action_notification(conn, action, notification_type)
     if notification_id:
+        existing_metadata = conn.execute("SELECT metadata_json FROM notifications WHERE notification_id=?", (notification_id,)).fetchone()
+        previous = _decode_json(existing_metadata[0])
+        if previous.get('delivery') and all(previous.get(key) == metadata.get(key) for key in ('reason_code', 'error_class', 'required_action', 'retryable')):
+            metadata['delivery'] = previous['delivery']
         conn.execute(
             """
             UPDATE notifications
@@ -848,6 +855,7 @@ def _publish_action(
             "ok": False,
             "status": "publish_failed",
             "safe_error": f"action scope validation failed: {scope_violation}",
+            "retryable": False,
         }
     scope_guard = _publication_scope_guard(conn, action)
     if scope_guard:
@@ -1196,11 +1204,19 @@ def _skip_pending_result_actions(
 
 
 def _record_failure(conn, action, result, now):
-    metadata = _decode_json(action["metadata_json"])
+    fresh = conn.execute('SELECT metadata_json FROM github_actions WHERE action_id=?',(action['action_id'],)).fetchone()
+    metadata = _decode_json(fresh[0] if fresh else action["metadata_json"])
+    prior = dict(metadata.get("publish") or {})
+    if prior.get('attempt_charged'):
+        prior['attempt_count'] = max(0, int(prior.get('attempt_count', 0)) - 1)
+    state = retry_policy.failure_state(prior, result.get("safe_error"), now, retryable=result.get("retryable", True))
+    from robert_agent import redaction
+    safe = redaction.redact_and_truncate(str(result.get("safe_error", "")), 2000)
+    result = {**result, "safe_error": safe.get("text", "Sensitive diagnostic omitted; inspect the local log."), "command": []}
     metadata["publish"] = {
+        **state,
         "status": "publish_failed",
         "failed_at": now,
-        "retryable": result.get("retryable", True),
         "safe_error": result.get("safe_error", ""),
         "command": result.get("command", []),
     }
@@ -1212,7 +1228,14 @@ def _record_failure(conn, action, result, now):
         """,
         (_encode_json(metadata), action["action_id"]),
     )
-    _insert_notification(conn, action, "github_publish_failed", result, now)
+    _insert_notification(conn, action, "github_publish_failed", {**result, **state}, now)
+    if not state["retryable"]:
+        intent = _load_intent(conn, action["action_id"])
+        if intent and intent["status"] == "executing":
+            workflow_store.transition_publication_intent(conn, intent["publication_id"], "attention", now,
+                error={"reason_code": state["reason_code"]})
+        workflow_operations.mark_publication_attention(conn, action.get("task_id"),
+            _trusted_action_scope(conn, action), state["reason_code"], now=now)
 
 
 def _record_remediation_publish_outcome(conn, action, result, now):
@@ -1237,9 +1260,9 @@ def _record_remediation_publish_outcome(conn, action, result, now):
     )
 
 
-def _ready_actions(conn, limit, repo_id=None):
+def _ready_actions(conn, limit, repo_id=None, task_ids=None):
     repo_filter = ""
-    params = []
+    params = [_now()]
     if repo_id:
         repo_filter = """
           AND EXISTS (
@@ -1251,6 +1274,19 @@ def _ready_actions(conn, limit, repo_id=None):
           )
         """
         params.append(repo_id)
+    if task_ids is not None:
+        repo_filter += ' AND github_actions.task_id IN (' + ','.join('?' for _ in task_ids) + ')'
+        params.extend(task_ids)
+        subject_type, subject_id = workflow_ownership.subject.get()
+        if subject_type == 'task':
+            repo_filter += ' AND github_actions.task_id=?'
+        else:
+            repo_filter += " AND EXISTS (SELECT 1 FROM tasks scope WHERE scope.task_id=github_actions.task_id AND json_extract(scope.metadata_json,'$.remediation_episode_id')=?)"
+        params.append(subject_id)
+    else:
+        repo_filter += """ AND NOT EXISTS (SELECT 1 FROM workflow_bindings wb JOIN tasks own ON own.task_id=github_actions.task_id
+          WHERE wb.owner_engine='dbos' AND ((wb.subject_type='task' AND wb.subject_id=own.task_id)
+          OR (wb.subject_type='remediation_episode' AND wb.subject_id=json_extract(own.metadata_json,'$.remediation_episode_id'))))"""
     return [
         dict(row)
         for row in conn.execute(
@@ -1258,8 +1294,7 @@ def _ready_actions(conn, limit, repo_id=None):
             SELECT action_id, result_id, task_id, action_type, target_url, external_id,
                    audit_status, publish_status, created_at, metadata_json
             FROM github_actions
-            WHERE audit_status = 'accepted'
-              AND publish_status = 'not_published'
+            WHERE {retry_policy.publication_ready_sql()}
               {repo_filter}
             ORDER BY created_at, action_id
             LIMIT ?
@@ -1269,14 +1304,16 @@ def _ready_actions(conn, limit, repo_id=None):
     ]
 
 
-def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subprocess.run, repo_id=None):
+def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subprocess.run, repo_id=None, task_ids=None):
+    if task_ids is not None and workflow_ownership.subject.get() is None:
+        raise ValueError('task-scoped publication requires durable workflow authority')
     def bounded_command(*args, **kwargs):
         kwargs["timeout"] = min(kwargs.get("timeout") or PUBLISH_COMMAND_TIMEOUT_SECONDS, PUBLISH_COMMAND_TIMEOUT_SECONDS)
         return run_command(*args, **kwargs)
 
     with closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        actions = _ready_actions(conn, limit, repo_id=repo_id)
+        actions = _ready_actions(conn, limit, repo_id=repo_id, task_ids=task_ids)
     if dry_run:
         return {
             "ok": True,
@@ -1537,6 +1574,25 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                         failed_result_ids.add(result_id)
                     continue
 
+                # Charge the durable budget before remote I/O, including a process
+                # crash that never reaches failure recording.
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.row_factory = sqlite3.Row
+                    fresh = conn.execute('SELECT metadata_json FROM github_actions WHERE action_id=?',(action['action_id'],)).fetchone()
+                    metadata = _decode_json(fresh[0])
+                    prior = metadata.get('publish') or {}
+                    first = prior.get('first_failed_at') or now
+                    expired = (retry_policy.timestamp(now) - retry_policy.timestamp(first)).total_seconds() >= retry_policy.MAX_ELAPSED_SECONDS
+                    if int(prior.get('attempt_count',0)) >= retry_policy.MAX_ATTEMPTS or expired:
+                        _record_failure(conn, action, {'safe_error':'Automatic publication retry budget exhausted. Inspect and retry explicitly.', 'retryable':False}, now)
+                        failed_count += 1
+                        if result_id:
+                            failed_result_ids.add(result_id)
+                        continue
+                    metadata['publish'] = {**prior, 'attempt_count':int(prior.get('attempt_count',0))+1,
+                        'first_failed_at':first, 'attempt_charged':True, 'last_attempt_at':now}
+                    conn.execute('UPDATE github_actions SET metadata_json=? WHERE action_id=?',(_encode_json(metadata), action['action_id']))
+                    action = {**action,'metadata_json':_encode_json(metadata)}
                 # The intent is committed as executing before this call.  No SQLite
                 # transaction spans the remote effect, so a crash leaves an executing
                 # intent for the next publisher pass to reconcile.
@@ -1615,6 +1671,15 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                 failures.append({"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []})
                 if action["result_id"]:
                     failed_result_ids.add(action["result_id"])
+            except OSError as exc:
+                result = {'status':'publish_failed','safe_error':type(exc).__name__, 'retryable': not isinstance(exc, FileNotFoundError)}
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.row_factory = sqlite3.Row
+                    _record_failure(conn, action, result, _now())
+                failed_count += 1
+                failures.append({'action_id':action['action_id'],'safe_error':result['safe_error'],'command':[]})
+                if action['result_id']:
+                    failed_result_ids.add(action['result_id'])
     return {
         "ok": failed_count == 0,
         "status": "published" if failed_count == 0 else "publish_failed",

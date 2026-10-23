@@ -3235,6 +3235,8 @@ repos:
                 """,
                 (workstream_id,),
             )
+            # This fixture was only prepared in dry-run; no process was launched.
+            conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.dispatch') WHERE task_id=?", (parent_task_id,))
             run_once._close_task_binding_if_terminal(conn, parent_task_id, '2026-10-19T00:01:00+00:00')
         context = work_items.CommandContext(
             actor_kind="operator",
@@ -3255,7 +3257,10 @@ repos:
             self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
             self.assertTrue(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
             conn.execute("UPDATE workflow_bindings SET owner_engine='dbos', workflow_id='fixture-retrigger' WHERE subject_id=?", (parent_task_id,))
+            self.assertTrue(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            conn.execute("UPDATE workflow_bindings SET binding_status='active' WHERE subject_id=?", (parent_task_id,))
             self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            conn.execute("UPDATE workflow_bindings SET binding_status='terminal' WHERE subject_id=?", (parent_task_id,))
             conn.execute("UPDATE workflow_bindings SET owner_engine='legacy', workflow_id=NULL WHERE subject_id=?", (parent_task_id,))
         followup_fixture = self.root / "retrigger-followup.json"
         followup_fixture.write_text(
@@ -5883,7 +5888,7 @@ repos:
         self.assertEqual(len(attempts), 2)
         self.assertEqual(attempts[0][0], attempt_id)
         self.assertEqual(attempts[0][2], "failed")
-        self.assertEqual(attempts[1][1:5], (2, "running", worktree_path, branch_name))
+        self.assertEqual(attempts[1][1:5], (2, "failed", worktree_path, branch_name))
         resumed_attempt_metadata = json.loads(attempts[1][5])
         resume_metadata = resumed_attempt_metadata["resume"]
         self.assertEqual(resume_metadata["previous_attempt_id"], attempt_id)
@@ -5891,8 +5896,8 @@ repos:
             resumed_attempt_metadata["existing_pr_head_sha"],
             "worker-base-sha",
         )
-        self.assertEqual(task_lifecycle, "running")
-        self.assertEqual(workstream, ("active", task_id))
+        self.assertEqual(task_lifecycle, "failed")
+        self.assertEqual(workstream, ("failed", None))
         self.assertEqual(notification, ("worker_identity_attention", "recorded"))
         self.assertEqual(binding, "attention")
         artifact_types = [row[0] for row in artifacts]

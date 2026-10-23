@@ -1918,8 +1918,8 @@ class WorkerProtocolTests(unittest.TestCase):
         )
 
         first = result.record_result(db_path, payload)
-        with self.assertRaises(sqlite3.IntegrityError):
-            result.record_result(db_path, payload)
+        duplicate = result.record_result(db_path, payload)
+        self.assertTrue(duplicate["deduplicated"])
 
         self.assertTrue(first["ok"], first)
         with closing(sqlite3.connect(db_path)) as conn, conn:
