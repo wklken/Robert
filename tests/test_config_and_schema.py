@@ -118,6 +118,10 @@ class NewSkillSkeletonTests(unittest.TestCase):
             worker_config["required"],
             ["adapter", "command", "model", "effort"],
         )
+        self.assertEqual(
+            worker_config["properties"]["fallback_model"],
+            {"type": "string", "minLength": 1},
+        )
         daemon_config = schema["properties"]["daemon"]
         self.assertIn("local_poll_seconds", daemon_config["properties"])
         self.assertFalse(daemon_config["additionalProperties"])
@@ -253,6 +257,22 @@ repos:
                 },
             },
         )
+
+    def test_config_defaults_hard_timeout_to_45_minutes(self):
+        from robert_agent import validate_config
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "hard_timeout_minutes: 90\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+
+        result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["hard_timeout_minutes"], 45)
 
     def test_config_accepts_pr_automation(self):
         from robert_agent import validate_config
@@ -501,6 +521,7 @@ repos:
                 "    agent: cbc\n"
                 "    command: cbc\n"
                 "    default_model: gpt-5.4\n"
+                "    fallback_model: gpt-5.6-sol\n"
                 "    default_effort: high\n"
                 "  - name: reviewer\n"
                 "    agent: codex\n"
@@ -535,6 +556,7 @@ repos:
                     "timeout_seconds": 5400,
                     "environment_allowlist": [],
                     "default_model": "gpt-5.4",
+                    "fallback_model": "gpt-5.6-sol",
                     "default_effort": "high",
                 },
                 {
@@ -546,6 +568,7 @@ repos:
                     "timeout_seconds": 5400,
                     "environment_allowlist": [],
                     "default_model": "gpt-5.6-sol",
+                    "fallback_model": None,
                     "default_effort": "xhigh",
                 },
             ],
@@ -570,6 +593,58 @@ repos:
                     "effort": "high",
                 },
             },
+        )
+
+    def test_config_accepts_mapping_worker_fallback_model(self):
+        from robert_agent import validate_config
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "database: dd.sqlite3",
+                "database: dd.sqlite3\n"
+                "workers:\n"
+                "  default:\n"
+                "    adapter: tcodex\n"
+                "    command: tcodex\n"
+                "    model: gpt-6.1-sol\n"
+                "    fallback_model: gpt-5.6-sol\n"
+                "    effort: high",
+            ),
+            encoding="utf-8",
+        )
+
+        result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            result["default_worker"]["fallback_model"],
+            "gpt-5.6-sol",
+        )
+
+    def test_config_rejects_blank_worker_fallback_model(self):
+        from robert_agent import validate_config
+        config_path = self.write_config()
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "database: dd.sqlite3",
+                "database: dd.sqlite3\n"
+                "workers:\n"
+                "  default:\n"
+                "    adapter: codex\n"
+                "    command: codex\n"
+                "    model: gpt-6.1-sol\n"
+                "    fallback_model: '   '\n"
+                "    effort: high",
+            ),
+            encoding="utf-8",
+        )
+
+        result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["safe_error"],
+            "invalid config: workers.default.fallback_model must not be empty",
         )
 
     def test_config_rejects_duplicate_worker_names(self):

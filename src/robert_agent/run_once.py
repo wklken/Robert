@@ -753,7 +753,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
             started_at=started_at,
             now=now_dt,
             stale_after_minutes=config_result.get("stale_after_minutes", 20),
-            hard_timeout_minutes=config_result.get("hard_timeout_minutes", 90),
+            hard_timeout_minutes=config_result.get("hard_timeout_minutes", 45),
             hard_timeout_seconds=worker_timeout_seconds,
         )
         process_status = {"status": "not_checked"}
@@ -3959,6 +3959,41 @@ def _ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
     return refreshed
 
 
+def _model_for_dispatch(
+    conn,
+    workstream_id,
+    attempt_id,
+    selected_worker,
+    primary_model,
+):
+    fallback_model = selected_worker.get("fallback_model")
+    if not fallback_model:
+        return primary_model
+    rows = conn.execute(
+        """
+        SELECT a.failure_json
+        FROM attempts a
+        JOIN tasks t ON t.task_id = a.task_id
+        WHERE t.workstream_id = ?
+          AND a.attempt_id != ?
+          AND a.status IN ('completed', 'failed', 'canceled')
+        ORDER BY COALESCE(a.finished_at, a.started_at) DESC, a.attempt_id DESC
+        LIMIT 2
+        """,
+        (workstream_id, attempt_id),
+    ).fetchall()
+    if len(rows) != 2:
+        return primary_model
+    failures = [_json_object(row[0]) for row in rows]
+    if all(
+        failure.get("status") == "failed_timeout"
+        or failure.get("original_status") == "failed_timeout"
+        for failure in failures
+    ):
+        return fallback_model
+    return primary_model
+
+
 def _dispatch_queued(
     db_path,
     repo_ids,
@@ -4047,6 +4082,19 @@ def _dispatch_queued(
                 ]
         elif route_worker_config:
             selected_worker = workers_by_name[route_worker_config["worker"]]
+        primary_model = (
+            route_worker_config["model"]
+            if route_worker_config and task_info.get("routing_mode") != "manual"
+            else selected_worker["default_model"]
+        )
+        with closing(sqlite3.connect(db_path)) as conn:
+            model = _model_for_dispatch(
+                conn,
+                task_info["workstream_id"],
+                task_info["attempt_id"],
+                selected_worker,
+                primary_model,
+            )
         worker_kwargs = {
             "task_id": task_info["task_id"],
             "attempt_id": task_info["attempt_id"],
@@ -4055,11 +4103,7 @@ def _dispatch_queued(
             "worker_command": selected_worker["command"],
             "worker_agent": selected_worker["agent"],
             "worker_agent_config": selected_worker,
-            "model": (
-                route_worker_config["model"]
-                if route_worker_config and task_info.get("routing_mode") != "manual"
-                else selected_worker["default_model"]
-            ),
+            "model": model,
             "reasoning_effort": (
                 route_worker_config["effort"]
                 if route_worker_config and task_info.get("routing_mode") != "manual"

@@ -135,6 +135,7 @@ repos:
                 "    agent: cbc\n"
                 f"    command: {self.worker_command}\n"
                 "    default_model: gpt-5.4\n"
+                "    fallback_model: gpt-5.6-sol\n"
                 "    default_effort: high\n"
                 "  - name: reviewer\n"
                 "    agent: codex\n"
@@ -159,6 +160,7 @@ repos:
         self.assertTrue(result["ok"], result)
         isolated = json.loads(Path(result["config_path"]).read_text(encoding="utf-8"))
         self.assertEqual([worker["name"] for worker in isolated["workers"]], ["default", "reviewer"])
+        self.assertEqual(isolated["workers"][0]["fallback_model"], "gpt-5.6-sol")
         self.assertEqual(isolated["workers"][1]["agent"], "codex")
         self.assertEqual(
             isolated["route_worker_models"]["review-pr"],

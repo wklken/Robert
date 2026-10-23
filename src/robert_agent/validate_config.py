@@ -36,6 +36,7 @@ def _normalize_workers(config):
                 "name": "default",
                 **worker_config,
                 "default_model": "gpt-5.4",
+                "fallback_model": None,
                 "default_effort": "high",
             }
         ]
@@ -50,6 +51,7 @@ def _normalize_workers(config):
                     "adapter",
                     "command",
                     "model",
+                    "fallback_model",
                     "effort",
                     "prompt_transport",
                     "timeout_seconds",
@@ -66,11 +68,21 @@ def _normalize_workers(config):
                 raise ValueError("worker name must not be empty")
             command = raw_worker.get("command", "")
             default_model = str(raw_worker.get("model", "")).strip()
+            raw_fallback_model = raw_worker.get("fallback_model")
+            fallback_model = (
+                None
+                if raw_fallback_model is None
+                else str(raw_fallback_model).strip()
+            )
             default_effort = str(raw_worker.get("effort", "")).strip()
             if not str(command).strip():
                 raise ValueError(f"workers.{name}.command must not be empty")
             if not default_model:
                 raise ValueError(f"workers.{name}.model must not be empty")
+            if raw_fallback_model is not None and not fallback_model:
+                raise ValueError(
+                    f"workers.{name}.fallback_model must not be empty"
+                )
             if not default_effort:
                 raise ValueError(f"workers.{name}.effort must not be empty")
             worker = worker_adapters.normalize_worker_agent_config(
@@ -96,6 +108,7 @@ def _normalize_workers(config):
                     "name": worker_name,
                     **worker,
                     "default_model": default_model,
+                    "fallback_model": fallback_model,
                     "default_effort": default_effort,
                 }
             )
@@ -117,6 +130,7 @@ def _normalize_workers(config):
                 "agent",
                 "command",
                 "default_model",
+                "fallback_model",
                 "default_effort",
                 "prompt_transport",
                 "timeout_seconds",
@@ -136,12 +150,22 @@ def _normalize_workers(config):
         seen_names.add(name)
 
         default_model = str(raw_worker.get("default_model", "")).strip()
+        raw_fallback_model = raw_worker.get("fallback_model")
+        fallback_model = (
+            None
+            if raw_fallback_model is None
+            else str(raw_fallback_model).strip()
+        )
         default_effort = str(raw_worker.get("default_effort", "")).strip()
         command = raw_worker.get("command", "")
         if not str(command).strip():
             raise ValueError(f"workers[{index}].command must not be empty")
         if not default_model:
             raise ValueError(f"workers[{index}].default_model must not be empty")
+        if raw_fallback_model is not None and not fallback_model:
+            raise ValueError(
+                f"workers[{index}].fallback_model must not be empty"
+            )
         if not default_effort:
             raise ValueError(f"workers[{index}].default_effort must not be empty")
 
@@ -167,6 +191,7 @@ def _normalize_workers(config):
                 "name": name,
                 **worker_config,
                 "default_model": default_model,
+                "fallback_model": fallback_model,
                 "default_effort": default_effort,
             }
         )
@@ -446,7 +471,7 @@ def validate_config(config_path, skip_external=False):
         )
         repos = config["repos"]
         stale_after_minutes = int(config.get("stale_after_minutes", 20))
-        hard_timeout_minutes = int(config.get("hard_timeout_minutes", 90))
+        hard_timeout_minutes = int(config.get("hard_timeout_minutes", 45))
         worker_startup_grace_seconds = int(config.get("worker_startup_grace_seconds", 300))
         lease_ttl_minutes = int(config.get("lease_ttl_minutes", 9))
         max_concurrency = int(config.get("max_concurrency", 3))

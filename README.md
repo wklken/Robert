@@ -83,6 +83,9 @@ confirmation wherever the guide requires it.
 Robert 使用带版本号的 YAML。配置包括 GitHub 账号、Worker、Skill 搜索路径、
 路由覆盖和一个或多个本地仓库。详见
 [docs/reference.md](docs/reference.md#configuration)。
+Worker 可配置 `fallback_model`；同一 workstream 连续两次
+`failed_timeout` 后，第三次运行切换到该模型，推理 effort 保持不变。默认硬超时为
+45 分钟。
 CI 和冲突修复默认关闭；只有仓库配置中的 `pr_automation` 显式启用后才运行，
 CI 还必须配置非空 `check_allowlist`。
 
