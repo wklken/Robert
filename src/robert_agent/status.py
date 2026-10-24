@@ -11,7 +11,7 @@ from contextlib import closing
 
 from robert_agent.run_history import step_output
 from robert_agent.common import emit
-from robert_agent import web
+from robert_agent import web, execution_metrics
 
 
 DEFAULT_DB = "~/.local/share/robert/dd.sqlite3"
@@ -216,7 +216,10 @@ def _compact_task(task):
 
 
 def build_status(db_path, history_limit=5):
+    db_path = Path(db_path).expanduser()
     data = web.build_dashboard_data(Path(db_path).expanduser(), history_limit=history_limit)
+    with closing(sqlite3.connect(db_path)) as conn:
+        timings = execution_metrics.summarize(conn)
     latest_run = (data.get("recent_runs") or [{}])[0]
     return {
         "summary": data.get("summary") or {},
@@ -224,6 +227,7 @@ def build_status(db_path, history_limit=5):
         "daemon": data.get("daemon") or {},
         "wakeup_summary": data.get("wakeup_summary") or {},
         "acceptance_metrics": data.get("acceptance_metrics") or {},
+        "execution_timings": timings,
         "latest_loop": data.get("latest_loop") or {},
         "operator_alerts": (data.get("operator_alerts") or [])[:history_limit],
         "operator_next_steps": (data.get("operator_next_steps") or [])[:history_limit],

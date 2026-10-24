@@ -29,7 +29,7 @@ from robert_agent import supervise
 from robert_agent import validate_config
 from robert_agent import workstream
 from robert_agent import worktree
-from robert_agent import workflow_operations
+from robert_agent import retry_policy, workflow_operations
 from robert_agent import workflow_store, workflow_ownership
 from robert_agent import worker_identity
 from robert_agent import workflow_events
@@ -519,15 +519,12 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         signals.append("dirty_worktree")
     if diff_text.strip():
         signals.append("diff_stat_available")
-    for artifact_type, payload in logs.items():
-        tail = payload.get("tail", "")
-        if not tail:
-            continue
-        if "command exited" in tail.lower():
-            signals.append(f"{artifact_type}_command_exit")
-        else:
-            signals.append(f"{artifact_type}_tail_available")
-    status = "no_progress"
+    # Logs are diagnostic evidence, not proof of completed work. In particular,
+    # repeated error output must not authorize another model attempt. Durable
+    # command records, checkpoints and worktree changes above establish progress.
+    category = retry_policy.error_class(retry_policy.worker_error(logs))
+    transport_failure = _terminal_transport_failure(logs)
+    status = "transport_interrupted" if transport_failure else "no_progress"
     if any(command["process_status"] in {"alive", "unknown"} for command in commands):
         status = "orphaned_command_running"
     elif signals:
@@ -542,7 +539,8 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         "logs": logs,
         "git": git_summary,
         "commands": commands,
-        "transport_failure": _terminal_transport_failure(logs),
+        "transport_failure": transport_failure,
+        "error_class": category,
     }
 
 
@@ -872,7 +870,8 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
         JOIN tasks t ON t.task_id = a.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE w.repo_id = ?
-          AND a.status IN ('running', 'stale')
+          AND (a.status IN ('running', 'stale')
+               OR (a.status='prepared' AND json_extract(a.metadata_json,'$.result_validation') IS NOT NULL))
           AND t.lifecycle IN ('queued', 'running')
         """,
         (repo_id,),
@@ -889,8 +888,13 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
         attempt_status,
         metadata_json,
     ) in rows:
-        if not heartbeat_at or not started_at:
+        metadata = _json_object(metadata_json)
+        rejection = metadata.get("result_validation")
+        if (not heartbeat_at or not started_at) and not rejection:
             continue
+        if rejection:
+            started_at = started_at or run_now
+            heartbeat_at = heartbeat_at or run_now
         if not _legacy_task_subject_active(conn, task_id, run_now):
             continue
         metadata = _json_object(metadata_json)
@@ -902,14 +906,17 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
             worker_timeout_seconds = None
         if worker_timeout_seconds is not None and worker_timeout_seconds < 1:
             worker_timeout_seconds = None
-        status = supervise.classify_attempt(
-            heartbeat_at=heartbeat_at,
-            started_at=started_at,
-            now=now_dt,
-            stale_after_minutes=config_result.get("stale_after_minutes", 20),
-            hard_timeout_minutes=config_result.get("hard_timeout_minutes", 45),
-            hard_timeout_seconds=worker_timeout_seconds,
-        )
+        if rejection:
+            status = {**rejection, "ok": False, "terminate": True}
+        else:
+            status = supervise.classify_attempt(
+                heartbeat_at=heartbeat_at,
+                started_at=started_at,
+                now=now_dt,
+                stale_after_minutes=config_result.get("stale_after_minutes", 20),
+                hard_timeout_minutes=config_result.get("hard_timeout_minutes", 45),
+                hard_timeout_seconds=worker_timeout_seconds,
+            )
         process_status = {"status": "not_checked"}
         if (
             attempt_status in {"running", "stale"}
@@ -979,7 +986,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 recovery.get("transport_failure") and transport_failure_count >= MAX_TRANSPORT_RESUMES
             )
             if (
-                recovery["status"] == "recoverable_progress"
+                recovery["status"] in {"recoverable_progress", "transport_interrupted"}
                 and not transport_exhausted
                 and data_dir is not None
                 and db_path is not None
@@ -1105,6 +1112,11 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                     ),
                     "terminate": False,
                 }
+            category = recovery.get("error_class")
+            if category and category not in {"transient_failure", "rate_limited"}:
+                status = {**status, "status": category, "reason_code": category,
+                          "safe_error": "Worker stopped: " + category,
+                          "required_action": "Repair the reported cause, then retry the task."}
         runtime_seconds = (now_dt - _parse_time(started_at)).total_seconds()
         has_worker_phase = conn.execute(
             "SELECT 1 FROM worker_phases WHERE attempt_id = ? LIMIT 1",
@@ -1188,7 +1200,8 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
             _supervision_failure_notification_type(status["status"]),
             "recorded",
             run_now,
-            {"task_id": task_id, "attempt_id": attempt_id, "workstream_id": workstream_id},
+            {"task_id": task_id, "attempt_id": attempt_id, "workstream_id": workstream_id,
+             **{key: status[key] for key in ("reason_code", "safe_error", "required_action") if key in status}},
         )
     return supervised
 
@@ -1276,7 +1289,7 @@ def _recover_failed_timeout_attempts(
             metadata,
             worktree_path,
         )
-        if recovery["status"] != "recoverable_progress":
+        if recovery["status"] not in {"recoverable_progress", "transport_interrupted"}:
             continue
         status = {
             **process_status,
@@ -1401,6 +1414,10 @@ def _dispatch_process_status(metadata):
 
 
 def _supervision_failure_notification_type(status):
+    if status in {"authentication_required", "permission_required", "configuration_required", "branch_conflict"}:
+        return "worker_" + status
+    if status == "failed_validation":
+        return "worker_result_validation_failed"
     if status == "failed_worker_startup":
         return "worker_startup_failed"
     if status == "failed_worker_process_exited":
@@ -4073,6 +4090,8 @@ def _record_dispatch_result(conn, attempt_id, dispatch_result):
     if current and current[0] in {"completed", "failed", "canceled"}:
         metadata = _json_object(current[1])
         metadata["dispatch"] = dispatch_result
+        if dispatch_result.get("status") == "running":
+            metadata.setdefault("worker_started_at", _now())
         conn.execute(
             """
             UPDATE attempts
@@ -4087,6 +4106,8 @@ def _record_dispatch_result(conn, attempt_id, dispatch_result):
     metadata = json.dumps(metadata_obj, ensure_ascii=False, sort_keys=True)
     if status == "running":
         started_at = _now()
+        metadata_obj["worker_started_at"] = started_at
+        metadata = json.dumps(metadata_obj, ensure_ascii=False, sort_keys=True)
         conn.execute(
             """
             UPDATE attempts
@@ -4955,7 +4976,7 @@ def _record_result_audit(conn, result_id, audit):
         (result_id,),
     ).fetchone()
     metadata = json.loads(row[0]) if row and row[0] else {}
-    metadata["audit"] = audit
+    metadata["audit"] = {**audit, "audited_at": _now()}
     conn.execute(
         """
         UPDATE worker_results
@@ -6346,6 +6367,7 @@ def _run_repo_pipeline(
         review_participants = _load_review_participants(conn, repo_id)
         active_workstreams = _load_active_workstreams(conn, repo_id)
         _mark_repo_run_step(conn, run_id, repo_id, "discover", "running", run_now)
+        conn.commit()  # Discovery can wait on remote I/O; never pin the domain writer.
         if fixture_path:
             raw_events = discover.load_fixture(fixture_path)
         elif skip_external:

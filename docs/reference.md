@@ -212,11 +212,13 @@ to contain a `postgresql://` URL. Store only the environment variable's **name**
 in YAML. This PostgreSQL system database is separate from Robert's SQLite task
 and audit database.
 
-DBOS runtime, bindings, durable workflows, and recovery foundations are present,
-but production dispatch still retains legacy ownership and active production
-drivers are not wired in. Keep `legacy` for unattended operation. A valid
-`active` configuration is not evidence of a supported production cutover. See
-[the lifecycle integration notes](web-lifecycle-board.md#与主工作区已有恢复逻辑的集成).
+The daemon installs the production v2 driver before launching DBOS. In `active`
+mode, new GitHub tasks and remediation episodes receive DBOS ownership before
+dispatch; existing legacy tasks retain their owner. `legacy` remains the default.
+Drain active v1 bindings with their original driver before enabling v2. Validate
+the deployment's PostgreSQL connectivity, Worker commands and independent
+notification receiver before a production canary. See [DBOS production v2](#dbos-production-v2)
+and the [isolated acceptance evidence](reliability-followup-20261024.md).
 
 ### Updating an existing configuration
 

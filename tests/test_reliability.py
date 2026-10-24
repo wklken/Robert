@@ -92,7 +92,7 @@ class PublicationBudgetTests(unittest.TestCase):
 
     def test_permanent_rejection_stops_remote_calls_and_scheduler(self):
         self.cycle()
-        for _ in range(10):
+        for _ in range(1000):
             self.assertEqual(self.cycle(600)["failed_count"], 0)
         self.assertEqual(self.calls.count(["git", "push"]), 1)
         with closing(sqlite3.connect(self.db)) as c:
@@ -404,6 +404,11 @@ class WaitingResultTests(unittest.TestCase):
         )
         response = result.record_result(self.db, self.payload)
         self.assertEqual(response["status"], "failed_validation")
+        with closing(sqlite3.connect(self.db)) as c:
+            self.assertEqual(c.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running")
+            self.assertEqual(c.execute("SELECT status FROM attempts").fetchone()[0], "running")
+            failure = json.loads(c.execute("SELECT failure_json FROM attempts").fetchone()[0])
+            self.assertEqual(failure["reason_code"], "question_not_deliverable")
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
                 c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0

@@ -21,8 +21,8 @@ def collect(db_path, *, now, repo_ids, limit=100):
             THEN 'publication_delayed' ELSE 'queue_delayed' END
             FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
             WHERE w.repo_id IN ({placeholders}) AND t.lifecycle IN ('queued','running')
-            AND ((t.lifecycle='queued' AND julianday(t.created_at)<julianday(?)-10.0/1440)
-                OR EXISTS (SELECT 1 FROM github_actions ga WHERE ga.task_id=t.task_id AND ga.audit_status='accepted' AND ga.publish_status='not_published' AND julianday(ga.created_at)<julianday(?)-10.0/1440))
+            AND ((t.lifecycle='queued' AND julianday(t.created_at)<julianday(?)-5.0/1440)
+                OR EXISTS (SELECT 1 FROM github_actions ga WHERE ga.task_id=t.task_id AND ga.audit_status='accepted' AND ga.publish_status='not_published' AND julianday(ga.created_at)<julianday(?)-2.0/1440))
             ORDER BY t.created_at LIMIT ?""",
             [*repo_ids, now, now, limit],
         ).fetchall()
@@ -31,7 +31,7 @@ def collect(db_path, *, now, repo_ids, limit=100):
                 """INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json)
                 VALUES (?,?,'execution_delayed','local','recorded',?,?)""",
                 (
-                    "notification-delay-" + task_id,
+                    "notification-delay-" + task_id + "-" + reason,
                     task_id,
                     now,
                     json.dumps(
@@ -52,6 +52,10 @@ def collect(db_path, *, now, repo_ids, limit=100):
             "SELECT count(*) FROM (SELECT notification_id FROM notifications WHERE status='recorded' AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted') LIMIT ?)",
             (limit,),
         ).fetchone()[0]
+        failed_notifications = conn.execute("SELECT count(*) FROM notifications WHERE json_extract(metadata_json,'$.delivery.status')='exhausted'").fetchone()[0]
+        oldest_notification = conn.execute("SELECT MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM notifications WHERE channel='local' AND status NOT IN ('sent','resolved') AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted')", (now,)).fetchone()[0]
+        outbox = conn.execute("SELECT count(*), MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM workflow_outbox WHERE status='pending'", (now,)).fetchone()
+        outbox_attention = conn.execute("SELECT count(*) FROM workflow_outbox WHERE status='attention'").fetchone()[0]
     wal = Path(str(db_path) + "-wal")
     return {
         "database_bytes": pages * page_size,
@@ -61,6 +65,12 @@ def collect(db_path, *, now, repo_ids, limit=100):
         "stale_runs_sample": orphaned,
         "pending_notifications_sample": unsent,
         "sample_limit": limit,
+        "delivery_scope": "database",
+        "failed_notifications": failed_notifications,
+        "oldest_notification_seconds": oldest_notification,
+        "pending_outbox": outbox[0],
+        "oldest_outbox_seconds": outbox[1],
+        "attention_outbox": outbox_attention,
         "notification_delivery_configured": bool(
             os.environ.get("ROBERT_NOTIFICATION_COMMAND")
         ),

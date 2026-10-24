@@ -243,6 +243,8 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
         conn.execute("BEGIN IMMEDIATE")
+        metadata["result_saved_at"] = result_spool.saved_at(db_path, payload["attempt_id"])
+        metadata["result_ingested_at"] = datetime.now(timezone.utc).isoformat()
         existing = conn.execute("SELECT result_id, metadata_json FROM worker_results WHERE attempt_id=?", (payload["attempt_id"],)).fetchone()
         if existing:
             if json.loads(existing[1] or '{}').get('submission_fingerprint') == metadata['submission_fingerprint']:
@@ -251,17 +253,6 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
         task = conn.execute("SELECT lifecycle, task_kind, metadata_json FROM tasks WHERE task_id=?", (payload["task_id"],)).fetchone()
         if task and task[0] in {'canceled', 'failed', 'ignored'}:
             return {"ok": False, "status": "rejected_by_supervisor"}
-        if payload.get('output_type') == 'waiting_for_user':
-            origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=(SELECT workstream_id FROM tasks WHERE task_id=?)",(payload['task_id'],)).fetchone()
-            error = None
-            if operator_question is None:
-                error = 'waiting_for_user requires operator_question'
-            elif (not origin or origin[0] == 'github') and not any(a.get('type') == 'comment' for a in actions):
-                error = 'GitHub waiting_for_user requires a public comment action'
-            if error:
-                conn.execute("INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json) VALUES (?,?,'worker_result_validation_failed','local','recorded',?,?)",
-                    ('notification-result-validation-' + payload['attempt_id'], payload['task_id'], result_created_at, json.dumps({'reason_code':'question_not_deliverable','safe_error':error,'required_action':'Correct the result and submit the question again.'})))
-                return {'ok':False,'status':'failed_validation','safe_error':error}
         subject_type, subject_id = 'task', payload['task_id']
         if task and task[1] in {'ci_remediation', 'merge_conflict_remediation'}:
             episode_id = json.loads(task[2] or '{}').get('remediation_episode_id')
@@ -270,6 +261,29 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
         owner = workflow_store.get_binding(conn, subject_type, subject_id)
         if owner and owner['binding_status'] != 'active':
             return {"ok": False, "status": "rejected_by_workflow_owner"}
+        prior_rejection = conn.execute("SELECT json_extract(metadata_json,'$.result_validation') FROM attempts WHERE attempt_id=? AND task_id=?", (payload['attempt_id'], payload['task_id'])).fetchone()
+        if prior_rejection and prior_rejection[0]:
+            return {"ok": False, "status": "rejected_by_supervisor"}
+        if payload.get('output_type') == 'waiting_for_user':
+            attempt = conn.execute("SELECT status FROM attempts WHERE attempt_id=? AND task_id=?", (payload['attempt_id'], payload['task_id'])).fetchone()
+            if not attempt or attempt[0] not in {'prepared', 'running', 'stale'}:
+                return {"ok": False, "status": "rejected_by_supervisor"}
+            origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=(SELECT workstream_id FROM tasks WHERE task_id=?)",(payload['task_id'],)).fetchone()
+            error = None
+            if operator_question is None:
+                error = 'waiting_for_user requires operator_question'
+            elif (not origin or origin[0] == 'github') and not any(a.get('type') == 'comment' for a in actions):
+                error = 'GitHub waiting_for_user requires a public comment action'
+            if error:
+                failure = {"status": "failed_validation", "reason_code": "question_not_deliverable",
+                           "safe_error": error, "required_action": "Correct the question and retry the task."}
+                # The Worker may still be alive (including this result helper).
+                # Keep capacity/ownership until the supervisor confirms cleanup.
+                conn.execute("UPDATE attempts SET failure_json=?, metadata_json=json_set(metadata_json, '$.result_validation', json(?), '$.supervise', json(?)) WHERE attempt_id=? AND task_id=?",
+                    (json.dumps(failure), json.dumps(failure), json.dumps({"status": "worker_identity_attention", "reason": error + "; waiting for Worker cleanup"}), payload['attempt_id'], payload['task_id']))
+                conn.execute("INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json) VALUES (?,?,'worker_result_validation_failed','local','recorded',?,?)",
+                    ('notification-result-validation-' + payload['attempt_id'], payload['task_id'], result_created_at, json.dumps({'reason_code':'question_not_deliverable','safe_error':error,'required_action':'Correct the question and retry the task.'})))
+                return {'ok':False,'status':'failed_validation','safe_error':error}
         conn.execute(
             """
             INSERT INTO worker_results(
