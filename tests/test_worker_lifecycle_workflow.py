@@ -8,7 +8,7 @@ from pathlib import Path
 
 class WorkerLifecycleWorkflowTests(unittest.TestCase):
     def _database(self):
-        from robert_agent import storage, workflow_store
+        from robert_agent import storage, execution_store
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -32,13 +32,11 @@ class WorkerLifecycleWorkflowTests(unittest.TestCase):
                 "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, metadata_json) VALUES ('attempt:test', 'task:test', 1, 'failed', ?)",
                 (json.dumps({"dispatch": {"pid": 7}}),),
             )
-            workflow_store.bind_subject(
-                conn, "task", "task:test", "human_request", "legacy", now
-            )
+            execution_store.ensure_subject(conn, 'task', 'task:test', 'human_request', now)
         return db_path
 
     def test_dead_recoverable_progress_consumes_quota_once_then_attention(self):
-        from robert_agent import workflow_operations, workflow_store
+        from robert_agent import execution_operations, execution_store
 
         db_path = self._database()
         evidence = {
@@ -51,32 +49,32 @@ class WorkerLifecycleWorkflowTests(unittest.TestCase):
         now = "2026-08-02T00:01:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             self.assertEqual(
-                workflow_operations.classify_recovery(
+                execution_operations.classify_recovery(
                     conn, "task", "task:test", "attempt:test", evidence, now=now
                 ),
                 "recover_once",
             )
             self.assertEqual(
-                workflow_store.get_binding(conn, "task", "task:test")[
+                execution_store.get_binding(conn, "task", "task:test")[
                     "recovery_attempts"
                 ],
                 1,
             )
             self.assertEqual(
-                workflow_operations.classify_recovery(
+                execution_operations.classify_recovery(
                     conn, "task", "task:test", "attempt:test", evidence, now=now
                 ),
                 "attention",
             )
             self.assertEqual(
-                workflow_store.get_binding(conn, "task", "task:test")[
+                execution_store.get_binding(conn, "task", "task:test")[
                     "binding_status"
                 ],
                 "attention",
             )
 
     def test_alive_same_never_consumes_recovery_quota(self):
-        from robert_agent import workflow_operations, workflow_store
+        from robert_agent import execution_operations, execution_store
 
         db_path = self._database()
         evidence = {
@@ -88,7 +86,7 @@ class WorkerLifecycleWorkflowTests(unittest.TestCase):
         }
         with closing(sqlite3.connect(db_path)) as conn, conn:
             self.assertEqual(
-                workflow_operations.classify_recovery(
+                execution_operations.classify_recovery(
                     conn,
                     "task",
                     "task:test",
@@ -99,7 +97,7 @@ class WorkerLifecycleWorkflowTests(unittest.TestCase):
                 "continue",
             )
             self.assertEqual(
-                workflow_store.get_binding(conn, "task", "task:test")[
+                execution_store.get_binding(conn, "task", "task:test")[
                     "recovery_attempts"
                 ],
                 0,

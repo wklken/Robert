@@ -250,7 +250,7 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed[0], .1)
 
     def test_db_backed_identity_operations_load_only_attempt_dispatch_metadata(self):
-        from robert_agent import storage, workflow_operations
+        from robert_agent import storage, execution_operations
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "robert.sqlite3"
@@ -288,20 +288,20 @@ class WorkerIdentityTests(unittest.TestCase):
                     ),
                 )
 
-            original = workflow_operations.worker_identity.inspect_recorded_identity
-            workflow_operations.worker_identity.inspect_recorded_identity = (
+            original = execution_operations.worker_identity.inspect_recorded_identity
+            execution_operations.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
             try:
                 self.assertEqual(
-                    workflow_operations.inspect_worker_identity(db_path, "attempt:test"),
+                    execution_operations.inspect_worker_identity(db_path, "attempt:test"),
                     "alive_same",
                 )
             finally:
-                workflow_operations.worker_identity.inspect_recorded_identity = original
+                execution_operations.worker_identity.inspect_recorded_identity = original
 
     def test_terminate_worker_persists_redacted_result_once_and_marks_attention(self):
-        from robert_agent import storage, workflow_operations, workflow_store
+        from robert_agent import storage, execution_operations, execution_store
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "robert.sqlite3"
@@ -339,12 +339,10 @@ class WorkerIdentityTests(unittest.TestCase):
                         ),
                     ),
                 )
-                workflow_store.bind_subject(
-                    conn, "task", "task:test", "human_request", "legacy", now
-                )
+                execution_store.ensure_subject(conn, 'task', 'task:test', 'human_request', now)
 
-            original = workflow_operations.worker_identity.terminate_recorded_identity
-            workflow_operations.worker_identity.terminate_recorded_identity = (
+            original = execution_operations.worker_identity.terminate_recorded_identity
+            execution_operations.worker_identity.terminate_recorded_identity = (
                 lambda _identity: {
                     "status": "attention",
                     "reason": "identity_changed",
@@ -354,15 +352,15 @@ class WorkerIdentityTests(unittest.TestCase):
             )
             try:
                 self.assertEqual(
-                    workflow_operations.terminate_worker(db_path, "attempt:test"),
+                    execution_operations.terminate_worker(db_path, "attempt:test"),
                     "attention",
                 )
                 self.assertEqual(
-                    workflow_operations.terminate_worker(db_path, "attempt:test"),
+                    execution_operations.terminate_worker(db_path, "attempt:test"),
                     "attention",
                 )
             finally:
-                workflow_operations.worker_identity.terminate_recorded_identity = original
+                execution_operations.worker_identity.terminate_recorded_identity = original
 
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 metadata_json = conn.execute(
@@ -373,7 +371,7 @@ class WorkerIdentityTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM notifications WHERE notification_type = 'worker_termination'"
                 ).fetchone()[0]
                 binding_status = conn.execute(
-                    "SELECT binding_status FROM workflow_bindings WHERE subject_type = 'task' AND subject_id = 'task:test'"
+                    "SELECT binding_status FROM execution_subjects WHERE subject_type = 'task' AND subject_id = 'task:test'"
                 ).fetchone()[0]
 
             metadata = json.loads(metadata_json)

@@ -611,8 +611,8 @@ def retrigger_failed_github_task(
             ).fetchone()
             if not row or row["repo_id"] not in context.allowed_repo_ids:
                 raise WorkItemNotFoundError("task not found")
-            from robert_agent import workflow_store
-            binding = workflow_store.get_binding(conn, "task", task_id)
+            from robert_agent import execution_store
+            binding = execution_store.get_binding(conn, "task", task_id)
             if row["lifecycle"] != "failed":
                 raise WorkItemConflictError("only a failed GitHub task can be retriggered")
             if row["source_state"].lower() != "open":
@@ -645,7 +645,7 @@ def retrigger_failed_github_task(
                     if _dispatch_process_status(process_metadata)['status'] != 'dead':
                         raise WorkItemConflictError("worker termination must be confirmed before retry")
             if binding and binding['binding_status'] != 'terminal':
-                workflow_store.close_binding(conn, "task", task_id, utc_now())
+                execution_store.close_binding(conn, "task", task_id, utc_now())
 
             dedupe_key = f"github-retrigger:{idempotency_key}"
             existing = conn.execute(
@@ -914,6 +914,8 @@ def execute_command(
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("BEGIN IMMEDIATE")
         try:
+            from robert_agent import execution_store
+            execution_store.require_migrated(conn)
             item = _load_item(conn, work_item_id)
             if item["repo_id"] not in context.allowed_repo_ids:
                 raise WorkItemNotFoundError("work item not found")

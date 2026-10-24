@@ -532,53 +532,9 @@ class PrRemediationIntegrationTests(unittest.TestCase):
                 )
             )
 
-    def test_dbos_owned_episode_does_not_materialize_legacy_repair_task(self):
-        from robert_agent import route, run_once, workflow_store, workstream
-
-        # The collector transaction is intentionally explicit here so the
-        # ownership claim and the attempted task materialization share a
-        # caller-owned transaction.
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            decisions = run_once._collect_pr_remediation_decisions(
-                conn,
-                "repo:example/backend",
-                self.repo,
-                self.runner(),
-                "2026-07-26T00:01:00Z",
-            )
-            episode_id = decisions[0]["metadata"]["remediation"]["episode_id"]
-            conn.execute(
-                "DELETE FROM workflow_bindings WHERE subject_type = 'remediation_episode' AND subject_id = ?",
-                (episode_id,),
-            )
-            workflow_store.bind_subject(
-                conn,
-                "remediation_episode",
-                episode_id,
-                "pr_remediation",
-                "dbos",
-                "2026-07-26T00:01:00Z",
-            )
-            event = decisions[0]
-            task = run_once._create_task_attempt_and_prompt(
-                conn,
-                Path(self.tmp.name),
-                self.db_path,
-                self.repo,
-                "repo:example/backend",
-                event,
-                route.route_task(event),
-                workstream.plan_event(event, active_workstreams=set()),
-                "2026-07-26T00:02:00Z",
-                worktree_result=None,
-            )
-            task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-
-        self.assertIsNone(task)
-        self.assertEqual(task_count, 0)
 
     def test_unbound_episode_is_claimed_legacy_before_repair_task_materialization(self):
-        from robert_agent import route, run_once, workflow_store, workstream
+        from robert_agent import route, run_once, execution_store, workstream
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             event = run_once._collect_pr_remediation_decisions(
@@ -601,14 +557,14 @@ class PrRemediationIntegrationTests(unittest.TestCase):
                 worktree_result=None,
             )
             episode_id = event["metadata"]["remediation"]["episode_id"]
-            binding = workflow_store.get_binding(
+            binding = execution_store.get_binding(
                 conn,
                 "remediation_episode",
                 episode_id,
             )
 
         self.assertIsNotNone(task)
-        self.assertEqual(binding["owner_engine"], "legacy")
+        self.assertEqual(binding["binding_status"], "active")
 
     def setUp_for_non_owned(self):
         from robert_agent import storage

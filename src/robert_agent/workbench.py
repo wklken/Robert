@@ -206,13 +206,16 @@ def _load_state(conn):
         "workstream_id",
     )
     attention = {}
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='workflow_bindings'").fetchone():
-        for row in conn.execute("""SELECT t.workstream_id, b.metadata_json FROM workflow_bindings b JOIN tasks t
-            ON (b.subject_type='task' AND b.subject_id=t.task_id)
-            OR (b.subject_type='remediation_episode' AND b.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))
-            WHERE b.binding_status='attention'"""):
-            metadata = _decode_json(row['metadata_json'], {}) or {}
-            attention[row['workstream_id']] = safe_text(metadata.get('reason_code') or 'workflow_attention_required')
+    from robert_agent import execution_store
+    controls=execution_store.read_controls(conn)
+    episode_by_task=dict(conn.execute("SELECT task_id,json_extract(metadata_json,'$.remediation_episode_id') FROM tasks"))
+    for stream_tasks in tasks.values():
+        for task in stream_tasks:
+            metadata=_decode_json(task.get('metadata_json'),{}) or {}
+            binding=controls.get(('task',task['task_id'])) or controls.get(('remediation_episode',episode_by_task.get(task['task_id'])))
+            if binding and binding['binding_status']=='attention':
+                metadata=_decode_json(binding['metadata_json'],{}) or {}
+                attention[task['workstream_id']]=safe_text(metadata.get('reason_code') or 'execution_attention_required')
     return {
         "workflow_attention": attention,
         "workstreams": workstreams,

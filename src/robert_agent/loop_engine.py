@@ -7,7 +7,7 @@ import sqlite3
 import time
 
 from robert_agent.common import emit
-from robert_agent import storage, wakeup, workflow_store, retry_policy, workflow_ownership
+from robert_agent import storage, wakeup, execution_store, retry_policy
 from robert_agent import run_once as run_once_module
 from robert_agent import validate_config
 
@@ -104,6 +104,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         SELECT 1
         FROM wakeups
         WHERE status = 'pending'
+          AND COALESCE(json_extract(metadata_json,'$.kind'),'')!='dbos_handoff'
           AND not_before_at <= ?
           AND (expires_at IS NULL OR expires_at > ?)
           {wakeup_repo_clause}
@@ -113,12 +114,16 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
     ).fetchone()
     if pending_wakeup:
         return True
-    if workflow_store.list_due_signals(
-        conn,
-        now,
-        limit=1,
-        repo_ids=repo_ids,
-    ):
+    fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
+    fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
+      JOIN execution_subjects c ON c.subject_type=f.subject_type AND c.subject_id=f.subject_id
+      WHERE f.consumed_at IS NULL AND c.binding_status='active'
+        AND julianday(f.not_before_at)<=julianday(?) {fact_repo_clause}
+        AND (f.subject_type='task' OR f.topic!='remediation_decision' OR EXISTS (
+          SELECT 1 FROM pr_remediation_episodes e WHERE e.episode_id=f.subject_id
+          AND (e.status IN ('resolved','exhausted','superseded','canceled')
+               OR f.dedupe_key!=f.fact_id||':'||e.attempt_count))) LIMIT 1""",[now,*fact_repo_params]).fetchone()
+    if fact:
         return True
     workstream_repo_clause, workstream_repo_params = _repo_filter("w", repo_ids)
     supervise_needed = conn.execute(
@@ -129,13 +134,30 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE a.status IN ('running', 'stale')
           AND t.lifecycle IN ('queued', 'running')
-          AND {workflow_ownership.legacy_runnable_sql()}
+          AND {execution_store.runnable_sql()}
           {workstream_repo_clause}
         LIMIT 1
         """,
         workstream_repo_params,
     ).fetchone()
     if supervise_needed:
+        return True
+    recovery_pending = conn.execute(
+        f"""SELECT 1 FROM attempts a
+        JOIN tasks t ON t.task_id=a.task_id
+        JOIN workstreams w ON w.workstream_id=t.workstream_id
+        JOIN execution_subjects c ON
+          (c.subject_type='task' AND c.subject_id=t.task_id) OR
+          (c.subject_type='remediation_episode' AND c.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))
+        WHERE a.status='failed' AND t.lifecycle='failed' AND w.lifecycle='failed'
+          AND json_extract(a.failure_json,'$.status')='failed_timeout'
+          AND c.binding_status='active' AND {execution_store.runnable_sql()}
+          AND (a.finished_at IS NULL OR julianday(a.finished_at)<=julianday(?))
+          AND a.attempt_no=(SELECT MAX(latest.attempt_no) FROM attempts latest WHERE latest.task_id=t.task_id)
+          {workstream_repo_clause} LIMIT 1""",
+        [now, *workstream_repo_params],
+    ).fetchone()
+    if recovery_pending:
         return True
     prepared = conn.execute(
         f"""
@@ -145,7 +167,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE a.status = 'prepared'
           AND t.lifecycle IN ('queued', 'running')
-          AND {workflow_ownership.legacy_runnable_sql()}
+          AND {execution_store.runnable_sql()}
           {workstream_repo_clause}
         LIMIT 1
         """,
@@ -160,7 +182,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         JOIN tasks t ON t.task_id = ga.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE {retry_policy.publication_ready_sql('ga')}
-          AND {workflow_ownership.legacy_runnable_sql()}
+          AND {execution_store.runnable_sql()}
           {workstream_repo_clause}
         LIMIT 1
         """,

@@ -125,9 +125,9 @@ repository; CI automation also requires a non-empty `check_allowlist`.
 
 Robert uses `version: 1` YAML at `~/.config/robert/config.yml`. The main sections
 are `github`, `workers`, `skills`, `routes`, `route_worker_models`, `repos`,
-`daemon`, and `workflow_engine`. Keep `workflow_engine.mode: legacy` for normal
-operation; DBOS `shadow` / `active` are migration development capabilities,
-and valid configuration alone does not establish a production cutover.
+`daemon`, and optional `workflow_engine`. SQLite is the only execution engine;
+`legacy` is accepted as a deprecated alias. Existing DBOS deployments must follow
+the [offline upgrade procedure](docs/sqlite-state-machine-upgrade.md) before switching.
 See the [configuration reference](docs/reference.md#configuration) for structure,
 defaults, and older configuration updates, and [guides](docs/guides.md) for examples.
 Workers may define `fallback_model`. After two consecutive `failed_timeout`

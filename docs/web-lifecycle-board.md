@@ -63,17 +63,14 @@ node --test tests/browser/*.test.cjs
 
 ## 与主工作区已有恢复逻辑的集成
 
-daemon 已接入 production v2 driver；`active` 模式在新 GitHub 任务和 remediation
-任务派发前建立 DBOS ownership，并在重启后恢复持久工作流。既有 legacy 任务保留
-原 owner，默认模式仍为 `legacy`；Web 本地任务继续走原有路径。隔离验收不替代部署
-环境的 PostgreSQL、Worker 和通知渠道验收，详见[可靠性验收记录](reliability-followup-20261024.md)。
+daemon 与本地调度共用 SQLite 执行状态。Worker 身份、发布意图、恢复额度和取消
+约束继续生效；已使用 DBOS 的部署须先按[升级指南](sqlite-state-machine-upgrade.md)
+完成离线交接。只读界面可以查看旧记录，写入入口会拒绝未交接的执行状态。
 
-- 保留主工作区的 Worker 身份、DBOS ownership 和 publication intent 边界。
-- GitHub 失败任务的手动重试创建新的 Task / binding，旧失败任务保持终态；必须有匹配的操作员 wakeup，不能借此转移 DBOS ownership。
-- 已达到本地一次自动恢复限制的任务进入“需要处理”，展示原因并允许安全取消。手动重试与自动恢复额度是不同的操作。
-- 发布结果不确定而进入终态 Attention，或缺少审核范围时，页面解释原因并仅提供取消。它不会展示无法执行的重试，也不会跳过审核直接发布。
-- 取消成功同时关闭相关 workflow binding，DBOS 活跃 binding 会收到持久化信号；旧 Worker 不能在后台恢复已取消的任务。
-- 进程已退出但进程组还有未核实的子进程时，不伪报停止成功，也不自动启动第二个 Worker。页面保留处理入口并显示身份/清理原因，需要在执行主机核实残余进程。
+- 手动重试创建新的 Task，旧失败任务保留终态与证据。
+- 一次自动恢复额度耗尽后进入“需要处理”，不因升级重置。
+- 发布结果未知时先核对远端，不能直接重新发布。
+- 取消只有在确认 Worker 停止后才完成，迟到结果不会复活任务。
 
 真实任务数据库的离线快照可以验证状态投影、历史和按钮可达性；真实 Worker 停止、再次执行及 GitHub 发布必须在拥有该数据库和进程的执行主机上验证。
 

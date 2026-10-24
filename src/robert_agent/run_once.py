@@ -29,10 +29,11 @@ from robert_agent import supervise
 from robert_agent import validate_config
 from robert_agent import workstream
 from robert_agent import worktree
-from robert_agent import retry_policy, workflow_operations
-from robert_agent import workflow_store, workflow_ownership
+from robert_agent import retry_policy, execution_operations
+from robert_agent import execution_store
 from robert_agent import worker_identity
 from robert_agent import workflow_events
+from robert_agent.publication_lock import task_publication_lock
 from robert_agent.common import emit
 from robert_agent import project_memory, runtime_knowledge, storage, usage, wakeup, work_items
 from robert_agent.worker import heartbeat as command_heartbeat, snapshot as worker_snapshot
@@ -114,7 +115,7 @@ def _workflow_event_subject(conn, event):
         if not task_id:
             return None
         subject_type, subject_id = "task", str(task_id)
-    binding = workflow_store.get_binding(conn, subject_type, subject_id)
+    binding = execution_store.get_binding(conn, subject_type, subject_id)
     if not binding:
         return None
     return subject_type, subject_id, binding
@@ -134,7 +135,7 @@ def _apply_workflow_event_fact(conn, event, run_now):
         "subject_id": subject_id,
     }
     try:
-        result = workflow_operations.apply_classified_fact(
+        result = execution_operations.apply_classified_fact(
             conn,
             subject_type,
             subject_id,
@@ -160,7 +161,7 @@ def _apply_workflow_event_fact(conn, event, run_now):
         ):
             raise
         if binding.get("binding_status") == "active":
-            workflow_store.mark_binding_attention(
+            execution_store.mark_binding_attention(
                 conn,
                 subject_type,
                 subject_id,
@@ -169,14 +170,13 @@ def _apply_workflow_event_fact(conn, event, run_now):
         return {
             "classification": workflow_events.INVALIDATING,
             "fact_id": fact["fact_id"],
-            "owner_engine": binding["owner_engine"],
+
             "binding_status": "attention",
-            "attempt_id": workflow_operations.bound_attempt_for_subject(
+            "attempt_id": execution_operations.bound_attempt_for_subject(
                 conn, subject_type, subject_id
             ),
             "validation_error": reason,
         }
-    result["owner_engine"] = binding["owner_engine"]
     result["subject_type"] = subject_type
     result["subject_id"] = subject_id
     return result
@@ -188,7 +188,7 @@ def _terminate_invalidated_attempts(db_path, attempt_ids):
     outcomes = []
     for attempt_id in dict.fromkeys(attempt_ids):
         outcomes.append(
-            (attempt_id, workflow_operations.terminate_worker(db_path, attempt_id))
+            (attempt_id, execution_operations.terminate_worker(db_path, attempt_id))
         )
     return outcomes
 
@@ -895,7 +895,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
         if rejection:
             started_at = started_at or run_now
             heartbeat_at = heartbeat_at or run_now
-        if not _legacy_task_subject_active(conn, task_id, run_now):
+        if not _execution_task_active(conn, task_id, run_now):
             continue
         metadata = _json_object(metadata_json)
         worker_launch = (metadata.get("dispatch") or {}).get("worker_launch") or {}
@@ -1008,7 +1008,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 recovery_subject_type, recovery_subject_id = _recovery_subject(
                     conn, task_id
                 )
-                recovery_decision = workflow_operations.classify_recovery(
+                recovery_decision = execution_operations.classify_recovery(
                     conn,
                     recovery_subject_type,
                     recovery_subject_id,
@@ -1253,7 +1253,7 @@ def _recover_failed_timeout_attempts(
         failure = _json_object(failure_json)
         if failure.get("status") != "failed_timeout":
             continue
-        if not _legacy_task_subject_active(conn, task_id, run_now):
+        if not _execution_task_active(conn, task_id, run_now):
             continue
         metadata = _json_object(metadata_json)
         process_status = _dispatch_process_status(metadata)
@@ -1290,6 +1290,16 @@ def _recover_failed_timeout_attempts(
             worktree_path,
         )
         if recovery["status"] not in {"recoverable_progress", "transport_interrupted"}:
+            _record_recovery_creation_attention(
+                conn,
+                attempt_id=attempt_id,
+                task_id=task_id,
+                workstream_id=workstream_id,
+                metadata=metadata,
+                status={"original_status": "failed_timeout", "recovery": recovery},
+                run_now=run_now,
+                reason="timeout_recovery_unavailable",
+            )
             continue
         status = {
             **process_status,
@@ -1301,7 +1311,7 @@ def _recover_failed_timeout_attempts(
         }
         metadata["supervise"] = status
         recovery_subject_type, recovery_subject_id = _recovery_subject(conn, task_id)
-        recovery_decision = workflow_operations.classify_recovery(
+        recovery_decision = execution_operations.classify_recovery(
             conn,
             recovery_subject_type,
             recovery_subject_id,
@@ -1461,16 +1471,23 @@ def _record_recovery_creation_attention(
     metadata,
     status,
     run_now,
+    reason="recovery_attempt_creation_failed",
 ):
-    """Record a consumed recovery quota that could not materialize an Attempt."""
+    """Stop automatic recovery without changing its already-recorded quota."""
 
     metadata["supervise"] = {
         **status,
         "status": "worker_identity_attention",
         "recovery_decision": "attention",
-        "reason": "recovery_attempt_creation_failed",
+        "reason": reason,
     }
     _mark_task_binding_attention(conn, task_id, run_now)
+    subject_type, subject_id = _recovery_subject(conn, task_id)
+    conn.execute(
+        "UPDATE execution_subjects SET metadata_json=json_set(metadata_json,"
+        "'$.reason_code',?,'$.required_action',?) WHERE subject_type=? AND subject_id=?",
+        (reason, "Inspect saved work and process evidence, then retry or cancel.", subject_type, subject_id),
+    )
     conn.execute(
         "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
         (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
@@ -1484,7 +1501,7 @@ def _record_recovery_creation_attention(
             "task_id": task_id,
             "attempt_id": attempt_id,
             "workstream_id": workstream_id,
-            "reason": "recovery_attempt_creation_failed",
+            "reason": reason,
         },
     )
 
@@ -1495,7 +1512,7 @@ def _recovery_subject(conn, task_id):
         (task_id,),
     ).fetchone()
     episode_id = _json_object(row[0] if row else None).get("remediation_episode_id")
-    if episode_id and workflow_store.get_binding(
+    if episode_id and execution_store.get_binding(
         conn, "remediation_episode", episode_id
     ):
         return "remediation_episode", episode_id
@@ -1508,9 +1525,9 @@ def _mark_task_binding_attention(conn, task_id, run_now):
     if (subject_type, subject_id) != ("task", task_id):
         candidates.append(("task", task_id))
     for candidate_type, candidate_id in candidates:
-        binding = workflow_store.get_binding(conn, candidate_type, candidate_id)
+        binding = execution_store.get_binding(conn, candidate_type, candidate_id)
         if binding and binding["binding_status"] == "active":
-            workflow_store.mark_binding_attention(
+            execution_store.mark_binding_attention(
                 conn, candidate_type, candidate_id, run_now
             )
             return
@@ -1685,7 +1702,7 @@ def _record_remote_terminal_state(
         } and episode_id:
             subject_type, subject_id = "remediation_episode", str(episode_id)
     binding = (
-        workflow_store.get_binding(conn, subject_type, subject_id)
+        execution_store.get_binding(conn, subject_type, subject_id)
         if subject_id
         else None
     )
@@ -1711,19 +1728,17 @@ def _record_remote_terminal_state(
             "source_state": remote_state.get("state"),
             "merged": bool(remote_state.get("merged") or remote_state.get("merged_at")),
         }
-        workflow_operations.apply_classified_fact(
+        execution_operations.apply_classified_fact(
             conn,
             subject_type,
             subject_id,
             workflow_fact,
             now=run_now,
         )
-        if binding["owner_engine"] == "dbos":
-            return True
     if (
         task_id
-        and not (binding and binding["owner_engine"] == "legacy")
-        and not _legacy_reconcile_task_allowed(conn, task_id, run_now)
+        and not binding
+        and not _execution_reconcile_task_allowed(conn, task_id, run_now)
     ):
         return False
     attempts = conn.execute(
@@ -2074,25 +2089,6 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
         )
         if not recorded:
             continue
-        bound_task = workflow_store.get_binding(conn, "task", task_id) if task_id else None
-        if not bound_task and task_id:
-            task_row = conn.execute(
-                "SELECT task_kind, metadata_json FROM tasks WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
-            episode_id = _json_object(task_row[1] if task_row else None).get(
-                "remediation_episode_id"
-            )
-            if task_row and task_row[0] in {
-                "ci_remediation",
-                "merge_conflict_remediation",
-            } and episode_id:
-                bound_task = workflow_store.get_binding(
-                    conn, "remediation_episode", str(episode_id)
-                )
-        if bound_task and bound_task["owner_engine"] == "dbos":
-            reconciled += 1
-            continue
         remediation.cancel_workstream_episodes(
             conn,
             workstream_id=workstream_id,
@@ -2359,18 +2355,6 @@ def _collect_pr_remediation_decisions(
             "limits": repo["pr_automation"][policy_key],
             "usage": decision["budget"],
         }
-        binding = workflow_store.get_binding(conn, 'remediation_episode', episode_id)
-        if binding and binding['owner_engine'] == 'dbos':
-            if binding['binding_status'] == 'active' and binding['definition_version'] == 'v2':
-                # Only the health collector, after budget/snapshot validation,
-                # can issue a new remediation decision. The same GitHub fact
-                # may authorize another bounded attempt, with a new generation.
-                episode = remediation._load_episode(conn, episode_id)
-                from robert_agent import workflow_signals
-                workflow_signals.record_subject_signal(conn, binding, 'remediation_decision',
-                    f"{event['event_fingerprint']}:{episode['attempt_count']}",
-                    {'fact_id':event['event_fingerprint']}, run_now)
-            continue
         events.append(event)
     for (episode_id,) in conn.execute(
         """
@@ -2387,7 +2371,7 @@ def _collect_pr_remediation_decisions(
     return [
         event
         for event in events
-        if _legacy_episode_subject_active(
+        if _execution_episode_active(
             conn,
             ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id"),
             run_now,
@@ -2827,7 +2811,7 @@ def _refresh_prepared_task(
     state = _active_task_state(conn, event["workstream_id"])
     if not state:
         return None
-    if not _legacy_task_subject_active(conn, state["task_id"], run_now):
+    if not _execution_task_active(conn, state["task_id"], run_now):
         return None
     if state["task_lifecycle"] != "queued" or state["attempt_status"] != "prepared":
         return None
@@ -3042,7 +3026,7 @@ def _append_event_to_active_task(conn, event, relationship, run_now):
     task_id = _active_task_id(conn, event["workstream_id"])
     if not task_id:
         return False
-    if not _legacy_task_subject_active(conn, task_id, run_now):
+    if not _execution_task_active(conn, task_id, run_now):
         return False
     conn.execute(
         """
@@ -3186,7 +3170,7 @@ def _handle_blocked_remediation_worktree(
         (event.get("metadata") or {}).get("remediation") or {}
     )
     episode_id = remediation_context.get("episode_id")
-    if episode_id and not _legacy_episode_subject_active(conn, episode_id, run_now):
+    if episode_id and not _execution_episode_active(conn, episode_id, run_now):
         return False
     if episode_id:
         reason = (
@@ -3590,9 +3574,9 @@ def _create_task_attempt_and_prompt(
     remediation_context = (
         (event.get("metadata") or {}).get("remediation") or {}
     )
-    if parent_task_id and not _legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id):
+    if parent_task_id and not _execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id):
         return None
-    if remediation_context.get("episode_id") and not _legacy_episode_subject_active(
+    if remediation_context.get("episode_id") and not _execution_episode_active(
         conn,
         remediation_context["episode_id"],
         run_now,
@@ -3741,21 +3725,7 @@ def _create_task_attempt_and_prompt(
             ),
         ),
     )
-    durable_created = False
-    if workflow_ownership.creation_mode.get() == 'active':
-        episode_id = remediation_context.get('episode_id')
-        origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=?", (workstream_id,)).fetchone()
-        if episode_id:
-            binding = workflow_store.get_binding(conn, 'remediation_episode', episode_id)
-            if not binding:
-                workflow_store.bind_subject(conn, 'remediation_episode', episode_id, 'pr_remediation', 'dbos', run_now, definition_version='v2')
-                durable_created = True
-            else:
-                durable_created = workflow_ownership.allows(conn, 'remediation_episode', episode_id)
-        elif event.get('task_kind', 'human_request') == 'human_request' and not (origin and origin[0] == 'web'):
-            workflow_store.bind_subject(conn, 'task', task_id, 'human_request', 'dbos', run_now, definition_version='v2')
-            durable_created = True
-    if not durable_created and not _legacy_task_subject_active(conn, task_id, run_now):
+    if not _execution_task_active(conn, task_id, run_now):
         conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         return None
     if blocked and event.get("task_kind", "human_request") == "human_request":
@@ -4185,12 +4155,16 @@ def _record_dispatch_artifacts(conn, task_info, dispatch_result, run_now):
         )
 
 
-def _legacy_task_subject_active(conn, task_id, run_now=None):
-    """Claim or verify the legacy owner before a task mutation.
+def _execution_subject_for_task(conn,task_id):
+    row=conn.execute('SELECT task_kind,metadata_json FROM tasks WHERE task_id=?',(task_id,)).fetchone()
+    episode=_json_object(row[1]).get('remediation_episode_id') if row else None
+    return ('remediation_episode',episode) if episode and row[0] in {'ci_remediation','merge_conflict_remediation'} else ('task',task_id)
 
-    Web-originated local Tasks deliberately retain their pre-migration path.
-    Remediation child Tasks inherit the Episode binding and never acquire a
-    second workflow owner.
+
+def _execution_task_active(conn, task_id, run_now=None):
+    """Check a subject's persisted execution state before a task mutation.
+
+    Remediation children share their Episode control and recovery budget.
     """
 
     row = conn.execute(
@@ -4201,19 +4175,8 @@ def _legacy_task_subject_active(conn, task_id, run_now=None):
         return False
     run_now = run_now or _now()
     task_kind, metadata_json = row
-    subject_type = 'remediation_episode' if task_kind in {'ci_remediation','merge_conflict_remediation'} else 'task'
-    subject_id = _json_object(metadata_json).get('remediation_episode_id') if subject_type == 'remediation_episode' else task_id
-    if workflow_ownership.subject.get() is not None:
-        return workflow_ownership.allows(conn, subject_type, subject_id)
     if task_kind == "human_request":
-        origin = conn.execute(
-            "SELECT origin_type FROM work_items WHERE workstream_id = "
-            "(SELECT workstream_id FROM tasks WHERE task_id = ?)",
-            (task_id,),
-        ).fetchone()
-        if origin and origin[0] == "web":
-            return True
-        return workflow_operations.claim_legacy_subject(
+        return execution_operations.claim_subject(
             conn,
             "task",
             task_id,
@@ -4222,10 +4185,13 @@ def _legacy_task_subject_active(conn, task_id, run_now=None):
     if task_kind in {"ci_remediation", "merge_conflict_remediation"}:
         episode_id = _json_object(metadata_json).get("remediation_episode_id")
         if not episode_id:
-            # Preserve old rows created before Episode metadata was required;
-            # new remediation Tasks always carry the Episode id.
-            return True
-        return workflow_operations.claim_legacy_subject(
+            metadata=_json_object(metadata_json)
+            if 'execution_attention' not in metadata:
+                metadata['execution_attention']={'reason_code':'remediation_episode_missing','required_action':'Inspect the historical remediation task and restore its Episode association before retrying.'}
+                conn.execute('UPDATE tasks SET metadata_json=? WHERE task_id=?',(json.dumps(metadata),task_id))
+                _insert_notification(conn,'execution_attention_required','recorded',run_now,{'task_id':task_id,**metadata['execution_attention']})
+            return False
+        return execution_operations.claim_subject(
             conn,
             "remediation_episode",
             episode_id,
@@ -4234,15 +4200,11 @@ def _legacy_task_subject_active(conn, task_id, run_now=None):
     return False
 
 
-def _legacy_episode_subject_active(conn, episode_id, run_now=None):
+def _execution_episode_active(conn, episode_id, run_now=None):
     if not episode_id:
         return False
-    if workflow_ownership.subject.get() is not None:
-        return workflow_ownership.allows(conn, 'remediation_episode', episode_id)
-    if workflow_ownership.creation_mode.get() == 'active' and not workflow_store.get_binding(conn, 'remediation_episode', episode_id):
-        return True
     return (
-        workflow_operations.claim_legacy_subject(
+        execution_operations.claim_subject(
             conn,
             "remediation_episode",
             episode_id,
@@ -4252,12 +4214,10 @@ def _legacy_episode_subject_active(conn, episode_id, run_now=None):
     )
 
 
-def _legacy_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
+def _execution_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
     if not parent_task_id:
         return True
-    binding = workflow_store.get_binding(conn, "task", parent_task_id)
-    if workflow_ownership.allows(conn, 'task', parent_task_id, terminal=True):
-        return True
+    binding = execution_store.get_binding(conn, "task", parent_task_id)
     if retrigger_wakeup_id is not None:
         # An audited operator request starts a new subject. It never reopens
         # the failed parent or transfers a DBOS-owned subject to legacy.
@@ -4273,17 +4233,17 @@ def _legacy_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=Non
               AND lower(gs.state)='open'""", (retrigger_wakeup_id, parent_task_id),
         ).fetchone()
         return bool(requested) and (not binding or (
-            binding['binding_status'] == 'terminal' or (binding['owner_engine'] == 'legacy' and binding['binding_status'] == 'active')
+            binding['binding_status'] == 'terminal' or (binding['binding_status'] == 'active')
         ))
     return not binding or (
-        binding["owner_engine"] == "legacy" and binding["binding_status"] == "active"
+        binding["binding_status"] == "active"
     )
 
 
-def _legacy_reconcile_task_allowed(conn, task_id, run_now):
-    binding = workflow_store.get_binding(conn, "task", task_id)
+def _execution_reconcile_task_allowed(conn, task_id, run_now):
+    binding = execution_store.get_binding(conn, "task", task_id)
     if binding:
-        return binding["owner_engine"] == "legacy" and binding["binding_status"] in {
+        return binding["binding_status"] in {
             "active",
             "terminal",
         }
@@ -4295,13 +4255,13 @@ def _legacy_reconcile_task_allowed(conn, task_id, run_now):
         return False
     if row[0] in {"completed", "failed", "canceled", "ignored"}:
         return True
-    return _legacy_task_subject_active(conn, task_id, run_now)
+    return _execution_task_active(conn, task_id, run_now)
 
 
 def _close_subject_binding(conn, subject_type, subject_id, run_now):
-    binding = workflow_store.get_binding(conn, subject_type, subject_id)
+    binding = execution_store.get_binding(conn, subject_type, subject_id)
     if binding and binding["binding_status"] == "active":
-        workflow_store.close_binding(conn, subject_type, subject_id, run_now)
+        execution_store.close_binding(conn, subject_type, subject_id, run_now)
 
 
 def _close_task_binding_if_terminal(conn, task_id, run_now):
@@ -4385,7 +4345,7 @@ def _queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
         )
         WHERE w.repo_id = ?
           AND a.status = 'prepared'
-          AND {workflow_ownership.legacy_runnable_sql()}
+          AND {execution_store.runnable_sql()}
           AND t.lifecycle IN ('queued', 'running')
           AND ar.artifact_type = 'prompt'
           AND (json_extract(a.metadata_json, '$.resume.not_before_at') IS NULL
@@ -4415,7 +4375,7 @@ def _queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
         routing_mode,
         requested_worker,
     ) in rows:
-        if not _legacy_task_subject_active(conn, task_id):
+        if not _execution_task_active(conn, task_id):
             continue
         task_info = {
             "task_id": task_id,
@@ -4469,7 +4429,7 @@ def _current_dispatch_target(conn, attempt_id):
         routing_mode,
         requested_worker,
     ) = row
-    if not _legacy_task_subject_active(conn, task_id):
+    if not _execution_task_active(conn, task_id):
         return None
     task_info = {
         "task_id": task_id,
@@ -4617,7 +4577,26 @@ def _model_for_dispatch(
     return primary_model
 
 
-def _dispatch_queued(
+def _dispatch_queued(db_path, repo_ids, dispatch_queue, dry_run, max_concurrency,
+                     workers=None, default_worker=None, route_worker_models=None, config_result=None):
+    # The process-owned task lock covers target validation, spawn and PID
+    # persistence. Cancellation/publication take this same lock.
+    with task_publication_lock(db_path,'dispatch-admission') as admission:
+        if not admission:
+            return []
+        results=[]
+        if not dry_run and len(dispatch_queue)>1:
+            with closing(sqlite3.connect(db_path)) as conn:
+                dispatch_queue=sorted(dispatch_queue,key=lambda item:_prepared_attempt_dispatch_priority(conn,item['task_info']['attempt_id']))
+        for item in dispatch_queue:
+            with task_publication_lock(db_path,item['task_info']['task_id']) as acquired:
+                if acquired:
+                    results.extend(_dispatch_queued_locked(db_path,repo_ids,[item],dry_run,max_concurrency,
+                        workers,default_worker,route_worker_models,config_result))
+        return results
+
+
+def _dispatch_queued_locked(
     db_path,
     repo_ids,
     dispatch_queue,
@@ -4634,17 +4613,6 @@ def _dispatch_queued(
         worker["name"]: worker
         for worker in (workers or [default_worker])
     }
-    if not dry_run and len(dispatch_queue) > 1:
-        with closing(sqlite3.connect(db_path)) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA busy_timeout = 5000")
-            dispatch_queue = sorted(
-                dispatch_queue,
-                key=lambda item: _prepared_attempt_dispatch_priority(
-                    conn,
-                    item["task_info"]["attempt_id"],
-                ),
-            )
     for item in dispatch_queue:
         task_info = item["task_info"]
         worktree_result = item["worktree_result"]
@@ -4668,7 +4636,7 @@ def _dispatch_queued(
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("PRAGMA busy_timeout = 5000")
-                if not _legacy_task_subject_active(conn, task_info["task_id"]):
+                if not _execution_task_active(conn, task_info["task_id"]):
                     continue
         route_worker_config = (route_worker_models or {}).get(task_info.get("route_id"))
         selected_worker = default_worker
@@ -4739,6 +4707,26 @@ def _dispatch_queued(
             ),
             "dry_run": dry_run,
         }
+        if not dry_run:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute('BEGIN IMMEDIATE')
+                target=_current_dispatch_target(conn,task_info['attempt_id'])
+                if target is None:
+                    continue
+                task_info,worktree_result=target
+                if not _execution_task_active(conn,task_info['task_id']):
+                    continue
+                subject_type, subject_id = _execution_subject_for_task(conn,task_info['task_id'])
+                binding=execution_store.get_binding(conn,subject_type,subject_id)
+                metadata=_json_object(binding['metadata_json']) if binding else {}
+                if metadata.get('dispatch_inflight'):
+                    if binding:
+                        metadata['reason_code']='dispatch_outcome_unknown'
+                        conn.execute("UPDATE execution_subjects SET binding_status='attention',metadata_json=? WHERE subject_type=? AND subject_id=?",(json.dumps(metadata),subject_type,subject_id))
+                    continue
+                if binding:
+                    metadata['dispatch_inflight']=task_info['attempt_id']
+                    conn.execute('UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?',(json.dumps(metadata),subject_type,subject_id))
         try:
             if worktree_result and not worktree_result.get("ok", True):
                 dispatch_result = {"ok": False, "status": "failed_dispatch",
@@ -4768,9 +4756,15 @@ def _dispatch_queued(
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA busy_timeout = 5000")
-            if not _legacy_task_subject_active(conn, task_info["task_id"]):
+            if not _execution_task_active(conn, task_info["task_id"]):
                 continue
             _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
+            subject_type, subject_id = _execution_subject_for_task(conn,task_info['task_id'])
+            binding=execution_store.get_binding(conn,subject_type,subject_id)
+            if binding:
+                metadata=_json_object(binding['metadata_json'])
+                metadata.pop('dispatch_inflight',None)
+                conn.execute('UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?',(json.dumps(metadata),subject_type,subject_id))
             _record_dispatch_artifacts(conn, task_info, dispatch_result, _now())
             if (
                 (not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed")
@@ -5070,7 +5064,7 @@ def _pending_events_for_task(conn, task_id, consumed_fingerprints):
 
 
 def _finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
-    if not _legacy_task_subject_active(conn, task_id, run_now):
+    if not _execution_task_active(conn, task_id, run_now):
         return False
     conn.execute(
         "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
@@ -5208,14 +5202,14 @@ def _create_child_task_for_pending_events(
     dispatch_budget,
     config_result=None,
 ):
-    if parent_task_id and not _legacy_parent_allows_child(conn, parent_task_id):
+    if parent_task_id and not _execution_parent_allows_child(conn, parent_task_id):
         return None
     remediation_context = (
         ((pending_events[0].get("metadata") or {}).get("remediation") or {})
         if pending_events
         else {}
     )
-    if remediation_context.get("episode_id") and not _legacy_episode_subject_active(
+    if remediation_context.get("episode_id") and not _execution_episode_active(
         conn,
         remediation_context["episode_id"],
         run_now,
@@ -5333,7 +5327,7 @@ def _create_child_task_for_recommended_route(
     dispatch_budget,
     config_result=None,
 ):
-    if not _legacy_parent_allows_child(conn, parent_task_id):
+    if not _execution_parent_allows_child(conn, parent_task_id):
         return None
     if not recommended_route:
         return None
@@ -5466,7 +5460,7 @@ def _finalize_accepted_result(
     dispatch_budget,
     config_result=None,
 ):
-    if not _legacy_task_subject_active(conn, payload["task_id"], run_now):
+    if not _execution_task_active(conn, payload["task_id"], run_now):
         return False
     work_item_row = conn.execute(
         "SELECT work_item_id, origin_type FROM work_items WHERE workstream_id = ?",
@@ -5660,7 +5654,7 @@ def _recover_orphaned_classification_results(
     recovered = 0
     for row in rows:
         result_row = row[:8]
-        if not _legacy_parent_allows_child(conn, row[1]):
+        if not _execution_parent_allows_child(conn, row[1]):
             continue
         workstream_id = row[8]
         payload = _load_result_payload(conn, result_row)
@@ -5751,7 +5745,7 @@ def _audit_completed_results(
     audited = 0
     for row in rows:
         result_row = row[:8]
-        if not _legacy_task_subject_active(conn, row[1], run_now):
+        if not _execution_task_active(conn, row[1], run_now):
             continue
         if _json_object(result_row[7]).get("audit"):
             continue
@@ -5802,7 +5796,7 @@ def _audit_completed_results(
                         ),
                     )
                 )
-        if not _legacy_task_subject_active(conn, payload["task_id"], run_now):
+        if not _execution_task_active(conn, payload["task_id"], run_now):
             continue
         audit = audit_result.audit_result(
             payload,
@@ -5925,7 +5919,7 @@ def _finalize_published_results(
     finalized = 0
     for row in rows:
         result_row = row[:8]
-        if not _legacy_task_subject_active(conn, row[1], run_now):
+        if not _execution_task_active(conn, row[1], run_now):
             continue
         workstream_id = row[8]
         payload = _load_result_payload(conn, result_row)
@@ -5997,7 +5991,6 @@ def _aggregate_repo_step_status(conn, run_id, step_key):
     return "pending"
 
 
-@workflow_ownership.creation_scope
 def _run_repo_pipeline(
     conn,
     *,
@@ -6066,6 +6059,8 @@ def _run_repo_pipeline(
         )
         summary["lease_status"] = lease_result["status"]
         if not lease_result["ok"]:
+            for (waiting_task,) in conn.execute("SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id WHERE w.repo_id=? AND t.lifecycle IN ('queued','running')",(repo_id,)).fetchall():
+                conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.wait_state.reason_code','repository_busy','$.wait_state.since',COALESCE(json_extract(metadata_json,'$.wait_state.since'),?),'$.wait_state.lease_expires_at',?) WHERE task_id=?",(run_now,lease_result.get('expires_at'),waiting_task))
             summary["status"] = lease_result["status"]
             summary["failure_status"] = lease_result["status"]
             _mark_repo_run_step(
@@ -6089,6 +6084,7 @@ def _run_repo_pipeline(
                 )
             return summary
 
+        conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.wait_state') WHERE task_id IN (SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id WHERE w.repo_id=?) AND json_extract(metadata_json,'$.wait_state.reason_code')='repository_busy'",(repo_id,))
         _mark_repo_run_step(
             conn,
             run_id,
@@ -6456,6 +6452,12 @@ def _run_repo_pipeline(
             if not fixture_path and not skip_external
             else []
         )
+        from robert_agent import execution_replay
+        decisions.extend(execution_replay.decisions(conn,repo_id,run_now,system_decisions if not fixture_path and not skip_external else [],repo=repo))
+        unique_decisions={}
+        for event in decisions:
+            unique_decisions.setdefault(event['event_fingerprint'],event)
+        decisions = list(unique_decisions.values())
         decisions = sorted(decisions, key=_event_priority)
         summary["decision_count"] = len(decisions)
         _mark_repo_run_step(
@@ -6524,14 +6526,10 @@ def _run_repo_pipeline(
                     and attempt_id
                 ):
                     invalidation_attempt_ids.append(attempt_id)
-                if workflow_fact.get("owner_engine") == "dbos":
-                    # A DBOS-owned subject is recorded/signalled above, but
-                    # legacy planning and dispatch must never advance it.
-                    continue
             remediation_episode_id = (
                 ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id")
             )
-            if remediation_episode_id and not _legacy_episode_subject_active(
+            if remediation_episode_id and not _execution_episode_active(
                 conn,
                 remediation_episode_id,
                 run_now,
@@ -6549,7 +6547,7 @@ def _run_repo_pipeline(
             if _is_driving_context_event(event):
                 waiting_task = _waiting_task_state(conn, event["workstream_id"])
                 if waiting_task:
-                    if not _legacy_task_subject_active(conn, waiting_task["task_id"], run_now):
+                    if not _execution_task_active(conn, waiting_task["task_id"], run_now):
                         continue
                     if not _is_trusted_actor(event, repo):
                         _append_event_to_active_task(conn, event, "context", run_now)
@@ -6615,6 +6613,7 @@ def _run_repo_pipeline(
                     )
                     if task_info is None:
                         continue
+                    _close_task_binding_if_terminal(conn,waiting_task['task_id'],run_now)
                     _queue_dispatch(
                         dispatch_queue,
                         task_info,
@@ -6795,6 +6794,8 @@ def _run_repo_pipeline(
             prompt_paths.append(str(task_info["prompt_path"]))
             active_workstreams.add(task_info["workstream_id"])
 
+        execution_replay.acknowledge_effects(conn,repo_id,run_now)
+
         if invalidation_attempt_ids:
             # Commit the classifier fence before touching any Worker process.
             conn.commit()
@@ -6867,6 +6868,8 @@ def run_once(
     data_dir = Path(config_result["data_dir"])
     db_path = Path(config_result["db_path"])
     storage.init_database(db_path)
+    with closing(sqlite3.connect(db_path)) as guard:
+        execution_store.require_migrated(guard)
     from robert_agent.worker.result import replay_pending_results
     if not dry_run:
         replay_pending_results(db_path)

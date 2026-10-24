@@ -525,7 +525,8 @@ def _migrate_workflow_storage(conn):
 
 
 def schema_sql() -> str:
-    return SCHEMA_RESOURCE.read_text(encoding="utf-8")
+    from robert_agent import execution_store
+    return SCHEMA_RESOURCE.read_text(encoding="utf-8") + "\n" + execution_store.SCHEMA
 
 
 def init_database(db_path, schema_path=None):
@@ -545,6 +546,8 @@ def init_database(db_path, schema_path=None):
         _migrate_route_recommended_skills(conn)
         _migrate_work_item_control(conn)
         _migrate_workflow_storage(conn)
+        from robert_agent import execution_store
+        execution_store.import_legacy_controls(conn)
         _migrate_project_memory_fts(conn)
         _migrate_pr_remediation(conn)
         tables = sorted(

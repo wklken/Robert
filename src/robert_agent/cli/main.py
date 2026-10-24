@@ -10,7 +10,7 @@ import sys
 from robert_agent import __version__
 from robert_agent import daemon
 from robert_agent import diagnostics
-from robert_agent import migrate
+from robert_agent import migrate, sqlite_migration, execution_store
 from robert_agent import retention
 from robert_agent import run_once
 from robert_agent import status
@@ -160,10 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
         "migrate",
         help="Migrate legacy Robert state.",
     )
-    migrate_command = migrate_parser.add_subparsers(
+    migration_commands = migrate_parser.add_subparsers(
         dest="migrate_command",
         required=True,
-    ).add_parser("dd-github-agent")
+    )
+    migrate_command = migration_commands.add_parser("dd-github-agent")
     migrate_command.add_argument(
         "--source",
         default="~/.agents/data/dd-github-agent",
@@ -174,6 +175,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate_command.add_argument("--dry-run", action="store_true")
     _add_output_argument(migrate_command)
+
+    sqlite_command = migration_commands.add_parser(
+        "dbos", help="Preview or apply an offline DBOS-to-SQLite handoff."
+    )
+    sqlite_command.add_argument(
+        "--db", required=True, help="Existing Robert SQLite database."
+    )
+    sqlite_command.add_argument(
+        "--plan-file", help="Create a new plan file in dry-run; read it with --apply."
+    )
+    migration_action = sqlite_command.add_mutually_exclusive_group()
+    migration_action.add_argument(
+        "--dry-run", action="store_true", help="Read-only preview (default)."
+    )
+    migration_action.add_argument(
+        "--apply", action="store_true", help="Apply a validated offline plan."
+    )
+    _add_output_argument(sqlite_command)
 
     service_parser = subparsers.add_parser(
         "service",
@@ -388,6 +407,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 args.output,
             )
+        if args.command == "migrate" and args.migrate_command == "dbos":
+            return _emit_and_code(
+                sqlite_migration.run(
+                    args.db, plan_file=args.plan_file, apply_changes=args.apply
+                ),
+                args.output,
+            )
         if args.command == "service":
             platform_name = (
                 "darwin"
@@ -574,6 +600,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output,
             )
         parser.error(f"command is not wired yet: {args.command}")
+    except execution_store.MigrationRequiredError as exc:
+        emit_result({'ok':False,'status':'migration_required','safe_error':str(exc)},output=getattr(args,'output','text'))
+        return exit_codes.STATE_FAILURE
     except (OSError, TypeError, ValueError) as exc:
         output = getattr(args, "output", "text")
         emit_result(

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-import os
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import yaml
 
@@ -271,10 +269,10 @@ DAEMON_LEGACY_FIELDS = {
 DAEMON_BOOLEAN_FIELDS = {"enabled", "run_on_start", "maintenance_enabled"}
 
 WORKFLOW_ENGINE_DEFAULTS = {
-    "mode": "legacy",
+    "mode": "sqlite",
     "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
 }
-WORKFLOW_ENGINE_MODES = {"legacy", "shadow", "active"}
+WORKFLOW_ENGINE_MODES = {"sqlite", "legacy", "shadow", "active"}
 
 
 def _normalize_workflow_engine(config, environ=None):
@@ -295,7 +293,7 @@ def _normalize_workflow_engine(config, environ=None):
     mode = str(raw.get("mode", WORKFLOW_ENGINE_DEFAULTS["mode"])).strip()
     if mode not in WORKFLOW_ENGINE_MODES:
         raise ValueError(
-            "workflow_engine.mode must be one of: legacy, shadow, active"
+            "workflow_engine.mode must be sqlite or the deprecated legacy alias; active/shadow require offline migration"
         )
     env_name = str(
         raw.get(
@@ -305,28 +303,16 @@ def _normalize_workflow_engine(config, environ=None):
     ).strip()
     if not env_name:
         raise ValueError("workflow_engine.system_database_url_env must not be empty")
-    if mode == "legacy":
+    if mode in {"sqlite", "legacy"}:
         return {
-            "mode": mode,
+            "mode": "sqlite",
             "system_database_url_env": env_name,
             "system_database_scheme": None,
             "configured": False,
         }
 
-    url = (environ if environ is not None else os.environ).get(env_name, "")
-    parsed = urlsplit(str(url))
-    if not url:
-        raise ValueError(f"{env_name} must be set for workflow_engine.mode {mode}")
-    if parsed.scheme != "postgresql":
-        raise ValueError(
-            f"{env_name} must contain a PostgreSQL URL for workflow_engine.mode {mode}"
-        )
-    return {
-        "mode": mode,
-        "system_database_url_env": env_name,
-        "system_database_scheme": parsed.scheme,
-        "configured": True,
-    }
+    raise ValueError("DBOS active/shadow execution was removed; stop the old service and run robert migrate dbos --db PATH --dry-run before setting workflow_engine.mode to sqlite or omitting workflow_engine")
+
 
 PR_AUTOMATION_DEFAULTS = {
     "conflict": {

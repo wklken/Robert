@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent import storage, workflow_store
+from robert_agent import storage, execution_store
 
 
 NOW = "2026-08-02T00:00:00+00:00"
@@ -102,9 +102,9 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
 
     def test_load_subject_snapshot_returns_authoritative_rows_and_ids_without_secrets(self):
-        from robert_agent import workflow_operations
+        from robert_agent import execution_operations
 
-        snapshot = workflow_operations.load_subject_snapshot(
+        snapshot = execution_operations.load_subject_snapshot(
             self.db_path,
             "task",
             "task-1",
@@ -119,51 +119,44 @@ class WorkflowOperationsTests(unittest.TestCase):
         self.assertNotIn("do-not-return", json.dumps(snapshot, sort_keys=True))
 
     def test_load_episode_snapshot_includes_episode_binding_and_child_task_ids(self):
-        from robert_agent import workflow_operations
+        from robert_agent import execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            binding = workflow_store.bind_subject(
-                conn,
-                "remediation_episode",
-                "episode-1",
-                "pr_remediation",
-                "dbos",
-                NOW,
-            )
+            binding = execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
             conn.execute(
                 """
-                UPDATE workflow_bindings
+                UPDATE execution_subjects
                 SET metadata_json = ?
                 WHERE subject_type = 'remediation_episode' AND subject_id = 'episode-1'
                 """,
                 (json.dumps({"token": "binding-secret", "reason": "test"}),),
             )
 
-        snapshot = workflow_operations.load_subject_snapshot(
+        snapshot = execution_operations.load_subject_snapshot(
             self.db_path,
             "remediation_episode",
             "episode-1",
         )
 
         self.assertEqual(snapshot["episode"]["episode_id"], "episode-1")
-        self.assertEqual(snapshot["binding"]["owner_engine"], binding["owner_engine"])
+        self.assertEqual(snapshot["binding"]["subject_id"], binding["subject_id"])
         self.assertEqual(snapshot["binding"]["metadata"], {"reason": "test"})
         self.assertIn("task-remediation", snapshot["lifecycle"]["task_ids"])
         rendered = json.dumps(snapshot, sort_keys=True)
         self.assertNotIn("do-not-return", rendered)
         self.assertNotIn("binding-secret", rendered)
 
-    def test_claim_legacy_subject_is_idempotent_and_does_not_transfer_dbos_or_terminal(self):
-        from robert_agent import workflow_operations
+    def test_claim_subject_is_idempotent_and_does_not_transfer_dbos_or_terminal(self):
+        from robert_agent import execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            first = workflow_operations.claim_legacy_subject(
+            first = execution_operations.claim_subject(
                 conn,
                 "task",
                 "task-1",
                 now=NOW,
             )
-            same = workflow_operations.claim_legacy_subject(
+            same = execution_operations.claim_subject(
                 conn,
                 "task",
                 "task-1",
@@ -171,16 +164,10 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
             self.assertEqual(first, same)
 
-            workflow_store.bind_subject(
-                conn,
-                "remediation_episode",
-                "episode-1",
-                "pr_remediation",
-                "dbos",
-                NOW,
-            )
+            execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
+            execution_store.mark_binding_attention(conn,'remediation_episode','episode-1',NOW)
             self.assertIsNone(
-                workflow_operations.claim_legacy_subject(
+                execution_operations.claim_subject(
                     conn,
                     "remediation_episode",
                     "episode-1",
@@ -192,20 +179,20 @@ class WorkflowOperationsTests(unittest.TestCase):
                 "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = 'task-1'"
             )
             self.assertEqual(
-                workflow_operations.claim_legacy_subject(
+                execution_operations.claim_subject(
                     conn,
                     "task",
                     "task-1",
                     now=NOW,
-                )["owner_engine"],
-                "legacy",
+                )["binding_status"],
+                "active",
             )
             conn.execute(
-                "UPDATE workflow_bindings SET binding_status = 'attention' "
+                "UPDATE execution_subjects SET binding_status = 'attention' "
                 "WHERE subject_type = 'task' AND subject_id = 'task-1'"
             )
             self.assertIsNone(
-                workflow_operations.claim_legacy_subject(
+                execution_operations.claim_subject(
                     conn,
                     "task",
                     "task-1",
@@ -214,45 +201,28 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
 
     def test_claim_and_require_reject_invalid_subjects_and_owner_mismatches(self):
-        from robert_agent import workflow_operations
+        from robert_agent import execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             with self.assertRaises(ValueError):
-                workflow_operations.claim_legacy_subject(
+                execution_operations.claim_subject(
                     conn,
                     "task",
                     "missing",
                     now=NOW,
                 )
             with self.assertRaises(ValueError):
-                workflow_operations.claim_legacy_subject(
+                execution_operations.claim_subject(
                     conn,
                     "task",
                     "task-remediation",
                     now=NOW,
                 )
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                "task-1",
-                "human_request",
-                "legacy",
-                NOW,
-            )
-            binding = workflow_operations.require_subject_owner(
-                conn,
-                "task",
-                "task-1",
-                "legacy",
-            )
-            self.assertEqual(binding["owner_engine"], "legacy")
-            with self.assertRaises(ValueError):
-                workflow_operations.require_subject_owner(
-                    conn,
-                    "task",
-                    "task-1",
-                    "dbos",
-                )
+            execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', NOW)
+            self.assertEqual(execution_operations.claim_subject(conn,'task','task-1',now=NOW)['binding_status'],'active')
+            execution_store.mark_binding_attention(conn,'task','task-1',NOW)
+            self.assertIsNone(execution_operations.claim_subject(conn,'task','task-1',now=NOW))
+
 
 
 if __name__ == "__main__":

@@ -92,7 +92,7 @@ repos:
         self.assertEqual(result["cycles"], 0)
         self.assertEqual(result["stop_reason"], "no_runnable_work")
 
-    def test_due_workflow_signal_counts_as_runnable_work(self):
+    def test_archived_workflow_signal_does_not_drive_native_execution(self):
         from robert_agent import loop_engine
 
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
@@ -110,10 +110,10 @@ repos:
             )
 
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=[]))
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=[]))
 
-    def test_workflow_signal_is_scoped_to_configured_repo(self):
-        from robert_agent import loop_engine, workflow_signals, workflow_store
+    def test_sqlite_execution_is_scoped_to_configured_repo(self):
+        from robert_agent import loop_engine, execution_store
 
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
@@ -143,17 +143,9 @@ repos:
                 """,
                 (now, now),
             )
-            binding = workflow_store.bind_subject(
-                conn, "task", "task-b", "human_request", "dbos", now
-            )
-            workflow_signals.record_subject_signal(
-                conn,
-                binding,
-                "worker_result",
-                "result-b",
-                {"fact_id": "result-b"},
-                now,
-            )
+            execution_store.ensure_subject(conn, 'task', 'task-b', 'human_request', now)
+            conn.execute("INSERT INTO execution_pending_facts(source_signal_id,subject_type,subject_id,topic,dedupe_key,fact_id,disposition,repo_id,task_id,payload_json,not_before_at) VALUES ('pending-b','task','task-b','subject-events','reply-b','reply-b','github_event','repo-b','task-b','{}',?)",(now,))
+
 
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo-a"]))

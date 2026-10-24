@@ -3253,15 +3253,13 @@ repos:
         )
         self.assertEqual(queued["status"], "queued")
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id))
-            self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
-            self.assertTrue(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            conn.execute("UPDATE workflow_bindings SET owner_engine='dbos', workflow_id='fixture-retrigger' WHERE subject_id=?", (parent_task_id,))
-            self.assertTrue(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            conn.execute("UPDATE workflow_bindings SET binding_status='active' WHERE subject_id=?", (parent_task_id,))
-            self.assertFalse(run_once._legacy_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            conn.execute("UPDATE workflow_bindings SET binding_status='terminal' WHERE subject_id=?", (parent_task_id,))
-            conn.execute("UPDATE workflow_bindings SET owner_engine='legacy', workflow_id=NULL WHERE subject_id=?", (parent_task_id,))
+            self.assertFalse(run_once._execution_parent_allows_child(conn, parent_task_id))
+            self.assertFalse(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
+            self.assertTrue(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            self.assertTrue(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            conn.execute("UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?", (parent_task_id,))
+            self.assertFalse(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            conn.execute("UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?", (parent_task_id,))
         followup_fixture = self.root / "retrigger-followup.json"
         followup_fixture.write_text(
             json.dumps(
@@ -5366,117 +5364,8 @@ repos:
         self.assertEqual(lease_status, "released")
         self.assertEqual(publish_step, "failed")
 
-    def test_dbos_owned_prepared_task_is_not_queued_or_dispatch_target(self):
-        from robert_agent import run_once, workflow_store
 
-        db_path, task_id, attempt_id = self._seed_active_pr_task(990)
-        prompt_path = self.data_dir / "prompt.md"
-        prompt_path.write_text("prompt", encoding="utf-8")
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO artifacts(
-                  artifact_id, task_id, attempt_id, artifact_type,
-                  path, created_at
-                ) VALUES ('artifact-990', ?, ?, 'prompt', ?, ?)
-                """,
-                (task_id, attempt_id, str(prompt_path), "2026-08-02T00:00:00Z"),
-            )
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                task_id,
-                "human_request",
-                "dbos",
-                "2026-08-02T00:00:00Z",
-            )
-            queue = []
-            queued = run_once._queue_prepared_attempts(
-                conn,
-                "repo:example/backend",
-                {"full_name": "example/backend"},
-                queue,
-                1,
-            )
-            target = run_once._current_dispatch_target(conn, attempt_id)
 
-        self.assertEqual(queued, 0)
-        self.assertEqual(queue, [])
-        self.assertIsNone(target)
-
-    def test_dbos_owned_running_task_is_not_supervised_or_failed(self):
-        from robert_agent import run_once, workflow_store
-
-        db_path, task_id, attempt_id = self._seed_active_pr_task(991)
-        old = "2026-08-01T00:00:00+00:00"
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
-                (task_id,),
-            )
-            conn.execute(
-                """
-                UPDATE attempts
-                SET status = 'running', started_at = ?, heartbeat_at = ?
-                WHERE attempt_id = ?
-                """,
-                (old, old, attempt_id),
-            )
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                task_id,
-                "human_request",
-                "dbos",
-                "2026-08-02T00:00:00Z",
-            )
-            supervised = run_once._supervise_running_attempts(
-                conn,
-                "repo:example/backend",
-                {
-                    "worker_startup_grace_seconds": 300,
-                    "stale_after_minutes": 20,
-                    "hard_timeout_minutes": 90,
-                },
-                "2026-08-02T01:00:00+00:00",
-            )
-            state = conn.execute(
-                "SELECT lifecycle FROM tasks WHERE task_id = ?", (task_id,)
-            ).fetchone()[0]
-            attempt_state = conn.execute(
-                "SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)
-            ).fetchone()[0]
-
-        self.assertEqual(supervised, 0)
-        self.assertEqual(state, "running")
-        self.assertEqual(attempt_state, "running")
-
-    def test_dbos_owned_task_is_not_finalized_by_legacy_failure_path(self):
-        from robert_agent import run_once, workflow_store
-
-        db_path, task_id, _attempt_id = self._seed_active_pr_task(992)
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                task_id,
-                "human_request",
-                "dbos",
-                "2026-08-02T00:00:00Z",
-            )
-            finalized = run_once._finalize_failed_task(
-                conn,
-                task_id,
-                "github:example/backend!992",
-                "2026-08-02T00:00:00Z",
-                {"status": "worker_failed"},
-            )
-            lifecycle = conn.execute(
-                "SELECT lifecycle FROM tasks WHERE task_id = ?", (task_id,)
-            ).fetchone()[0]
-
-        self.assertFalse(finalized)
-        self.assertEqual(lifecycle, "queued")
 
     def test_dispatch_process_status_requires_complete_recorded_identity(self):
         from robert_agent import run_once
@@ -5489,7 +5378,7 @@ repos:
         self.assertEqual(status["reason"], "identity_unverified")
 
     def test_unknown_worker_identity_marks_binding_attention_without_mutation(self):
-        from robert_agent import run_once, workflow_store
+        from robert_agent import run_once, execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(993)
         now = "2026-08-02T01:00:00+00:00"
@@ -5506,9 +5395,7 @@ repos:
                 "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ? WHERE attempt_id = ?",
                 (now, now, json.dumps({"dispatch": dispatch_metadata}), attempt_id),
             )
-            workflow_store.bind_subject(
-                conn, "task", task_id, "human_request", "legacy", now
-            )
+            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
             original = run_once.worker_identity.inspect_recorded_identity
             run_once.worker_identity.inspect_recorded_identity = lambda _identity: "unknown"
             try:
@@ -5524,7 +5411,7 @@ repos:
                 )
             finally:
                 run_once.worker_identity.inspect_recorded_identity = original
-            binding = workflow_store.get_binding(conn, "task", task_id)
+            binding = execution_store.get_binding(conn, "task", task_id)
             attempt_state = conn.execute(
                 "SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)
             ).fetchone()[0]
@@ -5881,7 +5768,7 @@ repos:
                 "SELECT notification_type, status FROM notifications WHERE notification_type = 'worker_identity_attention'"
             ).fetchone()
             binding = conn.execute(
-                "SELECT binding_status FROM workflow_bindings WHERE subject_type = 'task' AND subject_id = ?",
+                "SELECT binding_status FROM execution_subjects WHERE subject_type = 'task' AND subject_id = ?",
                 (task_id,),
             ).fetchone()[0]
 
@@ -5910,7 +5797,7 @@ repos:
         self.assertIn("git_status_short", prompt)
 
     def test_recovery_creation_failure_marks_attempt_and_binding_attention(self):
-        from robert_agent import run_once, workflow_store
+        from robert_agent import run_once, execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(987)
         now = "2026-08-02T01:00:00+00:00"
@@ -5928,14 +5815,7 @@ repos:
                     attempt_id,
                 ),
             )
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                task_id,
-                "human_request",
-                "legacy",
-                now,
-            )
+            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
             original_group = run_once._live_process_group
             run_once._live_process_group = lambda _pid: False
             original_inspect = run_once.worker_identity.inspect_recorded_identity
@@ -5974,7 +5854,7 @@ repos:
                 run_once.worker_identity.inspect_recorded_identity = original_inspect
                 run_once._inspect_attempt_recovery_with_metadata = original_recovery
                 run_once._create_resume_attempt_and_prompt = original_create
-            binding = workflow_store.get_binding(conn, "task", task_id)
+            binding = execution_store.get_binding(conn, "task", task_id)
             attempt_metadata = json.loads(
                 conn.execute(
                     "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
@@ -5994,21 +5874,14 @@ repos:
         self.assertEqual(notification, ("worker_identity_attention", "recorded"))
 
     def test_failed_timeout_recovery_creation_failure_marks_attention(self):
-        from robert_agent import run_once, workflow_store
+        from robert_agent import run_once, execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(988)
         now = "2026-08-02T01:00:00+00:00"
         old = "2026-08-01T00:00:00+00:00"
         failure = {"status": "failed_timeout", "terminate": True}
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                task_id,
-                "human_request",
-                "legacy",
-                old,
-            )
+            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', old)
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?",
                 (task_id,),
@@ -6062,7 +5935,7 @@ repos:
                 run_once._live_process_group = original_group
                 run_once._inspect_attempt_recovery_with_metadata = original_recovery
                 run_once._create_resume_attempt_and_prompt = original_create
-            binding = workflow_store.get_binding(conn, "task", task_id)
+            binding = execution_store.get_binding(conn, "task", task_id)
             metadata = json.loads(
                 conn.execute(
                     "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
@@ -6720,7 +6593,7 @@ repos:
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
-            self.assertEqual(conn.execute("SELECT binding_status FROM workflow_bindings WHERE subject_id=?", (task_id,)).fetchone()[0], 'attention')
+            self.assertEqual(conn.execute("SELECT binding_status FROM execution_subjects WHERE subject_id=?", (task_id,)).fetchone()[0], 'attention')
 
     def test_completed_command_does_not_hide_another_live_command(self):
         import os

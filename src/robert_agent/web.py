@@ -2904,6 +2904,8 @@ def build_control_context_from_config(
     db_path = config_result["db_path"]
     storage.init_database(db_path)
     with closing(sqlite3.connect(db_path)) as conn, conn:
+        from robert_agent import execution_store
+        execution_store.require_migrated(conn)
         allowed_repo_ids = frozenset(
             _upsert_control_repo(conn, repo) for repo in config_result["repos"]
         )

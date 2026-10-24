@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from robert_agent import discover, run_once, storage, workflow_events, workflow_operations, workflow_store
+from robert_agent import discover, run_once, storage, workflow_events, execution_operations, execution_store
 
 
 NOW = "2026-08-02T00:00:00+00:00"
@@ -122,23 +122,23 @@ class WorkflowEventApplicationTests(unittest.TestCase):
 
     def _bind(self, owner):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            return workflow_store.bind_subject(conn, "task", "task-1", "human_request", owner, NOW)
+            return execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', NOW)
 
     def test_dbos_invalidation_persists_attention_and_one_signal_atomically(self):
         self._bind("dbos")
         fact = _fact(old_head_sha="a" * 40, new_head_sha="b" * 40, event_type="snapshot")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            result = workflow_operations.apply_classified_fact(
+            result = execution_operations.apply_classified_fact(
                 conn, "task", "task-1", fact, now=NOW
             )
             self.assertEqual(result["classification"], "invalidating")
         with closing(sqlite3.connect(self.db_path)) as conn:
-            binding = workflow_store.get_binding(conn, "task", "task-1")
+            binding = execution_store.get_binding(conn, "task", "task-1")
             self.assertEqual(binding["binding_status"], "attention")
             metadata = json.loads(binding["metadata_json"])
             self.assertEqual(metadata["latest_fact"]["fact_id"], fact["fact_id"])
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0],
                 1,
             )
 
@@ -146,7 +146,7 @@ class WorkflowEventApplicationTests(unittest.TestCase):
         self._bind("dbos")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             with self.assertRaisesRegex(ValueError, "subject"):
-                workflow_operations.apply_classified_fact(
+                execution_operations.apply_classified_fact(
                     conn,
                     "task",
                     "task-1",
@@ -159,18 +159,18 @@ class WorkflowEventApplicationTests(unittest.TestCase):
         old_fact = _fact(fact_id="event:old")
         new_fact = _fact(fact_id="event:new", event_type="review_comment")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            workflow_operations.apply_classified_fact(
+            execution_operations.apply_classified_fact(
                 conn, "task", "task-1", old_fact, now=NOW
             )
-            workflow_operations.apply_classified_fact(
+            execution_operations.apply_classified_fact(
                 conn, "task", "task-1", new_fact, now=NOW
             )
-            replay = workflow_operations.apply_classified_fact(
+            replay = execution_operations.apply_classified_fact(
                 conn, "task", "task-1", old_fact, now=NOW
             )
             self.assertTrue(replay["duplicate"])
         with closing(sqlite3.connect(self.db_path)) as conn:
-            binding = workflow_store.get_binding(conn, "task", "task-1")
+            binding = execution_store.get_binding(conn, "task", "task-1")
             self.assertEqual(json.loads(binding["metadata_json"])["latest_fact"]["fact_id"], "event:new")
 
     def test_invalidation_termination_uses_exact_attempt_operation_after_commit(self):
@@ -192,7 +192,7 @@ class WorkflowEventApplicationTests(unittest.TestCase):
             conn.commit()
         self.assertEqual(result["attempt_id"], "attempt-1")
         with mock.patch.object(
-            run_once.workflow_operations,
+            run_once.execution_operations,
             "terminate_worker",
             return_value="terminated",
         ) as terminate:
@@ -236,10 +236,10 @@ class WorkflowEventApplicationTests(unittest.TestCase):
             )
             self.assertTrue(result)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            binding = workflow_store.get_binding(conn, "task", "task-1")
+            binding = execution_store.get_binding(conn, "task", "task-1")
             self.assertEqual(binding["binding_status"], "terminal")
-            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks WHERE task_id = 'task-1'").fetchone()[0], "running")
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks WHERE task_id = 'task-1'").fetchone()[0], "canceled")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
 
     def test_remote_terminal_reconciliation_targets_dbos_episode_not_child_task(self):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -254,9 +254,7 @@ class WorkflowEventApplicationTests(unittest.TestCase):
                 "INSERT INTO tasks(task_id, workstream_id, task_kind, lifecycle, created_at, updated_at, metadata_json) VALUES ('task-2', 'ws-1', 'ci_remediation', 'waiting_for_user', ?, ?, ?)",
                 (NOW, NOW, json.dumps({"remediation_episode_id": "episode-1"})),
             )
-            binding = workflow_store.bind_subject(
-                conn, "remediation_episode", "episode-1", "pr_remediation", "dbos", NOW
-            )
+            binding = execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
             result = run_once._record_remote_terminal_state(
                 conn,
                 "repo-1",
@@ -272,37 +270,37 @@ class WorkflowEventApplicationTests(unittest.TestCase):
                 NOW,
             )
             self.assertTrue(result)
-            self.assertIsNone(workflow_store.get_binding(conn, "task", "task-2"))
+            self.assertIsNone(execution_store.get_binding(conn, "task", "task-2"))
             self.assertEqual(
-                workflow_store.get_binding(conn, "remediation_episode", "episode-1")["binding_status"],
+                execution_store.get_binding(conn, "remediation_episode", "episode-1")["binding_status"],
                 "terminal",
             )
-            self.assertEqual(binding["workflow_id"], "robert:v1:remediation:episode-1")
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0], 1)
+            self.assertEqual(binding["subject_id"], "episode-1")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
 
     def test_duplicate_fact_is_idempotent(self):
         self._bind("dbos")
         fact = _fact()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            first = workflow_operations.apply_classified_fact(
+            first = execution_operations.apply_classified_fact(
                 conn, "task", "task-1", fact, now=NOW
             )
-            second = workflow_operations.apply_classified_fact(
+            second = execution_operations.apply_classified_fact(
                 conn, "task", "task-1", fact, now=NOW
             )
         self.assertEqual(first["fact_id"], second["fact_id"])
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
 
     def test_legacy_fact_persists_evidence_without_outbox(self):
         self._bind("legacy")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            workflow_operations.apply_classified_fact(
+            execution_operations.apply_classified_fact(
                 conn, "task", "task-1", _fact(), now=NOW
             )
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0], 0)
-            binding = workflow_store.get_binding(conn, "task", "task-1")
+            binding = execution_store.get_binding(conn, "task", "task-1")
             self.assertEqual(json.loads(binding["metadata_json"])["latest_fact"]["classification"], "additive")
 
 

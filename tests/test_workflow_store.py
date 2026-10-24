@@ -3,7 +3,8 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent import storage, workflow_store
+from robert_agent import storage, execution_store
+from tests import legacy_workflow_store as workflow_store
 
 
 NOW = "2026-08-02T00:00:00Z"
@@ -167,115 +168,52 @@ class WorkflowStoreTests(unittest.TestCase):
         self.assertEqual(binding["binding_status"], "active")
         self.assertEqual(binding["owner_engine"], "legacy")
 
-    def test_outbox_and_receipts_are_idempotent(self):
-        binding = workflow_store.bind_subject(
-            self.conn, "task", "task-1", "human_request", "dbos", NOW
-        )
-        first = workflow_store.enqueue_signal(
-            self.conn,
-            binding["workflow_id"],
-            "worker_result",
-            "result-1",
-            {"result_id": "result-1"},
-            NOW,
-        )
-        same = workflow_store.enqueue_signal(
-            self.conn,
-            binding["workflow_id"],
-            "worker_result",
-            "result-1",
-            {"result_id": "result-1"},
-            NOW,
-        )
 
-        self.assertEqual(first, same)
-        self.assertEqual([first], workflow_store.list_due_signals(self.conn, NOW))
-        self.assertTrue(
-            workflow_store.consume_signal_once(
-                self.conn, first["signal_id"], binding["workflow_id"], "worker_result", NOW
-            )
-        )
-        self.assertFalse(
-            workflow_store.consume_signal_once(
-                self.conn, first["signal_id"], binding["workflow_id"], "worker_result", NOW
-            )
-        )
-        with self.assertRaisesRegex(ValueError, "receipt conflicts"):
-            workflow_store.consume_signal_once(
-                self.conn,
-                first["signal_id"],
-                "robert:v1:task:different",
-                "worker_result",
-                NOW,
-            )
-        self.assertEqual("delivered", workflow_store.mark_signal_delivered(
-            self.conn, first["signal_id"], NOW
-        )["status"])
-
-    def test_attention_signal_cannot_be_marked_delivered(self):
-        binding = workflow_store.bind_subject(
-            self.conn, "task", "task-1", "human_request", "dbos", NOW
-        )
-        signal = workflow_store.enqueue_signal(
-            self.conn,
-            binding["workflow_id"],
-            "worker_result",
-            "result-attention",
-            {"result_id": "result-attention"},
-            NOW,
-        )
-        self.conn.execute(
-            "UPDATE workflow_outbox SET status = 'attention' WHERE signal_id = ?",
-            (signal["signal_id"],),
-        )
-
-        with self.assertRaisesRegex(ValueError, "not pending"):
-            workflow_store.mark_signal_delivered(self.conn, signal["signal_id"], NOW)
 
     def test_publication_intent_is_idempotent(self):
-        first = workflow_store.prepare_publication_intent(
+        first = execution_store.prepare_publication_intent(
             self.conn, "action-1", "publish:action-1", "request-1", NOW
         )
-        same = workflow_store.prepare_publication_intent(
+        same = execution_store.prepare_publication_intent(
             self.conn, "action-1", "publish:action-1", "request-1", NOW
         )
 
         self.assertEqual(first, same)
         with self.assertRaises(ValueError):
-            workflow_store.prepare_publication_intent(
+            execution_store.prepare_publication_intent(
                 self.conn, "action-1", "publish:action-1", "different-request", NOW
             )
-        published = workflow_store.transition_publication_intent(
+        published = execution_store.transition_publication_intent(
             self.conn, first["publication_id"], "executing", NOW
         )
-        published = workflow_store.transition_publication_intent(
+        published = execution_store.transition_publication_intent(
             self.conn, first["publication_id"], "published", NOW
         )
         self.assertEqual("published", published["status"])
 
     def test_publication_intent_rejects_illegal_state_jumps(self):
-        intent = workflow_store.prepare_publication_intent(
+        intent = execution_store.prepare_publication_intent(
             self.conn, "action-1", "publish:action-1", "request-1", NOW
         )
 
         with self.assertRaisesRegex(ValueError, "illegal publication intent transition"):
-            workflow_store.transition_publication_intent(
+            execution_store.transition_publication_intent(
                 self.conn, intent["publication_id"], "published", NOW
             )
-        executing = workflow_store.transition_publication_intent(
+        executing = execution_store.transition_publication_intent(
             self.conn, intent["publication_id"], "executing", NOW
         )
-        absent = workflow_store.transition_publication_intent(
+        absent = execution_store.transition_publication_intent(
             self.conn, executing["publication_id"], "confirmed_absent", NOW
         )
-        retrying = workflow_store.transition_publication_intent(
+        retrying = execution_store.transition_publication_intent(
             self.conn, absent["publication_id"], "executing", NOW
         )
-        attention = workflow_store.transition_publication_intent(
+        attention = execution_store.transition_publication_intent(
             self.conn, retrying["publication_id"], "attention", NOW
         )
         with self.assertRaisesRegex(ValueError, "illegal publication intent transition"):
-            workflow_store.transition_publication_intent(
+            execution_store.transition_publication_intent(
                 self.conn, attention["publication_id"], "executing", NOW
             )
 
