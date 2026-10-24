@@ -9,7 +9,7 @@ from pathlib import Path
 import shlex
 import sqlite3
 
-from robert_agent import board
+from robert_agent import board, execution_metrics
 from robert_agent.board_execution import safe_text
 
 
@@ -187,7 +187,7 @@ def _load_state(conn):
     notifications = _group_rows(
         conn,
         """
-        SELECT notification_id, task_id, notification_type, status, created_at
+        SELECT notification_id, task_id, notification_type, status, created_at, metadata_json
         FROM notifications
         ORDER BY created_at DESC, notification_id DESC
         """,
@@ -264,6 +264,10 @@ def _derive_operator_state(
         episode["status"] in {"resolved", "superseded", "canceled"}
         for episode in latest_episodes
     )
+    failure = _decode_json((attempt or {}).get("failure_json"), {}) or {}
+    if failure.get("reason_code") == "question_not_deliverable":
+        return ("needs_attention", "question_not_deliverable",
+                safe_text(failure.get("safe_error")) + " Confirm Worker cleanup, then correct the question and retry.")
     for action in actions:
         if action["publish_status"] == "published":
             continue
@@ -778,6 +782,7 @@ def get_work_item(db_path, workstream_id):
             workstream,
             state["tasks"].get(workstream_id, []),
         )
+        timings = [execution_metrics.task_timing(conn, task["task_id"]) for task in state["tasks"].get(workstream_id, [])]
         retrigger_pending = False
         if current_task:
             retrigger_pending = bool(
@@ -809,6 +814,13 @@ def get_work_item(db_path, workstream_id):
         "workstream_lifecycle": item["workstream_lifecycle"],
         "lifecycle": item["lifecycle"],
         "related_sources": related_sources,
+        "execution_timings": timings,
+        "notification_delivery": [
+            {"notification_id": row["notification_id"], "type": row["notification_type"],
+             "created_at": row["created_at"],
+             "delivery": _decode_json(row["metadata_json"]).get("delivery", {"status": "pending"})}
+            for task_id in task_ids for row in state["notifications"].get(task_id, [])
+        ],
         "operator_state": {
             "bucket": item["bucket"],
             "reason_code": item["reason_code"],

@@ -44,7 +44,8 @@ Issues = "https://github.com/wklken/robert/issues"
 dev = [
   "build",
   "mypy",
-  "pip-audit",
+  # Audit tooling uses Python 3.11+; CI still audits the resolved 3.10 environment.
+  "pip-audit; python_version >= '3.11'",
   "ruff",
   "twine",
   "tomli; python_version < '3.11'",

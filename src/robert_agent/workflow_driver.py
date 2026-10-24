@@ -260,7 +260,12 @@ class ProductionDriver:
                 conn, repo_id, run_id, now, self.config.get("lease_ttl_minutes", 9)
             )
             if not lease["ok"]:
+                previous = json.loads(conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task[0],)).fetchone()[0]).get("wait_state", {})
+                conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json, '$.wait_state', json(?)) WHERE task_id=?",
+                    (json.dumps({"reason_code": "repository_busy", "since": previous.get("since") or now,
+                                 "lease_expires_at": lease["expires_at"]}), task[0]))
                 return {"status": "waiting", "reason_code": "repository_busy"}
+            conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json, '$.wait_state') WHERE task_id=?", (task[0],))
             conn.execute(
                 "INSERT INTO agent_runs(run_id,status,started_at,config_path,dry_run) VALUES (?,'running',?,'dbos:v2',0)",
                 (run_id, now),
@@ -502,6 +507,7 @@ class ProductionDriver:
                     "workflow_runtime_" + status.status.lower(),
                 )
                 continue
-            dbos_runtime.start_bound_workflow(binding)
-            started += 1
+            if status is None:
+                dbos_runtime.start_bound_workflow(binding)
+                started += 1
         return started

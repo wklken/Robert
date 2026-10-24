@@ -1,6 +1,7 @@
 """Final Worker results survive a busy domain database and process restart."""
 
 from contextlib import closing, contextmanager
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -65,8 +66,11 @@ def submit(db_path, payload, writer, notifier=None, *, blocking=True):
         }
     digest = fingerprint(payload)
     with locked_record(db_path, attempt_id, blocking=blocking) as path:
+        saved_at = datetime.now(timezone.utc).isoformat()
         if path.exists():
             existing = json.loads(path.read_text())
+            if existing.get("fingerprint") == digest:
+                saved_at = existing.get("saved_at") or saved_at
             if (
                 existing.get("fingerprint") != digest
                 and existing.get("status") == "pending"
@@ -77,7 +81,7 @@ def submit(db_path, payload, writer, notifier=None, *, blocking=True):
                     "safe_error": "A different final result is already pending for this attempt.",
                 }
         atomic_write(
-            path, {"status": "pending", "fingerprint": digest, "payload": payload}
+            path, {"status": "pending", "fingerprint": digest, "payload": payload, "saved_at": saved_at}
         )
         try:
             response = writer(db_path, payload, notifier=notifier)
@@ -192,3 +196,12 @@ def replay(db_path, writer, limit=100):
                     ),
                 )
     return counts
+
+
+def saved_at(db_path, attempt_id):
+    """Read the timestamp while submit owns this attempt's spool lock."""
+    key = hashlib.sha256(str(attempt_id).encode()).hexdigest()
+    try:
+        return json.loads((directory(db_path) / (key + ".json")).read_text()).get("saved_at")
+    except (OSError, ValueError):
+        return None

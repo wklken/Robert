@@ -36,8 +36,24 @@ jobs:
       - run: python -B -m unittest discover -s tests
       - run: python -m compileall -q src
       - run: python -m build
-      - run: python -m pip_audit
       - run: git diff --check
+      - name: Record the tested environment for dependency audit
+        id: audit-target
+        shell: python
+        run: |
+          import os, sysconfig
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("site=" + sysconfig.get_paths()["purelib"] + "\n")
+      # filelock's security fixes require Python 3.11+. Keep audit tooling
+      # separate while inspecting the actual packages tested on every version.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m venv .audit-venv
+      - run: .audit-venv/bin/python -m pip install --upgrade pip pip-audit 'filelock>=4.2.1'
+      - run: .audit-venv/bin/python -m pip_audit --path '${{ steps.audit-target.outputs.site }}' --skip-editable
+      - run: .audit-venv/bin/python -m pip_audit
+
 
   wheel-smoke:
     runs-on: ubuntu-latest

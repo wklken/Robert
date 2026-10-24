@@ -1068,9 +1068,9 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     attempt = _attempt_dispatch_identity(conn, attempt_id)
     identity_status = _recovery_identity_status(evidence)
     logs = evidence.get("logs", {}) if isinstance(evidence, dict) else {}
-    terminal_error = "\n".join(str(v.get("tail", "")) for k, v in logs.items() if "stderr" in k and isinstance(v, dict))
+    terminal_error = retry_policy.worker_error(logs)
     category = retry_policy.error_class(terminal_error)
-    if category != "transient_failure":
+    if category not in {"transient_failure", "rate_limited"}:
         _mark_recovery_attention(conn, binding, now)
         if binding:
             conn.execute("UPDATE workflow_bindings SET metadata_json=? WHERE subject_type=? AND subject_id=?",
@@ -1084,6 +1084,15 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
         and evidence.get("previous_attempt_id") == attempt_id
         and isinstance(evidence.get("progress_signals"), list)
         and bool(evidence.get("progress_signals"))
+    )
+    # A structured terminal transport interruption may be retried before any
+    # work was saved. It consumes the same one-shot recovery budget.
+    valid_progress = valid_progress or bool(
+        isinstance(evidence, dict)
+        and evidence.get("status") == "transport_interrupted"
+        and evidence.get("transport_failure")
+        and evidence.get("task_id")
+        and evidence.get("previous_attempt_id") == attempt_id
     )
     consistent_attempt = bool(
         attempt

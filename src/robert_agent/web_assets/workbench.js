@@ -483,6 +483,31 @@ function detailView(detail, titleId) {
   } else outcome.append(node("p", { text: t("noOutcome") }));
   if (detail.workstream_lifecycle) outcome.append(node("p", { text: `${t("workflowState")}: ${humanize(detail.workstream_lifecycle)}` }));
   root.append(outcome);
+  if (detail.execution_timings?.length) {
+    const timingSection = node("section", { className: "detail-section" }, [node("h3", { text: state.language === "zh" ? "耗时与等待" : "Timing and waiting" })]);
+    const labels = state.language === "zh"
+      ? { queue_seconds: "首次排队", worker_seconds: "Worker 执行", result_ingestion_seconds: "结果入库等待", result_to_audit_seconds: "结果至审核", result_to_publication_seconds: "结果至发布" }
+      : { queue_seconds: "Initial queue", worker_seconds: "Worker execution", result_ingestion_seconds: "Result ingestion wait", result_to_audit_seconds: "Result to audit", result_to_publication_seconds: "Result to publication" };
+    detail.execution_timings.forEach((timing) => {
+      timingSection.append(node("p", { text: timing.task_id }));
+      Object.entries(labels).forEach(([key, label]) => timingSection.append(node("p", { text: `${label}: ${timing[key] == null ? (state.language === "zh" ? "未记录" : "Not recorded") : `${Math.round(timing[key])} s`}` })));
+      const waits = state.language === "zh" ? { repository_busy: "等待仓库执行租约", human_input: "等待人工回复", publication_attention: "发布已停止，需处理", publication_backoff: "发布退避", publication_pending: "等待发布", scheduler_pending: "等待调度", worker_or_result_pending: "等待 Worker 或结果", terminal: "已结束", unknown: "等待原因未记录" } : { repository_busy: "Waiting for repository lease", human_input: "Waiting for a reply", publication_attention: "Publication needs attention", publication_backoff: "Publication backoff", publication_pending: "Waiting for publication", scheduler_pending: "Waiting for scheduling", worker_or_result_pending: "Waiting for worker or result", terminal: "Finished", unknown: "Waiting reason not recorded" };
+      timingSection.append(node("p", { text: waits[timing.waiting_reason] || timing.waiting_reason }));
+      if (timing.lease_expires_at) timingSection.append(node("p", { text: `${state.language === "zh" ? "租约到期" : "Lease expires"}: ${formatTime(timing.lease_expires_at)}` }));
+      if (timing.next_retry_at) timingSection.append(node("p", { text: `${state.language === "zh" ? "下次发布重试" : "Next publication retry"}: ${formatTime(timing.next_retry_at)}` }));
+    });
+    timingSection.append(node("p", { text: state.language === "zh" ? "各区间可能重叠；缺少记录不代表耗时为零。" : "Intervals may overlap; missing evidence does not mean zero elapsed time." }));
+    root.append(timingSection);
+  }
+  if (detail.notification_delivery?.length) {
+    const notices = node("section", { className: "detail-section" }, [node("h3", { text: state.language === "zh" ? "通知送达" : "Notification delivery" })]);
+    const labels = state.language === "zh" ? { pending: "等待发送（需配置通知渠道）", sending: "正在发送或等待确认", sent: "已送达", failed: "发送失败，等待重试", exhausted: "发送已停止，请检查通知渠道" } : { pending: "Pending (requires a configured channel)", sending: "Sending or awaiting confirmation", sent: "Delivered", failed: "Failed; waiting to retry", exhausted: "Stopped; check notification channel" };
+    detail.notification_delivery.forEach((notice) => {
+      const delivery = notice.delivery || {};
+      notices.append(node("p", { text: `${notice.type}: ${labels[delivery.status] || delivery.status || labels.pending}${delivery.attempt_count ? ` (${delivery.attempt_count}/${delivery.max_attempts})` : ""}${delivery.sent_at ? ` · ${formatTime(delivery.sent_at)}` : ""}${delivery.next_retry_at ? ` · ${formatTime(delivery.next_retry_at)}` : ""}` }));
+    });
+    root.append(notices);
+  }
   const tasks = detail.tasks || [];
   const history = node("details", { className: "detail-section execution-history", dataset: { disclosure: "attempts" } });
   history.append(node("summary", { text: `${t("agentExecution")} · ${(detail.attempts || []).length}` }));

@@ -142,8 +142,10 @@ with the [configuration reference](reference.md#configuration):
   for Claude, OpenCode, and custom commands, correct the adapter explicitly.
 - `routes` selects Worker/Skill policy; `route_worker_models` supplies route
   model/effort overrides. Do not put those model keys into `routes`.
-- Keep `workflow_engine.mode: legacy`. DBOS `shadow` / `active` are migration
-  development settings, not a supported production cutover.
+- `workflow_engine.mode: legacy` remains the default. `active` uses the production
+  v2 driver for new GitHub tasks and remediation episodes; it preserves existing
+  legacy ownership. Follow the [cutover requirements](reference.md#dbos-production-v2)
+  and validate the deployment before enabling it.
 - Preserve the nested `daemon` section and its retention defaults. Enable
   per-repository `pr_automation` only when requested; CI also needs a non-empty
   `check_allowlist`.

@@ -63,9 +63,10 @@ node --test tests/browser/*.test.cjs
 
 ## 与主工作区已有恢复逻辑的集成
 
-本次同时提交 DBOS 运行时、工作流定义、ownership、outbox 和发布恢复的已有改动。
-生产调度目前仍保留 legacy ownership；DBOS 的生产 Driver 和 active 路由尚未接入，
-因此 `workflow_engine.mode: active` 还不能作为生产切换入口。默认继续使用 `legacy`。
+daemon 已接入 production v2 driver；`active` 模式在新 GitHub 任务和 remediation
+任务派发前建立 DBOS ownership，并在重启后恢复持久工作流。既有 legacy 任务保留
+原 owner，默认模式仍为 `legacy`；Web 本地任务继续走原有路径。隔离验收不替代部署
+环境的 PostgreSQL、Worker 和通知渠道验收，详见[可靠性验收记录](reliability-followup-20261024.md)。
 
 - 保留主工作区的 Worker 身份、DBOS ownership 和 publication intent 边界。
 - GitHub 失败任务的手动重试创建新的 Task / binding，旧失败任务保持终态；必须有匹配的操作员 wakeup，不能借此转移 DBOS ownership。
