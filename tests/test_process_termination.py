@@ -38,7 +38,7 @@ class ProcessTerminationTests(unittest.TestCase):
                         continue
                     identity = worker_identity.capture_process_identity(proc.pid)
                     outcome = run_once._terminate_attempt_process({'dispatch': identity})
-                    self.assertEqual(outcome['status'], 'terminated')
+                    self.assertEqual(outcome['status'], 'terminated', outcome)
                     deadline = time.monotonic() + 1
                     while run_once._process_state(child_pid) not in (None, 'Z', 'X', 'x') and time.monotonic() < deadline:
                         time.sleep(.01)
@@ -71,8 +71,8 @@ class ProcessTerminationTests(unittest.TestCase):
                     time.sleep(.01)
                 self.assertTrue(ready.exists())
                 identity = worker_identity.capture_process_identity(proc.pid)
-                run_once._terminate_attempt_process({'dispatch': identity})
-                self.assertIsNotNone(proc.poll())
+                outcome = run_once._terminate_attempt_process({'dispatch': identity})
+                self.assertIsNotNone(proc.poll(), outcome)
             finally:
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)

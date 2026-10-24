@@ -1,0 +1,4 @@
+# This article is accessible via a browser but returns HTTP 403 to the CI
+# checker (runs 39971801097 and 39990011030). Content verified 2026-10-24.
+# Recheck manually when updating this reference; all other URLs remain checked.
+^https://openai\.com/index/harness-engineering/$

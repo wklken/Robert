@@ -119,10 +119,18 @@ def read_proc_identity(
     read_text = read_text or (lambda path: Path(path).read_text(encoding="utf-8"))
     read_bytes = read_bytes or (lambda path: Path(path).read_bytes())
     identity = parse_proc_stat(read_text(stat_path), pid=pid)
+    if identity["process_state"] in _ZOMBIE_STATES:
+        raise ZombieProcess("process is a zombie")
     command_bytes = read_bytes(cmdline_path)
     if not isinstance(command_bytes, (bytes, bytearray, memoryview)):
         raise IdentityReadError("process cmdline is not bytes")
     if not command_bytes:
+        # Linux clears cmdline on exit. The process may have exited between
+        # the two reads; confirm its terminal state instead of treating an
+        # empty command line alone as proof of death.
+        terminal = parse_proc_stat(read_text(stat_path), pid=pid)
+        if terminal["process_state"] in _ZOMBIE_STATES:
+            raise ZombieProcess("process is a zombie")
         raise EmptyCommandline("process cmdline is empty")
     identity.update(
         {
@@ -285,6 +293,8 @@ def _observe_recorded_identity(recorded, *, proc_root="/proc", ps_runner=None):
             observed = read_proc_identity(pid, proc_root=proc_root)
         else:
             observed = read_ps_identity(pid, ps_runner=ps_runner)
+    except ZombieProcess:
+        return "dead"
     except (ProcessIdentityMissing, FileNotFoundError, ProcessLookupError):
         # A proc entry can disappear after the initial existence check.  If
         # the PID is genuinely gone it is dead; if it remains visible, the
@@ -327,7 +337,8 @@ def terminate_recorded_identity(
 
     The identity is checked before TERM and on every observation after TERM.
     KILL is only sent when the exact same identity remains alive.  Any
-    visibility loss/mismatch returns ``attention`` without another signal.
+    visibility loss/mismatch only waits for confirmed exit within the current
+    deadline, then returns ``attention`` without another signal.
     """
 
     inspect = inspect or inspect_recorded_identity
@@ -353,6 +364,19 @@ def terminate_recorded_identity(
         return {"status": "already_dead", "pid": pid}
     if initial != "alive_same":
         return {"status": "attention", "reason": "identity_not_verified", "pid": pid}
+
+    def wait_for_exit_after_identity_loss(deadline, sent_signal):
+        # Linux can clear cmdline before publishing zombie state. After a
+        # signal, wait out that transition, but never use a regained identity
+        # to authorize another signal once observation has been ambiguous.
+        while True:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return {"status": "attention", "reason": "identity_changed", "pid": pid}
+            sleep(max(0.0, min(float(poll_interval), remaining)))
+            if inspect(recorded) == "dead":
+                return {"status": "terminated", "pid": pid, "signal": sent_signal}
+
     try:
         signal_group(process_group_id, signal.SIGTERM)
     except ProcessLookupError:
@@ -370,7 +394,7 @@ def terminate_recorded_identity(
         if observed == "dead":
             return {"status": "terminated", "pid": pid, "signal": "SIGTERM"}
         if observed != "alive_same":
-            return {"status": "attention", "reason": "identity_changed", "pid": pid}
+            return wait_for_exit_after_identity_loss(deadline, "SIGTERM")
         current = clock()
         if current >= deadline:
             break
@@ -392,7 +416,7 @@ def terminate_recorded_identity(
         if observed == "dead":
             return {"status": "terminated", "pid": pid, "signal": "SIGKILL"}
         if observed != "alive_same":
-            return {"status": "attention", "reason": "identity_changed", "pid": pid}
+            return wait_for_exit_after_identity_loss(kill_deadline, "SIGKILL")
         current = clock()
         if current >= kill_deadline:
             return {"status": "attention", "reason": "termination_timeout", "pid": pid}
