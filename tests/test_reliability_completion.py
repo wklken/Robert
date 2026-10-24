@@ -118,6 +118,8 @@ daemon:
         (root/'receiver.py').write_text('import sys,json\nfrom pathlib import Path\np=Path(__file__).with_name("deliveries.jsonl")\nv=json.load(sys.stdin)\nwith p.open("a") as f:f.write(json.dumps(v)+"\\n")\n')
         import shlex
         env = {**os.environ,
+               'GH_CONFIG_DIR': str(root/'empty-gh-config'),
+               'GH_TOKEN': '', 'GITHUB_TOKEN': '',
                'ROBERT_NOTIFICATION_COMMAND':shlex.join([sys.executable,str(root/'receiver.py')])}
         child = str(Path(__file__).with_name('reliability_daemon_child.py'))
         with (root/'daemon.log').open('w') as log:

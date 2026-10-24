@@ -20,7 +20,8 @@ class ProcessTerminationTests(unittest.TestCase):
                 parent = (
                     "import subprocess,sys,time; from pathlib import Path; "
                     f"p=subprocess.Popen([sys.executable,'-c',{child!r}]); "
-                    f"Path({str(ready)!r}).write_text(str(p.pid)); "
+                    f"pending=Path({str(ready.with_suffix('.tmp'))!r}); "
+                    f"pending.write_text(str(p.pid)); pending.replace({str(ready)!r}); "
                     + ("" if leader_exits else "time.sleep(30)")
                 )
                 proc = subprocess.Popen([sys.executable, '-c', parent], start_new_session=True)

@@ -1,8 +1,8 @@
 """Real resident SQLite daemon, local Git remote, isolated subprocess crash.
 
 The daemon's local-drain subprocess seam runs the real loop inline so the test
-can inject its local Git runner. All domain, scheduling, audit, publication and
-notification code is the production implementation.
+can inject its local Git runner and fixed GitHub quota response. All domain,
+scheduling, audit, publication and notification code is the production implementation.
 """
 from contextlib import redirect_stdout
 import io
@@ -57,6 +57,10 @@ def drain(value, **kwargs):
 
 
 with patch.object(daemon, '_load_context', side_effect=context), \
+     patch.object(daemon, 'fetch_rate_limit', return_value={
+         'ok': True,
+         'rate_limit': {'core': {'remaining': 5000}, 'search': {'remaining': 30}},
+     }), \
      patch.object(daemon, '_run_local_drain', side_effect=drain), \
      patch.object(publish, 'publish_ready_actions', side_effect=local_publish):
     result = daemon.run_daemon(root / 'daemon.yml')
