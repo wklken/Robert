@@ -173,7 +173,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         "project_memory_terms",
         "knowledge_candidates",
         "runtime_knowledge",
-        "workflow_bindings",
+        "execution_subjects",
         "workflow_outbox",
         "workflow_signal_receipts",
         "workflow_shadow_observations",
@@ -451,7 +451,7 @@ repos:
         self.assertEqual(
             normalized,
             {
-                "mode": "legacy",
+                "mode": "sqlite",
                 "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
                 "system_database_scheme": None,
                 "configured": False,
@@ -464,7 +464,7 @@ repos:
         cases = {
             "invalid mode": (
                 {"workflow_engine": {"mode": "disabled"}},
-                "workflow_engine.mode must be one of: legacy, shadow, active",
+                "workflow_engine.mode must be sqlite or the deprecated legacy alias",
             ),
             "unknown field": (
                 {"workflow_engine": {"unknown": True}},
@@ -486,7 +486,7 @@ repos:
             with self.subTest(mode=mode, case="missing"):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "ROBERT_DBOS_SYSTEM_DATABASE_URL must be set",
+                    "migrate dbos",
                 ):
                     validate_config._normalize_workflow_engine(
                         {"workflow_engine": {"mode": mode}},
@@ -495,7 +495,7 @@ repos:
             with self.subTest(mode=mode, case="non-postgresql"):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "must contain a PostgreSQL URL",
+                    "migrate dbos",
                 ):
                     validate_config._normalize_workflow_engine(
                         {"workflow_engine": {"mode": mode}},
@@ -525,16 +525,8 @@ repos:
                 skip_external=True,
             )
 
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(
-            result["workflow_engine"],
-            {
-                "mode": "active",
-                "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
-                "system_database_scheme": "postgresql",
-                "configured": True,
-            },
-        )
+        self.assertFalse(result['ok'],result)
+        self.assertIn('migrate dbos',result['safe_error'])
         self.assertNotIn(url, json.dumps(result))
 
     def test_config_accepts_python_bin(self):

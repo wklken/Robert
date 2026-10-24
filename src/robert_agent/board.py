@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import urlsplit
 
-from robert_agent import work_items, work_item_control
+from robert_agent import work_items, work_item_control, execution_store
 from robert_agent.board_execution import execution_summary, attempt_history, publication_history, safe_text
 
 
@@ -302,8 +302,8 @@ def _project_item(conn, row):
             card["valid_commands"] = (["retry_publish"] if not facts["publication_retry_pending"] and not facts["publication_retry_blocked"] else []) + ["cancel"]
         elif task and task["lifecycle"] == "failed" and not running and not publication_in_progress:
             if row["origin_type"] != "web":
-                binding = conn.execute("SELECT owner_engine,binding_status FROM workflow_bindings WHERE subject_type='task' AND subject_id=?", (task['task_id'],)).fetchone()
-                ownership_blocked = binding and (binding[0] != 'legacy' or binding[1] == 'attention')
+                binding = execution_store.read_binding(conn,'task',task['task_id'])
+                ownership_blocked = binding and (binding['binding_status']=='attention' or binding.get('owner_engine')=='dbos')
                 pending = conn.execute("SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json, '$.kind')='github_retrigger'", (task["task_id"],)).fetchone()
                 card["valid_commands"] = ([] if pending or ownership_blocked else ["retrigger"]) + ["cancel"]
             else:

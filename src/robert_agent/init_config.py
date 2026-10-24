@@ -78,10 +78,7 @@ def init_config(
             "failed_run_retention_days": 30,
             "run_on_start": False,
         },
-        "workflow_engine": {
-            "mode": "legacy",
-            "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
-        },
+        "workflow_engine": {"mode": "sqlite"},
         "workers": {
             "default": {
                 "adapter": adapter,

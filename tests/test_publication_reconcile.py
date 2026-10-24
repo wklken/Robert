@@ -6,7 +6,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from robert_agent import publication_reconcile, publish, storage, workflow_store
+from robert_agent import publication_reconcile, publish, storage, execution_store
 
 
 class Completed:
@@ -627,29 +627,22 @@ class PublicationReconcileTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'", (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),))
             conn.execute("UPDATE github_actions SET action_type = 'push_existing_pr', metadata_json = ? WHERE action_id = 'action-1'", (json.dumps({"worktree_path": str(worktree), "branch": "feature"}),))
-            binding = workflow_store.bind_subject(conn, "task", "task-1", "human_request", "legacy", "now")
-            workflow_store.close_binding(conn, "task", "task-1", "now")
-            workflow_store.prepare_publication_intent(conn, "action-1", "k", "f", "now")
-            workflow_store.transition_publication_intent(conn, binding["workflow_id"] or "publication-" + "0" * 24, "executing", "now") if False else None
+            binding = execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', 'now')
+            execution_store.close_binding(conn, "task", "task-1", "now")
+            execution_store.prepare_publication_intent(conn, "action-1", "k", "f", "now")
+            execution_store.transition_publication_intent(conn, binding["workflow_id"] or "publication-" + "0" * 24, "executing", "now") if False else None
             publication_id = conn.execute("SELECT publication_id FROM publication_intents WHERE action_id='action-1'").fetchone()[0]
-            workflow_store.transition_publication_intent(conn, publication_id, "executing", "now")
+            execution_store.transition_publication_intent(conn, publication_id, "executing", "now")
         calls = []
         result = publish.publish_ready_actions(self.db_path, run_command=lambda command, **kwargs: calls.append(command) or Completed(""))
         self.assertFalse(result["ok"])
         self.assertEqual(calls, [["git", "ls-remote", "--heads", "origin", "feature"]])
 
     def test_missing_or_malformed_scope_performs_zero_writes(self):
-        from robert_agent import workflow_store
+        from robert_agent import execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                "task-1",
-                "human_request",
-                "legacy",
-                "2026-08-02T00:00:00+00:00",
-            )
+            execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')
             conn.execute("UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'", (json.dumps({"audit": {"status": "accepted", "action_scope": []}}),))
         calls = []
         result = publish.publish_ready_actions(self.db_path, run_command=lambda command, **kwargs: calls.append(command) or (_ for _ in ()).throw(AssertionError(command)))
@@ -658,23 +651,16 @@ class PublicationReconcileTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM notifications WHERE notification_type='workflow_attention_required'").fetchone()[0], 1)
             binding_status = conn.execute(
-                "SELECT binding_status FROM workflow_bindings "
+                "SELECT binding_status FROM execution_subjects "
                 "WHERE subject_type = 'task' AND subject_id = 'task-1'"
             ).fetchone()[0]
         self.assertEqual(binding_status, "attention")
 
     def test_empty_accepted_scope_performs_zero_remote_calls(self):
-        from robert_agent import workflow_store
+        from robert_agent import execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                "task-1",
-                "human_request",
-                "legacy",
-                "2026-08-02T00:00:00+00:00",
-            )
+            execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')
             conn.execute(
                 "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": {}}}),),
@@ -691,7 +677,7 @@ class PublicationReconcileTests(unittest.TestCase):
         self.assertEqual(calls, [])
         with closing(sqlite3.connect(self.db_path)) as conn:
             binding_status = conn.execute(
-                "SELECT binding_status FROM workflow_bindings "
+                "SELECT binding_status FROM execution_subjects "
                 "WHERE subject_type = 'task' AND subject_id = 'task-1'"
             ).fetchone()[0]
         self.assertEqual(binding_status, "attention")

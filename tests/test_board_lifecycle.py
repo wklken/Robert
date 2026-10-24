@@ -359,15 +359,15 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertNotIn('hidden-output', json.dumps(detail))
 
     def test_cancel_accepts_verified_dead_worker_and_closes_its_binding(self):
-        from robert_agent import workflow_store
+        from robert_agent import execution_store
         item = self.fixture._seed_six_columns()["doing"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
-            workflow_store.bind_subject(conn, 'task', task_id, 'human_request', 'legacy', '2026-10-22')
+            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', '2026-10-22')
         with patch('robert_agent.run_once._terminate_attempt_process', return_value={'status':'already_dead'}):
             self.command(item, 'cancel')
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(conn.execute('SELECT binding_status FROM workflow_bindings').fetchone()[0], 'terminal')
+            self.assertEqual(conn.execute('SELECT binding_status FROM execution_subjects').fetchone()[0], 'terminal')
 
     def test_publication_scope_failure_is_visible_and_can_be_canceled(self):
         item = self.create(start=True)
@@ -396,6 +396,25 @@ class BoardLifecycleTests(unittest.TestCase):
         detail = board.get_work_item_detail(self.db, item['work_item_id'])
         self.assertEqual(detail['column'], 'waiting')
         self.assertEqual(detail['valid_commands'], ['cancel'])
+
+    def test_old_database_readonly_inspection_and_mixed_controls_do_not_write(self):
+        from pathlib import Path
+        from robert_agent import execution_store, workbench
+        item=self.create('Historical task')
+        with closing(sqlite3.connect(self.db)) as conn,conn:
+            conn.execute('DROP TABLE execution_subjects')
+        before=Path(self.db).read_bytes()
+        board.get_work_item_detail(self.db,item['work_item_id'])
+        workbench.list_work_items(self.db)
+        self.assertEqual(Path(self.db).read_bytes(),before)
+        with closing(sqlite3.connect(self.db)) as conn,conn:
+            execution_store.initialize(conn)
+            conn.execute("INSERT INTO workflow_bindings(subject_type,subject_id,workflow_kind,owner_engine,binding_status,workflow_id,created_at,updated_at) VALUES ('task','historical','human_request','dbos','attention','old:id','now','now')")
+        before=Path(self.db).read_bytes()
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(execution_store.read_binding(conn,'task','historical')['binding_status'],'attention')
+        self.assertEqual(Path(self.db).read_bytes(),before)
+
 
 if __name__ == "__main__":
     unittest.main()

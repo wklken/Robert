@@ -21,7 +21,7 @@ one real local Git checkout before validation or operation.
 | `route_worker_models` | Per-route model/effort overrides, separate from route permissions. |
 | `repos` | Real checkouts, worktree roots, base branches, trusted actors, concurrency, route overrides, and opt-in PR automation. |
 | `daemon` | Local/GitHub polling, rate-limit thresholds, cycle timeouts, and diagnostic retention. |
-| `workflow_engine` | Workflow migration mode; normal operation uses `legacy`. |
+| `workflow_engine` | Optional compatibility configuration; execution uses `sqlite`. |
 
 The following is an extended example, not the generated defaults. Replace the
 accounts, paths, branch names, commands, and model names for your environment.
@@ -62,8 +62,7 @@ daemon:
   failed_run_retention_days: 30
   run_on_start: false
 workflow_engine:
-  mode: legacy
-  system_database_url_env: ROBERT_DBOS_SYSTEM_DATABASE_URL
+  mode: sqlite
 workers:
   default:
     adapter: codex
@@ -202,23 +201,16 @@ hard timeout. Retention defaults and protected history are described under
 
 ```yaml
 workflow_engine:
-  mode: legacy
-  system_database_url_env: ROBERT_DBOS_SYSTEM_DATABASE_URL
+  mode: sqlite
 ```
 
-`legacy` is the default and does not require a DBOS database URL. The validator
-also accepts `shadow` and `active`; both require the named environment variable
-to contain a `postgresql://` URL. Store only the environment variable's **name**
-in YAML. This PostgreSQL system database is separate from Robert's SQLite task
-and audit database.
-
-The daemon installs the production v2 driver before launching DBOS. In `active`
-mode, new GitHub tasks and remediation episodes receive DBOS ownership before
-dispatch; existing legacy tasks retain their owner. `legacy` remains the default.
-Drain active v1 bindings with their original driver before enabling v2. Validate
-the deployment's PostgreSQL connectivity, Worker commands and independent
-notification receiver before a production canary. See [DBOS production v2](#dbos-production-v2)
-and the [isolated acceptance evidence](reliability-followup-20261024.md).
+SQLite is the only execution engine and the default. The old `mode: legacy`
+input is accepted as a deprecated alias for SQLite. `active` and `shadow` are
+rejected with offline migration guidance; there is no implicit ownership transfer.
+No DBOS/PostgreSQL database URL is needed. See the
+[SQLite upgrade procedure](sqlite-state-machine-upgrade.md) before replacing
+an installation that has DBOS-owned tasks. The migration preserves historical
+IDs, attention, recovery budgets and unconsumed facts.
 
 ### Updating an existing configuration
 
@@ -234,7 +226,7 @@ nested `daemon` settings, and repository keys `checkout`, `worktrees`, and
 public configuration. Validation/show output includes internal normalized
 fields; it is not a round-trip configuration template.
 
-Missing `workflow_engine` defaults to `legacy`, and omitted optional daemon
+Missing `workflow_engine` defaults to `sqlite`, and omitted optional daemon
 settings receive their defaults. Keep PR automation disabled unless explicitly
 wanted. After editing:
 
@@ -525,16 +517,8 @@ now use actual boundary timestamps and monotonic durations; Codex
 
 ### DBOS production v2
 
-With `workflow_engine.mode: active`, new eligible GitHub tasks and remediation
-episodes bind to v2 before any legacy dispatch. The daemon installs a production
-driver before launching DBOS; it supervises Workers, audits results, publishes
-through existing intents, and finalizes the domain state. Existing legacy subjects
-continue to drain under legacy ownership. Web-origin work remains on its existing
-path. No subject changes owner during rollout.
-
-v1 workflow definitions and IDs remain intact. Existing active DBOS v1 subjects
-must drain with their original driver before this production v2 mode can start;
-the readiness check refuses to reinterpret their recorded history. A persisted
-ambiguous dispatch fence stops the v2 subject for inspection instead of spawning
-a second Worker. Validate rollout against a staging database and the intended
-Worker/service configuration before enabling active mode in production.
+This runtime was retired. Existing deployments must follow the
+[SQLite upgrade procedure](sqlite-state-machine-upgrade.md), including
+side-by-side tooling, drain/stop, backup, rehearsal, offline apply and postchecks.
+The former DBOS design is historical; its SQL migration checksums and records
+remain readable. Never restore stale business state after new external effects.

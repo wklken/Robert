@@ -1,5 +1,9 @@
 # Reliability remediation and isolated acceptance
 
+This report describes the pre-removal DBOS implementation. The current runtime
+uses SQLite; the resident-daemon crash/restart test now exercises that native
+path. See the [upgrade procedure](sqlite-state-machine-upgrade.md) for migration.
+
 Scope: the historical A–F, OBS-1, STORAGE-1 and DBOS-1 findings, checked against
 `f6c00516963d398de9b67f912aff4b8eb899e1b7` and this follow-up. This is isolated
 acceptance, not a production deployment or a claim that historical latency has

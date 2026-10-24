@@ -1,5 +1,9 @@
 # DBOS Durable Workflow Migration Implementation Plan
 
+> Historical design, superseded by the SQLite state-machine removal. Do not use
+> this plan for current deployment. See [upgrade instructions](../../sqlite-state-machine-upgrade.md).
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:executing-plans` to implement this plan task by task. Repository
 > policy prohibits subagents unless the user explicitly authorizes delegation;

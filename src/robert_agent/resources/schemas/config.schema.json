@@ -100,7 +100,7 @@
     "workflow_engine": {
       "type": "object",
       "properties": {
-        "mode": {"type": "string", "enum": ["legacy", "shadow", "active"]},
+        "mode": {"type": "string", "enum": ["sqlite", "legacy"]},
         "system_database_url_env": {"type": "string", "minLength": 1}
       },
       "additionalProperties": false

@@ -15,9 +15,8 @@ from robert_agent import (
     publication_reconcile,
     remediation,
     retry_policy,
-    workflow_operations,
-    workflow_store,
-    workflow_ownership,
+    execution_operations,
+    execution_store,
 )
 from robert_agent.common import emit
 from robert_agent.publication_lock import task_publication_lock
@@ -733,7 +732,7 @@ def _publication_scope_guard(conn, action):
     if conn is None:
         return None
     scope = _trusted_action_scope(conn, action)
-    if scope is None or workflow_operations.publication_scope_is_current(
+    if scope is None or execution_operations.publication_scope_is_current(
         conn, action.get("task_id"), scope
     ):
         return None
@@ -924,10 +923,10 @@ def _mark_published(conn, action, result, now, intent=None):
         current = intent["status"]
         if current in {"executing", "failed"}:
             if current == "failed":
-                workflow_store.transition_publication_intent(
+                execution_store.transition_publication_intent(
                     conn, intent["publication_id"], "executing", now
                 )
-            workflow_store.transition_publication_intent(
+            execution_store.transition_publication_intent(
                 conn,
                 intent["publication_id"],
                 "published",
@@ -1000,14 +999,14 @@ def _mark_attention(conn, action, intent, scope, reconciliation, now):
     _record_failure(conn, action, {"status": "publish_failed", "safe_error": f"Publication requires attention: {reason_code}", "retryable": False}, now)
     if intent and intent["status"] in {"prepared", "executing", "failed"}:
         if intent["status"] == "prepared":
-            workflow_store.transition_publication_intent(
+            execution_store.transition_publication_intent(
                 conn, intent["publication_id"], "executing", now
             )
         elif intent["status"] == "failed":
-            workflow_store.transition_publication_intent(
+            execution_store.transition_publication_intent(
                 conn, intent["publication_id"], "executing", now
             )
-        workflow_store.transition_publication_intent(
+        execution_store.transition_publication_intent(
             conn,
             intent["publication_id"],
             "attention",
@@ -1015,7 +1014,7 @@ def _mark_attention(conn, action, intent, scope, reconciliation, now):
             remote_evidence=reconciliation.get("evidence", {}),
             error={"reason_code": reason_code},
         )
-    workflow_operations.mark_publication_attention(
+    execution_operations.mark_publication_attention(
         conn, action.get("task_id"), scope, reason_code, now=now
     )
     _insert_workflow_attention_notification(conn, action, reason_code, now)
@@ -1095,7 +1094,7 @@ def _prepare_publication_intent(db_path, action_id, run_command):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             intent = dict(
-                workflow_store.prepare_publication_intent(
+                execution_store.prepare_publication_intent(
                     conn,
                     action_id,
                     idempotency_key,
@@ -1130,7 +1129,7 @@ def _prepare_publication_intent(db_path, action_id, run_command):
         latest = _load_intent(conn, action_id)
         if latest["status"] == "prepared":
             latest = dict(
-                workflow_store.transition_publication_intent(
+                execution_store.transition_publication_intent(
                     conn,
                     latest["publication_id"],
                     "executing",
@@ -1140,7 +1139,7 @@ def _prepare_publication_intent(db_path, action_id, run_command):
             )
         elif latest["status"] == "failed":
             latest = dict(
-                workflow_store.transition_publication_intent(
+                execution_store.transition_publication_intent(
                     conn,
                     latest["publication_id"],
                     "executing",
@@ -1232,9 +1231,9 @@ def _record_failure(conn, action, result, now):
     if not state["retryable"]:
         intent = _load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
-            workflow_store.transition_publication_intent(conn, intent["publication_id"], "attention", now,
+            execution_store.transition_publication_intent(conn, intent["publication_id"], "attention", now,
                 error={"reason_code": state["reason_code"]})
-        workflow_operations.mark_publication_attention(conn, action.get("task_id"),
+        execution_operations.mark_publication_attention(conn, action.get("task_id"),
             _trusted_action_scope(conn, action), state["reason_code"], now=now)
 
 
@@ -1277,16 +1276,9 @@ def _ready_actions(conn, limit, repo_id=None, task_ids=None):
     if task_ids is not None:
         repo_filter += ' AND github_actions.task_id IN (' + ','.join('?' for _ in task_ids) + ')'
         params.extend(task_ids)
-        subject_type, subject_id = workflow_ownership.subject.get()
-        if subject_type == 'task':
-            repo_filter += ' AND github_actions.task_id=?'
-        else:
-            repo_filter += " AND EXISTS (SELECT 1 FROM tasks scope WHERE scope.task_id=github_actions.task_id AND json_extract(scope.metadata_json,'$.remediation_episode_id')=?)"
-        params.append(subject_id)
-    else:
-        repo_filter += """ AND NOT EXISTS (SELECT 1 FROM workflow_bindings wb JOIN tasks own ON own.task_id=github_actions.task_id
-          WHERE wb.owner_engine='dbos' AND ((wb.subject_type='task' AND wb.subject_id=own.task_id)
-          OR (wb.subject_type='remediation_episode' AND wb.subject_id=json_extract(own.metadata_json,'$.remediation_episode_id'))))"""
+    repo_filter += """ AND NOT EXISTS (SELECT 1 FROM execution_subjects control JOIN tasks own ON own.task_id=github_actions.task_id
+        WHERE control.binding_status='attention' AND ((control.subject_type='task' AND control.subject_id=own.task_id)
+        OR (control.subject_type='remediation_episode' AND control.subject_id=json_extract(own.metadata_json,'$.remediation_episode_id'))))"""
     return [
         dict(row)
         for row in conn.execute(
@@ -1305,13 +1297,12 @@ def _ready_actions(conn, limit, repo_id=None, task_ids=None):
 
 
 def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subprocess.run, repo_id=None, task_ids=None):
-    if task_ids is not None and workflow_ownership.subject.get() is None:
-        raise ValueError('task-scoped publication requires durable workflow authority')
     def bounded_command(*args, **kwargs):
         kwargs["timeout"] = min(kwargs.get("timeout") or PUBLISH_COMMAND_TIMEOUT_SECONDS, PUBLISH_COMMAND_TIMEOUT_SECONDS)
         return run_command(*args, **kwargs)
 
     with closing(sqlite3.connect(db_path)) as conn:
+        execution_store.require_migrated(conn)
         conn.row_factory = sqlite3.Row
         actions = _ready_actions(conn, limit, repo_id=repo_id, task_ids=task_ids)
     if dry_run:
@@ -1423,7 +1414,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                             )
                         )
                         _record_failure(conn, action, {"status": "publish_failed", "safe_error": f"Publication requires attention: {reason_code}", "retryable": False}, now)
-                        workflow_operations.mark_publication_attention(
+                        execution_operations.mark_publication_attention(
                             conn,
                             action.get("task_id"),
                             scope,
@@ -1490,7 +1481,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                     if reconciliation["status"] == "confirmed_absent" and scope is not None:
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
-                            if not workflow_operations.publication_scope_is_current(
+                            if not execution_operations.publication_scope_is_current(
                                 conn, action.get("task_id"), scope
                             ):
                                 reconciliation = {
@@ -1512,7 +1503,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                                     absent_evidence["source_sha"] = source_sha
                                 if head_owner:
                                     absent_evidence["head_owner"] = head_owner
-                                workflow_store.transition_publication_intent(
+                                execution_store.transition_publication_intent(
                                     conn,
                                     latest["publication_id"],
                                     "confirmed_absent",
@@ -1524,7 +1515,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                                     retry_evidence["source_sha"] = source_sha
                                 if head_owner:
                                     retry_evidence["head_owner"] = head_owner
-                                workflow_store.transition_publication_intent(
+                                execution_store.transition_publication_intent(
                                     conn,
                                     latest["publication_id"],
                                     "executing",

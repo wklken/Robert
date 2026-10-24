@@ -1,9 +1,11 @@
-"""Isolated process fixture: real daemon/driver/DBOS, local Git remote only.
+"""Real resident SQLite daemon, local Git remote, isolated subprocess crash.
 
-Configuration validation still checks the production PostgreSQL contract. Only
-DBOS's system database URL is replaced by SQLite in this test process; live
-GitHub discovery is disabled. No production execution code is replaced.
+The daemon's local-drain subprocess seam runs the real loop inline so the test
+can inject its local Git runner. All domain, scheduling, audit, publication and
+notification code is the production implementation.
 """
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -11,13 +13,13 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from robert_agent import daemon, dbos_runtime, workflow_driver
+from robert_agent import daemon, loop_engine, publish
 
 root = Path(sys.argv[1])
 crash_after_push = sys.argv[2] == 'crash'
 load_context = daemon._load_context
-configure_runtime = dbos_runtime.configure_runtime
-configure_driver = workflow_driver.configure_driver
+local_drain = daemon._run_local_drain
+publisher = publish.publish_ready_actions
 
 
 def context(*args, **kwargs):
@@ -28,11 +30,6 @@ def context(*args, **kwargs):
     return value, error
 
 
-def runtime(config):
-    with patch.dict(os.environ, {'ROBERT_ISOLATED_SYSTEM_DB': 'sqlite:///' + str(root / 'system.db')}):
-        return configure_runtime(config)
-
-
 def local_git(command, **kwargs):
     if command[0] != 'git':
         raise AssertionError('Unexpected external command: ' + command[0])
@@ -40,19 +37,28 @@ def local_git(command, **kwargs):
         output.write(json.dumps(command) + '\n')
     completed = subprocess.run(command, **kwargs)
     if crash_after_push and command[:2] == ['git', 'push'] and completed.returncode == 0:
-        os._exit(73)  # external effect happened; no domain acknowledgement
+        os._exit(73)
     return completed
 
 
-def driver(config):
-    value = configure_driver(config)
-    value.publish_runner = local_git
-    return value
+def local_publish(*args, **kwargs):
+    return publisher(*args, **{**kwargs, 'run_command': local_git})
+
+
+def inline_child(command, **kwargs):
+    stream=io.StringIO()
+    with redirect_stdout(stream):
+        loop_engine.main(command[3:])
+    return json.loads(stream.getvalue())
+
+
+def drain(value, **kwargs):
+    return local_drain(value, **{**kwargs,'child_runner':inline_child})
 
 
 with patch.object(daemon, '_load_context', side_effect=context), \
-     patch.object(dbos_runtime, 'configure_runtime', side_effect=runtime), \
-     patch.object(workflow_driver, 'configure_driver', side_effect=driver):
+     patch.object(daemon, '_run_local_drain', side_effect=drain), \
+     patch.object(publish, 'publish_ready_actions', side_effect=local_publish):
     result = daemon.run_daemon(root / 'daemon.yml')
     print(json.dumps(result), flush=True)
     raise SystemExit(0 if result.get('ok') else 1)

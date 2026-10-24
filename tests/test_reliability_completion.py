@@ -79,7 +79,7 @@ class IsolatedDaemonTests(unittest.TestCase):
         import sys
         import time
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import workflow_store
+        from robert_agent import execution_store
         fixture = PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -97,8 +97,9 @@ class IsolatedDaemonTests(unittest.TestCase):
             metadata = json.loads(conn.execute('SELECT metadata_json FROM worker_results').fetchone()[0])
             metadata['audit']['action_scope']['result_head_sha'] = sha
             conn.execute('UPDATE worker_results SET metadata_json=?', (json.dumps(metadata),))
-            conn.execute("UPDATE workstreams SET active_task_id='t'")
-            workflow_store.bind_subject(conn, 'task', 't', 'human_request', 'dbos', fixture.now.isoformat(), definition_version='v2')
+            conn.execute("UPDATE repos SET repo_id='repo:x/y' WHERE repo_id='repo'")
+            conn.execute("UPDATE workstreams SET repo_id='repo:x/y',active_task_id='t'")
+            execution_store.ensure_subject(conn, 'task', 't', 'human_request', fixture.now.isoformat())
             conn.execute("INSERT INTO notifications(notification_id,task_id,notification_type,channel,status,created_at) VALUES ('notice','t','isolated','local','recorded',?)",(fixture.now.isoformat(),))
         (root/'daemon.yml').write_text(f'''data_dir: {root}
 database: db
@@ -110,16 +111,13 @@ repos:
     default_base_branch: main
     repo_root: {root}
     worktree_root: {root}/worktrees
-workflow_engine:
-  mode: active
-  system_database_url_env: ROBERT_ISOLATED_SYSTEM_DB
 daemon:
   enabled: true
   local_poll_seconds: 1
 ''')
         (root/'receiver.py').write_text('import sys,json\nfrom pathlib import Path\np=Path(__file__).with_name("deliveries.jsonl")\nv=json.load(sys.stdin)\nwith p.open("a") as f:f.write(json.dumps(v)+"\\n")\n')
         import shlex
-        env = {**os.environ, 'ROBERT_ISOLATED_SYSTEM_DB':'postgresql://localhost/unused',
+        env = {**os.environ,
                'ROBERT_NOTIFICATION_COMMAND':shlex.join([sys.executable,str(root/'receiver.py')])}
         child = str(Path(__file__).with_name('reliability_daemon_child.py'))
         with (root/'daemon.log').open('w') as log:
@@ -141,7 +139,7 @@ daemon:
             while time.monotonic()<deadline and second.poll() is None:
                 with closing(sqlite3.connect(fixture.db)) as conn:
                     complete = conn.execute("SELECT status FROM publication_intents").fetchone()[0]=='published'
-                    binding = conn.execute('SELECT binding_status FROM workflow_bindings').fetchone()[0]
+                    binding = conn.execute('SELECT binding_status FROM execution_subjects').fetchone()[0]
                 if complete and binding=='terminal':
                     break
                 time.sleep(.1)
@@ -239,22 +237,34 @@ print(json.dumps(result.record_result(sys.argv[1],json.load(open(sys.argv[2]))))
 
 
 class WaitingEvidenceTests(unittest.TestCase):
-    def test_repository_lease_wait_is_visible_and_preserves_since(self):
-        from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import workflow_store, workflow_driver, execution_metrics
-        fixture=PublicationBudgetTests()
+    def test_repository_lease_wait_is_visible_preserved_then_cleared(self):
+        from tests.test_run_once import RunOnceDryRunTests
+        from robert_agent import execution_metrics
+        fixture=RunOnceDryRunTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            workflow_store.bind_subject(conn,'task','t','human_request','dbos',fixture.now.isoformat(),definition_version='v2')
-            run_once._acquire_agent_lease(conn,'repo','other-run',fixture.now.isoformat(),9)
-        driver=workflow_driver.ProductionDriver({'python_bin':__import__('sys').executable,'db_path':str(fixture.db),'data_dir':fixture.tmp.name,'repos':[{'full_name':'x/y','repo_root':fixture.tmp.name,'worktree_root':fixture.tmp.name}]})
-        self.assertEqual(driver.advance('task','t')['reason_code'],'repository_busy')
-        with closing(sqlite3.connect(fixture.db)) as conn:
-            timing=execution_metrics.task_timing(conn,'t')
-            self.assertEqual(timing['waiting_reason'],'repository_busy')
-            self.assertIsNotNone(timing['waiting_since'])
-            self.assertIsNotNone(timing['lease_expires_at'])
+        first=run_once.run_once(fixture.config_path,fixture_path=fixture.fixture_path,dry_run=True,skip_external=True)
+        self.assertTrue(first['ok'],first)
+        db=fixture.data_dir/'dd.sqlite3'
+        now=run_once._now()
+        with closing(sqlite3.connect(db)) as conn,conn:
+            task=conn.execute('SELECT task_id FROM tasks').fetchone()[0]
+            lease=run_once._acquire_agent_lease(conn,'repo:example/backend','other-run',now,9)
+        saved=None
+        for _ in range(2):
+            run_once.run_once(fixture.config_path,dry_run=True,skip_external=True,skip_publish=True)
+            with closing(sqlite3.connect(db)) as conn:
+                timing=execution_metrics.task_timing(conn,task)
+                self.assertEqual(timing['waiting_reason'],'repository_busy')
+                self.assertIsNotNone(timing['lease_expires_at'])
+                if saved:
+                    self.assertEqual(timing['waiting_since'],saved)
+                saved=timing['waiting_since']
+        with closing(sqlite3.connect(db)) as conn,conn:
+            run_once._release_agent_lease(conn,lease['lease_id'],run_once._now())
+        run_once.run_once(fixture.config_path,dry_run=True,skip_external=True,skip_publish=True)
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertNotEqual(execution_metrics.task_timing(conn,task)['waiting_reason'],'repository_busy')
 
 
 class DiscoveryLockTests(unittest.TestCase):

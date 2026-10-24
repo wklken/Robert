@@ -57,12 +57,16 @@ def lifecycle_facts(conn, item):
                            'reason': safe_text(publication.get('safe_error')) + ' ' + safe_text(publication.get('required_action') or (('Next retry: ' + publication['next_retry_at']) if publication.get('next_retry_at') else '')), 'failed_at': publication.get('failed_at'),
                            **{key: publication.get(key) for key in ('reason_code','attempt_count','max_attempts','retryable','next_retry_at','required_action')}})
     attention = []
-    for binding in conn.execute(f"""SELECT DISTINCT wb.metadata_json FROM workflow_bindings wb JOIN tasks t ON
-        (wb.subject_type='task' AND wb.subject_id=t.task_id) OR
-        (wb.subject_type='remediation_episode' AND wb.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))
-        WHERE t.workstream_id IN ({placeholders}) AND wb.binding_status='attention'""", streams):
-        metadata = json.loads(binding[0] or '{}')
-        attention.append(safe_text(metadata.get('reason_code') or 'Workflow requires operator attention.'))
+    from robert_agent import execution_store
+    subjects=set()
+    for task_id,episode_id in conn.execute(f"SELECT task_id,json_extract(metadata_json,'$.remediation_episode_id') FROM tasks WHERE workstream_id IN ({placeholders})",streams):
+        subjects.add(('task',task_id))
+        if episode_id:
+            subjects.add(('remediation_episode',episode_id))
+    for key,binding in execution_store.read_controls(conn).items():
+        if key in subjects and (binding['binding_status']=='attention' or (binding.get('owner_engine')=='dbos' and binding['binding_status']!='terminal')):
+            metadata=json.loads(binding['metadata_json'] or '{}')
+            attention.append(safe_text(metadata.get('reason_code') or 'Execution requires operator attention or offline migration.'))
     source = conn.execute("SELECT state FROM github_sources WHERE source_id=?", (item['origin_source_id'],)).fetchone()
     pending = conn.execute(
         """SELECT 1 FROM wakeups WHERE work_item_id=? AND status='pending'
@@ -106,7 +110,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks):
             raise work_items.WorkItemConflictError('Worker could not be stopped: ' + str(outcome.get('reason') or outcome.get('status')))
         metadata['termination'] = outcome
         conn.execute('UPDATE attempts SET metadata_json=? WHERE attempt_id=?', (json.dumps(metadata), attempt['attempt_id']))
-    from robert_agent import workflow_store, workflow_signals
+    from robert_agent import execution_store
     subjects = {('task', task_id) for (task_id,) in task_ids}
     for (task_id,) in task_ids:
         task = conn.execute('SELECT task_kind, metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
@@ -115,13 +119,10 @@ def cancel_execution(conn, item, facts, now, db_path, locks):
             if metadata.get('remediation_episode_id'):
                 subjects.add(('remediation_episode', metadata['remediation_episode_id']))
     for subject_type, subject_id in sorted(subjects):
-        binding = workflow_store.get_binding(conn, subject_type, subject_id)
+        binding = execution_store.get_binding(conn, subject_type, subject_id)
         if not binding or binding['binding_status'] == 'terminal':
             continue
-        if binding['owner_engine'] == 'dbos' and binding['binding_status'] == 'active':
-            fact_id = f"web-cancel:{item['work_item_id']}:{item['version']}"
-            workflow_signals.record_subject_signal(conn, binding, workflow_signals.DBOS_TOPIC, fact_id, {'fact_id': fact_id}, now)
-        workflow_store.close_binding(conn, subject_type, subject_id, now)
+        execution_store.close_binding(conn, subject_type, subject_id, now)
         if subject_type == 'remediation_episode':
             conn.execute("UPDATE pr_remediation_episodes SET status='canceled', updated_at=? WHERE episode_id=? AND status NOT IN ('resolved','exhausted','superseded','canceled')", (now, subject_id))
     placeholders = ','.join('?' for _ in facts['streams']) or 'NULL'

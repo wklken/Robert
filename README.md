@@ -87,8 +87,9 @@ confirmation wherever the guide requires it.
 Robert 使用 `version: 1` 的 YAML，默认位于 `~/.config/robert/config.yml`。
 `github` 配置监听账号，`workers` 定义编码 Agent，`routes` 与 `route_worker_models`
 配置路由及模型，`repos` 定义仓库与信任关系，`daemon` 配置轮询及诊断保留策略。
-`workflow_engine` 默认使用 `legacy`；DBOS 的 `shadow` / `active` 仍属于迁移开发能力，
-不能仅凭配置校验通过就切换生产调度。
+任务执行统一使用 SQLite 状态机，不需要 DBOS 或 PostgreSQL。旧 `legacy` 配置作为
+SQLite 的兼容输入接受；旧 `active` / `shadow` 部署须先按[升级指南](docs/sqlite-state-machine-upgrade.md)
+完成离线交接，不能仅修改模式后直接启动。
 
 完整结构、字段默认值与旧配置调整见[配置参考](docs/reference.md#configuration)，
 安装与多仓库示例见[操作指引](docs/guides.md)。

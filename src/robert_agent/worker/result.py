@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from robert_agent.common import emit
-from robert_agent import wakeup_notifier, workflow_signals, workflow_store, result_spool
+from robert_agent import wakeup_notifier, execution_store, result_spool
 
 
 def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
@@ -240,6 +240,7 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
     result_created_at = created_at.isoformat()
     result_id = f"result-{uuid4().hex[:12]}"
     with closing(sqlite3.connect(db_path)) as conn, conn:
+        execution_store.require_migrated(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
         conn.execute("BEGIN IMMEDIATE")
@@ -258,7 +259,7 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
             episode_id = json.loads(task[2] or '{}').get('remediation_episode_id')
             if episode_id:
                 subject_type, subject_id = 'remediation_episode', episode_id
-        owner = workflow_store.get_binding(conn, subject_type, subject_id)
+        owner = execution_store.get_binding(conn, subject_type, subject_id)
         if owner and owner['binding_status'] != 'active':
             return {"ok": False, "status": "rejected_by_workflow_owner"}
         prior_rejection = conn.execute("SELECT json_extract(metadata_json,'$.result_validation') FROM attempts WHERE attempt_id=? AND task_id=?", (payload['attempt_id'], payload['task_id'])).fetchone()
@@ -341,23 +342,6 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
         if cur.rowcount == 0:
             conn.rollback()
             return {"ok": False, "status": "rejected_by_supervisor", "result_id": result_id}
-        binding = workflow_store.get_binding(conn, "task", payload["task_id"])
-        if binding and binding["owner_engine"] == "dbos":
-            if binding["binding_status"] != "active":
-                conn.rollback()
-                return {
-                    "ok": False,
-                    "status": "rejected_by_workflow_owner",
-                    "result_id": result_id,
-                }
-            workflow_signals.record_subject_signal(
-                conn,
-                binding,
-                "worker_result",
-                result_id,
-                {"fact_id": result_id},
-                result_created_at,
-            )
         _insert_worker_result_wakeup(conn, payload, result_id, result_created_at)
     wakeup_notifier.notify(db_path, sender=notifier)
     return {"ok": True, "status": "recorded", "result_id": result_id}
