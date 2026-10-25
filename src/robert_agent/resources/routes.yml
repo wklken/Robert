@@ -80,3 +80,13 @@ routes:
       required_statuses: []
       allow_skipped: false
     recommended_skills: []
+  - id: vote
+    workspace_mode: none
+    expected_output: multi_agent_vote_report
+    allowed_github_actions: [comment]
+    needs_worktree: false
+    verification_policy:
+      mode: optional
+      required_statuses: [passed]
+      allow_skipped: true
+    recommended_skills: []

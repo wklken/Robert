@@ -153,7 +153,26 @@ def infer_dd_workstream_from_pr_body(body, repo_full_name):
     return {}
 
 
+def is_vote_request(body):
+    """Recognize an addressed decision request, ignoring quoted/background text."""
+    text = re.sub(r"```[\s\S]*?```", "", body or "")
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith('>'))
+    addressed = re.search(r"@[^\s]+\s+([\s\S]+)", text)
+    if not addressed:
+        return False
+    request = addressed.group(1).strip()
+    if re.match(r"(?:please\s+)?review\b", request, re.I):
+        return False
+    if re.search(r"(?:不要|不需要|先不|别|无需).{0,8}(?:投票|表决|对比|比较)|(?:do not|don't|no need to)\s+(?:vote|compare)", request, re.I):
+        return False
+    if re.match(r"(?:(?:如何|怎么|怎样|how\b).{0,30})?(?:请|帮我|please\s+)?(?:实现|开发|增加|支持|implement|build|add)\s*", request, re.I):
+        return False
+    return bool(re.search(r"投票|表决|\bvote\b|(?:多个模型|各模型|多\s*agent|multiple\s+(?:models|agents)).{0,80}(?:选择|比较|推荐|choose|compare|decide)|(?:对比|比较).{0,80}(?:方案|选项|推荐|选择)|\bcompare\b.{0,100}\b(?:and|versus|vs|recommend|choose)\b", request, re.I))
+
+
 def infer_intent(title, body, event_type):
+    if is_vote_request(body):
+        return "vote"
     text = f"{title or ''}\n{body or ''}".lower()
     if event_type == "review_request":
         return "review_request"

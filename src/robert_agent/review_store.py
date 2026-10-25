@@ -174,15 +174,8 @@ def configure_process_pool(conn, limit):
 
 
 def process_pool_status(conn):
-    # Status/Board are read-only and may open a database before the next
-    # engine cycle migrates it. Unknown capacity must not look like zero use.
-    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='review_process_pool'").fetchone():
-        return None
-    limit = conn.execute('SELECT max_concurrency FROM review_process_pool WHERE singleton=1').fetchone()
-    if not limit or 'slot_reserved' not in {row[1] for row in conn.execute('PRAGMA table_info(review_runs)')}:
-        return None
-    return {'limit': limit[0],
-            'in_use': conn.execute('SELECT COUNT(*) FROM review_runs WHERE slot_reserved=1').fetchone()[0]}
+    from robert_agent import model_pool
+    return model_pool.status(conn)
 
 
 def reserved_runs(conn):
@@ -192,17 +185,8 @@ def reserved_runs(conn):
 
 
 def reserve_slot(conn, run_id):
-    """Caller holds BEGIN IMMEDIATE and has checked the current task owner."""
-    if not conn.in_transaction:
-        raise ValueError('review slot reservation requires a write transaction')
-    pool = process_pool_status(conn)
-    if pool is None:
-        raise ValueError('review process pool is not initialized')
-    if pool['in_use'] >= pool['limit']:
-        return False
-    changed = conn.execute('''UPDATE review_runs SET slot_reserved=1,status='starting',started_at=?,updated_at=?
-        WHERE run_id=? AND status='waiting' AND slot_reserved=0''', (now(), now(), run_id)).rowcount
-    return bool(changed)
+    from robert_agent import model_pool
+    return model_pool.reserve(conn, 'review_runs', run_id, now())
 
 
 def release_slot(conn, run_id):
@@ -241,3 +225,8 @@ def board_status(conn, task_id):
                       'attempt_no': run['attempt_no'], 'status': run['status'],
                       'error': safe_text(run['error'] or '')}
                      for run in runs(conn, entry['round_id'])]}
+
+
+def release_finished_slot(conn, run):
+    conn.execute("UPDATE review_runs SET slot_reserved=0 WHERE run_id=? AND updated_at=?",
+                 (run['run_id'], run['updated_at']))

@@ -226,6 +226,7 @@ Object.assign(translations.en, {
   publication_push_existing_pr: "Push code",
   publication_comment: "Publish comment",
   publication_review: "Publish review",
+  vote: "Vote", multi_agent_vote_report: "Multi-Agent vote", voting: "Voting", synthesizing: "Synthesizing",
   published: "Published",
   not_published: "Awaiting publication",
   publish_failed: "Publication failed",
@@ -281,7 +282,7 @@ Object.assign(translations.en, {
   cancelHelp:
     "Stop this task and skip unpublished results? Existing GitHub changes are kept. A worker that cannot be stopped remains active.",
   confirmCancel: "Confirm cancellation",
-  abandonReviewHelp: "I inspected and stopped all residual model processes for the unknown launches listed below. Abandon those launches and release their review slots.",
+  abandonReviewHelp: "I inspected and stopped all residual model processes for the unknown launches listed below. Abandon those launches and release their model slots.",
   submitting: "Submitting…",
   save: "Save changes",
   reviewDraft: "I reviewed the latest state; keep editing",
@@ -343,6 +344,7 @@ Object.assign(translations.zh, {
   publication_push_existing_pr: "推送代码",
   publication_comment: "发布评论",
   publication_review: "发布评审",
+  vote: "投票", multi_agent_vote_report: "多 Agent 投票", voting: "投票中", synthesizing: "汇总中",
   published: "已发布",
   not_published: "等待发布",
   publish_failed: "发布失败",
@@ -399,7 +401,7 @@ Object.assign(translations.zh, {
   cancelHelp:
     "停止此任务并跳过尚未发布的结果？已产生的 GitHub 变更会保留。无法停止的 Worker 会继续显示为运行中。",
   confirmCancel: "确认取消任务",
-  abandonReviewHelp: "我已检查并停止下列未知启动记录对应的所有残留模型进程。放弃这些记录并释放 review 并发额度。",
+  abandonReviewHelp: "我已检查并停止下列未知启动记录对应的所有残留模型进程。放弃这些记录并释放模型并发额度。",
   submitting: "提交中…",
   save: "保存修改",
   reviewDraft: "已核对最新内容，继续编辑",
@@ -1057,7 +1059,7 @@ function attentionForCommand(detail, command) {
   )?.event_id;
 }
 function unknownReviewRunIds(detail) {
-  return (detail.tasks || []).flatMap(task => (task.review?.runs || [])
+  return (detail.tasks || []).flatMap(task => ((task.vote || task.review)?.runs || [])
     .filter(run => run.can_abandon).map(run => run.run_id)).sort();
 }
 function updateComposerState(detail) {
@@ -1092,11 +1094,11 @@ function renderExecutionHistory(detail) {
     const entry = node("section", "execution-history-task");
     entry.append(node("h3", "", `${t(task.expected_output || task.route_id || "task")} · ${t(task.lifecycle)}`));
     entry.append(node("p", "attempt-counts", `${attemptCounts(task.attempts)} · ${task.task_id}`));
-    if (task.review) {
-      const review = task.review;
+    if (task.vote || task.review) {
+      const review = task.vote || task.review;
       entry.append(node("p", "", `${review.round_id} · ${review.head_sha || "pending"} · ${t(review.status)}`));
-      if (review.process_pool) entry.append(node("p", "", `Review processes: ${review.process_pool.in_use} / ${review.process_pool.limit}`));
-      else entry.append(node("p", "", "Review processes: unavailable"));
+      if (review.process_pool) entry.append(node("p", "", `Model processes: ${review.process_pool.in_use} / ${review.process_pool.limit}`));
+      else entry.append(node("p", "", "Model processes: unavailable"));
       if (review.error) entry.append(node("p", "", review.error));
       (review.runs || []).forEach((run) => {
         entry.append(node("p", "", `${run.stage} · ${run.worker_id}${run.model ? " (" + run.model + ")" : ""} · #${run.attempt_no} · ${t(run.status)}${run.error ? " · " + run.error : ""}`));

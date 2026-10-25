@@ -2,9 +2,10 @@ version: 1
 data_dir: ~/.local/share/robert
 database: robert.sqlite3
 hard_timeout_minutes: 45
-# Global model-process limit for native multi-model review, shared by all repos.
-# A review round still counts as one task against the existing max_concurrency.
-review_max_concurrency: 4
+# Global model-process limit shared by native review and vote across all repos.
+# Each round still counts as one task against max_concurrency.
+# review_max_concurrency remains a compatible alias; if both are set they must match.
+model_max_concurrency: 4
 
 github:
   account: robert-bot
@@ -70,3 +71,12 @@ repos: []
 #       enabled: true
 #       workers: [default, claude_reviewer]
 #       author_allowlist: [your-github-login]
+
+# Explicit trusted @ requests for multi-Agent voting (docs/multi-agent-vote.md).
+# Merge this vote entry into routes and define claude_voter under workers first.
+# routes:
+#   vote:
+#     worker: default
+#     multi_agent_vote:
+#       enabled: true
+#       workers: [default, claude_voter]

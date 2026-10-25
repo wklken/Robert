@@ -78,3 +78,12 @@ Issue-sourced `open_pr` actions must set `issue_resolution` to `complete` or
 `partial`. Complete delivery must use a GitHub closing keyword for the source
 issue. Partial delivery must use `Refs #N` and include a non-empty
 `remaining_scope` describing what still needs a follow-up.
+
+## Native voting
+
+The `vote` route uses the internal coordinator, not a runtime skill. Its workers
+exchange prepared-request.json, ballot.json and synthesis.json via isolated,
+sealed file handoffs. A normal final `multi_agent_vote_report` proposes exactly
+one audited `comment`, bound to its round, snapshot and triggering Issue/PR.
+Missing decision input uses the existing `waiting_for_user` protocol. See
+`docs/multi-agent-vote.md` for equal single-choice tally and recovery semantics.

@@ -1,3 +1,4 @@
+from robert_agent import model_execution
 from contextlib import closing
 import json
 import os
@@ -165,8 +166,8 @@ class ReviewRecoveryTests(unittest.TestCase):
             observed.append(recorded['pid'])
             return {'status': 'terminated'}
         with patch.object(driver, 'prepare', side_effect=RuntimeError('phase failed')), \
-             patch.object(review_coordinator, '_group_finished', return_value=False), \
-             patch.object(review_coordinator, '_wait_for_group_exit', return_value=True), \
+             patch.object(model_execution, '_group_finished', return_value=False), \
+             patch.object(model_execution, '_wait_for_group_exit', return_value=True), \
              patch.object(review_coordinator.worker_identity, 'inspect_recorded_identity', return_value='alive'), \
              patch.object(review_coordinator.worker_identity, 'terminate_recorded_identity', side_effect=terminate):
             with self.assertRaisesRegex(RuntimeError, 'phase failed'):

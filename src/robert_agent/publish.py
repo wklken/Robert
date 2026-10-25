@@ -14,6 +14,7 @@ from robert_agent import (
     pr_health,
     publication_reconcile,
     review_publish,
+    vote_publish,
     remediation,
     retry_policy,
     execution_operations,
@@ -863,6 +864,9 @@ def _publish_action(
     if action["action_type"] == "submit_pr_review":
         return review_publish.publish(action, _trusted_action_scope(conn, action), run_command,
                                       scope_guard=lambda: _publication_scope_guard(conn, action))
+    if action["action_type"] == "comment" and vote_publish.is_vote(action):
+        return vote_publish.publish(action, _trusted_action_scope(conn, action), run_command,
+                                    scope_guard=lambda: _publication_scope_guard(conn, action))
     if action["action_type"] == "comment":
         return _publish_comment(action, run_command, conn=conn)
     if action["action_type"] == "open_pr":
@@ -900,6 +904,7 @@ def _publish_action(
 
 def _mark_published(conn, action, result, now, intent=None):
     review_publish.record_outcome(conn, action, "published", now)
+    vote_publish.record_outcome(conn, action, "published", now)
     metadata = _decode_json(action["metadata_json"])
     metadata["publish"] = {
         "status": "published",
@@ -1167,7 +1172,8 @@ def _prepare_publication_intent(db_path, action_id, run_command):
 
 def _mark_skipped(conn, action, result, now):
     review_publish.record_outcome(conn, action, result.get("status"), now)
-    if action.get("action_type") == "submit_pr_review" and result.get("status") == "superseded":
+    vote_publish.record_outcome(conn, action, result.get("status"), now)
+    if (action.get("action_type") == "submit_pr_review" or vote_publish.is_vote(action)) and result.get("status") == "superseded":
         intent = _load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
             execution_store.transition_publication_intent(

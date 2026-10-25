@@ -441,6 +441,8 @@ def build_task(conn, task_id, result_limit=5):
     if _table_exists(conn, "review_sessions"):
         from robert_agent import review_store
         task["review"] = review_store.task_status(conn, task_id)
+    from robert_agent import vote_store
+    task["vote"] = vote_store.task_status(conn, task_id)
     task["events"] = [
         _row_dict(row)
         for row in conn.execute(

@@ -390,7 +390,7 @@ def terminate_worker(db_path, attempt_id):
             result = {**result, "status": status}
 
         metadata = _json_object(attempt.get("metadata_json"))
-        from robert_agent.review_coordinator import terminate_children
+        from robert_agent.native_rounds import terminate_children
         children_status = terminate_children(conn, attempt["task_id"])
         if children_status == "attention":
             status = "attention"

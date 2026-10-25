@@ -521,7 +521,13 @@ def validate_config(config_path, skip_external=False):
         worker_startup_grace_seconds = int(config.get("worker_startup_grace_seconds", 300))
         lease_ttl_minutes = int(config.get("lease_ttl_minutes", 9))
         max_concurrency = int(config.get("max_concurrency", 3))
-        review_max_concurrency = config.get("review_max_concurrency", 4)
+        for field in ('model_max_concurrency', 'review_max_concurrency'):
+            if field in config and (type(config[field]) is not int or config[field] < 1):
+                raise ValueError(f'{field} must be a positive integer')
+        review_max_concurrency = config.get("model_max_concurrency", config.get("review_max_concurrency", 4))
+        if ("model_max_concurrency" in config and "review_max_concurrency" in config
+                and config["model_max_concurrency"] != config["review_max_concurrency"]):
+            raise ValueError("model_max_concurrency and review_max_concurrency disagree")
         if type(review_max_concurrency) is not int or review_max_concurrency < 1:
             raise ValueError("review_max_concurrency must be a positive integer")
         python_bin_value = config.get("python_bin", "python3")
@@ -643,7 +649,7 @@ def validate_config(config_path, skip_external=False):
                 "status": "failed_config",
                 "safe_error": f"repos[{index}].github_account must not be empty",
             }
-        if "review_max_concurrency" in repo:
+        if "review_max_concurrency" in repo or "model_max_concurrency" in repo:
             return {
                 "ok": False,
                 "status": "failed_config",
@@ -811,6 +817,7 @@ def validate_config(config_path, skip_external=False):
         "lease_ttl_minutes": lease_ttl_minutes,
         "max_concurrency": max_concurrency,
         "review_max_concurrency": review_max_concurrency,
+        "model_max_concurrency": review_max_concurrency,
         "python_bin": python_bin,
         "worker_agent": worker_agent,
         "worker_command": worker_command,
