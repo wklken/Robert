@@ -70,6 +70,7 @@
     "version": {"const": 1},
     "data_dir": {"type": "string", "minLength": 1},
     "database": {"type": "string", "minLength": 1},
+    "review_max_concurrency": {"type": "integer", "minimum": 1, "default": 4},
     "github": {
       "type": "object",
       "required": ["account"],

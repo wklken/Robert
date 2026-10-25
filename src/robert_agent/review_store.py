@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS review_runs (
   status TEXT NOT NULL,
   output_dir TEXT NOT NULL UNIQUE,
   prompt_sha256 TEXT NOT NULL,
+  slot_reserved INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
   dispatch_json TEXT,
   artifact_json TEXT,
   error TEXT,
@@ -44,6 +46,11 @@ CREATE TABLE IF NOT EXISTS review_runs (
   UNIQUE(round_id, stage, worker_id, attempt_no)
 );
 CREATE INDEX IF NOT EXISTS review_sessions_workstream ON review_sessions(workstream_id, created_at);
+CREATE TABLE IF NOT EXISTS review_process_pool (
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  max_concurrency INTEGER NOT NULL CHECK(max_concurrency>0)
+);
+INSERT OR IGNORE INTO review_process_pool VALUES (1,4);
 """
 
 
@@ -58,6 +65,15 @@ def initialize(conn):
             conn.execute(statement)
     if 'model' not in {row[1] for row in conn.execute('PRAGMA table_info(review_runs)')}:
         conn.execute('ALTER TABLE review_runs ADD COLUMN model TEXT')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(review_runs)')}
+    if 'slot_reserved' not in columns:
+        conn.execute('ALTER TABLE review_runs ADD COLUMN slot_reserved INTEGER NOT NULL DEFAULT 0')
+        # Existing children remain counted until their process groups are
+        # proven to have exited, including ambiguous starts.
+        conn.execute("UPDATE review_runs SET slot_reserved=1 WHERE status IN ('starting','running')")
+    if 'started_at' not in columns:
+        conn.execute('ALTER TABLE review_runs ADD COLUMN started_at TEXT')
+        conn.execute("UPDATE review_runs SET started_at=created_at WHERE status IN ('starting','running')")
 
 
 @contextmanager
@@ -143,7 +159,7 @@ def new_run(conn, round_id, stage, worker_id, owner_attempt_id, root, prompt_sha
 
 
 def update_run(conn, run_id, **fields):
-    allowed = {'status', 'dispatch_json', 'artifact_json', 'error'}
+    allowed = {'status', 'dispatch_json', 'artifact_json', 'error', 'slot_reserved'}
     if not fields or set(fields) - allowed:
         raise ValueError('invalid review run update')
     fields['updated_at'] = now()
@@ -151,11 +167,54 @@ def update_run(conn, run_id, **fields):
                  + ' WHERE run_id=?', [*fields.values(), run_id])
 
 
+def configure_process_pool(conn, limit):
+    if type(limit) is not int or limit < 1:
+        raise ValueError('review_max_concurrency must be a positive integer')
+    conn.execute('UPDATE review_process_pool SET max_concurrency=? WHERE singleton=1', (limit,))
+
+
+def process_pool_status(conn):
+    # Status/Board are read-only and may open a database before the next
+    # engine cycle migrates it. Unknown capacity must not look like zero use.
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='review_process_pool'").fetchone():
+        return None
+    limit = conn.execute('SELECT max_concurrency FROM review_process_pool WHERE singleton=1').fetchone()
+    if not limit or 'slot_reserved' not in {row[1] for row in conn.execute('PRAGMA table_info(review_runs)')}:
+        return None
+    return {'limit': limit[0],
+            'in_use': conn.execute('SELECT COUNT(*) FROM review_runs WHERE slot_reserved=1').fetchone()[0]}
+
+
+def reserved_runs(conn):
+    cursor = conn.execute('SELECT * FROM review_runs WHERE slot_reserved=1')
+    names = [column[0] for column in cursor.description]
+    return [decode(dict(zip(names, row))) for row in cursor]
+
+
+def reserve_slot(conn, run_id):
+    """Caller holds BEGIN IMMEDIATE and has checked the current task owner."""
+    if not conn.in_transaction:
+        raise ValueError('review slot reservation requires a write transaction')
+    pool = process_pool_status(conn)
+    if pool is None:
+        raise ValueError('review process pool is not initialized')
+    if pool['in_use'] >= pool['limit']:
+        return False
+    changed = conn.execute('''UPDATE review_runs SET slot_reserved=1,status='starting',started_at=?,updated_at=?
+        WHERE run_id=? AND status='waiting' AND slot_reserved=0''', (now(), now(), run_id)).rowcount
+    return bool(changed)
+
+
+def release_slot(conn, run_id):
+    conn.execute('UPDATE review_runs SET slot_reserved=0 WHERE run_id=?', (run_id,))
+
+
 def task_status(conn, task_id):
     entry = session(conn, task_id=task_id)
     if not entry:
         return None
     return {key: value for key, value in entry.items() if key != 'request'} | {
+        'process_pool': process_pool_status(conn),
         'runs': [{key: value for key, value in run.items() if key != 'dispatch'}
                  for run in runs(conn, entry['round_id'])]}
 
@@ -168,10 +227,12 @@ def board_status(conn, task_id):
         return None
     manifest = entry['manifest']
     return {'round_id': entry['round_id'], 'status': entry['status'],
+            'process_pool': process_pool_status(conn),
             'head_sha': manifest.get('head_sha'), 'base_ref': manifest.get('base_ref'),
             'error': safe_text(entry['error'] or ''),
             'runs': [{'stage': run['stage'], 'worker_id': safe_text(run['worker_id']),
                       'model': safe_text(run['model'] or ''),
+                      'slot_reserved': bool(run['slot_reserved']) if 'slot_reserved' in run else None,
                       'attempt_no': run['attempt_no'], 'status': run['status'],
                       'error': safe_text(run['error'] or '')}
                      for run in runs(conn, entry['round_id'])]}

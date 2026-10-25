@@ -1088,6 +1088,8 @@ function renderExecutionHistory(detail) {
     if (task.review) {
       const review = task.review;
       entry.append(node("p", "", `${review.round_id} · ${review.head_sha || "pending"} · ${t(review.status)}`));
+      if (review.process_pool) entry.append(node("p", "", `Review processes: ${review.process_pool.in_use} / ${review.process_pool.limit}`));
+      else entry.append(node("p", "", "Review processes: unavailable"));
       if (review.error) entry.append(node("p", "", review.error));
       (review.runs || []).forEach((run) => {
         entry.append(node("p", "", `${run.stage} · ${run.worker_id}${run.model ? " (" + run.model + ")" : ""} · #${run.attempt_no} · ${t(run.status)}${run.error ? " · " + run.error : ""}`));

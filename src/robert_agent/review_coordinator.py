@@ -2,9 +2,10 @@
 
 Models only read inputs and write their own output files. This trusted process
 owns SQLite, phase transitions, result validation and the audited publication
-proposal. One model at a time uses the task's existing concurrency slot.
+proposal. The round uses one task slot; model processes share a separate pool.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -14,11 +15,13 @@ import shutil
 import signal
 import stat
 import subprocess
+import threading
 import time
 
 from robert_agent import dispatch, execution_store, review_files, review_sandbox
 from robert_agent import review_store as store
 from robert_agent import review_workspace, worker_identity
+from robert_agent.publication_lock import task_publication_lock
 from robert_agent.worker import result as worker_result, snapshot
 
 
@@ -89,16 +92,23 @@ def terminate_children(conn, task_id):
         return 'already_dead'
     outcomes = []
     for run in store.runs(conn, review['round_id']):
+        if run['status'] in {'prepared', 'waiting'} and not run['slot_reserved']:
+            store.update_run(conn, run['run_id'], status='interrupted', error='coordinator stopped before launch')
+            continue
         if run['status'] not in {'starting', 'running', 'failed'}:
             continue
         recorded = run['dispatch']
         if run['status'] == 'failed' and not recorded.get('pid'):
             continue
         if _group_finished(recorded):
+            store.release_slot(conn, run['run_id'])
             outcomes.append('already_dead')
             continue
         if recorded.get('process_exited') or (recorded and worker_identity.inspect_recorded_identity(recorded) == 'dead'):
-            outcomes.append('already_dead' if _wait_for_group_exit(recorded) else 'attention')
+            exited = _wait_for_group_exit(recorded)
+            if exited:
+                store.release_slot(conn, run['run_id'])
+            outcomes.append('already_dead' if exited else 'attention')
             continue
         if not recorded:
             outcomes.append('attention')
@@ -108,7 +118,7 @@ def terminate_children(conn, task_id):
             result = {'status': 'attention'}
         outcomes.append(result['status'])
         if result['status'] != 'attention':
-            store.update_run(conn, run['run_id'], status='interrupted', error='coordinator stopped')
+            store.update_run(conn, run['run_id'], status='interrupted', slot_reserved=0, error='coordinator stopped')
     return 'attention' if 'attention' in outcomes else 'terminated'
 
 
@@ -119,6 +129,8 @@ class Coordinator:
         self.db_path, self.task_id, self.attempt_id = str(db_path), task_id, attempt_id
         self.fetch_pr, self.launcher, self.sandbox = fetch_pr, launcher, sandbox
         self.poll_seconds = poll_seconds
+        self.stopping = threading.Event()
+        self.processes = {}
         with store.connect(db_path) as conn:
             self.session = store.session(conn, task_id=task_id)
         if not self.session:
@@ -129,6 +141,8 @@ class Coordinator:
         self.manifest = self.session['manifest']
 
     def check_active(self):
+        if self.stopping.is_set():
+            raise ReviewStopped('review coordinator is stopping')
         with store.connect(self.db_path) as conn:
             if not _active(conn, self.task_id, self.attempt_id):
                 raise ReviewStopped('review attempt is no longer current')
@@ -153,11 +167,14 @@ class Coordinator:
         with store.connect(self.db_path) as conn:
             previous = store.runs(conn, self.round_id)
         workers = {worker['name']: worker for worker in self.request['workers']}
+        pending = []
         for run in previous:
             if run['status'] == 'starting' and not run['dispatch']:
                 raise ReviewStopped('model launch outcome unknown; inspect before retry')
-            if run['status'] != 'running':
-                continue
+            if run['status'] == 'running':
+                pending.append(run)
+
+        def reconcile(run):
             try:
                 self._wait(run, run['dispatch'], workers[run['worker_id']]['timeout_seconds'])
             except ReviewStopped:
@@ -165,6 +182,76 @@ class Coordinator:
             except RuntimeError as exc:
                 with store.connect(self.db_path) as conn:
                     store.update_run(conn, run['run_id'], status='failed', error=str(exc))
+        self.parallel(pending, reconcile)
+
+    def parallel(self, items, operation):
+        """Stop sibling waiters on cancellation without losing running children."""
+        if not items:
+            return []
+        with ThreadPoolExecutor(max_workers=len(items)) as executor:
+            futures = {}
+            try:
+                for index, item in enumerate(items):
+                    futures[executor.submit(operation, item)] = index
+                results = [None] * len(items)
+                for future in as_completed(futures):
+                    results[futures[future]] = future.result()
+            except BaseException:
+                self.stopping.set()
+                for future in futures:
+                    future.cancel()
+                raise
+        return results
+
+    def release_slot(self, run):
+        with store.connect(self.db_path) as conn:
+            store.release_slot(conn, run['run_id'])
+
+    def reclaim_finished_slots(self):
+        # A crashed coordinator may leave a completed child counted. Reclaim
+        # only a proven-empty group; never guess whether an ambiguous spawn ran.
+        with store.connect(self.db_path) as conn:
+            reserved = store.reserved_runs(conn)
+        for run in reserved:
+            if run['dispatch'] and _group_finished(run['dispatch']):
+                with store.connect(self.db_path) as conn:
+                    conn.execute('''UPDATE review_runs SET slot_reserved=0
+                        WHERE run_id=? AND updated_at=?''', (run['run_id'], run['updated_at']))
+
+    def launch_with_slot(self, run, worker, prompt_path, prefix, environment):
+        while True:
+            self.check_active()
+            self.reclaim_finished_slots()
+            # Cancellation takes this same lock before changing the owner or
+            # terminating children. Keep reservation/spawn/PID registration
+            # together, but never retain a SQLite writer across external I/O.
+            with task_publication_lock(self.db_path, self.task_id) as locked:
+                if locked:
+                    self.check_active()
+                    with store.connect(self.db_path) as conn:
+                        conn.execute('BEGIN IMMEDIATE')
+                        if not _active(conn, self.task_id, self.attempt_id):
+                            raise ReviewStopped('review attempt is no longer current')
+                        acquired = store.reserve_slot(conn, run['run_id'])
+                    if acquired:
+                        launched = self.launcher(
+                            task_id=self.task_id, attempt_id=run['run_id'], prompt_path=prompt_path,
+                            worktree_path=self.manifest['worktree_path'], worker_agent_config=worker,
+                            model=run['model'], reasoning_effort=worker['default_effort'],
+                            trusted_environment=environment, command_prefix=prefix, log_dir=run['output_dir'], dry_run=False,
+                        )
+                        # Retain our Popen even when another thread's dispatch
+                        # reaps the shared registry before this waiter polls it.
+                        process = dispatch._BACKGROUND_PROCESSES.get(launched.get('pid'))
+                        if process is not None:
+                            self.processes[launched['pid']] = process
+                        with store.connect(self.db_path) as conn:
+                            store.update_run(conn, run['run_id'], status='running' if launched.get('ok') or launched.get('pid') else 'failed',
+                                             dispatch_json=json.dumps(launched))
+                            fresh = next(r for r in store.runs(conn, self.round_id) if r['run_id'] == run['run_id'])
+                        run.update(fresh)
+                        return launched
+            self.stopping.wait(self.poll_seconds)
 
     def register(self, run, artifact):
         self.check_active()
@@ -227,14 +314,15 @@ class Coordinator:
         return sealed
 
     def _wait(self, run, launched, timeout):
-        started = datetime.fromisoformat(run['created_at'])
+        started = datetime.fromisoformat(run.get('started_at') or run['created_at'])
         while not launched.get('process_exited'):
             self.check_active()
-            proc = dispatch._BACKGROUND_PROCESSES.get(launched.get('pid'))
+            proc = self.processes.get(launched.get('pid')) or dispatch._BACKGROUND_PROCESSES.get(launched.get('pid'))
             if proc is not None:
                 code = proc.poll()
                 if code is not None:
                     dispatch._BACKGROUND_PROCESSES.pop(proc.pid, None)
+                    self.processes.pop(proc.pid, None)
                     launched = {**launched, 'process_exited': True, 'returncode': code}
                     break
             else:
@@ -252,12 +340,14 @@ class Coordinator:
                     raise ReviewStopped('review worker timeout termination requires attention')
                 if not _wait_for_group_exit(launched):
                     raise ReviewStopped('review worker timeout left a process group; inspect remaining processes')
+                self.release_slot(run)
                 raise RuntimeError('review worker timed out')
             time.sleep(self.poll_seconds)
         with store.connect(self.db_path) as conn:
             store.update_run(conn, run['run_id'], dispatch_json=json.dumps(launched))
         if not _wait_for_group_exit(launched):
             raise ReviewStopped('review leader exited but process group remains; inspect and stop remaining processes before retry')
+        self.release_slot(run)
         if launched.get('returncode', 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
 
@@ -271,6 +361,10 @@ class Coordinator:
             prior = [r for r in store.runs(conn, self.round_id)
                      if r['stage'] == stage and r['worker_id'] == worker['name']]
         for run in reversed(prior):
+            if run['status'] in {'prepared', 'waiting'} and not run['slot_reserved']:
+                with store.connect(self.db_path) as conn:
+                    store.update_run(conn, run['run_id'], status='interrupted', error='recovered before launch')
+                continue
             if run['prompt_sha256'] != prompt_hash:
                 if stage == 'synthesis':
                     if run['status'] in {'running', 'succeeded'}:
@@ -312,23 +406,15 @@ class Coordinator:
                 model = worker['fallback_model']
             run = store.new_run(conn, self.round_id, stage, worker['name'], self.attempt_id,
                                 self.manifest['artifact_root'], prompt_hash, model=model)
+            store.update_run(conn, run['run_id'], status='waiting')
         try:
             prefix, environment = self.sandbox(self.manifest, run['output_dir'], self.data_dir,
                                                prompt_path, readable_files)
-            with store.connect(self.db_path) as conn:
-                store.update_run(conn, run['run_id'], status='starting')
-            launched = self.launcher(
-                task_id=self.task_id, attempt_id=run['run_id'], prompt_path=prompt_path,
-                worktree_path=self.manifest['worktree_path'], worker_agent_config=worker,
-                model=model, reasoning_effort=worker['default_effort'],
-                trusted_environment=environment, command_prefix=prefix, log_dir=run['output_dir'], dry_run=False,
-            )
-            with store.connect(self.db_path) as conn:
-                store.update_run(conn, run['run_id'], status='running' if launched.get('ok') or launched.get('pid') else 'failed',
-                                 dispatch_json=json.dumps(launched))
+            launched = self.launch_with_slot(run, worker, prompt_path, prefix, environment)
             if not launched.get('ok'):
                 if launched.get('pid') and not _wait_for_group_exit(launched):
                     raise ReviewStopped('failed model launch left a process group; inspect remaining processes')
+                self.release_slot(run)
                 raise RuntimeError(launched.get('safe_error', 'review launch failed'))
             self._wait(run, launched, worker['timeout_seconds'])
             if store.digest(prompt_path) != prompt_hash:
@@ -420,8 +506,7 @@ class Coordinator:
 
     def review(self):
         self.phase('reviewing')
-        records, failures = [], []
-        for worker in self.request['workers']:
+        def review_one(worker):
             def validate(output, model, worker=worker):
                 result_path = output / 'result.json'
                 result = review_files.read_result(result_path, self.manifest)
@@ -434,11 +519,14 @@ class Coordinator:
                         'result_sha256': store.digest(result_path), 'report_path': str(report_path),
                         'report_sha256': store.digest(report_path)}
             try:
-                records.append(self.run_phase('review', worker, self.manifest['prompt_path'], validate))
+                return self.run_phase('review', worker, self.manifest['prompt_path'], validate), None
             except ReviewStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
-                failures.append(f"{worker['name']}: {exc}")
+                return None, f"{worker['name']}: {exc}"
+        results = self.parallel(self.request['workers'], review_one)
+        records = [record for record, error in results if record]
+        failures = [error for record, error in results if error]
         if failures:
             raise RuntimeError('; '.join(failures))
         return records

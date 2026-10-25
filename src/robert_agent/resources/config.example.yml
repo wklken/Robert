@@ -2,6 +2,9 @@ version: 1
 data_dir: ~/.local/share/robert
 database: robert.sqlite3
 hard_timeout_minutes: 45
+# Global model-process limit for native multi-model review, shared by all repos.
+# A review round still counts as one task against the existing max_concurrency.
+review_max_concurrency: 4
 
 github:
   account: robert-bot

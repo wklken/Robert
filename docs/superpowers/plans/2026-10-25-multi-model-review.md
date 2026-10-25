@@ -1,12 +1,21 @@
 # Robert 多模型 PR Review 实现方案
 
 日期：2026-10-25。分析基线：`0e0201a834d1c9ffc6cd54a21836ce738b4b1c6a`（已执行 `git pull --ff-only`，本地 main 与拉取后的 origin/main 一致）。
-当前授权包含本地实现、完整测试和 subagents。不包含运行真实付费模型、GitHub 写入、提交或推送。
+当前授权包含本地实现、完整测试、subagents、提交并 push 到现有 PR #45，以及更新该 PR 描述。不包含运行真实付费模型、在真实测试 PR 上执行 review 发布、合并或发布版本。
+
+## 本轮并发修改检查点
+
+- 修改基线：`ea38417107e58f2a5fb298ea3e99dffcd7277253`，分支 `codex/native-multi-model-review`，已有 PR #45。
+- 每轮 review 仍占一个原有任务并发槽；准备、reviewer、汇总各模型进程使用独立的全局子进程池。同轮 reviewer 在额度允许时并行执行。
+- 顶层 `review_max_concurrency` 默认 4，严格正整数，不允许 repository 或 route 覆盖；同一数据库/数据目录下所有仓库共享上限。原单模型路径不使用新池。
+- SQLite 持久化全局上限和额度认领。等待额度不计入 worker timeout，父任务总时限保留。降低上限不终止已运行模型，提高上限后等待者继续申请。
+- 重试只为需要执行的阶段重新申请额度；取消阻止等待者启动，确认模型进程组退出后释放额度；未知启动或未确认退出保留额度。恢复核对已登记进程和文件，避免重复启动。
+- 本轮增加并发、全局上限、重试、取消、恢复及单模型兼容验收，完成后跑完整测试和打包门禁；结果由交付说明记录。
 
 ## 实现检查点
 
 - 基线：934 项完整测试通过，Python 3.14.7。
-- 使用内建 `review_coordinator` 作为原有 attempt 的受监督进程，SQLite 保存 round/run。每轮顺序运行 reviewer，占用原有一个并发槽，避免扩张仓库并发限额。准备、独立审查和汇总均为新进程；重试仅重新执行未通过文件校验的阶段。
+- 使用内建 `review_coordinator` 作为原有 attempt 的受监督进程，SQLite 保存 round/run。每轮占用原有一个任务并发槽，reviewer 使用独立全局子进程池并行执行。准备、独立审查和汇总均为新进程；重试仅重新执行未通过文件校验的阶段。
 - 原有 `pr_review_comment` 路径保留。匹配作者白名单才切换到 `multi_agent_review_report` / `submit_pr_review`。
 - 每个 reviewer 的输出目录由配置名的 hash 派生，避免任意 worker 名称作为路径。
 - macOS 使用 sandbox-exec；Linux 使用 bubblewrap。缺少隔离工具时失败并显示原因，不自动降低隔离。
@@ -21,6 +30,7 @@
 
 - 把 github-pr-monitor 的准备上下文、独立 review、复核汇总、报告生成、发布与恢复流程实现为 Robert 内建能力，不创建或依赖该 skill。
 - 多个 reviewer 使用同一份 review prompt、同一代码快照、同一上下文；不保留按模型区分的审查重点。
+- 主 agent 准备并冻结上下文后，各 reviewer 在全局子进程额度内并行；全部结果有效后再汇总。配置顺序决定报告排列，不要求按完成顺序生成报告。
 - 文件是各阶段的交接协议：每轮独立 git worktree；reviewer 自行读取准备好的上下文与源码，写入自己的结果文件；主 agent 读取经校验的结果文件复核汇总。SQLite 保存状态、文件索引、hash 和执行证据。
 - 开关开启且白名单命中时运行多个 reviewer；其余情况只运行第一个 reviewer，保留现有单模型路径。
 - 白名单仅判断 PR 作者的 GitHub login；Git commit author、committer、Co-authored-by、评论者和请求者均不参与白名单判断，不增加 commit 身份查询。
@@ -46,6 +56,8 @@
 保持现有 workers 定义；在 review-pr 路由上增加 multi_agent_review 块，功能名为 multi-agent-review。实现后的使用说明见 [多模型 Review](../../multi-model-review.md)。
 
 ```yaml
+review_max_concurrency: 4
+
 workers:
   reviewer:
     adapter: codex
@@ -66,17 +78,18 @@ routes:
     multi_agent_review:
       enabled: true
       workers: [reviewer, claude_reviewer]
-      allowlist: [wklken]
+      author_allowlist: [your-github-login]
 ```
 
 - `workers` 是有序的已命名 worker 引用，可以继续增加第三个模型，也允许同一 adapter 的不同 model。
+- `review_max_concurrency` 是独立于任务 `max_concurrency` 的全局模型子进程上限；默认 4，不允许 repository/route 覆盖。准备和汇总也计算在内，协调器不计算在内。
 - `worker` 同时作为主 agent 配置和默认单模型配置；要求列表第一个元素与它相同，避免不命中白名单时选错模型。
 - 省略整个配置块时保持旧行为；enabled 默认 false；空白名单不启用多模型。
 - 开启时要求至少两个唯一 worker 名称且均存在；配置错误在校验阶段报告，不静默删掉参与者。
 - 账号去除输入中的首尾空白和可选 @ 前缀，并按 GitHub login 不区分大小写匹配；只与 PR 元信息中的 author.login 比较。
 - PR 作者缺失或查询失败时不启用多模型，记录无法确认作者的原因。后续执行仍须满足原有上下文和授权要求，不能绕过缺失必要元信息的失败处理。
 - 支持现有全局和仓库级 route 覆盖；仓库级 multi_agent_review 块整体替换全局块，数组不合并。
-- 每轮开始重新判断 PR 作者和当时的配置，随后固化选择结果、作者 login、命中原因与配置指纹。普通配置修改只影响下一轮；停止当前轮使用既有取消操作。
+- 每轮开始重新判断 PR 作者和当时的 worker/route 配置，随后固化选择结果、作者 login、命中原因与配置指纹。worker/route 修改只影响下一轮；停止当前轮使用既有取消操作。全局子进程上限在下次加载配置时应用到共享池，降低上限不终止已有模型，只限制新增启动。
 
 判定公式：`multi_model = enabled and normalize(pr.author.login) in allowlist`。
 
@@ -107,7 +120,7 @@ routes:
 - 一条新的有效 review 评论创建新 round，即使与上一轮措辞相同或 head SHA 相同。普通 push、普通讨论、已读过的旧 assignment/review request 不自行创建新轮次。
 - 评论编辑沿用现有事件身份，不当作新的 review 请求；再次执行通过新评论或新的 review request 表达。
 
-### 触发与串行推进
+### 触发与轮次串行推进
 
 1. 首次入口覆盖可信用户向 Robert 发出的 PR assignment、review request，以及明确要求 Robert review 的评论。将属于 reviewer 的 PR 指派归入 `review-pr`；issue 指派和明确的代码修改请求保持原有语义。
 2. 后续评论继续通过相同授权和意图识别，支持 `@bot review ...`、`@bot review again`、明确的重新审查表达；不能把“作者反馈已修复”、报告引用、提到其他 reviewer 或普通讨论当作新请求。
@@ -322,7 +335,7 @@ skill 同时写了“主 agent 不做 review 判断”和“主 agent 必须验�
 - 已选定的 N 个 reviewer 必须全部成功。一个成功、一个失败时保留成功结果，只补跑失败方；不得降级发布单模型报告，也不得让主 agent 补写缺失报告。
 - 复用要求 round、head/base/merge-base、context、prompt、worker 配置及结果 hash 均有效。显式 review-again 创建新一轮，即使 HEAD 不变也重跑全部模型；故障 retry 沿用同一轮。
 - 聚合失败只重跑聚合；发布失败只重试/对账发布。任何阶段重试都不覆盖已经封存的成功产物。
-- 每个实际模型进程占用并发名额，prepare 和 synthesis 也计算在内；父控制器不占模型名额。容量为 1 时允许顺序执行多个模型，避免父任务占满名额造成死锁。
+- 每轮父任务占一个原有任务并发槽，模型进程使用独立的 `review_max_concurrency` 全局额度。prepare 和 synthesis 各计算一个模型进程，父控制器不占模型名额。额度为 1 时 reviewer 等待前一个模型退出；额度足够时同轮 reviewer 并行，不受任务并发为 1 的限制。启动前原子认领额度，未知启动/未确认退出继续保留额度；等待时间不计入模型 timeout，仍保留父任务总时限。
 - 使用各 worker 的 timeout_seconds，保留任务总时限、有界重试和 execution subject 的恢复限制；耗尽后进入可见失败/attention，提供重试或取消，不能无期限运行。
 - 取消父任务会停止所有活跃 run、冻结发布、保留诊断材料。只有确认进程退出后才释放并清理工作区。
 - fallback 按失败的 reviewer 单独计算，不累计其他模型的失败；记录实际替代模型。两个参与者最终落到相同模型配置时，不得将其宣传成两个不同模型。
@@ -344,6 +357,8 @@ skill 同时写了“主 agent 不做 review 判断”和“主 agent 必须验�
 每步先写有意义的行为测试，使用 fake binary 和 fake GitHub 建立可重复验证。重点不是只验证启动两个命令，而是覆盖完整的准备、分析、部分失败、恢复、汇总、发布与重入。
 
 文件交接验收：fake reviewer 必须实际从 stdin 接收 prompt、读取 context/worktree，再向 env 指定目录写 result.json；fake 主 agent 必须按 inputs.json 读取这些结果后写 evaluation.json。断言 codex/claude 及同轮补跑接收的 prompt 字节/hash 相同，而输出目录各不相同。覆盖临时文件未提交、JSON 截断、只有 stdout 没有结果文件、错 snapshot、越界结果路径、结果落盘后登记前崩溃、登记后文件丢失、汇总期间输入 hash 变化，以及第二轮输入/输出不能覆盖第一轮。
+
+并发验收：任务并发为 1、子进程额度大于等于 2 时，同轮 reviewer 确实重叠运行；多个轮次/仓库共享上限且不能超额。额度为 1 时等待执行，等待时间不消耗模型 timeout。覆盖额度升降、失败方重试、取消等待者不再启动、取消活跃模型后释放额度、启动结果不明时保留额度，以及协调器恢复后不重复启动仍活跃的 run。单模型和未命中白名单的既有行为继续通过。
 
 必须增加一条跨轮端到端验收：PR 指派或评论 E1 → HEAD A → 多模型报告 R1 发布 → 修改并 push HEAD B → 新评论 E2 → 重新准备上下文并运行全部所选模型 → 报告 R2 发布。断言 R1/R2 绑定不同 round 和正确 SHA；重复投递 E1/E2 不新增执行；第二轮部分失败不取用第一轮报告；即使正文相同也存在两条各自幂等的 PR Review。额外覆盖 HEAD 未变但明确新请求、前轮运行中再请求、前轮失败/取消后新请求、PR 更新导致旧轮 superseded 以及 daemon 重启后的排队推进。
 

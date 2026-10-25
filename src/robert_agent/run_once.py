@@ -7005,6 +7005,8 @@ def run_once(
     data_dir = Path(config_result["data_dir"])
     db_path = Path(config_result["db_path"])
     storage.init_database(db_path)
+    with closing(sqlite3.connect(db_path)) as pool_conn, pool_conn:
+        review_store.configure_process_pool(pool_conn, config_result['review_max_concurrency'])
     with closing(sqlite3.connect(db_path)) as guard:
         execution_store.require_migrated(guard)
     from robert_agent.worker.result import replay_pending_results
