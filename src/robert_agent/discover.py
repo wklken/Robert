@@ -284,6 +284,7 @@ def _notification_to_raw(notification):
         "number": int(match.group("number")),
         "source_type": source_type,
         "event_type": "notification",
+        "notification_reason": notification.get("reason"),
         "actor_login": "github",
         "trusted_trigger_found": False,
         "authorization_lookup_complete": False,
@@ -613,12 +614,22 @@ def _trusted_trigger_from_source(
     repo_config,
     runner,
     known_workstreams=None,
+    review_author_allowlist=None,
 ):
     trusted = set(repo_config.get("trusted_actors", []))
     github_account = repo_config["github_account"]
     raw = _enrich_pull_request_metadata(raw, repo_config, runner)
     known_workstreams = set(known_workstreams or [])
     raw_workstream_id = _raw_workstream_id(raw, repo_config["full_name"])
+
+    if (raw.get('source_type') == 'pull_request' and raw.get('notification_reason') == 'review_requested'
+            and (raw.get('pr_author_login') or '').casefold() in (review_author_allowlist or ())):
+        # This notification requests a new native review round. An older
+        # assignment is not its trigger, even if that assignment was trusted.
+        requested = _timeline_review_request(raw, repo_config, runner)
+        return {**requested,
+                'actor_login': requested.get('requester_login') or requested.get('actor_login'),
+                'trusted_trigger_found': requested.get('requester_login') in trusted}
 
     def _discussion_result():
         if raw_workstream_id in known_workstreams:
@@ -698,6 +709,7 @@ def collect_live_events(
     known_workstreams=None,
     notification_hints=None,
     include_notifications=True,
+    review_author_allowlist=None,
 ):
     repo = repo_config["full_name"]
     github_account = repo_config["github_account"]
@@ -781,6 +793,7 @@ def collect_live_events(
                 repo_config,
                 runner,
                 known_workstreams=known_workstreams,
+                review_author_allowlist=review_author_allowlist,
             )
         )
 

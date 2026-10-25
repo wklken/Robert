@@ -57,3 +57,13 @@ repos: []
 #     max_total_tokens: 200000
 #     max_cost_usd: 10.0
 #     max_failure_summary_chars: 12000
+
+# Native multi-model review (see docs/multi-model-review.md). Define each worker
+# above first; the first reviewer must equal routes.review-pr.worker.
+# routes:
+#   review-pr:
+#     worker: default
+#     multi_agent_review:
+#       enabled: true
+#       workers: [default, claude_reviewer]
+#       author_allowlist: [your-github-login]

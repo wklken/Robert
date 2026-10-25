@@ -79,6 +79,9 @@ def dispatch_worker(
     worker_agent_config=None,
     dry_run=True,
     startup_probe_seconds=0.2,
+    trusted_environment=None,
+    command_prefix=(),
+    log_dir=None,
 ):
     prompt_path = Path(prompt_path)
     try:
@@ -102,7 +105,7 @@ def dispatch_worker(
             "error_type": type(exc).__name__,
             "prompt_path": str(prompt_path),
         }
-    command = launch.command
+    command = [*command_prefix, *launch.command]
     if dry_run:
         return {
             "ok": True,
@@ -116,9 +119,12 @@ def dispatch_worker(
             "worker_launch": launch.metadata(),
         }
 
-    stdout_path = prompt_path.parent / f"{attempt_id}.stdout.log"
-    stderr_path = prompt_path.parent / f"{attempt_id}.stderr.log"
+    stdout_path = Path(log_dir) / "stdout.log" if log_dir else prompt_path.parent / f"{attempt_id}.stdout.log"
+    stderr_path = Path(log_dir) / "stderr.log" if log_dir else prompt_path.parent / f"{attempt_id}.stderr.log"
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    environment = _worker_environment(launch.environment_allowlist)
+    environment.update(trusted_environment or {})
     try:
         with ExitStack() as stack:
             prompt_file = stack.enter_context(prompt_path.open("r", encoding="utf-8"))
@@ -127,7 +133,7 @@ def dispatch_worker(
             proc = subprocess.Popen(
                 command,
                 cwd=launch.cwd,
-                env=_worker_environment(launch.environment_allowlist),
+                env=environment,
                 stdin=prompt_file,
                 stdout=stdout_file,
                 stderr=stderr_file,

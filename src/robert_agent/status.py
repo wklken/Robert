@@ -438,6 +438,9 @@ def build_task(conn, task_id, result_limit=5):
     task["latest_notification"] = _latest_notification_for_task(conn, task_id)
     task["actions"] = _actions_for_task(conn, task_id)
     task["artifacts"] = _artifacts_for(conn, task_id=task_id)
+    if _table_exists(conn, "review_sessions"):
+        from robert_agent import review_store
+        task["review"] = review_store.task_status(conn, task_id)
     task["events"] = [
         _row_dict(row)
         for row in conn.execute(

@@ -550,6 +550,8 @@ def init_database(db_path, schema_path=None):
         execution_store.import_legacy_controls(conn)
         _migrate_project_memory_fts(conn)
         _migrate_pr_remediation(conn)
+        from robert_agent import review_store
+        review_store.initialize(conn)
         tables = sorted(
             row[0]
             for row in conn.execute(

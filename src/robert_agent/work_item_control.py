@@ -110,6 +110,10 @@ def cancel_execution(conn, item, facts, now, db_path, locks):
             raise work_items.WorkItemConflictError('Worker could not be stopped: ' + str(outcome.get('reason') or outcome.get('status')))
         metadata['termination'] = outcome
         conn.execute('UPDATE attempts SET metadata_json=? WHERE attempt_id=?', (json.dumps(metadata), attempt['attempt_id']))
+    from robert_agent.review_coordinator import terminate_children
+    for (task_id,) in task_ids:
+        if terminate_children(conn, task_id) == 'attention':
+            raise work_items.WorkItemConflictError('Review worker identity could not be verified; inspect before canceling.')
     from robert_agent import execution_store
     subjects = {('task', task_id) for (task_id,) in task_ids}
     for (task_id,) in task_ids:
@@ -130,6 +134,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks):
     conn.execute(f"UPDATE tasks SET lifecycle='canceled', updated_at=? WHERE workstream_id IN ({placeholders}) AND lifecycle NOT IN ('completed','ignored','canceled')", params)
     conn.execute(f"UPDATE attempts SET status='canceled', finished_at=? WHERE task_id IN (SELECT task_id FROM tasks WHERE workstream_id IN ({placeholders})) AND status IN ('prepared','running','stale')", params)
     conn.execute(f"UPDATE workstreams SET lifecycle='canceled', active_task_id=NULL, updated_at=? WHERE workstream_id IN ({placeholders})", params)
+    conn.execute(f"UPDATE review_sessions SET status='canceled',error='operator canceled work item',updated_at=? WHERE workstream_id IN ({placeholders}) AND status NOT IN ('published','superseded','canceled')", params)
     conn.execute(f"UPDATE github_actions SET publish_status='skipped' WHERE task_id IN (SELECT task_id FROM tasks WHERE workstream_id IN ({placeholders})) AND publish_status='not_published'", facts['streams'])
     conn.execute("UPDATE wakeups SET status='canceled', updated_at=? WHERE work_item_id=? AND status='pending'", (now, item['work_item_id']))
 

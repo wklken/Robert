@@ -1085,6 +1085,14 @@ function renderExecutionHistory(detail) {
     const entry = node("section", "execution-history-task");
     entry.append(node("h3", "", `${t(task.expected_output || task.route_id || "task")} · ${t(task.lifecycle)}`));
     entry.append(node("p", "attempt-counts", `${attemptCounts(task.attempts)} · ${task.task_id}`));
+    if (task.review) {
+      const review = task.review;
+      entry.append(node("p", "", `${review.round_id} · ${review.head_sha || "pending"} · ${t(review.status)}`));
+      if (review.error) entry.append(node("p", "", review.error));
+      (review.runs || []).forEach((run) => {
+        entry.append(node("p", "", `${run.stage} · ${run.worker_id}${run.model ? " (" + run.model + ")" : ""} · #${run.attempt_no} · ${t(run.status)}${run.error ? " · " + run.error : ""}`));
+      });
+    }
     if (!task.attempts.length) entry.append(node("p", "", t("noProgress")));
     const attempts = [...task.attempts].reverse();
     let shown = Math.min(state.historyLimits[task.task_id] || 10, attempts.length);

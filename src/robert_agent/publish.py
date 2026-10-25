@@ -13,6 +13,7 @@ from robert_agent import (
     audit_result,
     pr_health,
     publication_reconcile,
+    review_publish,
     remediation,
     retry_policy,
     execution_operations,
@@ -859,6 +860,9 @@ def _publish_action(
     scope_guard = _publication_scope_guard(conn, action)
     if scope_guard:
         return scope_guard
+    if action["action_type"] == "submit_pr_review":
+        return review_publish.publish(action, _trusted_action_scope(conn, action), run_command,
+                                      scope_guard=lambda: _publication_scope_guard(conn, action))
     if action["action_type"] == "comment":
         return _publish_comment(action, run_command, conn=conn)
     if action["action_type"] == "open_pr":
@@ -895,6 +899,7 @@ def _publish_action(
 
 
 def _mark_published(conn, action, result, now, intent=None):
+    review_publish.record_outcome(conn, action, "published", now)
     metadata = _decode_json(action["metadata_json"])
     metadata["publish"] = {
         "status": "published",
@@ -1093,6 +1098,9 @@ def _prepare_publication_intent(db_path, action_id, run_command):
             return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
+            conflicting = conn.execute("SELECT action_id FROM publication_intents WHERE idempotency_key=? AND action_id!=?", (idempotency_key, action_id)).fetchone()
+            if conflicting:
+                return {"state": "scope_missing", "action": action, "intent": None, "scope": scope}
             intent = dict(
                 execution_store.prepare_publication_intent(
                     conn,
@@ -1158,6 +1166,13 @@ def _prepare_publication_intent(db_path, action_id, run_command):
 
 
 def _mark_skipped(conn, action, result, now):
+    review_publish.record_outcome(conn, action, result.get("status"), now)
+    if action.get("action_type") == "submit_pr_review" and result.get("status") == "superseded":
+        intent = _load_intent(conn, action["action_id"])
+        if intent and intent["status"] == "executing":
+            execution_store.transition_publication_intent(
+                conn, intent["publication_id"], "confirmed_absent", now,
+                remote_evidence={"reason_code": "review_snapshot_changed", "status": "confirmed_absent"})
     metadata = _decode_json(action["metadata_json"])
     metadata["publish"] = {
         "status": "skipped",

@@ -24,6 +24,7 @@ from robert_agent import publish
 from robert_agent import route
 from robert_agent.run_history import SUMMARY_REFERENCE
 from robert_agent import route_config
+from robert_agent import review_store
 from robert_agent import skills
 from robert_agent import supervise
 from robert_agent import validate_config
@@ -490,6 +491,16 @@ def _terminal_transport_failure(logs):
 
 
 def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
+    review = review_store.session(conn, task_id=task_id) if conn is not None else None
+    if review:
+        return {
+            "status": "recoverable_progress" if review["status"] not in {"canceled", "superseded", "attention"} else "unrecoverable",
+            "reason_code": "native_review_checkpoint", "round_id": review["round_id"],
+            "task_id": task_id, "previous_attempt_id": attempt_id,
+            "worktree_path": str(worktree_path or review["manifest"].get("worktree_path", "")),
+            "progress_signals": ["native_review_checkpoint"],
+            "logs": _attempt_log_tails(conn, attempt_id), "commands": [],
+        }
     commands = _attempt_command_records(conn, attempt_id, task_id)
     phases = _latest_worker_phases(conn, attempt_id)
     logs = _attempt_log_tails(conn, attempt_id)
@@ -3098,6 +3109,9 @@ def _retrieve_project_memories(conn, repo_id, workstream_id, route_result, event
 
 
 def _prepare_worktree(repo, event, route_result, dry_run):
+    if route_result.get("native_review_workers"):
+        # The native coordinator fetches and pins this round after admission.
+        return None
     skill_status = route_result.get("skill_status")
     if skill_status and not skill_status.get("runnable", True):
         return None
@@ -3196,15 +3210,39 @@ def _handle_blocked_remediation_worktree(
 
 
 def _effective_route(config_result, repo, event, route_id=None):
+    if (config_result is not None and not route_id and event.get("source_type") == "pull_request"
+            and event.get("authorization_status") == "accepted_context"
+            and event.get("actor_login") in repo.get("trusted_actors", [])
+            and event.get("intent") == "review_request"):
+        candidate = route_config.resolve_route_config(config_result, repo, ROUTE_POLICIES["review-pr"])
+        if len(route_config.review_workers_for_author(candidate, event.get("pr_author_login"))) > 1:
+            event = {**event, "authorization_status": "authorized_trigger"}
     base_route = dict(route.ROUTES[route_id]) if route_id else route.route_task(event)
     if config_result is None:
         return base_route
+    if (not route_id and event.get("source_type") == "pull_request"
+            and event.get("event_type") == "assigned"
+            and event.get("authorization_status") == "authorized_trigger"
+            and event.get("intent") in {None, "unclear", "review_request"}):
+        candidate = route_config.resolve_route_config(config_result, repo, ROUTE_POLICIES["review-pr"])
+        if len(route_config.review_workers_for_author(candidate, event.get("pr_author_login"))) > 1:
+            base_route = dict(route.ROUTES["review-pr"])
     policy = ROUTE_POLICIES[base_route["route_id"]]
     resolved = route_config.resolve_route_config(
         config_result,
         repo,
         policy,
     )
+    if resolved["id"] == "review-pr":
+        selected = route_config.review_workers_for_author(resolved, event.get("pr_author_login"))
+        if len(selected) > 1:
+            configured = {worker["name"]: worker for worker in config_result["workers"]}
+            resolved.update(
+                native_review_workers=[configured[name] for name in selected],
+                expected_output="multi_agent_review_report",
+                allowed_github_actions=["submit_pr_review"],
+                required_skills=[], recommended_skills=[],
+            )
     installed = skills.discover_skill_names(
         config_result["skills"]["search_paths"]
     )
@@ -3506,6 +3544,9 @@ def _prepare_github_retrigger_tasks(
             task_event,
             route_id=parent_route_id,
         )
+        saved_review = review_store.session(conn, task_id=parent_task_id)
+        if saved_review:
+            route_result = saved_review["request"]["route"]
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
             worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
@@ -3556,6 +3597,41 @@ def _prepare_github_retrigger_tasks(
     return prepared_workstreams
 
 
+def _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
+                            dry_run, dispatch_queue, dispatch_budget):
+    queued = conn.execute("""SELECT round_id FROM review_sessions rs
+        WHERE rs.repo=? AND rs.task_id IS NULL AND rs.status='queued'
+        ORDER BY rs.created_at, rs.round_id""", (repo["full_name"],)).fetchall()
+    for (round_id,) in queued:
+        entry = review_store.session(conn, round_id=round_id)
+        if conn.execute("""SELECT 1 FROM review_sessions WHERE workstream_id=?
+            AND status='attention'""", (entry["workstream_id"],)).fetchone():
+            continue
+        if conn.execute("""SELECT 1 FROM review_sessions old
+            JOIN execution_subjects owner ON owner.subject_type='task' AND owner.subject_id=old.task_id
+            WHERE old.workstream_id=? AND owner.binding_status='attention'""",
+            (entry["workstream_id"],)).fetchone():
+            continue
+        if conn.execute("""SELECT 1 FROM tasks WHERE workstream_id=?
+            AND lifecycle IN ('detected','authorized','classified','queued','running','waiting_for_user')""",
+            (entry["workstream_id"],)).fetchone():
+            continue
+        event = entry["request"]["event"]
+        if _record_current_state_closed_source_if_needed(
+            conn, repo_id, _source_id(event["source_key"]),
+            _event_id(event["event_fingerprint"]), event, run_now
+        ):
+            review_store.update(conn, round_id, status="canceled", error="source_closed")
+            continue
+        task_info = _create_task_attempt_and_prompt(
+            conn, data_dir, db_path, repo, repo_id, event, entry["request"]["route"],
+            {"workstream_id": entry["workstream_id"]}, run_now,
+        )
+        if task_info:
+            _queue_dispatch(dispatch_queue, task_info, None, dispatch_budget,
+                            repo_id=repo_id, repo=repo)
+
+
 def _create_task_attempt_and_prompt(
     conn,
     data_dir,
@@ -3593,6 +3669,8 @@ def _create_task_attempt_and_prompt(
     task_lifecycle = "failed" if blocked else "queued"
     attempt_status = "failed" if blocked else "prepared"
     related_events = list(related_events or [event])
+    if route_result.get("native_review_workers"):
+        related_events = [event]
     workstream_id = stream["workstream_id"]
     source_id = _source_id(event["source_key"])
     task_id = _id("task")
@@ -3728,6 +3806,9 @@ def _create_task_attempt_and_prompt(
     if not _execution_task_active(conn, task_id, run_now):
         conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         return None
+    if route_result.get("native_review_workers"):
+        review = review_store.enqueue(conn, repo, event, route_result, route_result["native_review_workers"])
+        review_store.update(conn, review["round_id"], task_id=task_id, status="queued", error=None)
     if blocked and event.get("task_kind", "human_request") == "human_request":
         conn.execute(
             "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
@@ -4707,6 +4788,20 @@ def _dispatch_queued_locked(
             ),
             "dry_run": dry_run,
         }
+        with closing(sqlite3.connect(db_path)) as conn:
+            native_review = review_store.session(conn, task_id=task_info["task_id"])
+        if native_review:
+            configured = native_review["request"]["workers"]
+            timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
+            environment_names = sorted({"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
+                                       | {name for w in configured for name in w["environment_allowlist"]})
+            worker_kwargs.update(
+                worktree_path=str(Path(db_path).resolve().parent),
+                worker_agent_config={"agent": "command", "command_argv": [
+                    sys.executable, "-m", "robert_agent.review_coordinator", "--db", str(Path(db_path).resolve()),
+                    "--task-id", task_info["task_id"], "--attempt-id", task_info["attempt_id"],
+                ], "timeout_seconds": timeout, "environment_allowlist": environment_names},
+            )
         if not dry_run:
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -4937,6 +5032,13 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
     if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
         action_scope["existing_pr_head_sha"] = existing_pr_head_sha
     task_metadata = _json_object(row[6])
+    review = review_store.session(conn, task_id=task_id)
+    if review and review["manifest"] and review["report_path"]:
+        action_scope.update(
+            review_round_id=review["round_id"], review_head_sha=review["manifest"]["head_sha"],
+            review_base_sha=review["manifest"]["base_sha"], review_base_ref=review["manifest"]["base_ref"],
+            review_report_path=review["report_path"], review_report_sha256=review["report_sha256"],
+        )
     episode_id = task_metadata.get("remediation_episode_id")
     if row[5] in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
         episode = remediation.load_episode(conn, episode_id)
@@ -5066,6 +5168,11 @@ def _pending_events_for_task(conn, task_id, consumed_fingerprints):
 def _finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
     if not _execution_task_active(conn, task_id, run_now):
         return False
+    if review_store.session(conn, task_id=task_id):
+        from robert_agent.review_coordinator import terminate_children
+        if terminate_children(conn, task_id) == "attention":
+            review = review_store.session(conn, task_id=task_id)
+            review_store.update(conn, review["round_id"], status="attention", error="review child identity unknown")
     conn.execute(
         "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
         (run_now, task_id),
@@ -5430,6 +5537,9 @@ def _result_actions_all_published(conn, result_id):
     ).fetchone()
     metadata = _json_object(result_row[0] if result_row else None)
     action_scope = (metadata.get("audit") or {}).get("action_scope")
+    if isinstance(action_scope, dict) and action_scope.get("review_round_id"):
+        review = review_store.session(conn, round_id=action_scope["review_round_id"])
+        return bool(review and review["status"] == "superseded")
     return (
         isinstance(action_scope, dict)
         and action_scope.get("task_kind")
@@ -6371,6 +6481,11 @@ def _run_repo_pipeline(
         else:
             try:
                 discovery_kwargs = {"known_workstreams": known_workstreams}
+                if config_result is not None:
+                    review_settings = route_config.resolve_route_config(
+                        config_result, repo, ROUTE_POLICIES['review-pr']).get('multi_agent_review', {})
+                    if review_settings.get('enabled') and len(review_settings.get('workers', [])) > 1:
+                        discovery_kwargs['review_author_allowlist'] = review_settings['author_allowlist']
                 if notification_hints is not None:
                     discovery_kwargs["notification_hints"] = notification_hints
                     discovery_kwargs["include_notifications"] = False
@@ -6447,6 +6562,16 @@ def _run_repo_pipeline(
             repo,
             known_workstreams=known_workstreams,
         )
+        # Native review requests create new rounds, including for known PRs.
+        # Reuse the original requester/target authorization without treating
+        # this explicit request as ordinary follow-up comment context.
+        if config_result is not None:
+            for index, event in enumerate(decisions):
+                if event.get('source_type') == 'pull_request' and event.get('event_type') == 'review_request':
+                    candidate = route_config.resolve_route_config(config_result, repo, ROUTE_POLICIES['review-pr'])
+                    if len(route_config.review_workers_for_author(candidate, event.get('pr_author_login'))) > 1:
+                        requested = {**event, 'actor_login': event.get('requester_login') or event.get('actor_login')}
+                        decisions[index] = authorize.authorize_event(requested, repo, known_workstreams=set())
         decisions.extend(
             system_decisions
             if not fixture_path and not skip_external
@@ -6518,6 +6643,16 @@ def _run_repo_pipeline(
 
         for event in decisions:
             source_id, event_id = _insert_source_and_event(conn, repo_id, event, run_now)
+            # New review requests are independent durable rounds. They never
+            # become pending context that a still-running reviewer can consume.
+            if (event.get("source_type") == "pull_request"
+                    and event.get("authorization_status") in {"authorized_trigger", "accepted_context"}
+                    and (event.get("authorization_status") == "authorized_trigger"
+                         or event.get("actor_login") in repo.get("trusted_actors", []))):
+                review_route = _effective_route(config_result, repo, event)
+                if review_route.get("native_review_workers"):
+                    review_store.enqueue(conn, repo, event, review_route, review_route["native_review_workers"])
+                    continue
             workflow_fact = _apply_workflow_event_fact(conn, event, run_now)
             if workflow_fact:
                 attempt_id = workflow_fact.get("attempt_id")
@@ -6794,6 +6929,8 @@ def _run_repo_pipeline(
             prompt_paths.append(str(task_info["prompt_path"]))
             active_workstreams.add(task_info["workstream_id"])
 
+        _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
+                                dry_run, dispatch_queue, dispatch_budget)
         execution_replay.acknowledge_effects(conn,repo_id,run_now)
 
         if invalidation_attempt_ids:

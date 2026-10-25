@@ -1,0 +1,83 @@
+# 多模型 PR Review
+
+Robert 内建多模型审查流程：准备上下文、独立审查、验证汇总、发布 PR Review。
+不需要安装 github-pr-monitor 或额外审查 skill。默认保持现有单模型行为。
+
+在现有配置中声明两个 worker，再覆盖 `review-pr` 路由：
+
+```yaml
+workers:
+  codex_reviewer:
+    adapter: codex
+    command: codex
+    model: default
+    effort: default
+  claude_reviewer:
+    adapter: claude
+    command: claude
+    model: default
+    effort: default
+
+routes:
+  review-pr:
+    worker: codex_reviewer
+    multi_agent_review:
+      enabled: true
+      workers: [codex_reviewer, claude_reviewer]
+      author_allowlist: [your-github-login]
+```
+
+`workers[0]` 必须与该路由的 `worker` 相同。也可在单个 repository 的 `routes.review-pr`
+覆盖 `multi_agent_review`；覆盖整个设置对象。作者 login 不区分大小写。
+仅开关开启且 **PR 作者**在白名单时使用多模型；空白名单、未命中或开关关闭均使用原单模型路径。
+触发者、commit author 和 committer 不参与白名单判断；`trusted_actors` 的触发授权继续生效。
+多个已选 reviewer 按顺序执行，共占用原有一个任务并发槽。准备和汇总使用第一个 worker。
+
+## 文件交接
+
+每轮 fetch 当前 PR head/base，验证 SHA 后建立独立 detached Git worktree。
+完整 PR diff 从该轮 merge-base 到 head 计算。共享源码和上下文不被后续轮次 reset。
+PR 信息、触发上下文、变更文件、diff/stat/行数、Python 运行时信息由 Robert 写入；
+第一个 worker 以独立会话阅读源码、调用方、项目约定和测试，写出上下文摘要和源码索引。
+没有验证到项目 Python 解释器时，运行时记录 `UNRESOLVED`，不能用系统 Python 作语法错误的证据。
+
+Robert 冻结 manifest 和一次生成的 `reviewer-prompt.md`。所有 reviewer 的 stdin 读取同一个文件，
+启动前后核对 SHA256；重试也不改变 prompt。不同 CLI 内置的系统提示不在此字节一致保证内。
+每个子进程使用相同 cwd，通过独立环境变量 `ROBERT_REVIEW_OUTPUT_DIR` 得到自己的结果目录，
+不将 worker 名称或各自输出路径插入 prompt，不修改宿主环境。
+
+reviewer 自行阅读 manifest、完整 diff、摘要、源码索引及相关源码，写 `result.json.tmp`，
+关闭后原子重命名为 `result.json`。stdout/stderr 只用于诊断。结果必须包含轮次、快照、head SHA、
+稳定 finding id、位置、严重性、触发条件、影响、证据、建议、排除项、覆盖范围及合并建议。
+Robert 确认已登记的进程组结束，将指定交接文件复制到生产者沙箱不可写的 `sealed` 目录，
+校验路径、schema、身份和共享输入完整性，再登记封存副本的 hash。汇总读取封存副本，
+生产者之后修改自己的原始输出不会改变已接纳的结果。封存完成但 SQLite 登记前崩溃也可恢复。
+
+全部模型结果通过后，Robert 创建 `synthesis/inputs.json`，列出本轮选中的每个结果和派生报告的路径、hash。
+主 agent 以新会话读取这些文件并逐项复核，写 `evaluation.json`。
+若汇总失败后某个 reviewer 结果需要重建，会保留旧清单，生成带 hash 的新 inputs 和汇总 prompt；旧汇总进程先收尾，其结果不会用于新清单。每个 finding 必须恰好被处理一次，
+保留来源；未报告与明确反驳分开，不按多数票决定问题是否成立，也不允许增加没有模型来源的问题。
+Robert 固定渲染中文 `merged-review.md`，经现有审计链路提交绑定 head SHA 的 GitHub PR Review `COMMENT`。
+
+## 多轮、恢复和运行约束
+
+- 可信的 PR 指派、review request 或 `@robert-bot review ...` 评论可以触发；机器人名以配置为准。
+- 新评论创建新轮次，即使 SHA 未变。运行中收到的新请求单独排队，不会被上一轮消费；相同事件重复轮询不会重复建轮。
+- 作者更新代码后再触发，将重新 fetch、建 worktree、准备上下文并审查完整 PR diff。
+- 仅某个模型失败时，同轮重试复用已验证的其他模型结果；汇总失败仅重跑汇总。产物已落盘但数据库登记前崩溃，可重新验证后接纳。
+- 配置了 `fallback_model` 时，同轮同阶段同一 worker 连续两次超时，下一次重试使用备用模型；其他 worker 的失败不会计入。实际选择在启动前持久化，恢复、报告和 Board 使用该值，reviewer prompt 不变。CLI 的 `default` 表示未指定具体模型，不推测其实际名称；相同模型配置不宣称为不同模型。
+- 原成功文件缺失或 hash 改变，不再作为有效结果使用。无法确认进程身份或启动结果时停止自动执行，需要先检查并取消；不盲目拉起第二个进程。主进程退出但进程组仍存在时同样停止，不能把仍可能变化的文件登记为成功。
+- 使用现有任务 Retry/Cancel 和 publication retry。发布失败沿用原 action/result，仅重试发布和远端对账。
+- 发布前再次核对 head、base、目标分支和 PR 是否仍打开；变化标记 `superseded`，需要新触发请求。已有排队请求会继续执行。
+- 发布按 repository、PR、round 去重；遇到模糊响应先分页查询 PR Reviews，核对 marker、commit 和完整正文，不能确认时不重复发布。
+- `robert status` 任务详情和 Board 执行历史显示轮次、SHA、各阶段/模型状态及失败原因。
+
+macOS 需要系统 `sandbox-exec`，Linux 需要可用的 `bubblewrap` (`bwrap`)。
+隔离策略允许读取共享源码/context、写当前输出目录，并屏蔽 Robert 数据目录中的其他模型结果。
+缺少隔离工具会失败并保留诊断，不能自动改用不受限模式。CLI 自身的模型认证/会话缓存仍使用当前运行账户；
+同一个 Unix 账户的管理员进程不是隔离对象。进程监督只保证已登记的进程组；
+`setsid` 等创建的独立后代不属于该组，因此 prompt 禁止后台/脱离进程，封存副本还会隔离其潜在晚写。
+Linux bubblewrap 与真实模型认证未在本次 macOS 验证中实测。没有额外 Python runtime 依赖。
+
+产物保存在 `data_dir/artifacts/reviews`，代码放在 repository 配置的 worktrees 根目录下。
+历史 worktree 和产物保留用于排查与审计；当前不自动清理。模型二进制与认证应在运行 Robert 的账户下配置好。
