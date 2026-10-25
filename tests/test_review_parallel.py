@@ -54,7 +54,7 @@ class ParallelReviewTests(unittest.TestCase):
 output,gate=map(pathlib.Path,sys.argv[1:3])
 (output/'started').write_text(str(time.monotonic()))
 deadline=time.monotonic()+15
-while not gate.exists():
+while not (gate.exists() and (output/'registered').exists()):
     if time.monotonic()>deadline:
         sys.exit(17)
     time.sleep(.02)
@@ -65,6 +65,10 @@ sys.exit(int(sys.argv[3]))
         kwargs['worker_agent_config'] = {'agent': 'command', 'command_argv': [
             sys.executable, '-c', script, str(output), str(self.gate), str(exit_code)]}
         launched = dispatch.dispatch_worker(**kwargs, startup_probe_seconds=.01)
+        # Keep every child alive through identity capture, even when an earlier
+        # worker has already opened the shared release gate.
+        if launched.get('ok'):
+            (output / 'registered').touch()
         with self.mutex:
             self.launched.append((launched, output))
         return launched
@@ -135,6 +139,30 @@ sys.exit(int(sys.argv[3]))
         with review_store.connect(self.fixture.db) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 1)
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
+
+    def test_released_gate_keeps_child_alive_until_identity_capture(self):
+        self.configure(1)
+        driver = self.driver()
+        driver.request['workers'] = driver.request['workers'][:1]
+        self.gate.touch()
+        capture = worker_identity.capture_process_identity
+
+        def delayed_capture(pid):
+            # A slow ps call must not race a fixture child that was released
+            # before launch (for example on retry or after waiting for a slot).
+            output = Path(self.fixture.calls[-1][4])
+            deadline = time.monotonic() + 3
+            while not (output / 'started').exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue((output / 'started').exists())
+            time.sleep(.2)
+            return capture(pid)
+
+        with patch.object(worker_identity, 'capture_process_identity', side_effect=delayed_capture) as observed:
+            records = driver.review()
+        self.assertEqual(observed.call_count, 1)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(self.pool()['in_use'], 0)
 
     def test_global_capacity_is_shared_by_independent_rounds(self):
         self.configure(1)
