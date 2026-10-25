@@ -14,6 +14,20 @@
         "recommended_skills": {
           "type": "array",
           "items": {"type": "string", "minLength": 1}
+        },
+        "multi_agent_review": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "workers": {
+              "type": "array", "minItems": 1, "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            },
+            "author_allowlist": {
+              "type": "array", "items": {"type": "string", "minLength": 1}
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -56,6 +70,7 @@
     "version": {"const": 1},
     "data_dir": {"type": "string", "minLength": 1},
     "database": {"type": "string", "minLength": 1},
+    "review_max_concurrency": {"type": "integer", "minimum": 1, "default": 4},
     "github": {
       "type": "object",
       "required": ["account"],

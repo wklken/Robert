@@ -24,6 +24,23 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip setuptools certifi
       - run: python -m pip install -e '.[dev]'
+      - name: Install Linux review sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 requires an AppArmor allowance for bwrap user namespaces.
+          # Probe first so newer runners keep their already-working policy.
+          if ! bwrap --unshare-pid --ro-bind / / --proc /proc -- true; then
+            sudo apt-get install -y apparmor-profiles
+            if [ ! -f /etc/apparmor.d/bwrap-userns-restrict ]; then
+              sudo install -m 0644 \
+                /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+                /etc/apparmor.d/bwrap-userns-restrict
+            fi
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          fi
+          bwrap --unshare-pid --ro-bind / / --proc /proc -- true
       - run: python -m ruff check src tests
       - run: >-
           python -m mypy
@@ -34,6 +51,8 @@ jobs:
           src/robert_agent/service.py
           src/robert_agent/migrate.py
       - run: python -B -m unittest discover -s tests
+        env:
+          ROBERT_REQUIRE_LINUX_SANDBOX_TESTS: ${{ runner.os == 'Linux' && '1' || '' }}
       - run: python -m compileall -q src
       - run: python -m build
       - run: git diff --check

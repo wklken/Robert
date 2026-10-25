@@ -390,6 +390,11 @@ def terminate_worker(db_path, attempt_id):
             result = {**result, "status": status}
 
         metadata = _json_object(attempt.get("metadata_json"))
+        from robert_agent.review_coordinator import terminate_children
+        children_status = terminate_children(conn, attempt["task_id"])
+        if children_status == "attention":
+            status = "attention"
+            result = {**result, "status": status, "reason": "review_child_identity_unknown"}
         metadata["termination"] = result
         conn.execute(
             "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",

@@ -2,6 +2,9 @@ version: 1
 data_dir: ~/.local/share/robert
 database: robert.sqlite3
 hard_timeout_minutes: 45
+# Global model-process limit for native multi-model review, shared by all repos.
+# A review round still counts as one task against the existing max_concurrency.
+review_max_concurrency: 4
 
 github:
   account: robert-bot
@@ -57,3 +60,13 @@ repos: []
 #     max_total_tokens: 200000
 #     max_cost_usd: 10.0
 #     max_failure_summary_chars: 12000
+
+# Native multi-model review (see docs/multi-model-review.md). Define each worker
+# above first; the first reviewer must equal routes.review-pr.worker.
+# routes:
+#   review-pr:
+#     worker: default
+#     multi_agent_review:
+#       enabled: true
+#       workers: [default, claude_reviewer]
+#       author_allowlist: [your-github-login]

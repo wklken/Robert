@@ -2564,6 +2564,7 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
             title=payload.get("title"),
             description=payload.get("description"),
             priority=payload.get("priority"),
+            abandon_review_run_ids=payload.get("abandon_review_run_ids"),
         )
         detail = board.get_work_item_detail(db_path, result["item"]["work_item_id"])
         return _json_response(detail)

@@ -114,6 +114,21 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
     ).fetchone()
     if pending_wakeup:
         return True
+    review_repo_clause, review_repo_params = _repo_filter("r", repo_ids)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='review_sessions'").fetchone():
+        queued_review = conn.execute(f"""SELECT 1 FROM review_sessions rs
+            JOIN repos r ON r.full_name=rs.repo
+            WHERE rs.status='queued' AND rs.task_id IS NULL {review_repo_clause}
+              AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.workstream_id=rs.workstream_id
+                AND t.lifecycle IN ('detected','authorized','classified','queued','running','waiting_for_user'))
+              AND NOT EXISTS (SELECT 1 FROM review_sessions blocked
+                WHERE blocked.workstream_id=rs.workstream_id AND blocked.status='attention')
+              AND NOT EXISTS (SELECT 1 FROM review_sessions old
+                JOIN execution_subjects owner ON owner.subject_type='task' AND owner.subject_id=old.task_id
+                WHERE old.workstream_id=rs.workstream_id AND owner.binding_status='attention')
+            LIMIT 1""", review_repo_params).fetchone()
+        if queued_review:
+            return True
     fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
     fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
       JOIN execution_subjects c ON c.subject_type=f.subject_type AND c.subject_id=f.subject_id

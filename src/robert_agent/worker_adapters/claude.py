@@ -32,6 +32,7 @@ def build_launch(
             "text",
             "--output-format",
             "stream-json",
+            "--verbose",
             "--add-dir",
             str(prompt_path.parent),
         ]

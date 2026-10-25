@@ -7,6 +7,7 @@ ALLOWED_ROUTE_OVERRIDE_FIELDS = {
     "worker",
     "required_skills",
     "recommended_skills",
+    "multi_agent_review",
 }
 
 
@@ -61,4 +62,45 @@ def resolve_route_config(config, repo, route_policy):
     result.setdefault("worker", default_worker)
     result.setdefault("required_skills", [])
     result.setdefault("recommended_skills", [])
+    if "multi_agent_review" in result:
+        _validate_multi_review(result, workers)
     return result
+
+
+def _validate_multi_review(route, workers):
+    settings = route["multi_agent_review"]
+    if route["id"] != "review-pr":
+        raise ValueError("multi_agent_review is only supported by review-pr")
+    if not isinstance(settings, dict) or set(settings) - {
+        "enabled", "workers", "author_allowlist"
+    }:
+        raise ValueError("multi_agent_review requires enabled, workers and author_allowlist")
+    if not isinstance(settings.get("enabled", False), bool):
+        raise ValueError("multi_agent_review.enabled must be a boolean")
+    names = settings.get("workers", [route["worker"]])
+    known = set(workers) if isinstance(workers, dict) else {w["name"] for w in workers}
+    if (not isinstance(names, list) or not names
+            or any(not isinstance(name, str) or name not in known for name in names)
+            or len(set(names)) != len(names)):
+        raise ValueError("multi_agent_review.workers must name distinct configured workers")
+    if names[0] != route["worker"]:
+        raise ValueError("the first review worker must equal routes.review-pr.worker")
+    authors = settings.get("author_allowlist", [])
+    if not isinstance(authors, list) or any(
+        not isinstance(author, str) or not author.strip() for author in authors
+    ):
+        raise ValueError("multi_agent_review.author_allowlist must contain GitHub logins")
+    route["multi_agent_review"] = {
+        "enabled": settings.get("enabled", False), "workers": list(names),
+        "author_allowlist": [author.strip().casefold() for author in authors],
+    }
+
+
+def review_workers_for_author(route, pr_author):
+    """Routing permission is independent of trigger trust; only PR authors qualify."""
+    settings = route.get("multi_agent_review") or {}
+    if settings.get("enabled") and isinstance(pr_author, str) and (
+        pr_author.casefold() in settings.get("author_allowlist", [])
+    ):
+        return list(settings["workers"])
+    return [route["worker"]]

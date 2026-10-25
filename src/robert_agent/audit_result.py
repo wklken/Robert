@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from robert_agent.common import emit
-from robert_agent import redaction
+from robert_agent import redaction, review_publish
 
 
 PUBLIC_TEXT_FIELDS = {
@@ -27,6 +27,7 @@ EXPECTED_ACTIONS_FOR_OUTPUT = {
     "update_existing_pr": {"push_existing_pr", "comment"},
     "review_comment": {"comment"},
     "pr_review_comment": {"comment"},
+    "multi_agent_review_report": {"submit_pr_review"},
     "waiting_for_user": {"comment"},
 }
 VALID_OPERATOR_QUESTION_KINDS = {
@@ -108,6 +109,8 @@ def _missing_fields(action, fields):
 def _audit_publisher_requirements(actions):
     for action in actions:
         action_type = action.get("type")
+        if action_type == "submit_pr_review":
+            continue  # Full scope/file contract is checked by action_scope_violation.
         if action_type == "comment":
             missing = []
             if not _string_value(action, "target_url", "url"):
@@ -204,6 +207,8 @@ def _canonical_path(value):
 
 def action_scope_violation(actions, action_scope):
     if action_scope is None:
+        if any(action.get("type") == "submit_pr_review" for action in actions):
+            return "PR review requires its trusted action scope"
         return None
     if not isinstance(action_scope, dict):
         return "action scope must be an object"
@@ -218,6 +223,12 @@ def action_scope_violation(actions, action_scope):
     }
     for action in actions:
         action_type = action.get("type")
+        if action_type == "submit_pr_review":
+            try:
+                review_publish.validate_action(action, action_scope)
+            except (ValueError, TypeError, OSError) as exc:
+                return str(exc)
+            continue
         if action_type == "comment":
             target = _github_source_target(_string_value(action, "target_url", "url"))
             if target is None:
@@ -273,6 +284,8 @@ def action_scope_violation(actions, action_scope):
 
 def _audit_expected_actions(output_type, actual_types):
     expected_types = EXPECTED_ACTIONS_FOR_OUTPUT.get(output_type, set())
+    if output_type == "multi_agent_review_report" and actual_types != ["submit_pr_review"]:
+        return "multi_agent_review_report requires exactly one submit_pr_review action"
     if not expected_types:
         return None
     if output_type == "update_existing_pr":
@@ -572,7 +585,8 @@ def audit_result(
                 "status": "failed",
                 "safe_error": skill_error,
             }
-        coverage_error = _audit_required_skills_coverage(used_skills, required_skills)
+        coverage_error = (None if result.get("output_type") == "multi_agent_review_report"
+                          else _audit_required_skills_coverage(used_skills, required_skills))
         if coverage_error:
             return {
                 "ok": False,
@@ -597,7 +611,7 @@ def audit_result(
             "status": "policy_violation",
             "violations": violations,
         }
-    if origin_type == "web" and "comment" in actual_types:
+    if origin_type == "web" and any(kind in {"comment", "submit_pr_review"} for kind in actual_types):
         return {
             "ok": False,
             "status": "policy_violation",

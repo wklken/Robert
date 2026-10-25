@@ -87,7 +87,7 @@ def require_idle_repository(conn, repo_id, now):
         raise WorkItemConflictError('The repository is processing a cycle. Refresh and retry after it finishes.')
 
 
-def cancel_execution(conn, item, facts, now, db_path, locks):
+def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_run_ids=()):
     from robert_agent import run_once, work_items
     # The write transaction prevents a new engine lease. Publication has its
     # own task lock, held until this command commits; neither lock waits on I/O.
@@ -98,6 +98,15 @@ def cancel_execution(conn, item, facts, now, db_path, locks):
     for (task_id,) in task_ids:
         if not locks.enter_context(task_publication_lock(db_path, task_id)):
             raise work_items.WorkItemConflictError('A publication is in progress for this task. Retry cancellation after it finishes.')
+    from robert_agent import review_store
+    unknown = {}
+    for (task_id,) in task_ids:
+        review = review_store.session(conn, task_id=task_id)
+        if review:
+            unknown.update({run['run_id']: run for run in review_store.runs(conn, review['round_id'])
+                            if review_store.can_abandon(run)})
+    if set(abandon_review_run_ids) - unknown.keys():
+        raise work_items.WorkItemConflictError('The selected unknown review launch changed. Refresh and inspect before abandoning it.')
     for attempt in facts['running']:
         try:
             metadata = json.loads(attempt['metadata_json'] or '{}')
@@ -110,6 +119,15 @@ def cancel_execution(conn, item, facts, now, db_path, locks):
             raise work_items.WorkItemConflictError('Worker could not be stopped: ' + str(outcome.get('reason') or outcome.get('status')))
         metadata['termination'] = outcome
         conn.execute('UPDATE attempts SET metadata_json=? WHERE attempt_id=?', (json.dumps(metadata), attempt['attempt_id']))
+    # This is an explicit operator attestation, never an automatic inference
+    # that an unrecorded process died. The task locks prevent concurrent spawn.
+    for run_id in abandon_review_run_ids:
+        review_store.update_run(conn, run_id, status='abandoned', slot_reserved=0,
+                                error='operator confirmed untracked model processes were stopped')
+    from robert_agent.review_coordinator import terminate_children
+    for (task_id,) in task_ids:
+        if terminate_children(conn, task_id) == 'attention':
+            raise work_items.WorkItemConflictError('Review worker identity could not be verified. Inspect and stop residual processes, then explicitly confirm abandonment of unknown launches when canceling.')
     from robert_agent import execution_store
     subjects = {('task', task_id) for (task_id,) in task_ids}
     for (task_id,) in task_ids:
@@ -130,6 +148,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks):
     conn.execute(f"UPDATE tasks SET lifecycle='canceled', updated_at=? WHERE workstream_id IN ({placeholders}) AND lifecycle NOT IN ('completed','ignored','canceled')", params)
     conn.execute(f"UPDATE attempts SET status='canceled', finished_at=? WHERE task_id IN (SELECT task_id FROM tasks WHERE workstream_id IN ({placeholders})) AND status IN ('prepared','running','stale')", params)
     conn.execute(f"UPDATE workstreams SET lifecycle='canceled', active_task_id=NULL, updated_at=? WHERE workstream_id IN ({placeholders})", params)
+    conn.execute(f"UPDATE review_sessions SET status='canceled',error='operator canceled work item',updated_at=? WHERE workstream_id IN ({placeholders}) AND status NOT IN ('published','superseded','canceled')", params)
     conn.execute(f"UPDATE github_actions SET publish_status='skipped' WHERE task_id IN (SELECT task_id FROM tasks WHERE workstream_id IN ({placeholders})) AND publish_status='not_published'", facts['streams'])
     conn.execute("UPDATE wakeups SET status='canceled', updated_at=? WHERE work_item_id=? AND status='pending'", (now, item['work_item_id']))
 

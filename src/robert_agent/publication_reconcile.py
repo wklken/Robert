@@ -11,7 +11,7 @@ import json
 import re
 from urllib.parse import urlparse
 
-from robert_agent import pr_health
+from robert_agent import pr_health, review_publish
 
 
 COMMENT_MARKER_RE = re.compile(
@@ -165,6 +165,8 @@ def _scope_projection(action_scope):
 def derive_publication_keys(action, action_scope):
     """Return stable idempotency/request keys from audited scope only."""
 
+    if action.get('action_type') == 'submit_pr_review':
+        return review_publish.publication_keys(action, action_scope)
     projection = _scope_projection(action_scope)
     if not isinstance(projection, dict):
         raise ValueError("accepted action scope is required for publication intent")
@@ -416,6 +418,8 @@ def classify_remote_state(action, action_scope, run_command, *, conn=None):
     if not isinstance(action_scope, dict):
         return _result("unknown", "audited_scope_missing")
     action_type = action.get("action_type")
+    if action_type == "submit_pr_review":
+        return review_publish.reconcile(action, action_scope, run_command)
     if action_type == "comment":
         return _reconcile_comment(action, action_scope, run_command)
     if action_type == "open_pr":

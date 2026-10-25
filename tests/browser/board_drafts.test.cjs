@@ -66,3 +66,25 @@ test('a new question without a version bump still invalidates the reply draft', 
     { attention_signals:[{event_id:'new',type:'operator_question',summary:'New question'}] });
   assert.equal(vm.runInContext('state.composer.send.disabled', context), true);
 });
+
+test('cancel abandons only displayed unknown launches after explicit confirmation', () => {
+  const { context, submit } = scenario('cancel', {tasks:[{task_id:'task', attempts:[], review:{
+    runs:[{run_id:'unknown-run', can_abandon:true}, {run_id:'running-run', can_abandon:false}],
+  }}]}, {});
+  submit();
+  assert.equal(vm.runInContext('captured.abandon_review_run_ids', context), undefined);
+  assert.equal(vm.runInContext('state.composer.abandonment.checked', context), false);
+  vm.runInContext('state.composer.abandonment.checked = true', context);
+  submit();
+  assert.equal(vm.runInContext('JSON.stringify(captured.abandon_review_run_ids)', context), '["unknown-run"]');
+});
+
+test('cancel requires another review when the unknown launch set changes', () => {
+  const { context } = scenario('cancel', {tasks:[]}, {tasks:[{task_id:'task', attempts:[], review:{
+    runs:[{run_id:'new-unknown', can_abandon:true}],
+  }}]});
+  assert.equal(vm.runInContext('state.composer.send.disabled', context), true);
+  vm.runInContext('state.composer.confirm.events.click()', context);
+  assert.equal(vm.runInContext('state.composer.send.disabled', context), false);
+  assert.equal(vm.runInContext('state.composer.abandonment.checked', context), false);
+});

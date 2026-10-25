@@ -85,6 +85,10 @@ class NewSkillSkeletonTests(unittest.TestCase):
             for path in root.rglob("*.py"):
                 text = path.read_text(encoding="utf-8")
                 for literal in forbidden_literals:
+                    if literal == "result.json" and path.name in {"review_files.py", "review_coordinator.py"}:
+                        # Native review results are registered artifacts, not the
+                        # removed file-backed task/control plane.
+                        continue
                     if literal in text:
                         offenders.append(f"{path.relative_to(REPO_ROOT)} contains {literal}")
         self.assertEqual(offenders, [])
