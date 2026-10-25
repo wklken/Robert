@@ -91,9 +91,10 @@ def terminate_children(conn, task_id):
     if not review:
         return 'already_dead'
     outcomes = []
+    updates = []
     for run in store.runs(conn, review['round_id']):
         if run['status'] in {'prepared', 'waiting'} and not run['slot_reserved']:
-            store.update_run(conn, run['run_id'], status='interrupted', error='coordinator stopped before launch')
+            updates.append((run['run_id'], {'status': 'interrupted', 'error': 'coordinator stopped before launch'}))
             continue
         if run['status'] not in {'starting', 'running', 'failed'}:
             continue
@@ -101,13 +102,13 @@ def terminate_children(conn, task_id):
         if run['status'] == 'failed' and not recorded.get('pid'):
             continue
         if _group_finished(recorded):
-            store.release_slot(conn, run['run_id'])
+            updates.append((run['run_id'], {'slot_reserved': 0}))
             outcomes.append('already_dead')
             continue
         if recorded.get('process_exited') or (recorded and worker_identity.inspect_recorded_identity(recorded) == 'dead'):
             exited = _wait_for_group_exit(recorded)
             if exited:
-                store.release_slot(conn, run['run_id'])
+                updates.append((run['run_id'], {'slot_reserved': 0}))
             outcomes.append('already_dead' if exited else 'attention')
             continue
         if not recorded:
@@ -118,7 +119,11 @@ def terminate_children(conn, task_id):
             result = {'status': 'attention'}
         outcomes.append(result['status'])
         if result['status'] != 'attention':
-            store.update_run(conn, run['run_id'], status='interrupted', slot_reserved=0, error='coordinator stopped')
+            updates.append((run['run_id'], {'status': 'interrupted', 'slot_reserved': 0, 'error': 'coordinator stopped'}))
+    # Observe/stop every child before opening our write transaction. In
+    # particular, stopping the second child must not hold the first's update.
+    for run_id, fields in updates:
+        store.update_run(conn, run_id, **fields)
     return 'attention' if 'attention' in outcomes else 'terminated'
 
 
@@ -409,7 +414,7 @@ class Coordinator:
             store.update_run(conn, run['run_id'], status='waiting')
         try:
             prefix, environment = self.sandbox(self.manifest, run['output_dir'], self.data_dir,
-                                               prompt_path, readable_files)
+                                               prompt_path, readable_files, worker_agent=worker['agent'])
             launched = self.launch_with_slot(run, worker, prompt_path, prefix, environment)
             if not launched.get('ok'):
                 if launched.get('pid') and not _wait_for_group_exit(launched):
@@ -582,6 +587,7 @@ class Coordinator:
                 if isinstance(exc, ReviewStopped):
                     status = 'canceled' if not _active(conn, self.task_id, self.attempt_id) else 'attention'
                 store.update(conn, self.round_id, status=status, error=str(exc))
+            with store.connect(self.db_path) as conn:
                 terminate_children(conn, self.task_id)
             raise
 
@@ -593,10 +599,12 @@ def main(argv=None):
     parser.add_argument('--attempt-id', required=True)
     args = parser.parse_args(argv)
 
+    coordinator = Coordinator(args.db, args.task_id, args.attempt_id)
     def stop(_signum, _frame):
-        raise ReviewStopped('coordinator received termination signal')
+        # Finish any in-flight spawn and persist its identity before cleanup.
+        coordinator.stopping.set()
     signal.signal(signal.SIGTERM, stop)
-    Coordinator(args.db, args.task_id, args.attempt_id).run()
+    coordinator.run()
     return 0
 
 

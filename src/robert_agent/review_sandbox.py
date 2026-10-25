@@ -7,7 +7,7 @@ import shutil
 import sys
 
 
-def launch_policy(manifest, output_dir, data_dir, prompt_path, readable_files=()):
+def launch_policy(manifest, output_dir, data_dir, prompt_path, readable_files=(), *, worker_agent=None):
     output = Path(output_dir).resolve()
     scratch = output / '.tmp'
     scratch.mkdir(exist_ok=True)
@@ -24,6 +24,15 @@ def launch_policy(manifest, output_dir, data_dir, prompt_path, readable_files=()
     if os.environ.get('CODEX_HOME'):
         writable.append(Path(os.environ['CODEX_HOME']).resolve())
         environment['CODEX_HOME'] = str(writable[-1])
+    if os.environ.get('CLAUDE_CONFIG_DIR'):
+        config = Path(os.environ['CLAUDE_CONFIG_DIR']).expanduser().resolve()
+        if any(config == path or config in path.parents or path in config.parents
+               for path in (data, tree, context)):
+            raise RuntimeError('CLAUDE_CONFIG_DIR must not overlap review inputs or Robert data')
+        if not config.is_dir():
+            raise RuntimeError('CLAUDE_CONFIG_DIR must be an existing, authenticated Claude configuration directory')
+        writable.append(config)
+        environment['CLAUDE_CONFIG_DIR'] = str(config)
     if sys.platform == 'darwin' and shutil.which('sandbox-exec'):
         def rule(operation, paths):
             return '(' + operation + ' ' + ' '.join('(subpath ' + json.dumps(str(p)) + ')' for p in paths) + ')'
@@ -43,7 +52,10 @@ def launch_policy(manifest, output_dir, data_dir, prompt_path, readable_files=()
         profile_path.write_text(profile, encoding='utf-8')
         return ['/usr/bin/sandbox-exec', '-f', str(profile_path)], environment
     if sys.platform.startswith('linux') and shutil.which('bwrap'):
-        prefix = ['bwrap', '--die-with-parent', '--new-session', '--ro-bind', '/', '/',
+        if worker_agent in {'claude', 'tclaude'} and not environment.get('CLAUDE_CONFIG_DIR'):
+            raise RuntimeError('Linux Claude review requires CLAUDE_CONFIG_DIR pointing to an authenticated '
+                               'configuration directory; ~/.claude.json cannot be atomically updated through a file bind')
+        prefix = ['bwrap', '--die-with-parent', '--unshare-pid', '--new-session', '--ro-bind', '/', '/',
                   '--dev-bind', '/dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
                   '--tmpfs', str(data)]
         # Re-expose only this stage's inputs after hiding Robert's data directory.

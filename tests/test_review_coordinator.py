@@ -103,7 +103,7 @@ class ReviewCoordinatorTests(unittest.TestCase):
     def coordinator(self):
         task, attempt = self.current()
         return review_coordinator.Coordinator(self.db, task, attempt, fetch_pr=self.pr, launcher=self.launcher,
-              sandbox=lambda manifest, output, data, prompt, readable: ([], {'ROBERT_REVIEW_OUTPUT_DIR': str(output)}))
+              sandbox=lambda manifest, output, data, prompt, readable, **kwargs: ([], {'ROBERT_REVIEW_OUTPUT_DIR': str(output)}))
 
     def finish_task(self, task):
         with review_store.connect(self.db) as conn:
@@ -305,7 +305,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
             self.cycle([event, event])
             task, attempt = self.current()
             driver = review_coordinator.Coordinator(self.db, task, attempt, fetch_pr=self.pr,
-                sandbox=lambda manifest, output, data, prompt, readable: ([], {'ROBERT_REVIEW_OUTPUT_DIR': str(output)}))
+                sandbox=lambda manifest, output, data, prompt, readable, **kwargs: ([], {'ROBERT_REVIEW_OUTPUT_DIR': str(output)}))
             report = driver.run()
             rounds.append((driver, report.read_bytes()))
             self.cycle([])

@@ -209,6 +209,10 @@ def release_slot(conn, run_id):
     conn.execute('UPDATE review_runs SET slot_reserved=0 WHERE run_id=?', (run_id,))
 
 
+def can_abandon(run):
+    return run['status'] == 'starting' and not run['dispatch'] and bool(run.get('slot_reserved'))
+
+
 def task_status(conn, task_id):
     entry = session(conn, task_id=task_id)
     if not entry:
@@ -230,7 +234,8 @@ def board_status(conn, task_id):
             'process_pool': process_pool_status(conn),
             'head_sha': manifest.get('head_sha'), 'base_ref': manifest.get('base_ref'),
             'error': safe_text(entry['error'] or ''),
-            'runs': [{'stage': run['stage'], 'worker_id': safe_text(run['worker_id']),
+            'runs': [{'run_id': run['run_id'], 'can_abandon': can_abandon(run),
+                      'stage': run['stage'], 'worker_id': safe_text(run['worker_id']),
                       'model': safe_text(run['model'] or ''),
                       'slot_reserved': bool(run['slot_reserved']) if 'slot_reserved' in run else None,
                       'attempt_no': run['attempt_no'], 'status': run['status'],

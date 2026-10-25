@@ -281,6 +281,7 @@ Object.assign(translations.en, {
   cancelHelp:
     "Stop this task and skip unpublished results? Existing GitHub changes are kept. A worker that cannot be stopped remains active.",
   confirmCancel: "Confirm cancellation",
+  abandonReviewHelp: "I inspected and stopped all residual model processes for the unknown launches listed below. Abandon those launches and release their review slots.",
   submitting: "Submitting…",
   save: "Save changes",
   reviewDraft: "I reviewed the latest state; keep editing",
@@ -398,6 +399,7 @@ Object.assign(translations.zh, {
   cancelHelp:
     "停止此任务并跳过尚未发布的结果？已产生的 GitHub 变更会保留。无法停止的 Worker 会继续显示为运行中。",
   confirmCancel: "确认取消任务",
+  abandonReviewHelp: "我已检查并停止下列未知启动记录对应的所有残留模型进程。放弃这些记录并释放 review 并发额度。",
   submitting: "提交中…",
   save: "保存修改",
   reviewDraft: "已核对最新内容，继续编辑",
@@ -1054,13 +1056,18 @@ function attentionForCommand(detail, command) {
     kinds.includes(signal.type),
   )?.event_id;
 }
+function unknownReviewRunIds(detail) {
+  return (detail.tasks || []).flatMap(task => (task.review?.runs || [])
+    .filter(run => run.can_abandon).map(run => run.run_id)).sort();
+}
 function updateComposerState(detail) {
   const draft = state.composer;
   if (!draft?.send) return;
   const changed =
     draft.item.version !== detail.version ||
     attentionForCommand(draft.item, draft.command) !==
-      attentionForCommand(detail, draft.command);
+      attentionForCommand(detail, draft.command) ||
+    (draft.command === "cancel" && JSON.stringify(draft.abandonRunIds) !== JSON.stringify(unknownReviewRunIds(detail)));
   const available = detail.valid_commands.includes(draft.command);
   draft.send.disabled =
     state.busy || !canWrite(detail) || changed || !available;
@@ -1254,7 +1261,18 @@ function composeOrExecute(command) {
     form.append(field);
     inputs[name] = el;
   }
-  if (command === "cancel") form.append(node("p", "", t("cancelHelp")));
+  if (command === "cancel") {
+    form.append(node("p", "", t("cancelHelp")));
+    draft.abandonRunIds = unknownReviewRunIds(detail);
+    if (draft.abandonRunIds.length) {
+      const label = node("label", "", t("abandonReviewHelp"));
+      draft.abandonment = node("input");
+      draft.abandonment.type = "checkbox";
+      draft.abandonment.checked = false;
+      label.append(draft.abandonment);
+      form.append(label, node("p", "", draft.abandonRunIds.join(", ")));
+    }
+  }
   else if (command === "edit") {
     input(t("title"), "title", detail.title, false);
     input(t("requirement"), "description", detail.description);
@@ -1305,6 +1323,7 @@ function composeOrExecute(command) {
   draft.send = send;
   draft.notice = node("p", "notice");
   draft.confirm = button(t("reviewDraft"), () => {
+    if (command === "cancel") return composeOrExecute(command);
     draft.item = state.detail;
     updateComposerState(state.detail);
   });
@@ -1313,6 +1332,7 @@ function composeOrExecute(command) {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const extra = {};
+    if (draft.abandonment?.checked) extra.abandon_review_run_ids = draft.abandonRunIds;
     Object.entries(inputs).forEach(([name, el]) => {
       if (name !== "routing") extra[name] = el.value;
     });

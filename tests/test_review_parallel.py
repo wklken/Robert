@@ -84,7 +84,7 @@ sys.exit(int(sys.argv[3]))
                 ORDER BY a.attempt_no DESC LIMIT 1''', (number,)).fetchone()
         driver = review_coordinator.Coordinator(self.fixture.db, task, attempt,
             fetch_pr=lambda repo, n: self.fixture.pr(repo, n) | {'number': n}, launcher=self.launcher,
-            sandbox=lambda manifest, output, data, prompt, readable: ([], {'ROBERT_REVIEW_OUTPUT_DIR': str(output)}),
+            sandbox=lambda manifest, output, data, prompt, readable, **kwargs: ([], {'ROBERT_REVIEW_OUTPUT_DIR': str(output)}),
             poll_seconds=.02)
         driver.prepare()
         return driver

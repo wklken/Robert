@@ -897,6 +897,7 @@ def execute_command(
     description=None,
     priority=None,
     notifier=None,
+    abandon_review_run_ids=None,
 ):
     _validate_idempotency_key(idempotency_key)
     if command not in COMMANDS:
@@ -906,6 +907,16 @@ def execute_command(
     if expected_event_id is not None:
         expected_event_id = _validate_text(expected_event_id, "expected_event_id", 128, required=True)
     body = _validate_text(body, "body", MAX_REPLY)
+    if abandon_review_run_ids is None:
+        abandon_review_run_ids = []
+    if not isinstance(abandon_review_run_ids, list):
+        raise WorkItemValidationError('abandon_review_run_ids must be a list of run IDs')
+    abandon_review_run_ids = [_validate_text(value, 'review run ID', 128, required=True)
+                             for value in abandon_review_run_ids]
+    if len(set(abandon_review_run_ids)) != len(abandon_review_run_ids):
+        raise WorkItemValidationError('abandon_review_run_ids must not contain duplicates')
+    if abandon_review_run_ids and command != 'cancel':
+        raise WorkItemValidationError('unknown review launches can only be abandoned during cancel')
 
     db_path = Path(db_path).expanduser()
     with closing(sqlite3.connect(db_path, isolation_level=None)) as conn, ExitStack() as locks:
@@ -980,7 +991,8 @@ def execute_command(
                 resolved_event_id = None
                 task_id = None
             elif command == "cancel":
-                work_item_control.cancel_execution(conn, item, facts, now, db_path, locks)
+                work_item_control.cancel_execution(conn, item, facts, now, db_path, locks,
+                                                   abandon_review_run_ids=abandon_review_run_ids)
                 conn.execute(
                     """
                     UPDATE work_items
@@ -1136,6 +1148,8 @@ def execute_command(
                 "task_id": task_id,
                 "resolved_event_id": resolved_event_id,
             }
+            if abandon_review_run_ids:
+                result['abandoned_review_run_ids'] = abandon_review_run_ids
             _insert_event(
                 conn,
                 work_item_id,
