@@ -142,6 +142,51 @@ workers:
     effort: high
 ```
 
+### Claude workers as root in a restricted container
+
+The `claude` and `tclaude` adapters append `--permission-mode bypassPermissions`.
+Claude Code normally refuses that mode when its process runs as root. Check
+the account running the Robert service, which may differ from your login shell.
+
+For an already restricted container that intentionally runs Robert as root,
+prefix the affected worker's command with `env IS_SANDBOX=1`:
+
+```yaml
+workers:
+  claude_reviewer:
+    adapter: tclaude
+    command: ["env", "IS_SANDBOX=1", "tclaude"]
+    model: default
+    effort: default
+```
+
+Use the existing worker name, model, effort, and other settings. Prepend `env`
+and `IS_SANDBOX=1` to its existing command, preserving any absolute executable
+path and arguments. Keep `adapter: tclaude`; for the `claude` CLI, keep
+`adapter: claude` and its executable instead. Apply this to every affected
+worker, including separate review and vote workers.
+
+Robert executes an argument list without a shell. Do not use
+`command: IS_SANDBOX=1 tclaude`, which treats the assignment as an executable.
+The `env` prefix sets the variable for that worker without an
+`environment_allowlist` entry. There is no worker `env` or `environment` mapping
+in Robert YAML. Alternatively, set `IS_SANDBOX=1` in the container or service
+environment and add `IS_SANDBOX` to each affected worker's
+`environment_allowlist`; the allowlist passes existing values and does not
+create them. Exporting a value in a terminal does not change a running service.
+
+`IS_SANDBOX=1` bypasses Claude's root check; it does not start `bubblewrap`,
+create isolation, or reduce root privileges. Do not add it automatically on an
+unrestricted host. This is an upstream workaround, so recheck it when upgrading
+the model CLI.
+
+After validation, restart Robert using the deployment's existing service
+manager and verify a newly created task actually starts the Claude worker.
+Existing rounds can retain their saved worker configuration. A version check,
+doctor result, dry run, or mocked launch does not exercise this root check;
+report live startup as unverified if it is outside the authorized deployment
+scope.
+
 ## External Skills
 
 Robert validates local skills but does not install or update them:

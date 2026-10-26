@@ -65,6 +65,13 @@ command -v codex
 
 Replace `codex` if another worker was selected.
 
+Check the intended Robert service account as well. For `claude` or `tclaude`
+running as root in an already restricted container, follow the
+[root container configuration](guides.md#claude-workers-as-root-in-a-restricted-container)
+before readiness checks. Preserve the configured adapter, executable path, and
+arguments when adding the command prefix; do not infer container isolation
+from `IS_SANDBOX=1` itself.
+
 ### 2. Verify GitHub Authentication
 
 ```bash
@@ -176,6 +183,11 @@ robert run once --config ~/.config/robert/config.yml --dry-run --skip-external
 
 Do not claim success if a required check failed or was skipped. This preview
 alone does not prove live GitHub polling or worker execution.
+
+For root container Claude workers, version checks and mocked launches also
+miss the upstream permission-mode check. When live execution is authorized,
+verify a newly created task starts the configured Claude worker after restart;
+otherwise report that check as pending without creating remote test objects.
 
 ### 8. Prepare Supervisor for Daemon and Web
 
