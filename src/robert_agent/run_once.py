@@ -3741,6 +3741,12 @@ def _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
         ORDER BY rs.created_at, rs.round_id""", (repo["full_name"],)).fetchall()
     for (round_id,) in queued:
         entry = round_store.session(conn, round_id=round_id)
+        if round_store is review_store and conn.execute(
+            "SELECT 1 FROM task_events WHERE event_id=? LIMIT 1",
+            (_event_id(entry["trigger_fingerprint"]),),
+        ).fetchone():
+            round_store.update(conn, round_id, status="canceled", error="trigger_already_processed")
+            continue
         if conn.execute(f"""SELECT 1 FROM {table} WHERE workstream_id=?
             AND status='attention'""", (entry["workstream_id"],)).fetchone():
             continue
@@ -6891,6 +6897,8 @@ def _run_repo_pipeline(
                          or event.get("actor_login") in repo.get("trusted_actors", []))):
                 review_route = _effective_route(config_result, repo, event)
                 if review_route.get("native_review_workers"):
+                    if conn.execute("SELECT 1 FROM task_events WHERE event_id=? LIMIT 1", (event_id,)).fetchone():
+                        continue
                     review_store.enqueue(conn, repo, event, review_route, review_route["native_review_workers"])
                     continue
             workflow_fact = _apply_workflow_event_fact(conn, event, run_now)

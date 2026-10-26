@@ -106,6 +106,20 @@ class ReviewWorkspaceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             review_workspace.verify_snapshot(manifest)
 
+    def test_advanced_target_branch_preserves_captured_pr_base(self):
+        self.git(self.upstream, 'checkout', 'main')
+        (self.upstream / 'other.py').write_text('unrelated = True\n')
+        self.git(self.upstream, 'add', '.')
+        self.git(self.upstream, 'commit', '-m', 'advance target branch')
+        self.assertNotEqual(self.git(self.upstream, 'rev-parse', 'main'), self.base)
+
+        manifest = self.freeze(self.prepare('advanced-base'))
+
+        self.assertEqual(manifest['base_sha'], self.base)
+        self.assertEqual(manifest['merge_base_sha'], self.base)
+        self.assertEqual(Path(manifest['context_dir'], 'changed-files.txt').read_text(), 'source.py\n')
+        self.assertTrue(review_workspace.verify_snapshot(manifest))
+
     def test_unresolved_runtime_and_missing_primary_files(self):
         manifest = self.prepare('round-1')
         runtime = json.loads(Path(manifest['context_dir'], 'runtime-info.json').read_text())
