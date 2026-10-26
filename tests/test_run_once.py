@@ -4657,6 +4657,8 @@ repos:
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
+            # This fixture represents a database that predates the mainline migration.
+            conn.execute("DELETE FROM schema_migrations WHERE name=?", (storage.PR_MAINLINE_MIGRATION_NAME,))
             conn.execute(
                 """
                 INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root)
@@ -7142,7 +7144,7 @@ repos:
         self.assertEqual(workstream, ("failed", None))
         self.assertEqual(notification, ("worker_timeout", "recorded"))
 
-    def test_stale_attempt_does_not_consume_dispatch_capacity(self):
+    def test_stale_attempt_retains_dispatch_capacity(self):
         from robert_agent import run_once
         self.config_path.write_text(
             self.config_path.read_text(encoding="utf-8").replace(
@@ -7238,13 +7240,13 @@ repos:
             run_once.worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 0)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             statuses = conn.execute(
                 "SELECT status FROM attempts ORDER BY started_at"
             ).fetchall()
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        self.assertEqual(statuses, [("stale",), ("running",)])
+        self.assertCountEqual(statuses, [("stale",), ("prepared",)])
         self.assertEqual(task_count, 2)
 
     def test_live_discovery_failure_preserves_supervision_state(self):
@@ -7756,7 +7758,10 @@ repos:
                 "failed_count": 0,
             }
 
+        original_process = run_once._dispatch_process_status
         try:
+            # The stub worker has exited; only the controller can confirm that fact.
+            run_once._dispatch_process_status = lambda _metadata: {"status": "dead"}
             run_once.publish.publish_ready_actions = fake_publish_ready_actions
             second = run_once.run_once(
                 self.config_path,
@@ -7765,6 +7770,7 @@ repos:
                 skip_external=True,
             )
         finally:
+            run_once._dispatch_process_status = original_process
             run_once.publish.publish_ready_actions = original_publish
 
         self.assertTrue(second["ok"], second)
@@ -7877,6 +7883,9 @@ raise SystemExit(0 if record["ok"] else 1)
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
                 result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
+                if result_count:
+                    run_once._supervise_running_attempts(conn, "repo:example/backend", {}, run_once._now())
+                    attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
             if attempt_status == "completed" and result_count == 1:
                 break
             time.sleep(0.1)

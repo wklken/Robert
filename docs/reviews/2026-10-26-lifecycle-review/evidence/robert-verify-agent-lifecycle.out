@@ -1,0 +1,45 @@
+{
+  "B/I/1": {
+    "daemon_status": "child_timeout",
+    "finally_executed": false,
+    "persisted_run_status": "running",
+    "persisted_lease_status": "active",
+    "lease_ttl_seconds": 540.0,
+    "next_acquisition": "skipped_active_lease",
+    "prune_counts": {
+      "run_steps": 0,
+      "run_repo_steps": 0,
+      "agent_runs": 0,
+      "daemon_events": 0,
+      "leases": 0
+    }
+  },
+  "B/I/3": {
+    "ok": false,
+    "status": "failed_timeout",
+    "terminate": true,
+    "timeout_seconds": 2700,
+    "heartbeat_age_minutes": 0.0,
+    "runtime_minutes": 45.0
+  },
+  "B/I/4": {
+    "exception": "OperationalError: database is locked",
+    "elapsed_seconds": 11.05,
+    "session_status": "failed",
+    "model_returncode": -15
+  },
+  "B/I/6": {
+    "failed_run_ok": false,
+    "failed_run_status": "failed_route",
+    "parent_task_lifecycle": "completed",
+    "children_after_failure": 0,
+    "wakeups": [
+      [
+        "consumed",
+        1
+      ]
+    ],
+    "scheduler_runnable_after_failure": false,
+    "manual_run_recovered_dispatch_count": 1
+  }
+}

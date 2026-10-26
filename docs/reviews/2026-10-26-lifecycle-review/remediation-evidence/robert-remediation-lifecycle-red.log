@@ -1,0 +1,61 @@
+EFFF
+======================================================================
+ERROR: test_health_reads_release_writer_between_prs (tests.test_lifecycle_remediation.LifecycleRemediationTests.test_health_reads_release_writer_between_prs)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_lifecycle_remediation.py", line 101, in test_health_reads_release_writer_between_prs
+    decisions = run_once._collect_pr_remediation_decisions(
+        conn, 'repo:example/backend', fixture.repo, runner,
+        '2026-10-26T00:00:00+00:00',
+    )
+  File "./src/robert_agent/run_once.py", line 2240, in _collect_pr_remediation_decisions
+    snapshot = pr_health.fetch_pr_snapshot(
+        repo["full_name"],
+        number,
+        runner=runner,
+    )
+  File "./src/robert_agent/pr_health.py", line 32, in fetch_pr_snapshot
+    payload = discover._try_run_json(
+        ["gh", "api", f"repos/{repo_full_name}/pulls/{number}"],
+        runner=runner,
+    )
+  File "./src/robert_agent/discover.py", line 80, in _try_run_json
+    return _run_json(args, runner=runner)
+  File "./src/robert_agent/discover.py", line 71, in _run_json
+    completed = runner(args, text=True, capture_output=True, check=True)
+  File "./tests/test_lifecycle_remediation.py", line 96, in runner
+    other.execute('BEGIN IMMEDIATE')
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+======================================================================
+FAIL: test_received_result_retains_ownership_until_process_exit (tests.test_lifecycle_remediation.LifecycleRemediationTests.test_received_result_retains_ownership_until_process_exit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_lifecycle_remediation.py", line 69, in test_received_result_retains_ownership_until_process_exit
+    self.assertEqual(run_once._running_attempt_count(conn, repo), 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_remote_close_stops_registered_native_models (tests.test_lifecycle_remediation.LifecycleRemediationTests.test_remote_close_stops_registered_native_models)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_lifecycle_remediation.py", line 164, in test_remote_close_stops_registered_native_models
+    self.assertIsNotNone(model.poll(), 'remote close must stop the independent model group')
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: unexpectedly None : remote close must stop the independent model group
+
+======================================================================
+FAIL: test_stale_live_worker_keeps_dispatch_capacity (tests.test_lifecycle_remediation.LifecycleRemediationTests.test_stale_live_worker_keeps_dispatch_capacity)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_lifecycle_remediation.py", line 62, in test_stale_live_worker_keeps_dispatch_capacity
+    self.assertEqual(run_once._running_attempt_count(conn, repo), 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+----------------------------------------------------------------------
+Ran 4 tests in 3.125s
+
+FAILED (failures=3, errors=1)

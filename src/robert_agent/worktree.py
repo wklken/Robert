@@ -5,7 +5,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from robert_agent.common import emit
+from robert_agent.common import emit, run_command
 
 
 def _slug(value):
@@ -15,7 +15,7 @@ def _slug(value):
 
 def _existing_worktree_for_branch(repo_root, branch_name):
     try:
-        completed = subprocess.run(
+        completed = run_command(
             ["git", "worktree", "list", "--porcelain"],
             cwd=repo_root,
             text=True,
@@ -93,14 +93,14 @@ def plan_worktree(
 
     worktree_root.mkdir(parents=True, exist_ok=True)
     if mode == "new_branch":
-        subprocess.run(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True)
-        subprocess.run(
+        run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True)
+        run_command(
             ["git", "worktree", "add", str(worktree_path), "-b", branch_name, start_point],
             cwd=repo_root,
             check=True,
         )
     else:
-        subprocess.run(
+        run_command(
             ["git", "worktree", "add", str(worktree_path), branch_name],
             cwd=repo_root,
             check=True,
@@ -204,22 +204,25 @@ def prepare_existing_pr_worktree(
         return result
 
     for command in command_argvs[:2]:
-        runner(
+        run_command(
             command,
+            runner=runner,
             cwd=repo_root,
             check=True,
             text=True,
             capture_output=True,
         )
-    actual_head = runner(
+    actual_head = run_command(
         ["git", "rev-parse", head_ref],
+        runner=runner,
         cwd=repo_root,
         check=True,
         text=True,
         capture_output=True,
     ).stdout.strip()
-    actual_base = runner(
+    actual_base = run_command(
         ["git", "rev-parse", base_ref],
+        runner=runner,
         cwd=repo_root,
         check=True,
         text=True,
@@ -235,8 +238,9 @@ def prepare_existing_pr_worktree(
         }
 
     if existing_worktree_path:
-        status = runner(
+        status = run_command(
             ["git", "status", "--porcelain"],
+            runner=runner,
             cwd=worktree_path,
             check=True,
             text=True,
@@ -248,8 +252,9 @@ def prepare_existing_pr_worktree(
                 "ok": False,
                 "status": "blocked_dirty_worktree",
             }
-        runner(
+        run_command(
             ["git", "reset", "--hard", head_ref],
+            runner=runner,
             cwd=worktree_path,
             check=True,
             text=True,
@@ -261,7 +266,7 @@ def prepare_existing_pr_worktree(
         }
 
     worktree_root.mkdir(parents=True, exist_ok=True)
-    runner(
+    run_command(
         [
             "git",
             "worktree",
@@ -271,6 +276,7 @@ def prepare_existing_pr_worktree(
             branch_name,
             head_ref,
         ],
+        runner=runner,
         cwd=repo_root,
         check=True,
         text=True,
@@ -285,7 +291,7 @@ def _workspace_reuse_error(worktree_path, worktree_root, dry_run):
     except ValueError:
         return "blocked_unmanaged_worktree"
     if not dry_run:
-        status = subprocess.run(
+        status = run_command(
             ["git", "status", "--porcelain"], cwd=worktree_path,
             check=True, text=True, capture_output=True,
         ).stdout
@@ -346,12 +352,12 @@ def plan_review_worktree(
         return result
 
     if mode == "reuse_existing_worktree":
-        subprocess.run(
+        run_command(
             ["git", "fetch", "upstream", base_branch],
             cwd=repo_root,
             check=True,
         )
-        subprocess.run(
+        run_command(
             [
                 "git",
                 "fetch",
@@ -361,7 +367,7 @@ def plan_review_worktree(
             cwd=repo_root,
             check=True,
         )
-        subprocess.run(
+        run_command(
             ["git", "reset", "--hard", review_ref],
             cwd=worktree_path,
             check=True,
@@ -369,8 +375,8 @@ def plan_review_worktree(
         return result
 
     worktree_root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True)
-    subprocess.run(
+    run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True)
+    run_command(
         [
             "git",
             "fetch",
@@ -380,7 +386,7 @@ def plan_review_worktree(
         cwd=repo_root,
         check=True,
     )
-    subprocess.run(
+    run_command(
         [
             "git",
             "worktree",
@@ -398,7 +404,7 @@ def plan_review_worktree(
 
 def _registered_worktree(repo_root, expected_path):
     try:
-        completed = subprocess.run(
+        completed = run_command(
             ["git", "worktree", "list", "--porcelain"],
             cwd=repo_root,
             text=True,
@@ -447,7 +453,7 @@ def plan_analysis_worktree(
     if not dry_run:
         worktree_root.mkdir(parents=True, exist_ok=True)
         for command in commands:
-            subprocess.run(command, cwd=repo_root, check=True)
+            run_command(command, cwd=repo_root, check=True)
     return {
         "ok": True,
         "status": (

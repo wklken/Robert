@@ -1,0 +1,171 @@
+FFFFFFFFFFFFFFF
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='分析一下为什么失败')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 23, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertEqual(discover.infer_intent('', body, 'comment'), 'analysis')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'bug_fix' != 'analysis'
+- bug_fix
++ analysis
+
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='please explain this bug')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 23, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertEqual(discover.infer_intent('', body, 'comment'), 'analysis')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'bug_fix' != 'analysis'
+- bug_fix
++ analysis
+
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='analyze fixture behavior')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 23, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertEqual(discover.infer_intent('', body, 'comment'), 'analysis')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'bug_fix' != 'analysis'
+- bug_fix
++ analysis
+
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='prefix')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 26, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertNotEqual(discover.infer_intent('', body, 'comment'), 'bug_fix')
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'bug_fix' == 'bug_fix'
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='fixture')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 26, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertNotEqual(discover.infer_intent('', body, 'comment'), 'bug_fix')
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'bug_fix' == 'bug_fix'
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='suffix')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 26, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertNotEqual(discover.infer_intent('', body, 'comment'), 'bug_fix')
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'bug_fix' == 'bug_fix'
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='debug information')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 26, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertNotEqual(discover.infer_intent('', body, 'comment'), 'bug_fix')
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'bug_fix' == 'bug_fix'
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='实现用户登录')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 30, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertEqual(route.route_task({'intent': intent, 'source_type': 'issue'})['route_id'], 'new-pr')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'classification-result' != 'new-pr'
+- classification-result
++ new-pr
+
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='支持增量同步')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 30, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertEqual(route.route_task({'intent': intent, 'source_type': 'issue'})['route_id'], 'new-pr')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'classification-result' != 'new-pr'
+- classification-result
++ new-pr
+
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='add a feature')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 30, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertEqual(route.route_task({'intent': intent, 'source_type': 'issue'})['route_id'], 'new-pr')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'classification-result' != 'new-pr'
+- classification-result
++ new-pr
+
+
+======================================================================
+FAIL: test_analysis_and_implementation_intents_do_not_match_substrings (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_analysis_and_implementation_intents_do_not_match_substrings) (body='implement pagination')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 30, in test_analysis_and_implementation_intents_do_not_match_substrings
+    self.assertEqual(route.route_task({'intent': intent, 'source_type': 'issue'})['route_id'], 'new-pr')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'classification-result' != 'new-pr'
+- classification-result
++ new-pr
+
+
+======================================================================
+FAIL: test_maintenance_catches_up_more_than_one_event_batch (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_maintenance_catches_up_more_than_one_event_batch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 84, in test_maintenance_catches_up_more_than_one_event_batch
+    self.assertLess(remaining, 150)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: 150 not less than 150
+
+======================================================================
+FAIL: test_rejected_spool_prefix_cannot_permanently_starve_pending (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_rejected_spool_prefix_cannot_permanently_starve_pending)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 71, in test_rejected_spool_prefix_cannot_permanently_starve_pending
+    self.assertEqual(received, [True])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != [True]
+
+Second list contains 1 additional elements.
+First extra element 0:
+True
+
+- []
++ [True]
+
+======================================================================
+FAIL: test_search_floor_does_not_disable_core_only_publication (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_search_floor_does_not_disable_core_only_publication)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 53, in test_search_floor_does_not_disable_core_only_publication
+    self.assertNotIn('--skip-publish', calls[0])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '--skip-publish' unexpectedly found in ['./.venv/bin/python3', '-B', './src/robert_agent/loop_engine.py', '--config', '<TEMP>/tmpjxgbu3y4/config.yml', '--skip-external', '--max-seconds', '180', '--skip-publish']
+
+======================================================================
+FAIL: test_timed_out_control_child_releases_only_its_own_run_lease (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_timed_out_control_child_releases_only_its_own_run_lease)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 112, in test_timed_out_control_child_releases_only_its_own_run_lease
+    self.assertEqual(conn.execute("SELECT status FROM agent_runs WHERE run_id='timed'").fetchone()[0], 'failed')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'running' != 'failed'
+- running
++ failed
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.589s
+
+FAILED (failures=15)

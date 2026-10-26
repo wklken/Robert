@@ -1,0 +1,180 @@
+EFEEFFFFF
+======================================================================
+ERROR: test_absent_signal_target_does_not_replace_group_liveness_proof (tests.test_deadline_remediation.DeadlineRemediationTests.test_absent_signal_target_does_not_replace_group_liveness_proof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./src/robert_agent/daemon.py", line 117, in run_child_json
+    stdout, stderr = process.communicate(timeout=timeout_seconds)
+                     ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1245, in _execute_mock_call
+    raise result
+subprocess.TimeoutExpired: Command '['control']' timed out after 1 seconds
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 44, in test_absent_signal_target_does_not_replace_group_liveness_proof
+    result = daemon.run_child_json(['control'], timeout_seconds=1)
+  File "./src/robert_agent/daemon.py", line 119, in run_child_json
+    os.killpg(process.pid, signal.SIGTERM)
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+ProcessLookupError
+
+======================================================================
+ERROR: test_exited_group_at_term_or_kill_still_returns_reaped_timeout (tests.test_deadline_remediation.DeadlineRemediationTests.test_exited_group_at_term_or_kill_still_returns_reaped_timeout) (at_kill=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./src/robert_agent/daemon.py", line 117, in run_child_json
+    stdout, stderr = process.communicate(timeout=timeout_seconds)
+                     ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1245, in _execute_mock_call
+    raise result
+subprocess.TimeoutExpired: Command '['control']' timed out after 1 seconds
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 31, in test_exited_group_at_term_or_kill_still_returns_reaped_timeout
+    result = daemon.run_child_json(['control'], timeout_seconds=1)
+  File "./src/robert_agent/daemon.py", line 119, in run_child_json
+    os.killpg(process.pid, signal.SIGTERM)
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1245, in _execute_mock_call
+    raise result
+ProcessLookupError
+
+======================================================================
+ERROR: test_exited_group_at_term_or_kill_still_returns_reaped_timeout (tests.test_deadline_remediation.DeadlineRemediationTests.test_exited_group_at_term_or_kill_still_returns_reaped_timeout) (at_kill=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./src/robert_agent/daemon.py", line 117, in run_child_json
+    stdout, stderr = process.communicate(timeout=timeout_seconds)
+                     ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1245, in _execute_mock_call
+    raise result
+subprocess.TimeoutExpired: Command '['control']' timed out after 1 seconds
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "./src/robert_agent/daemon.py", line 121, in run_child_json
+    process.communicate(timeout=min(2, max(.1, margin)))
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1245, in _execute_mock_call
+    raise result
+subprocess.TimeoutExpired: Command '['control']' timed out after 0.1 seconds
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 31, in test_exited_group_at_term_or_kill_still_returns_reaped_timeout
+    result = daemon.run_child_json(['control'], timeout_seconds=1)
+  File "./src/robert_agent/daemon.py", line 123, in run_child_json
+    os.killpg(process.pid, signal.SIGKILL)
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1245, in _execute_mock_call
+    raise result
+ProcessLookupError
+
+======================================================================
+FAIL: test_daemon_lease_covers_rate_query_children_and_timeout_cleanup (tests.test_deadline_remediation.DeadlineRemediationTests.test_daemon_lease_covers_rate_query_children_and_timeout_cleanup)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 111, in test_daemon_lease_covers_rate_query_children_and_timeout_cleanup
+    self.assertGreater(daemon._lease_ttl_seconds(config), decision_seconds)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 510 not greater than 518
+
+======================================================================
+FAIL: test_materialization_probe_rejects_expired_deadline_before_process (tests.test_deadline_remediation.DeadlineRemediationTests.test_materialization_probe_rejects_expired_deadline_before_process)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 87, in test_materialization_probe_rejects_expired_deadline_before_process
+    with self.assertRaises(subprocess.TimeoutExpired):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: TimeoutExpired not raised
+
+======================================================================
+FAIL: test_pr_worktree_expired_deadline_invokes_no_injected_command (tests.test_deadline_remediation.DeadlineRemediationTests.test_pr_worktree_expired_deadline_invokes_no_injected_command)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 59, in test_pr_worktree_expired_deadline_invokes_no_injected_command
+    with self.assertRaises(subprocess.TimeoutExpired):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: TimeoutExpired not raised
+
+======================================================================
+FAIL: test_pr_worktree_new_and_reuse_commands_share_remaining_budget (tests.test_deadline_remediation.DeadlineRemediationTests.test_pr_worktree_new_and_reuse_commands_share_remaining_budget) (reuse=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 81, in test_pr_worktree_new_and_reuse_commands_share_remaining_budget
+    self.assertTrue(all(0 < call.get('timeout', 999) <= 2 for call in calls), calls)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : [{'cwd': PosixPath('<TEMP>/tmpehefchf4'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpehefchf4'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpehefchf4'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpehefchf4'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpehefchf4'), 'check': True, 'text': True, 'capture_output': True}]
+
+======================================================================
+FAIL: test_pr_worktree_new_and_reuse_commands_share_remaining_budget (tests.test_deadline_remediation.DeadlineRemediationTests.test_pr_worktree_new_and_reuse_commands_share_remaining_budget) (reuse=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 81, in test_pr_worktree_new_and_reuse_commands_share_remaining_budget
+    self.assertTrue(all(0 < call.get('timeout', 999) <= 2 for call in calls), calls)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : [{'cwd': PosixPath('<TEMP>/tmpg8c01ikz'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpg8c01ikz'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpg8c01ikz'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpg8c01ikz'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpg8c01ikz/worktrees/topic'), 'check': True, 'text': True, 'capture_output': True}, {'cwd': PosixPath('<TEMP>/tmpg8c01ikz/worktrees/topic'), 'check': True, 'text': True, 'capture_output': True}]
+
+======================================================================
+FAIL: test_publication_expired_deadline_retains_intent_without_remote_invocation (tests.test_deadline_remediation.DeadlineRemediationTests.test_publication_expired_deadline_retains_intent_without_remote_invocation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_deadline_remediation.py", line 98, in test_publication_expired_deadline_retains_intent_without_remote_invocation
+    self.assertEqual(result['failed_count'], 1, result)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : {'ok': True, 'status': 'published', 'pending_count': 1, 'published_count': 1, 'deduplicated_count': 0, 'skipped_count': 0, 'failed_count': 0, 'failures': []}
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.042s
+
+FAILED (failures=6, errors=3)

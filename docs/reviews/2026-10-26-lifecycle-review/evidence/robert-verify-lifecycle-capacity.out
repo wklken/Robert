@@ -1,0 +1,5 @@
+before 1
+after_stale stale live True count 0 global_count 0
+record_result {'ok': True, 'status': 'recorded', 'result_id': 'result-0ff3d1070040'}
+after_result completed live True count 0
+supervised_after_result 0

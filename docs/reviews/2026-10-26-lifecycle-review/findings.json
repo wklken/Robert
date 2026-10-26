@@ -1,0 +1,1948 @@
+{
+  "scope": {
+    "repository": ".",
+    "branch": "codex/multi-agent-vote",
+    "checked_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+    "base": "Not applicable",
+    "pr": "Not applicable",
+    "source_a_head": "1b23d3b635d3b319e02f3f73029ff5676f30eb26",
+    "source_b_original_revision": "Unverified",
+    "snapshot": "<TEMP>/robert-verify-764c5e3-d_pwg86h",
+    "reviewed_paths": [
+      "src/robert_agent",
+      "tests",
+      "docs/reference.md",
+      "docs/multi-model-review.md",
+      "docs/reliability-followup-20261024.md"
+    ],
+    "exclusions": [
+      "production database and deployment telemetry",
+      "production process lifecycle",
+      "external GitHub/model calls",
+      "automatic remediation or publication"
+    ]
+  },
+  "sources": {
+    "A": {
+      "type": "previous assistant report",
+      "items": [
+        {
+          "id": "A/1",
+          "original_id": "1",
+          "source_order": 1,
+          "source_group": "优先处理的生命周期问题",
+          "synthetic": false,
+          "original_severity": "P1",
+          "original_claim": "远端关闭任务，可能留下失去监管的模型进程。\n关闭路径持有 SQLite 写锁，再等待顶层 coordinator 退出。Coordinator 收到 TERM 后先尝试更新数据库，被该锁阻塞，随后被强杀；独立进程组中的模型没有被收拢。实际复现：约 2 秒后 task、attempt 已是 canceled，coordinator 退出码为 -9，模型仍存活，模型槽位仍被占用。模型卡死时，可以长期消耗资源并阻塞后续轮次。",
+          "reviewer_proposed_fix": "应在短事务之外显式停止并确认所有模型进程组，再关闭所有权。",
+          "source_reference": "sources/a-previous-review.md#1"
+        },
+        {
+          "id": "A/2",
+          "original_id": "2",
+          "source_order": 2,
+          "source_group": "优先处理的生命周期问题",
+          "synthetic": false,
+          "original_severity": "P1",
+          "original_claim": "收到结果就认为进程完成，过早释放容量和监管责任。\nrecord_result 立即将 attempt 标为 completed。后续 supervisor 不再扫描它，但此时 worker 或后台命令可能仍在运行。实际复现：合法结果提交成功后，进程仍存活，并发计数已经归零，下一次 supervision 处理数量为零。这会允许后继任务启动，同时旧进程继续运行，甚至在结果审计后继续改变工作区。",
+          "reviewer_proposed_fix": "应区分“结果已收到”和“进程已停止”。",
+          "source_reference": "sources/a-previous-review.md#2"
+        },
+        {
+          "id": "A/3",
+          "original_id": "3",
+          "source_order": 3,
+          "source_group": "优先处理的生命周期问题",
+          "synthetic": false,
+          "original_severity": "P1",
+          "original_claim": "PR 健康采集会跨远端请求持有 SQLite 写锁。\n_collect_pr_remediation_decisions 处理第一个 PR 时写入 episode，随后读取第二个 PR 的远端状态，期间没有释放写事务。双 PR 隔离复现中，第一个 API 调用期间其他 writer 可以写入；第二个调用期间，其他 writer 得到 database is locked。慢请求会阻塞心跳、结果入库和其他控制操作，进一步触发失败或恢复。",
+          "reviewer_proposed_fix": "应拆成“读取远端事实—短事务保存”的批次。",
+          "source_reference": "sources/a-previous-review.md#3"
+        },
+        {
+          "id": "A/4",
+          "original_id": "4",
+          "source_order": 4,
+          "source_group": "优先处理的生命周期问题",
+          "synthetic": false,
+          "original_severity": "P2",
+          "original_claim": "活着的 stale worker 不占派发容量，会突破并发上限。\nstale 只代表心跳过期，supervisor 明确不终止进程；但 run_once 的 admission 只统计 running。真实进程复现中，变为 stale 后仍活着，仓库和全局计数都从 1 变成 0。daemon_state 却把 stale 算入容量，两处机制不一致。已有测试还明确固化了“不占容量”的行为。",
+          "reviewer_proposed_fix": "需要修改机制及对应测试。",
+          "source_reference": "sources/a-previous-review.md#4"
+        },
+        {
+          "id": "A/5",
+          "original_id": "5",
+          "source_order": 5,
+          "source_group": "直接拉长耗时、产生空转和存储增长的问题",
+          "synthetic": false,
+          "original_severity": "P2",
+          "original_claim": "心跳包装器会给命令结束额外增加接近 60 秒的等待。\n它通过 sleep(heartbeat_interval) 等待，而没有等待进程退出事件。实际测量：裸命令 0.078 秒，默认包装后 60.025 秒。每个被包装的串行命令都可能累积这段等待。",
+          "reviewer_proposed_fix": "应使用带 timeout 的进程等待，到心跳期限仍未结束时才写心跳。",
+          "source_reference": "sources/a-previous-review.md#5"
+        },
+        {
+          "id": "A/6",
+          "original_id": "6",
+          "source_order": 6,
+          "source_group": "直接拉长耗时、产生空转和存储增长的问题",
+          "synthetic": false,
+          "original_severity": "P2",
+          "original_claim": "正常运行的 worker 会每 5 秒触发完整流水线，即使没有任何进展。\n调度器把“存在运行中的 attempt”直接视为 runnable，然后启动完整 run_once。隔离复现连续 10 次 drain，全部返回 no_progress，任务和 attempt 没有推进，却新增 agent_runs=10、run_steps=130、run_repo_steps=80、leases=10。单仓库持续活跃、单轮足够快时，按默认间隔估算，诊断记录可达到约 40 万条/天，另有 daemon 事件。",
+          "reviewer_proposed_fix": "应把轻量进程监管与完整业务 drain 分开，并合并无变化记录。",
+          "source_reference": "sources/a-previous-review.md#6"
+        },
+        {
+          "id": "A/7",
+          "original_id": "7",
+          "source_order": 7,
+          "source_group": "直接拉长耗时、产生空转和存储增长的问题",
+          "synthetic": false,
+          "original_severity": "P2",
+          "original_claim": "默认清理吞吐可能低于上述事件生成速率。\n每次 drain 写开始、结束两条 daemon 事件；每 5 秒一轮对应 34,560 条/天。默认 maintenance 每 300 秒只清理一个 100 条批次，上限为 28,800 条/天，还未扣除实际运行和锁等待。因此存在持续追不上的负载区间，“保留 7 天”不能保证诊断历史有界。",
+          "reviewer_proposed_fix": "应先减少无变化事件，再允许 maintenance 在时间预算内追赶多个批次。",
+          "source_reference": "sources/a-previous-review.md#7"
+        },
+        {
+          "id": "A/8",
+          "original_id": "8",
+          "source_order": 8,
+          "source_group": "直接拉长耗时、产生空转和存储增长的问题",
+          "synthetic": false,
+          "original_severity": "P2",
+          "original_claim": "本地 runnable 探测遗漏 queued vote，影响重启恢复。\n探测包含 review_sessions，没有对应的 vote_sessions。隔离数据库中，只有 queued vote 时返回 False，换成 queued review 则返回 True。当崩溃恢复后只剩排队 vote，它可能要等下一次外部 poll，默认额外等待数分钟；限流时更久。",
+          "reviewer_proposed_fix": "应让调度探测和实际队列准备使用同一套 eligibility 判断。",
+          "source_reference": "sources/a-previous-review.md#8"
+        },
+        {
+          "id": "A/9",
+          "original_id": "9",
+          "source_order": 9,
+          "source_group": "直接拉长耗时、产生空转和存储增长的问题",
+          "synthetic": false,
+          "original_severity": "P2",
+          "original_claim": "Search 配额不足会连带阻止已有结果发布。\n本地 drain 复用了外部 discovery 的限流判断。复现中 core.remaining=5000、search.remaining=0，仍传入 --skip-publish。普通评论发布路径没有执行 search，却被一起暂停；默认判断缓存还会延长等待。",
+          "reviewer_proposed_fix": "应按实际操作需要的配额分别控制 discovery 和 publication。",
+          "source_reference": "sources/a-previous-review.md#9"
+        },
+        {
+          "id": "A/PERFORMANCE-1",
+          "original_id": null,
+          "source_order": 10,
+          "source_group": "此外，有两个已经量化的优化点",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "模型池每个等待者每秒扫描历史 run，缺少 slot_reserved 索引。\n每表历史从 1,000 增至 100,000 行，查询组合从 0.101 ms 增至 7.179 ms。",
+          "reviewer_proposed_fix": "增加活动槽位的 partial index，保留事务内 admission。",
+          "source_reference": "sources/a-previous-review.md#performance-1"
+        },
+        {
+          "id": "A/PERFORMANCE-2",
+          "original_id": null,
+          "source_order": 11,
+          "source_group": "此外，有两个已经量化的优化点",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "同一 review snapshot 被反复全仓 hash。\n默认两个 reviewer，约 33 MiB 仓库扫描 12 次，累计读取约 396 MiB。",
+          "reviewer_proposed_fix": "先改为分块 hash；合并验证须保留完整性保证。",
+          "source_reference": "sources/a-previous-review.md#performance-2"
+        },
+        {
+          "id": "A/VALIDATION-1",
+          "original_id": null,
+          "source_order": 12,
+          "source_group": "验证方面",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "vote recovery 测试存在竞态。\n固定快照的全量测试为 1,055 项，跳过 1 项，其余通过；未知启动的恢复测试重复 10 次有 1 次失败，原因是测试只确认了多个未知启动中的一个，取消逻辑正确拒绝了剩余未知进程。",
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/a-previous-review.md#validation-1"
+        }
+      ]
+    },
+    "B": {
+      "original_path": "<LOCAL_HOME>/.codex/attachments/5d6cc648-27c4-4f3f-b166-16d0d6127c0b/已粘贴的文本.txt",
+      "sha256": "1db7dbf48221d6f133773f19119dc71e615fb6b571852d46fc82e01e92b59823",
+      "items": [
+        {
+          "id": "B/I/1",
+          "original_id": "1",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "高",
+          "original_claim": "**1.（高）drain 内部预算等于外部 kill 超时，SIGKILL 会留下脏状态**\n- **问题：**\n  - `daemon.py:68` 把 `--max-seconds 180` 传给 loop_engine；`daemon.py:101` 又把同一个 180 秒用作 `subprocess.run(timeout=)`。\n  - loop_engine 只在每个 cycle 开始前检查预算（`loop_engine.py:255-257`），所以第 170 秒开始的 cycle 一定会被 SIGKILL。\n  - live poll 的 300 秒外部超时也没有对应的内部预算。`worktree.py:96` 和 `review_workspace.py:110` 里的 `git fetch` 都没有设置 timeout。\n- **后果：**\n  - `_run_repo_pipeline` 在 `finally` 里释放 lease 的代码不会执行。该 repo 被锁 9 分钟，期间每次 drain 都返回 `skipped_active_lease`。\n  - 对应的 `agent_runs` 记录永远停在 `running`。retention 只删除 completed、skipped、failed 状态的记录，所以它永远不会被清掉。`reliability_health.py:45-50` 专门统计这类孤儿 run，说明线上已经出现过。\n  - 如果 SIGKILL 正好发生在 dispatch 过程中，`dispatch_inflight` 会残留，下一轮这个 binding 被标成 `dispatch_outcome_unknown` 的 attention 状态，只能人工处理。",
+          "source_order": 1,
+          "reviewer_proposed_fix": "- **修复：**\n  - 内部预算设为外部 timeout 减 60 秒，超时先发 SIGTERM 再 KILL。\n  - 所有 git 和 gh 子进程都加 timeout。\n  - daemon 启动时把自己遗留的 `running` 状态 run 收尾为 failed。",
+          "source_reference": "sources/b-additional-review.txt (B/I/1)"
+        },
+        {
+          "id": "B/I/2",
+          "original_id": "2",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "高",
+          "original_claim": "**2.（高）两处并发容量统计口径不同，`max_concurrency` 会被突破**\n- 派发时用的 `_running_attempt_count_for_repos` 只统计 `status='running'`（`run_once.py:2422-2438`）。\n- daemon 判断容量（`daemon_state.py:266,285`）和 `has_runnable_local_work`（`loop_engine.py:150`）统计的却是 running 加 stale。\n- 进入 stale 的 Worker 通常还在运行，只是没写心跳，派发逻辑却会认为有空位，再拉起一个新 Worker。",
+          "source_order": 2,
+          "reviewer_proposed_fix": "- **修复：** 统一成一个计数函数，包含 running、stale，以及终止尚未确认的 attempt。",
+          "source_reference": "sources/b-additional-review.txt (B/I/2)"
+        },
+        {
+          "id": "B/I/3",
+          "original_id": "3",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "高，语义冲突",
+          "original_claim": "**3.（高，语义冲突）45 分钟全局硬超时会覆盖所有 attempt 自己的超时**\n\n```31:47:src/robert_agent/supervise.py\n    global_timeout_seconds = hard_timeout_minutes * 60\n    timeout_seconds = global_timeout_seconds\n    if hard_timeout_seconds is not None:\n        timeout_seconds = min(global_timeout_seconds, hard_timeout_seconds)\n\n    if (\n        runtime_seconds >= timeout_seconds\n        or heartbeat_age_seconds >= global_timeout_seconds\n    ):\n        return {\n            \"ok\": False,\n            \"status\": \"failed_timeout\",\n```\n\n- 被截断的配置：\n  - Worker 示例配置是 `timeout_seconds: 5400`（`docs/guides.md:112`）。\n  - 心跳包装器的默认超时也是 5400 秒（`worker/heartbeat.py:141`）。\n  - 评审协调器派发时会算出\"所有 Worker 超时之和 + 2 倍首个 Worker 超时 + 600 秒\"。\n- 因为取了 `min()`，这些值在 45 分钟时全部被判为 `failed_timeout`。\n- **影响：**\n  - 历史数据里 new-pr 类型 Worker attempt 的 P95 是 5015 秒，超过 2700 秒的任务会被杀掉再 resume，大量工作重做。\n  - 评审排队等 slot 的时间虽然不算进单个 Worker 的超时，却算进父任务这 45 分钟（`docs/multi-model-review.md:54`）。",
+          "source_order": 3,
+          "reviewer_proposed_fix": "- **修复：** 以 attempt 自己的 timeout 为准，全局值只作缺省；至少在 `validate_config` 里对\"Worker timeout 大于全局硬超时\"给出警告。",
+          "source_reference": "sources/b-additional-review.txt (B/I/3)"
+        },
+        {
+          "id": "B/I/4",
+          "original_id": "4",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "中高",
+          "original_claim": "**4.（中高）一次短暂的 SQLite 锁冲突就能让一整轮多模型评审失败**\n- 每个评审线程在 `_wait` 里每秒调用一次 `check_active()`，每次都会写 `UPDATE attempts SET heartbeat_at`（`model_execution.py:136-143, 319-349`）。连接的锁等待只有 `timeout=10`（`review_store.py:81`）。\n- run_once 有多处长时间持有写锁（见第 8 条）。等锁超过 10 秒会抛出 `sqlite3.OperationalError`，而 `review_one` 没有捕获这个异常类型：\n\n```112:115:src/robert_agent/review_coordinator.py\n            except ReviewStopped:\n                raise\n            except (ValueError, OSError, RuntimeError) as exc:\n                return None, f\"{worker['name']}: {exc}\"\n```\n\n- 异常一路冒到 `run()`，整轮被标为 failed，`terminate_children` 会把其它还在跑的评审模型一起杀掉（`review_coordinator.py:164-176`）。",
+          "source_order": 4,
+          "reviewer_proposed_fix": "- **修复：** 心跳降到 30–60 秒一次；`check_active` 遇到锁冲突时跳过本次即可，不要抛出。",
+          "source_reference": "sources/b-additional-review.txt (B/I/4)"
+        },
+        {
+          "id": "B/I/5",
+          "original_id": "5",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "中",
+          "original_claim": "**5.（中）主进程已退出、子进程还在时，attempt 永远停在 running 并一直占着容量**\n- `terminate_recorded_identity` 只有在主进程身份核对为 `alive_same` 时才会给整个进程组发信号；主进程已经退出时，不会去清理进程组（`worker_identity.py:325`）。\n- 在\"终止未确认\"和 `orphaned_command_running` 两个分支里，supervise 每一轮只是重写一次 metadata（`run_once.py:869` 起），attempt 一直是 running，binding 进入 attention。\n- 容量计数不排除 attention，这个槽位就一直被占着。",
+          "source_order": 5,
+          "reviewer_proposed_fix": "- **修复：** 当 pgid 等于原 pid、且进程组仍有成员时，直接 `killpg`（`model_execution._group_finished` 已经是这个思路）；超过上限后转为 failed。",
+          "source_reference": "sources/b-additional-review.txt (B/I/5)"
+        },
+        {
+          "id": "B/I/6",
+          "original_id": "6",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "中",
+          "original_claim": "**6.（中）classification 结果在 finalize 中途就提交了，失败时会留下孤儿状态**\n- `run_once.py:5550-5551` 在 `_prepare_worktree` 之前执行了 `conn.commit()`。此时父分类任务已经是 completed，相关事件也已标记为消费，但子任务还没创建。\n- 如果 git 失败或进程被杀，只能靠 `_recover_orphaned_classification_results` 补救。\n- 问题在于 `has_runnable_local_work` 识别不了这种状态，所以实际要等下一次 live poll（5–10 分钟），而且每次都会重试 `git fetch`。",
+          "source_order": 6,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/I/6)"
+        },
+        {
+          "id": "B/I/7",
+          "original_id": "7",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "中",
+          "original_claim": "**7.（中）`has_runnable_local_work` 判断 prepared 状态时没有看 `resume.not_before_at`**\n- 真正入队时，`_queue_prepared_attempts` 会跳过还在退避期的 attempt（`run_once.py:4473`），但 has_runnable 只要看到 prepared 就返回 true。\n- 结果是在传输错误退避期间（30–300 秒，最多 5 次），daemon 每 5 秒空跑一次 drain。",
+          "source_order": 7,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/I/7)"
+        },
+        {
+          "id": "B/I/8",
+          "original_id": "8",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "中",
+          "original_claim": "**8.（中）写锁持有过长，而且跨越外部 I/O**\n- run_once 全程只用一个连接和一个事务。从 `INSERT agent_runs` 起就持有写锁，一直到 publish 前或 discover 阶段第一次 commit 才释放。\n- 这期间包括：\n  - supervise 阶段的 `ps` 调用，以及每个 attempt 最多约 4 秒的终止等待；\n  - audit 阶段的 `git rev-parse` 和 `git remote get-url`。\n- live poll 时，reconcile 和 PR 健康检查（`run_once.py:2050, 2204`）对每个 PR 串行调用 `gh`，而前面的 upsert（`run_once.py:2939`）已经拿到写锁，所以后续所有 `gh` 调用都在持锁状态下进行。\n- **后果：** Worker 写 snapshot 或 result 时会撞上 busy_timeout，结果被转进 spool 延后处理；多模型评审则直接触发第 4 条。",
+          "source_order": 8,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/I/8)"
+        },
+        {
+          "id": "B/I/9",
+          "original_id": "9",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "中，疑似风险",
+          "original_claim": "**9.（中，疑似风险）`init_database` 每次进程启动都会重新执行数据迁移**\n- `storage.py:532-546` 每次调用都会执行 `_migrate_pr_mainline_workstreams` 和 `_migrate_route_recommended_skills`。前者是一个多表 JOIN，再 upsert workstreams 并覆盖 `lifecycle` 和 `active_task_id`。\n- 每次 daemon drain 会调用它两次：loop_engine 一次，run_once 一次。\n- 除了开销，这个迁移可能在系统运行中反复改写 workstream 状态。我没有构造出具体的反例，但这类迁移本应只执行一次。",
+          "source_order": 9,
+          "reviewer_proposed_fix": "- **修复：** 用 `schema_migrations` 或 `PRAGMA user_version` 做版本门控。",
+          "source_reference": "sources/b-additional-review.txt (B/I/9)"
+        },
+        {
+          "id": "B/I/10",
+          "original_id": "10",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "低，迁移遗留的边缘情况",
+          "original_claim": "**10.（低，迁移遗留的边缘情况）`execution_pending_facts` 没有过期时间，也没有重试上限**\n- `execution_replay.decisions` 在三种情况下不会消费 fact：对应的 worker_result 行缺失、非驱动事件追加失败、驱动事件被跳过。`acknowledge_effects` 也只有找到关联 task 时才消费。\n- 消费不掉的 fact 会让 has_runnable 一直为 true，daemon 每 5 秒空转一次。",
+          "source_order": 10,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/I/10)"
+        },
+        {
+          "id": "B/I/11",
+          "original_id": "11",
+          "source_group": "一、Bug（按严重程度排序）",
+          "synthetic": false,
+          "original_severity": "低到中",
+          "original_claim": "**11.（低到中）意图识别用的是子串匹配**\n\n```189:194:src/robert_agent/discover.py\n    if any(word in text for word in [\"bug\", \"fix\", \"修复\", \"报错\", \"失败\"]):\n        return \"bug_fix\"\n    if any(\n        word in text\n        for word in [\"分析\", \"analysis\", \"analyze\", \"explain\", \"discuss\", \"讨论\", \"方案\"]\n```\n\n- **误判：** \"debug、prefix、fixture、suffix\"都会被判成 bug_fix，走 new-pr 路线，真的去开一个 PR。\"分析一下为什么失败\"也会被判成 bug_fix。\n- **漏判：** \"实现、支持、add、implement\"这类功能请求会落到 unclear，多跑一轮 classification Worker。这类任务历史上的 Worker 耗时 P50 是 103 秒、P95 是 496 秒，还没算排队时间。\n- `small_change` 和 `add_tests` 两种意图永远不会被识别出来。",
+          "source_order": 11,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/I/11)"
+        },
+        {
+          "id": "B/LATENCY-1",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **事件发现靠轮询：** live poll 默认 300 秒一次，容量满时 600 秒一次（`validate_config.py:248-261`），平均多等 2.5–5 分钟。",
+          "source_order": 12,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-1)"
+        },
+        {
+          "id": "B/LATENCY-2",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **unclear 意图多跑一轮 Worker：** 见第 11 条。",
+          "source_order": 13,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-2)"
+        },
+        {
+          "id": "B/LATENCY-3",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **45 分钟强杀后 resume：** 长任务重复做工，见第 3 条。",
+          "source_order": 14,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-3)"
+        },
+        {
+          "id": "B/LATENCY-4",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **9 分钟 lease 空窗：** SIGKILL 之后该 repo 完全停摆，见第 1 条。",
+          "source_order": 15,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-4)"
+        },
+        {
+          "id": "B/LATENCY-5",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **死进程发现窗口太长：**\n  - `heartbeat_at` 只有两种情况会更新：Worker 主动调用 snapshot CLI，或者在心跳包装器包住的命令运行期间（每 60 秒一次）。\n  - LLM 长时间思考、不执行命令时，要 20 分钟才被标成 stale，45 分钟才被判超时。",
+          "source_order": 16,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-5)"
+        },
+        {
+          "id": "B/LATENCY-6",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **attention 状态占着并发槽位不放：** 见第 5 条，后续任务只能一直排队。",
+          "source_order": 17,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-6)"
+        },
+        {
+          "id": "B/LATENCY-7",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **live poll 里串行调用 `gh`：**\n  - 每个活跃 workstream、每个见过的 open PR 都要做一次 reconcile；\n  - 每个 Robert 的 open PR 还要再拉一次 PR 快照和 CI 状态。\n  - PR 一多，单次 live poll 就可能逼近 300 秒超时，又回到第 1 条的问题。",
+          "source_order": 18,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-7)"
+        },
+        {
+          "id": "B/LATENCY-8",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **每个 workstream 同时只允许一个活跃 task：** 同一个 PR 上的后续评论只能等前一个任务做完。",
+          "source_order": 19,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-8)"
+        },
+        {
+          "id": "B/LATENCY-9",
+          "original_id": null,
+          "source_group": "二、导致事件处理变长的机制（按影响大小排序）",
+          "synthetic": true,
+          "original_severity": null,
+          "original_claim": "- **多模型评审是三段串行的 LLM 调用：** prepare、review（这一段内部并行）、synthesis，再叠加下一节第 4 点的全仓哈希校验。",
+          "source_order": 20,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/LATENCY-9)"
+        },
+        {
+          "id": "B/III/1",
+          "original_id": "1",
+          "source_group": "三、\"忙碌但没干活\"的机制",
+          "synthetic": false,
+          "original_severity": "最严重",
+          "original_claim": "**1. 用整条流水线做进程监督（最严重）**\n- 只要存在任何 running 或 stale 状态的 attempt，`has_runnable_local_work` 就返回 true。之后 daemon 每一轮会：\n  - 启动 loop_engine 子进程，执行 `validate_config` 和 `init_database`（包括上面第 9 条的迁移）；\n  - 跑 17 个 `COUNT(*)` 记录进度；\n  - 在进程内调用 `run_once`，它又执行一遍 `validate_config`、`init_database` 和 `replay_pending_results`；\n  - 写 1 条 `agent_runs`、13 条 `run_steps`、每个 repo 8 条 `run_repo_steps`（每条先写 running 再写终态）；\n  - 对每个 running attempt 执行一次 `ps`；\n  - 再跑 17 个 `COUNT(*)`，重写 `latest-loop.json`；\n  - daemon 再写 2 条 `daemon_events`（包含完整命令行）。\n- 一轮下来没有任何进展，sleep 5 秒，然后从头再来。\n- **量化：** 一个 Worker 跑 30 分钟，就要执行约 250–350 次完整的 run_once；如果一直有 Worker 在跑，一天就是上万次。\n- 每次约 22 行记录，外加 2 份 repo 摘要 JSON。retention 每 300 秒删 100 条，每天最多删 28,800 条，所以库存稳定在\"7 天 × 每天上万次\"，约 8 万个 run，这和 2.05 GB 的数据库对得上。",
+          "source_order": 21,
+          "reviewer_proposed_fix": "- **修复：** 把 supervise 拆成一个轻量检查，只查 attempts 表和进程身份，不写 run_steps。只在 wakeup、进程退出、到达 stale 或超时阈值时才触发完整 drain。",
+          "source_reference": "sources/b-additional-review.txt (B/III/1)"
+        },
+        {
+          "id": "B/III/2",
+          "original_id": "2",
+          "source_group": "三、\"忙碌但没干活\"的机制",
+          "synthetic": false,
+          "original_severity": null,
+          "original_claim": "**2. 每次心跳都 INSERT 一行 `worker_phases`，而且永不清理**\n- 插入发生在 `worker/snapshot.py:27-35`，心跳包装器每 60 秒调用一次（`worker/heartbeat.py:142`）。\n- 3 个并发 Worker 一天约产生 4,300 行，retention 完全不覆盖这张表。",
+          "source_order": 22,
+          "reviewer_proposed_fix": "- **修复：** 心跳只做 `UPDATE attempts.heartbeat_at`；只有 phase 真正变化时才 INSERT。",
+          "source_reference": "sources/b-additional-review.txt (B/III/2)"
+        },
+        {
+          "id": "B/III/3",
+          "original_id": "3",
+          "source_group": "三、\"忙碌但没干活\"的机制",
+          "synthetic": false,
+          "original_severity": null,
+          "original_claim": "**3. 评审协调器每个线程每秒写一次心跳**\n- 3 个评审模型时，大约每秒写库 3 次，而监督的 stale 阈值是 20 分钟。\n- 等待 slot 时，`launch_with_slot` 也是每秒循环一次，每次都扫描所有已预留的 run（`model_execution.py:222-256`）。",
+          "source_order": 23,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/III/3)"
+        },
+        {
+          "id": "B/III/4",
+          "original_id": "4",
+          "source_group": "三、\"忙碌但没干活\"的机制",
+          "synthetic": false,
+          "original_severity": null,
+          "original_claim": "**4. 每轮评审都新建完整 worktree 和两个 ref，从不清理；并且反复做全仓 sha256**\n- `review_workspace.py:108-134` 每轮都会：\n  - 创建 `refs/robert/review-rounds/<round>/{head,base}` 两个 ref；\n  - 执行一次 `git worktree add --detach`。\n- 整个代码库里没有任何 `worktree remove` 或目录清理逻辑。\n- `verify_snapshot`（`review_workspace.py:161-187`）每次调用都会：\n  - 执行 `git status --untracked-files=all` 和 `git ls-files --others`；\n  - 读取所有被追踪文件并计算 sha256。\n- 调用次数：\n  - 每次 `run_phase` 会调用 2–3 次（`model_execution.py:361, 394, 427`）；\n  - 3 个评审模型的一轮至少 12 次；\n  - review 阶段这些调用由多个线程并发执行。\n- 大仓库下这是分钟级的 I/O。",
+          "source_order": 24,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/III/4)"
+        },
+        {
+          "id": "B/III/5",
+          "original_id": "5",
+          "source_group": "三、\"忙碌但没干活\"的机制",
+          "synthetic": false,
+          "original_severity": null,
+          "original_claim": "**5. 各种文件只增不减**\n- **result spool：** `.lock` 文件从不删除，被拒绝的 `.json` 永久保留。`result_spool.replay`（`result_spool.py:112-117`）在 daemon 每轮和每次 run_once 启动时都会 glob 并读取全部 `*.json`，只有 2 秒的处理时限。被拒文件一多，可能挤占正常结果的处理时间（这一点是推测）。\n- **其它目录：** `.publication-locks/`、`artifacts/<task_id>`、`*.command.json`、stdout/stderr 日志、prompt 文件、普通任务的 worktree，全部没有清理逻辑。",
+          "source_order": 25,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/III/5)"
+        },
+        {
+          "id": "B/III/6",
+          "original_id": "6",
+          "source_group": "三、\"忙碌但没干活\"的机制",
+          "synthetic": false,
+          "original_severity": null,
+          "original_claim": "**6. 其它每轮都重复做的事**\n- **全量扫描：** `_recover_failed_timeout_attempts`、`_recover_orphaned_classification_results`、`_audit_completed_results`、`_finalize_published_results` 每轮都全量扫一遍。\n- **lease 相关的重复写：** 拿不到 lease（`skipped_active_lease`）时，会把该 repo 下所有任务的 wait_state 重写一遍（`run_once.py:808` 起）；拿到 lease 后又全部清除一遍。\n- **live poll 的重复工作：** 每次都 upsert 全部 CI 观测事件，即使没有变化；结束后还总会再跑一次本地 drain。\n- **健康检查和通知：**\n  - 每 300 秒写一条 `reliability_health` 事件。\n  - `reliability_health.collect` 名义上是只读的，实际会 INSERT notifications，并对从不清理的 notifications 表做 `json_extract` 全表扫描。\n  - 配置了通知命令时，`notify.deliver_pending` 每轮都全表扫描一次。\n- **不在 retention 范围内的表：** wakeups、notifications、audit_events、github_events 都不清理，进度统计里 `consumed_wakeups` 的 COUNT 会越来越慢。\n- **文件不会缩小：** 没有执行过 VACUUM 或 `wal_checkpoint(TRUNCATE)`，删掉的页只进 freelist，数据库文件大小不变。",
+          "source_order": 26,
+          "reviewer_proposed_fix": null,
+          "source_reference": "sources/b-additional-review.txt (B/III/6)"
+        }
+      ],
+      "global_reviewer_proposed_fix": "1. 把进程监督从完整 drain 中拆出来（第三节第 1 点），收益最大。\n2. 子进程预算留出余量；所有 git 和 gh 调用加 timeout；daemon 启动时收尾自己遗留的 run（第 1 条）。\n3. 统一容量计数；主进程退出时按进程组清理（第 2、5 条）。\n4. 让 attempt 自己的 timeout 生效，或者在配置校验时给出警告（第 3 条）。\n5. 评审协调器心跳降频，并容忍锁冲突（第 4 条）。\n6. `init_database` 加版本门控（第 9 条）。\n7. 心跳改成 UPDATE；retention 扩展到 `worker_phases`、notifications、wakeups、spool、lock 文件和 worktree；定期执行 checkpoint 或 vacuum。\n8. 改进意图识别（第 11 条）。\n\n按 AGENTS.md 的要求，每个 bug 修复都要先补一个能复现问题的失败测试。要动手的话，我建议从第 1 或第 2 项开始。"
+    }
+  },
+  "findings": [
+    {
+      "finding_id": "A/1",
+      "severity": "P1",
+      "summary": "远端关闭会取消父任务而留下独立模型进程。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r01"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R01"
+      ],
+      "reason": "当前版本实进程复现：父退出-9，模型仍活着，run仍running+slot_reserved1；模型退出后可由后续申请回收槽位，不能写成无条件永久占槽。",
+      "source_reference": "sources/a-previous-review.md#1",
+      "source_order": 1,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:1183",
+        "src/robert_agent/review_coordinator.py:164"
+      ]
+    },
+    {
+      "finding_id": "A/2",
+      "severity": "P1",
+      "summary": "结果提交将活着的worker移出容量统计与supervision。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r02"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R02"
+      ],
+      "reason": "当前版本实际record_result后attempt=completed，进程仍活着，supervision数量0。",
+      "source_reference": "sources/a-previous-review.md#2",
+      "source_order": 2,
+      "controlling_code": [
+        "src/robert_agent/worker/result.py:336",
+        "src/robert_agent/run_once.py:869"
+      ]
+    },
+    {
+      "finding_id": "A/3",
+      "severity": "P1",
+      "summary": "PR健康采集在第二个远端请求期间仍持SQLite写锁。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r03"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R03"
+      ],
+      "reason": "当前版本双PR探针中第二次请求期间独立writer返回database is locked。",
+      "source_reference": "sources/a-previous-review.md#3",
+      "source_order": 3,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:2239",
+        "src/robert_agent/run_once.py:6179"
+      ]
+    },
+    {
+      "finding_id": "A/4",
+      "severity": "P2",
+      "summary": "stale但存活的worker未计入实际派发容量。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r05"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R05"
+      ],
+      "reason": "当前版本实进程复现count和global_count归零；daemon_state另有包含stale的口径。",
+      "source_reference": "sources/a-previous-review.md#4",
+      "source_order": 4,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:2407",
+        "src/robert_agent/daemon_state.py:258",
+        "tests/test_run_once.py:7145"
+      ]
+    },
+    {
+      "finding_id": "A/5",
+      "severity": "P2",
+      "summary": "默认心跳等待可能把命令退出检测延迟近60秒。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r07"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R07"
+      ],
+      "reason": "heartbeat.py相对来源A版本逐字节一致；复用原始0.078/60.025秒隔离测量，检查当前控制流仍相同。",
+      "source_reference": "sources/a-previous-review.md#5",
+      "source_order": 5,
+      "controlling_code": [
+        "src/robert_agent/worker/heartbeat.py:209"
+      ]
+    },
+    {
+      "finding_id": "A/6",
+      "severity": "P2",
+      "summary": "无进展supervision仍产生完整run和步骤记录。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r08"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R08"
+      ],
+      "reason": "当前版本10次drain均no_progress，却新增230条run/step/lease记录。每日数字是默认间隔下的容量估算，不是生产观测。",
+      "source_reference": "sources/a-previous-review.md#6",
+      "source_order": 6,
+      "controlling_code": [
+        "src/robert_agent/loop_engine.py:144",
+        "src/robert_agent/daemon.py:581",
+        "src/robert_agent/run_once.py:7117"
+      ]
+    },
+    {
+      "finding_id": "A/7",
+      "severity": "P2",
+      "summary": "持续活跃时默认daemon_events清理吞吐可落后于生成。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r09"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R09"
+      ],
+      "reason": "单事件批100/300秒=28800每天；2事件/5秒=34560每天，包含运行耗时、锁和保留年龄的限制。",
+      "source_reference": "sources/a-previous-review.md#7",
+      "source_order": 7,
+      "controlling_code": [
+        "src/robert_agent/retention.py:20",
+        "src/robert_agent/retention.py:81",
+        "src/robert_agent/daemon.py:403"
+      ]
+    },
+    {
+      "finding_id": "A/8",
+      "severity": "P2",
+      "summary": "孤立queued vote不被本地调度探测发现。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r10"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R10"
+      ],
+      "reason": "当前版本相同状态queued vote=False、queued review=True。",
+      "source_reference": "sources/a-previous-review.md#8",
+      "source_order": 8,
+      "controlling_code": [
+        "src/robert_agent/loop_engine.py:118",
+        "src/robert_agent/run_once.py:3657"
+      ]
+    },
+    {
+      "finding_id": "A/9",
+      "severity": "P2",
+      "summary": "Search配额不足会禁止无需search的本地发布。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r14"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R14"
+      ],
+      "reason": "当前版本core5000/search0仍向本地drain传--skip-publish。",
+      "source_reference": "sources/a-previous-review.md#9",
+      "source_order": 9,
+      "controlling_code": [
+        "src/robert_agent/daemon.py:168",
+        "src/robert_agent/daemon.py:581",
+        "src/robert_agent/publish.py:180"
+      ]
+    },
+    {
+      "finding_id": "A/PERFORMANCE-1",
+      "severity": "Not supplied",
+      "summary": "模型池活动槽位查询随全部历史run增长。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r17"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R17"
+      ],
+      "reason": "关键源文件和测量fixture不变；原始EXPLAIN为SCAN，1k/100k历史测量0.101/7.179ms是合成负载。",
+      "source_reference": "sources/a-previous-review.md#performance-1",
+      "source_order": 10,
+      "controlling_code": [
+        "src/robert_agent/loop_engine.py:52",
+        "src/robert_agent/model_pool.py:6",
+        "src/robert_agent/review_store.py:181",
+        "src/robert_agent/run_once.py:1133"
+      ]
+    },
+    {
+      "finding_id": "A/PERFORMANCE-2",
+      "severity": "Not supplied",
+      "summary": "同轮各阶段重复全仓hash且单文件整体载入内存。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r18"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R18"
+      ],
+      "reason": "关键源文件和review fixture不变；复用33MiB×12次的合成测量，非生产耗时。",
+      "source_reference": "sources/a-previous-review.md#performance-2",
+      "source_order": 11,
+      "controlling_code": [
+        "src/robert_agent/review_workspace.py:161",
+        "src/robert_agent/review_files.py:20",
+        "src/robert_agent/model_execution.py:358"
+      ]
+    },
+    {
+      "finding_id": "A/VALIDATION-1",
+      "severity": "Not supplied",
+      "summary": "未知vote启动的恢复测试在两个starting并存时会竞态失败。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#t01"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "T01"
+      ],
+      "reason": "当前版本重复10次为9pass/1error；全量1069项在另一轮通过不否定该竞态。",
+      "source_reference": "sources/a-previous-review.md#validation-1",
+      "source_order": 12,
+      "controlling_code": [
+        "tests/test_vote_recovery.py:64",
+        "tests/test_review_recovery.py:25"
+      ]
+    },
+    {
+      "finding_id": "B/I/1",
+      "severity": "高",
+      "summary": "内外同预算可强杀子执行器并遗留run和lease。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r06"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R06"
+      ],
+      "reason": "强杀残留已实证；170秒起步并非必杀，等待是剩余TTL，health指标不证明线上发生。",
+      "source_reference": "sources/b-additional-review.txt (B/I/1)",
+      "source_order": 1,
+      "controlling_code": [
+        "src/robert_agent/daemon.py:432",
+        "src/robert_agent/daemon.py:101",
+        "src/robert_agent/loop_engine.py:255",
+        "src/robert_agent/run_once.py:808"
+      ]
+    },
+    {
+      "finding_id": "B/I/2",
+      "severity": "高",
+      "summary": "stale worker被两套容量统计以不同方式处理。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r05"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R05"
+      ],
+      "reason": "与A/4同一机制，保留两条原ID。",
+      "source_reference": "sources/b-additional-review.txt (B/I/2)",
+      "source_order": 2,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:2407",
+        "src/robert_agent/daemon_state.py:258",
+        "tests/test_run_once.py:7145"
+      ]
+    },
+    {
+      "finding_id": "B/I/3",
+      "severity": "高，语义冲突",
+      "summary": "全局45分钟会限制更长的worker配置。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r23"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R23"
+      ],
+      "reason": "行为真实且明确写入reference与多模型文档；不是实现违背配置。历史P95不能证明当前部署反复重做，改优先级属于策略变更。",
+      "source_reference": "sources/b-additional-review.txt (B/I/3)",
+      "source_order": 3,
+      "controlling_code": [
+        "src/robert_agent/supervise.py:34",
+        "docs/reference.md:197",
+        "docs/multi-model-review.md:54"
+      ]
+    },
+    {
+      "finding_id": "B/I/4",
+      "severity": "中高",
+      "summary": "超过10秒的writer竞争可使整轮review失败并终止同轮模型。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r04",
+        "report.md#r03"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R04",
+        "R03"
+      ],
+      "reason": "真实11秒writer竞争已复现；不能以跳过全部check_active修复，否则丢失取消与ownership fencing。",
+      "source_reference": "sources/b-additional-review.txt (B/I/4)",
+      "source_order": 4,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:2239",
+        "src/robert_agent/run_once.py:6179",
+        "src/robert_agent/model_execution.py:136",
+        "src/robert_agent/review_store.py:81",
+        "src/robert_agent/review_coordinator.py:114"
+      ]
+    },
+    {
+      "finding_id": "B/I/5",
+      "severity": "中",
+      "summary": "无法验证的后代存活会保留容量并进入attention。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r24"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R24"
+      ],
+      "reason": "当前首先返回unknown并进入attention，之后被runnable fence排除；不是无限普通supervise。只凭旧PGID杀组不安全。",
+      "source_reference": "sources/b-additional-review.txt (B/I/5)",
+      "source_order": 5,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:1410",
+        "src/robert_agent/run_once.py:937",
+        "src/robert_agent/worker_identity.py:325",
+        "src/robert_agent/execution_store.py:297"
+      ]
+    },
+    {
+      "finding_id": "B/I/6",
+      "severity": "中",
+      "summary": "classification完成提交后Git失败会留下调度遗漏的恢复状态。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r11"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R11"
+      ],
+      "reason": "实证父completed、child0、wakeup consumed、runnable=False；手动run_once可恢复。",
+      "source_reference": "sources/b-additional-review.txt (B/I/6)",
+      "source_order": 6,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:5491",
+        "src/robert_agent/run_once.py:5797",
+        "src/robert_agent/loop_engine.py:95"
+      ]
+    },
+    {
+      "finding_id": "B/I/7",
+      "severity": "中",
+      "summary": "prepared退避时间未进入runnable探测条件。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r12"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R12"
+      ],
+      "reason": "未来5分钟的prepared在has_runnable=True，但真实_queue_prepared_attempts=0。",
+      "source_reference": "sources/b-additional-review.txt (B/I/7)",
+      "source_order": 7,
+      "controlling_code": [
+        "src/robert_agent/loop_engine.py:177",
+        "src/robert_agent/run_once.py:4475"
+      ]
+    },
+    {
+      "finding_id": "B/I/8",
+      "severity": "中",
+      "summary": "若干supervise/audit/reconcile外部I/O跨SQLite写事务。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r03"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R03"
+      ],
+      "reason": "PR第二轮持锁已复现，supervise/audit也有持锁窗口；“全程一个事务/全部gh持锁”过度概括，源码已有多个显式commit，首轮远端读取可无锁。",
+      "source_reference": "sources/b-additional-review.txt (B/I/8)",
+      "source_order": 8,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:2239",
+        "src/robert_agent/run_once.py:6179"
+      ]
+    },
+    {
+      "finding_id": "B/I/9",
+      "severity": "中，疑似风险",
+      "summary": "init_database重复执行未版本门控的扫描和迁移入口。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r21"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R21"
+      ],
+      "reason": "重复入口可证；已迁移task移到source_key后被WHERE排除，未复现运行中反复破坏lifecycle。",
+      "source_reference": "sources/b-additional-review.txt (B/I/9)",
+      "source_order": 9,
+      "controlling_code": [
+        "src/robert_agent/storage.py:80",
+        "src/robert_agent/storage.py:162",
+        "src/robert_agent/storage.py:532",
+        "src/robert_agent/loop_engine.py:27"
+      ]
+    },
+    {
+      "finding_id": "B/I/10",
+      "severity": "低，迁移遗留的边缘情况",
+      "summary": "无法消费的pending fact缺少通用停止预算。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#u01"
+      ],
+      "disposition": "Need evidence",
+      "resolution": "open",
+      "canonical_groups": [
+        "U01"
+      ],
+      "reason": "表确无TTL/重试上限；但正常迁移只映射存在的result/event，缺result分支不能作为正常生产触发。普通等待中的context探针实际被成功消费；缺少合法迁移后持续空转的复现。",
+      "source_reference": "sources/b-additional-review.txt (B/I/10)",
+      "source_order": 10,
+      "controlling_code": [
+        "src/robert_agent/execution_replay.py:12",
+        "src/robert_agent/sqlite_migration.py:265",
+        "src/robert_agent/loop_engine.py:133"
+      ]
+    },
+    {
+      "finding_id": "B/I/11",
+      "severity": "低到中",
+      "summary": "子串启发式会误路由部分非修复请求并增加分类阶段。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r13"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R13"
+      ],
+      "reason": "当前实测debug/prefix/fixture/suffix和“分析一下为什么失败”→bug_fix/new-pr；实现/支持/add/implement→unclear。进入route不等于自动获得发布权限；旧P50/P95不是当前测量。",
+      "source_reference": "sources/b-additional-review.txt (B/I/11)",
+      "source_order": 11,
+      "controlling_code": [
+        "src/robert_agent/discover.py:188",
+        "src/robert_agent/route.py:187",
+        "docs/reliability-followup-20261024.md:40"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-1",
+      "severity": "Not supplied",
+      "summary": "外部事件发现受300/600秒轮询周期限制。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r25"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R25"
+      ],
+      "reason": "默认周期可证；2.5/5分钟平均值只在到达近似均匀等假设下成立，未测生产事件分布。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-1)",
+      "source_order": 12,
+      "controlling_code": [
+        "src/robert_agent/validate_config.py:246",
+        "src/robert_agent/daemon.py:573",
+        "src/robert_agent/discover.py:739",
+        "src/robert_agent/run_once.py:2050"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-2",
+      "severity": "Not supplied",
+      "summary": "unclear请求额外执行classification worker。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r13"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R13"
+      ],
+      "reason": "路径真实；大量请求比例和当前分类耗时未测，历史103/496秒只属旧snapshot。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-2)",
+      "source_order": 13,
+      "controlling_code": [
+        "src/robert_agent/discover.py:188",
+        "src/robert_agent/route.py:187",
+        "docs/reliability-followup-20261024.md:40"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-3",
+      "severity": "Not supplied",
+      "summary": "全局超时可能触发恢复并延长处理。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r23"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R23"
+      ],
+      "reason": "全局cap真实，恢复有配额和证据门槛，也可复用worktree；不能称所有长任务都会被杀并大量重做。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-3)",
+      "source_order": 14,
+      "controlling_code": [
+        "src/robert_agent/supervise.py:34",
+        "docs/reference.md:197",
+        "docs/multi-model-review.md:54"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-4",
+      "severity": "Not supplied",
+      "summary": "被强杀执行器会留下repository lease等待。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r06"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R06"
+      ],
+      "reason": "等待余下的540秒TTL，非从SIGKILL重新计满9分钟。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-4)",
+      "source_order": 15,
+      "controlling_code": [
+        "src/robert_agent/daemon.py:432",
+        "src/robert_agent/daemon.py:101",
+        "src/robert_agent/loop_engine.py:255",
+        "src/robert_agent/run_once.py:808"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-5",
+      "severity": "Not supplied",
+      "summary": "死进程必须等20分钟stale或45分钟timeout才被发现。",
+      "verdict": "Incorrect",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#n01"
+      ],
+      "disposition": "Reject",
+      "resolution": "open",
+      "canonical_groups": [
+        "N01"
+      ],
+      "reason": "supervisor每次对running/stale检查进程身份，dead/unknown有独立分支；native coordinator另有每秒heartbeat更新。活着但无心跳与已死是不同状态。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-5)",
+      "source_order": 16,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:936",
+        "src/robert_agent/run_once.py:963",
+        "src/robert_agent/model_execution.py:136"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-6",
+      "severity": "Not supplied",
+      "summary": "attention进程所有权保留可能阻塞后续容量。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r24"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R24"
+      ],
+      "reason": "仍未证明停止的进程确会占容量，这是防重入/未知进程的安全边界，不能用到时释放作为通用修复。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-6)",
+      "source_order": 17,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:1410",
+        "src/robert_agent/run_once.py:937",
+        "src/robert_agent/worker_identity.py:325",
+        "src/robert_agent/execution_store.py:297"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-7",
+      "severity": "Not supplied",
+      "summary": "live poll串行读取source与PR/CI，长批次会阻塞本地推进。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r25",
+        "report.md#r06",
+        "report.md#r03"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R25",
+        "R06",
+        "R03"
+      ],
+      "reason": "顺序调用和父进程同步等待可证；是否实际接近300秒取决于部署规模及API延迟，未量化生产。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-7)",
+      "source_order": 18,
+      "controlling_code": [
+        "src/robert_agent/run_once.py:2239",
+        "src/robert_agent/run_once.py:6179",
+        "src/robert_agent/daemon.py:432",
+        "src/robert_agent/daemon.py:101",
+        "src/robert_agent/loop_engine.py:255",
+        "src/robert_agent/run_once.py:808",
+        "src/robert_agent/validate_config.py:246",
+        "src/robert_agent/daemon.py:573",
+        "src/robert_agent/discover.py:739",
+        "src/robert_agent/run_once.py:2050"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-8",
+      "severity": "Not supplied",
+      "summary": "同一workstream只推进一个活跃task。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r26"
+      ],
+      "disposition": "Reject",
+      "resolution": "open",
+      "canonical_groups": [
+        "R26"
+      ],
+      "reason": "这是现有所有权与顺序契约，本条按行为保留，作为bug或无效工作应拒绝。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-8)",
+      "source_order": 19,
+      "controlling_code": [
+        "src/robert_agent/resources/db/schema.sql:107",
+        "src/robert_agent/review_coordinator.py:164",
+        "docs/multi-model-review.md:48"
+      ]
+    },
+    {
+      "finding_id": "B/LATENCY-9",
+      "severity": "Not supplied",
+      "summary": "多模型review存在prepare、并行review、synthesis三阶段。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r26",
+        "report.md#r18"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R26",
+        "R18"
+      ],
+      "reason": "这是审查上下文/独立结果/统一报告契约；阶段成本真实，不能直接删阶段。",
+      "source_reference": "sources/b-additional-review.txt (B/LATENCY-9)",
+      "source_order": 20,
+      "controlling_code": [
+        "src/robert_agent/review_workspace.py:161",
+        "src/robert_agent/review_files.py:20",
+        "src/robert_agent/model_execution.py:358",
+        "src/robert_agent/resources/db/schema.sql:107",
+        "src/robert_agent/review_coordinator.py:164",
+        "docs/multi-model-review.md:48"
+      ]
+    },
+    {
+      "finding_id": "B/III/1",
+      "severity": "最严重",
+      "summary": "用完整流水线监督运行进程制造大量无进展记录。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r08",
+        "report.md#r09"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R08",
+        "R09"
+      ],
+      "reason": "主机制及10轮230条已证；默认retention的100是run候选数而非总行数，事件另有100批次。固定8万run/解释2.05GB均未获当前表级数据支持，现有summary引用也避免了部分重复。",
+      "source_reference": "sources/b-additional-review.txt (B/III/1)",
+      "source_order": 21,
+      "controlling_code": [
+        "src/robert_agent/loop_engine.py:144",
+        "src/robert_agent/daemon.py:581",
+        "src/robert_agent/run_once.py:7117",
+        "src/robert_agent/retention.py:20",
+        "src/robert_agent/retention.py:81",
+        "src/robert_agent/daemon.py:403"
+      ]
+    },
+    {
+      "finding_id": "B/III/2",
+      "severity": "Not supplied",
+      "summary": "长命令每次心跳追加worker_phases且不在自动retention内。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r15"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R15"
+      ],
+      "reason": "当前对同一attempt/phase/status调用3次得到3行；4300/天只对应3个持续活跃wrapper的条件负载。",
+      "source_reference": "sources/b-additional-review.txt (B/III/2)",
+      "source_order": 22,
+      "controlling_code": [
+        "src/robert_agent/worker/snapshot.py:27",
+        "src/robert_agent/retention.py:9"
+      ]
+    },
+    {
+      "finding_id": "B/III/3",
+      "severity": "Not supplied",
+      "summary": "native模型等待和等槽周期反复更新父attempt心跳。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r16",
+        "report.md#r17"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R16",
+        "R17"
+      ],
+      "reason": "默认1秒循环以及多线程重复写同一attempt可证；这些是UPDATE，不应当作新增worker_phases或DB行数增长。",
+      "source_reference": "sources/b-additional-review.txt (B/III/3)",
+      "source_order": 23,
+      "controlling_code": [
+        "src/robert_agent/model_execution.py:136",
+        "src/robert_agent/model_execution.py:222",
+        "src/robert_agent/model_execution.py:319",
+        "src/robert_agent/loop_engine.py:52",
+        "src/robert_agent/model_pool.py:6",
+        "src/robert_agent/review_store.py:181",
+        "src/robert_agent/run_once.py:1133"
+      ]
+    },
+    {
+      "finding_id": "B/III/4",
+      "severity": "Not supplied",
+      "summary": "不同review round保留worktree/refs并反复全仓hash。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r18",
+        "report.md#r19"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R18",
+        "R19"
+      ],
+      "reason": "每个新round单独checkout真实；同round重试复用且Git objects共享。无runtime GC可证，但分钟级生产开销未测；不得删除完整性检查。",
+      "source_reference": "sources/b-additional-review.txt (B/III/4)",
+      "source_order": 24,
+      "controlling_code": [
+        "src/robert_agent/review_workspace.py:161",
+        "src/robert_agent/review_files.py:20",
+        "src/robert_agent/model_execution.py:358",
+        "src/robert_agent/review_workspace.py:108",
+        "src/robert_agent/dispatch.py:122",
+        "src/robert_agent/publication_lock.py:9",
+        "src/robert_agent/result_spool.py:26"
+      ]
+    },
+    {
+      "finding_id": "B/III/5",
+      "severity": "Not supplied",
+      "summary": "若干证据文件缺少GC，rejected spool能挤占扫描预算。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r19",
+        "report.md#r20"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R19",
+        "R20"
+      ],
+      "reason": "rejected文件和稳定lock保留真实；成功spool会unlink，读取受2秒/100项边界而非每次读完全部。模拟慢读可使尾部pending连续不处理，尚无生产规模测量；在线删lock会破坏互斥。",
+      "source_reference": "sources/b-additional-review.txt (B/III/5)",
+      "source_order": 25,
+      "controlling_code": [
+        "src/robert_agent/review_workspace.py:108",
+        "src/robert_agent/dispatch.py:122",
+        "src/robert_agent/publication_lock.py:9",
+        "src/robert_agent/result_spool.py:26",
+        "src/robert_agent/result_spool.py:112",
+        "src/robert_agent/result_spool.py:146"
+      ]
+    },
+    {
+      "finding_id": "B/III/6",
+      "severity": "Not supplied",
+      "summary": "若干历史查询与诊断写入持续存在，删除不自动缩小文件。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "report.md#r17",
+        "report.md#r22",
+        "report.md#r09"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "canonical_groups": [
+        "R17",
+        "R22",
+        "R09"
+      ],
+      "reason": "health会去重INSERT通知，JSON聚合及历史COUNT成本真实；部分业务查询有repo/status过滤，daemon摘要已收敛，freelist可复用。默认journal_mode为delete，不能把无wal_checkpoint当WAL泄漏；业务历史/幂等记录不能一并按年龄删。",
+      "source_reference": "sources/b-additional-review.txt (B/III/6)",
+      "source_order": 26,
+      "controlling_code": [
+        "src/robert_agent/retention.py:20",
+        "src/robert_agent/retention.py:81",
+        "src/robert_agent/daemon.py:403",
+        "src/robert_agent/loop_engine.py:52",
+        "src/robert_agent/model_pool.py:6",
+        "src/robert_agent/review_store.py:181",
+        "src/robert_agent/run_once.py:1133",
+        "src/robert_agent/reliability_health.py:10",
+        "src/robert_agent/notify.py:78",
+        "docs/reliability-followup-20261024.md:57"
+      ]
+    }
+  ],
+  "canonical_groups": [
+    {
+      "id": "R01",
+      "title": "远端关闭只收拢父进程，独立模型可能失去监管",
+      "priority": "P1",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-lifecycle-remote-close.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/run_once.py:1183",
+        "src/robert_agent/review_coordinator.py:164"
+      ],
+      "source_ids": [
+        "A/1"
+      ]
+    },
+    {
+      "id": "R02",
+      "title": "结果入库和进程退出被合并为同一个完成状态",
+      "priority": "P1",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-lifecycle-capacity.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/worker/result.py:336",
+        "src/robert_agent/run_once.py:869"
+      ],
+      "source_ids": [
+        "A/2"
+      ]
+    },
+    {
+      "id": "R03",
+      "title": "若干外部 I/O 跨 SQLite 写事务",
+      "priority": "P1",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-network-lock.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/run_once.py:2239",
+        "src/robert_agent/run_once.py:6179"
+      ],
+      "source_ids": [
+        "A/3",
+        "B/I/4",
+        "B/I/8",
+        "B/LATENCY-7"
+      ]
+    },
+    {
+      "id": "R04",
+      "title": "可重试的 heartbeat 写锁竞争会升级为整轮 review 失败",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-agent-lifecycle-results.json"
+      ],
+      "code_evidence": [
+        "src/robert_agent/model_execution.py:136",
+        "src/robert_agent/review_store.py:81",
+        "src/robert_agent/review_coordinator.py:114"
+      ],
+      "source_ids": [
+        "B/I/4"
+      ]
+    },
+    {
+      "id": "R05",
+      "title": "stale 存活进程从实际 admission 容量中消失",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-lifecycle-capacity.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/run_once.py:2407",
+        "src/robert_agent/daemon_state.py:258",
+        "tests/test_run_once.py:7145"
+      ],
+      "source_ids": [
+        "A/4",
+        "B/I/2"
+      ]
+    },
+    {
+      "id": "R06",
+      "title": "执行器超时会强杀持久化中的执行，且缺少遗留 run 的自动收尾",
+      "priority": "P1",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-agent-lifecycle-results.json"
+      ],
+      "code_evidence": [
+        "src/robert_agent/daemon.py:432",
+        "src/robert_agent/daemon.py:101",
+        "src/robert_agent/loop_engine.py:255",
+        "src/robert_agent/run_once.py:808"
+      ],
+      "source_ids": [
+        "B/I/1",
+        "B/LATENCY-4",
+        "B/LATENCY-7"
+      ]
+    },
+    {
+      "id": "R07",
+      "title": "心跳 sleep 给被包装命令增加退出检测延迟",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-review-probes.log",
+        "reused-evidence-code-hashes.json"
+      ],
+      "code_evidence": [
+        "src/robert_agent/worker/heartbeat.py:209"
+      ],
+      "source_ids": [
+        "A/5"
+      ]
+    },
+    {
+      "id": "R08",
+      "title": "完整流水线被用作无变化的进程监督",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-no-progress.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/loop_engine.py:144",
+        "src/robert_agent/daemon.py:581",
+        "src/robert_agent/run_once.py:7117"
+      ],
+      "source_ids": [
+        "A/6",
+        "B/III/1"
+      ]
+    },
+    {
+      "id": "R09",
+      "title": "默认事件清理能力低于一部分持续活跃负载的事件产生速率",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-scheduler-storage.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/retention.py:20",
+        "src/robert_agent/retention.py:81",
+        "src/robert_agent/daemon.py:403"
+      ],
+      "source_ids": [
+        "A/7",
+        "B/III/1",
+        "B/III/6"
+      ]
+    },
+    {
+      "id": "R10",
+      "title": "孤立 queued vote 没有进入本地 runnable 探测",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-scheduler-storage.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/loop_engine.py:118",
+        "src/robert_agent/run_once.py:3657"
+      ],
+      "source_ids": [
+        "A/8"
+      ]
+    },
+    {
+      "id": "R11",
+      "title": "分类后继创建失败的 durable handoff 不在本地探测中",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-agent-lifecycle-results.json"
+      ],
+      "code_evidence": [
+        "src/robert_agent/run_once.py:5491",
+        "src/robert_agent/run_once.py:5797",
+        "src/robert_agent/loop_engine.py:95"
+      ],
+      "source_ids": [
+        "B/I/6"
+      ]
+    },
+    {
+      "id": "R12",
+      "title": "prepared 退避期限未进入 runnable 判定",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-local.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/loop_engine.py:177",
+        "src/robert_agent/run_once.py:4475"
+      ],
+      "source_ids": [
+        "B/I/7"
+      ]
+    },
+    {
+      "id": "R13",
+      "title": "子串启发式误判意图，且部分明确实现请求多一轮分类",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-local.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/discover.py:188",
+        "src/robert_agent/route.py:187",
+        "docs/reliability-followup-20261024.md:40"
+      ],
+      "source_ids": [
+        "B/I/11",
+        "B/LATENCY-2"
+      ]
+    },
+    {
+      "id": "R14",
+      "title": "外部 search 配额门槛被用于本地 publication",
+      "priority": "P2",
+      "category": "应修复",
+      "outputs": [
+        "robert-verify-rate-gate.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/daemon.py:168",
+        "src/robert_agent/daemon.py:581",
+        "src/robert_agent/publish.py:180"
+      ],
+      "source_ids": [
+        "A/9"
+      ]
+    },
+    {
+      "id": "R15",
+      "title": "重复心跳永久追加到 phase 历史",
+      "priority": "优化",
+      "category": "已证成本，待确定保留策略",
+      "outputs": [
+        "robert-verify-local.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/worker/snapshot.py:27",
+        "src/robert_agent/retention.py:9"
+      ],
+      "source_ids": [
+        "B/III/2"
+      ]
+    },
+    {
+      "id": "R16",
+      "title": "native 模型的多个线程重复更新同一个父心跳",
+      "priority": "优化",
+      "category": "已证成本，非追加历史",
+      "outputs": [],
+      "code_evidence": [
+        "src/robert_agent/model_execution.py:136",
+        "src/robert_agent/model_execution.py:222",
+        "src/robert_agent/model_execution.py:319"
+      ],
+      "source_ids": [
+        "B/III/3"
+      ]
+    },
+    {
+      "id": "R17",
+      "title": "历史规模放大进度统计、模型池与部分恢复查询",
+      "priority": "优化",
+      "category": "已证规模成本",
+      "outputs": [
+        "robert-review-lifecycle-native-cost.out",
+        "robert-verify-scheduler-storage.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/loop_engine.py:52",
+        "src/robert_agent/model_pool.py:6",
+        "src/robert_agent/review_store.py:181",
+        "src/robert_agent/run_once.py:1133"
+      ],
+      "source_ids": [
+        "A/PERFORMANCE-1",
+        "B/III/3",
+        "B/III/6"
+      ]
+    },
+    {
+      "id": "R18",
+      "title": "同轮完整性校验多次全仓读盘且大文件整体入内存",
+      "priority": "优化",
+      "category": "已证规模成本",
+      "outputs": [
+        "robert-review-lifecycle-native-cost.out",
+        "reused-evidence-code-hashes.json"
+      ],
+      "code_evidence": [
+        "src/robert_agent/review_workspace.py:161",
+        "src/robert_agent/review_files.py:20",
+        "src/robert_agent/model_execution.py:358"
+      ],
+      "source_ids": [
+        "A/PERFORMANCE-2",
+        "B/LATENCY-9",
+        "B/III/4"
+      ]
+    },
+    {
+      "id": "R19",
+      "title": "round 工作区、refs、日志及证据缺少统一回收策略",
+      "priority": "优化",
+      "category": "已证保留行为，增长量未测",
+      "outputs": [],
+      "code_evidence": [
+        "src/robert_agent/review_workspace.py:108",
+        "src/robert_agent/dispatch.py:122",
+        "src/robert_agent/publication_lock.py:9",
+        "src/robert_agent/result_spool.py:26"
+      ],
+      "source_ids": [
+        "B/III/4",
+        "B/III/5"
+      ]
+    },
+    {
+      "id": "R20",
+      "title": "rejected spool 记录可反复耗尽扫描预算，尾部 pending 缺少公平性",
+      "priority": "条件性 P2",
+      "category": "条件缺陷已复现，生产规模未测",
+      "outputs": [
+        "robert-verify-local.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/result_spool.py:112",
+        "src/robert_agent/result_spool.py:146"
+      ],
+      "source_ids": [
+        "B/III/5"
+      ]
+    },
+    {
+      "id": "R21",
+      "title": "init_database 的热路径包含重复扫描和旧迁移入口",
+      "priority": "优化",
+      "category": "成本成立，状态破坏未证",
+      "outputs": [],
+      "code_evidence": [
+        "src/robert_agent/storage.py:80",
+        "src/robert_agent/storage.py:162",
+        "src/robert_agent/storage.py:532",
+        "src/robert_agent/loop_engine.py:27"
+      ],
+      "source_ids": [
+        "B/I/9"
+      ]
+    },
+    {
+      "id": "R22",
+      "title": "health/通知/历史保留的成本与压缩边界需要区分",
+      "priority": "优化",
+      "category": "部分成本真实，部分属有意保留",
+      "outputs": [],
+      "code_evidence": [
+        "src/robert_agent/reliability_health.py:10",
+        "src/robert_agent/notify.py:78",
+        "src/robert_agent/retention.py:81",
+        "docs/reliability-followup-20261024.md:57"
+      ],
+      "source_ids": [
+        "B/III/6"
+      ]
+    },
+    {
+      "id": "R23",
+      "title": "45 分钟是明确声明的全局上限，不是被 worker 配置意外覆盖",
+      "priority": "策略说明",
+      "category": "不作为实现 bug",
+      "outputs": [
+        "robert-verify-agent-lifecycle-results.json"
+      ],
+      "code_evidence": [
+        "src/robert_agent/supervise.py:34",
+        "docs/reference.md:197",
+        "docs/multi-model-review.md:54"
+      ],
+      "source_ids": [
+        "B/I/3",
+        "B/LATENCY-3"
+      ]
+    },
+    {
+      "id": "R24",
+      "title": "未知后代和 attention 保留容量是安全边界，恢复体验可以改进",
+      "priority": "策略说明",
+      "category": "保留 fail-closed，拒绝盲目 kill/release",
+      "outputs": [
+        "robert-verify-agent-process-termination.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/run_once.py:1410",
+        "src/robert_agent/run_once.py:937",
+        "src/robert_agent/worker_identity.py:325",
+        "src/robert_agent/execution_store.py:297"
+      ],
+      "source_ids": [
+        "B/I/5",
+        "B/LATENCY-6"
+      ]
+    },
+    {
+      "id": "R25",
+      "title": "外部轮询和串行远端采集是延迟来源，实际占比尚未测量",
+      "priority": "策略说明",
+      "category": "参数与部署规模的取舍",
+      "outputs": [],
+      "code_evidence": [
+        "src/robert_agent/validate_config.py:246",
+        "src/robert_agent/daemon.py:573",
+        "src/robert_agent/discover.py:739",
+        "src/robert_agent/run_once.py:2050"
+      ],
+      "source_ids": [
+        "B/LATENCY-1",
+        "B/LATENCY-7"
+      ]
+    },
+    {
+      "id": "R26",
+      "title": "workstream 顺序推进和 review 三阶段是现有契约",
+      "priority": "策略说明",
+      "category": "不直接删掉或并发放宽",
+      "outputs": [],
+      "code_evidence": [
+        "src/robert_agent/resources/db/schema.sql:107",
+        "src/robert_agent/review_coordinator.py:164",
+        "docs/multi-model-review.md:48"
+      ],
+      "source_ids": [
+        "B/LATENCY-8",
+        "B/LATENCY-9"
+      ]
+    },
+    {
+      "id": "N01",
+      "title": "“死进程必须等20/45分钟才被发现”不成立",
+      "priority": "拒绝",
+      "category": "Incorrect / Reject",
+      "outputs": [],
+      "code_evidence": [
+        "src/robert_agent/run_once.py:936",
+        "src/robert_agent/run_once.py:963",
+        "src/robert_agent/model_execution.py:136"
+      ],
+      "source_ids": [
+        "B/LATENCY-5"
+      ]
+    },
+    {
+      "id": "U01",
+      "title": "pending fact 的无限空转风险尚缺常规生产触发证据",
+      "priority": "待补证",
+      "category": "Partially correct / Need evidence",
+      "outputs": [
+        "robert-verify-local.out"
+      ],
+      "code_evidence": [
+        "src/robert_agent/execution_replay.py:12",
+        "src/robert_agent/sqlite_migration.py:265",
+        "src/robert_agent/loop_engine.py:133"
+      ],
+      "source_ids": [
+        "B/I/10"
+      ]
+    },
+    {
+      "id": "T01",
+      "title": "vote recovery 测试只确认一个 unknown launch，存在竞态",
+      "priority": "P2 测试",
+      "category": "测试问题，非取消安全漏洞",
+      "outputs": [
+        "robert-verify-vote-flake.out",
+        "robert-verify-764c5e3-unittest.log"
+      ],
+      "code_evidence": [
+        "tests/test_vote_recovery.py:64",
+        "tests/test_review_recovery.py:25"
+      ],
+      "source_ids": [
+        "A/VALIDATION-1"
+      ]
+    }
+  ],
+  "counts": {
+    "input_ids": 38,
+    "verdicts": {
+      "Correct": 21,
+      "Partially correct": 16,
+      "Incorrect": 1
+    },
+    "canonical_groups": 29,
+    "categories": {
+      "应修复": 14,
+      "已证成本，待确定保留策略": 1,
+      "已证成本，非追加历史": 1,
+      "已证规模成本": 2,
+      "已证保留行为，增长量未测": 1,
+      "条件缺陷已复现，生产规模未测": 1,
+      "成本成立，状态破坏未证": 1,
+      "部分成本真实，部分属有意保留": 1,
+      "不作为实现 bug": 1,
+      "保留 fail-closed，拒绝盲目 kill/release": 1,
+      "参数与部署规模的取舍": 1,
+      "不直接删掉或并发放宽": 1,
+      "Incorrect / Reject": 1,
+      "Partially correct / Need evidence": 1,
+      "测试问题，非取消安全漏洞": 1
+    }
+  }
+}

@@ -1,0 +1,84 @@
+import os,sys,json,sqlite3,tempfile,subprocess,time,threading,signal
+from pathlib import Path
+from datetime import datetime,timezone,timedelta
+from contextlib import closing
+from unittest.mock import patch
+ROOT=Path('<TEMP>/robert-verify-764c5e3-d_pwg86h')
+sys.path[:0]=[str(ROOT/'src'),str(ROOT)]
+from robert_agent import daemon,storage,run_once,retention,supervise,loop_engine,review_store,dispatch,worker_identity
+from robert_agent.worker import result as result_module
+from tests.test_review_coordinator import ReviewCoordinatorTests
+from tests.test_run_once import RunOnceDryRunTests
+OUTPUT={}
+# B/I/1: process killed through the actual daemon child runner after committing actual ownership rows.
+with tempfile.TemporaryDirectory() as tmp:
+ db=Path(tmp)/'db.sqlite3'; marker=Path(tmp)/'finally-ran'; storage.init_database(db)
+ program='''import sys,time,sqlite3
+from pathlib import Path
+from datetime import datetime,timezone
+from robert_agent import run_once
+now=datetime.now(timezone.utc).isoformat()
+c=sqlite3.connect(sys.argv[1]);c.execute("INSERT INTO agent_runs(run_id,status,started_at) VALUES ('killed','running',?)",(now,))
+l=run_once._acquire_agent_lease(c,'repo:x','killed',now,9);c.commit()
+try:time.sleep(30)
+finally:
+ run_once._release_agent_lease(c,l['lease_id'],now);c.commit();Path(sys.argv[2]).touch()
+'''
+ response=daemon.run_child_json([sys.executable,'-B','-c',program,str(db),str(marker)],timeout_seconds=.4)
+ with closing(sqlite3.connect(db)) as c,c:
+  row=c.execute("SELECT r.status,l.status,l.expires_at,l.acquired_at FROM agent_runs r JOIN leases l ON l.owner_id=r.run_id WHERE r.run_id='killed'").fetchone()
+  blocked=run_once._acquire_agent_lease(c,'repo:x','next',datetime.now(timezone.utc).isoformat(),9)
+ OUTPUT['B/I/1']={'daemon_status':response['status'],'finally_executed':marker.exists(),'persisted_run_status':row[0],'persisted_lease_status':row[1],'lease_ttl_seconds':(datetime.fromisoformat(row[2])-datetime.fromisoformat(row[3])).total_seconds(),'next_acquisition':blocked['status'],'prune_counts':retention.prune_database(db,apply=True,now='2070-01-01T00:00:00+00:00')['counts']}
+# B/I/3: explicit cap holds even with fresh heartbeat.
+OUTPUT['B/I/3']=supervise.classify_attempt(heartbeat_at='2026-10-26T00:45:00+00:00',started_at='2026-10-26T00:00:00+00:00',now=datetime.fromisoformat('2026-10-26T00:45:00+00:00'),hard_timeout_minutes=45,hard_timeout_seconds=5400)
+# B/I/4: actual _wait/check_active/store timeout; mock only stage entry so lock occurs during waiting.
+f=ReviewCoordinatorTests();f.setUp(); model=None
+try:
+ f.cycle([f.event()]);d=f.coordinator();d.prepare()
+ model=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],start_new_session=True)
+ time.sleep(.1);identity=worker_identity.capture_process_identity(model.pid);dispatch._BACKGROUND_PROCESSES[model.pid]=model
+ with review_store.connect(f.db) as c:
+  run=review_store.new_run(c,d.round_id,'review','codex',d.attempt_id,d.manifest['artifact_root'],d.manifest['prompt_sha256'])
+  review_store.update_run(c,run['run_id'],status='running',slot_reserved=1,dispatch_json=json.dumps(identity))
+  run=next(r for r in review_store.runs(c,d.round_id) if r['run_id']==run['run_id'])
+ ready=threading.Event()
+ def hold():
+  with closing(sqlite3.connect(f.db)) as c,c:
+   c.execute('BEGIN IMMEDIATE');c.execute('UPDATE attempts SET heartbeat_at=heartbeat_at WHERE attempt_id=?',(d.attempt_id,));ready.set();time.sleep(11)
+ thread=threading.Thread(target=hold);thread.start();ready.wait(3)
+ d.prepare=lambda:None
+ d.review=lambda:d._wait(run,identity,120)
+ started=time.monotonic()
+ try:d.run()
+ except Exception as e:error=type(e).__name__+': '+str(e)
+ thread.join()
+ with review_store.connect(f.db) as c:state=review_store.session(c,task_id=d.task_id)['status']
+ OUTPUT['B/I/4']={'exception':error,'elapsed_seconds':round(time.monotonic()-started,3),'session_status':state,'model_returncode':model.poll()}
+finally:
+ if model and model.poll() is None:
+  os.killpg(model.pid,signal.SIGKILL);model.wait(timeout=3)
+ if model:dispatch._BACKGROUND_PROCESSES.pop(model.pid,None)
+ f.doCleanups()
+# B/I/6: actual finalization hits a simulated Git failure after its pre-I/O commit.
+f=RunOnceDryRunTests();f.setUp()
+try:
+ event={'id':'assign-16','number':16,'source_type':'issue','event_type':'assigned','actor_login':'robert-bot','assignment_actor_login':'wklken','assigned_to':'robert-bot','authorization_lookup_complete':True,'event_fingerprint':'assigned:assign-16','body':'remove the DCO check from GitHub Actions','intent':'unclear','title':'remove the dco in ci','url':'https://github.com/example/backend/issues/16','state':'open'}
+ f.fixture_path.write_text(json.dumps({'events':[event]}))
+ first=run_once.run_once(f.config_path,fixture_path=f.fixture_path,dry_run=True,skip_external=True)
+ assert first['ok'],first
+ db=f.data_dir/'dd.sqlite3'
+ with closing(sqlite3.connect(db)) as c:task,attempt=c.execute('SELECT task_id,attempt_id FROM attempts').fetchone()
+ recorded=result_module.record_result(db,{'task_id':task,'attempt_id':attempt,'output_type':'classification_result','planned_github_actions':[],'consumed_event_fingerprints':['assigned:assign-16'],'verification':[],'handoff':'Route to implementation','used_skills':[],'recommended_route':'new-pr','branch_slug':'remove-dco'})
+ assert recorded['ok'],recorded
+ with patch.object(run_once,'_prepare_worktree',side_effect=subprocess.CalledProcessError(1,['git','fetch'],stderr='probe Git failure')):
+  failed=run_once.run_once(f.config_path,dry_run=True,skip_external=True)
+ with closing(sqlite3.connect(db)) as c,c:
+  state=c.execute('SELECT lifecycle FROM tasks WHERE task_id=?',(task,)).fetchone()[0]
+  wakeups=c.execute('SELECT status,count(*) FROM wakeups GROUP BY status').fetchall()
+  runnable=loop_engine.has_runnable_local_work(c,repo_ids=['repo:example/backend'])
+  children=c.execute('SELECT count(*) FROM tasks WHERE parent_task_id=?',(task,)).fetchone()[0]
+ recovered=run_once.run_once(f.config_path,dry_run=True,skip_external=True)
+ OUTPUT['B/I/6']={'failed_run_ok':failed['ok'],'failed_run_status':failed.get('status'),'parent_task_lifecycle':state,'children_after_failure':children,'wakeups':wakeups,'scheduler_runnable_after_failure':runnable,'manual_run_recovered_dispatch_count':recovered['dispatch_count']}
+finally:f.doCleanups()
+print(json.dumps(OUTPUT,ensure_ascii=False,indent=2))
+Path('<TEMP>/robert-verify-agent-lifecycle-results.json').write_text(json.dumps(OUTPUT,ensure_ascii=False,indent=2))

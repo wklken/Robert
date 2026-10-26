@@ -5,6 +5,14 @@ from datetime import datetime, timezone
 from robert_agent.common import emit
 
 
+def occupied_attempt_sql(alias="a"):
+    """Result receipt alone does not prove that a recorded process stopped."""
+    return f"""({alias}.status IN ('running', 'stale') OR
+      ({alias}.status='completed'
+       AND json_type({alias}.metadata_json,'$.dispatch.pid')='integer'
+       AND json_extract({alias}.metadata_json,'$.process_stopped_at') IS NULL))"""
+
+
 def _parse_time(value):
     if isinstance(value, datetime):
         return value

@@ -5,7 +5,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from robert_agent.common import emit
+from robert_agent.common import emit, run_command
 
 
 def source_key(repo_full_name, source_type, number):
@@ -68,7 +68,7 @@ def normalize_events(raw_events, repo_config):
 
 
 def _run_json(args, runner=subprocess.run):
-    completed = runner(args, text=True, capture_output=True, check=True)
+    completed = run_command(args, runner=runner, text=True, capture_output=True, check=True)
     stdout = completed.stdout.strip()
     if not stdout:
         return []
@@ -193,13 +193,27 @@ def infer_intent(title, body, event_type, github_account=None):
     text = f"{title or ''}\n{body or ''}".lower()
     if re.search(r"@\S+\s+(?:please\s+)?review\b", body or "", re.I):
         return "review_request"
-    if any(word in text for word in ["bug", "fix", "修复", "报错", "失败"]):
-        return "bug_fix"
+    clean_body = re.sub(r"```[\s\S]*?```", "", body or "")
+    clean_body = '\n'.join(line for line in clean_body.splitlines() if not line.lstrip().startswith('>'))
+    requests = bot_requests(body, github_account)
+    instruction = (requests[0] if requests else re.sub(r'^@\S+\s+', '', clean_body.strip())).lower()
+    prefix = r'^(?:(?:please|can you|could you)\s+|请(?:帮我)?|帮我)?'
+    if re.match(prefix + r'(?:分析|讨论|解释|为什么|为何|analy[sz]e\b|analysis\b|explain\b|discuss\b)', instruction):
+        return 'analysis'
+    if re.match(prefix + r'(?:fix\b|修复)', instruction):
+        return 'bug_fix'
+    if re.match(prefix + r'(?:add\s+(?:unit\s+)?tests?\b|write\s+tests?\b|补充测试|增加测试)', instruction):
+        return 'add_tests'
+    if re.match(prefix + r'(?:implement\b|add\b|build\b|create\b|support\b|实现|支持|增加|添加)', instruction):
+        return 'small_change'
     if any(
         word in text
         for word in ["分析", "analysis", "analyze", "explain", "discuss", "讨论", "方案"]
     ):
         return "analysis"
+    if (not re.search(r"(?:不要|无需|别).{0,8}修复|\b(?:do not|don't)\s+fix\b", instruction)
+            and re.search(r'\b(?:bug|fix|fixes|fixed)\b|修复|报错|失败', text)):
+        return 'bug_fix'
     return "unclear"
 
 

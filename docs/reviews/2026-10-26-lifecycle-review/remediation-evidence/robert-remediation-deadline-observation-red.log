@@ -1,0 +1,23 @@
+FF
+======================================================================
+FAIL: test_control_deadline_does_not_fail_recoverable_worker (tests.test_lifecycle_remediation.LifecycleRemediationTests.test_control_deadline_does_not_fail_recoverable_worker)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_lifecycle_remediation.py", line 215, in test_control_deadline_does_not_fail_recoverable_worker
+    with self.assertRaises(subprocess.TimeoutExpired):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: TimeoutExpired not raised
+
+======================================================================
+FAIL: test_control_deadline_aborts_scope_observation_without_rejecting_result (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_control_deadline_aborts_scope_observation_without_rejecting_result)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 29, in test_control_deadline_aborts_scope_observation_without_rejecting_result
+    with self.assertRaises(subprocess.TimeoutExpired):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: TimeoutExpired not raised
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.231s
+
+FAILED (failures=2)

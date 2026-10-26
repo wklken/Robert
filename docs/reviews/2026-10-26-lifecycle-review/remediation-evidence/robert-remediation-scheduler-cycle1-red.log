@@ -1,0 +1,95 @@
+FF.F.FEFFFF
+======================================================================
+ERROR: test_observation_is_read_only_and_does_not_expire_wakeups (tests.test_scheduler_remediation.SchedulerRemediationTests.test_observation_is_read_only_and_does_not_expire_wakeups)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 88, in test_observation_is_read_only_and_does_not_expire_wakeups
+    self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=['repo:example/repo']))
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "./src/robert_agent/loop_engine.py", line 100, in has_runnable_local_work
+    wakeup.expire_due_wakeups(conn, now=now)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "./src/robert_agent/wakeup.py", line 250, in expire_due_wakeups
+    cur = conn.execute(
+        """
+    ...<7 lines>...
+        (now, now),
+    )
+sqlite3.OperationalError: attempt to write a readonly database
+
+======================================================================
+FAIL: test_already_stale_alive_worker_does_not_trigger_duplicate_transition (tests.test_scheduler_remediation.SchedulerRemediationTests.test_already_stale_alive_worker_does_not_trigger_duplicate_transition)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 99, in test_already_stale_alive_worker_does_not_trigger_duplicate_transition
+    self.assertFalse(self.runnable())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_attempt_timeout_uses_real_loop_configuration (tests.test_scheduler_remediation.SchedulerRemediationTests.test_attempt_timeout_uses_real_loop_configuration)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 142, in test_attempt_timeout_uses_real_loop_configuration
+    self.assertEqual(outcome['cycles'], 0)  # This config deliberately permits 90 minutes.
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+======================================================================
+FAIL: test_completed_legacy_result_still_waits_for_recorded_process (tests.test_scheduler_remediation.SchedulerRemediationTests.test_completed_legacy_result_still_waits_for_recorded_process)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 114, in test_completed_legacy_result_still_waits_for_recorded_process
+    self.assertFalse(self.runnable())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_healthy_worker_does_not_create_business_runs (tests.test_scheduler_remediation.SchedulerRemediationTests.test_healthy_worker_does_not_create_business_runs)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 75, in test_healthy_worker_does_not_create_business_runs
+    self.assertEqual(outcome['cycles'], 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+======================================================================
+FAIL: test_orphaned_classification_is_discovered_and_respects_backoff (tests.test_scheduler_remediation.SchedulerRemediationTests.test_orphaned_classification_is_discovered_and_respects_backoff)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 149, in test_orphaned_classification_is_discovered_and_respects_backoff
+    self.assertTrue(self.runnable())
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_pending_result_waits_for_process_exit_without_repeated_drain (tests.test_scheduler_remediation.SchedulerRemediationTests.test_pending_result_waits_for_process_exit_without_repeated_drain)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 106, in test_pending_result_waits_for_process_exit_without_repeated_drain
+    self.assertFalse(self.runnable())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_prepared_backoff_waits_until_due (tests.test_scheduler_remediation.SchedulerRemediationTests.test_prepared_backoff_waits_until_due)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 122, in test_prepared_backoff_waits_until_due
+    self.assertFalse(self.runnable())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_queued_vote_is_discovered_but_cross_workflow_attention_blocks_it (tests.test_scheduler_remediation.SchedulerRemediationTests.test_queued_vote_is_discovered_but_cross_workflow_attention_blocks_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_scheduler_remediation.py", line 132, in test_queued_vote_is_discovered_but_cross_workflow_attention_blocks_it
+    self.assertTrue(self.runnable())
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 11 tests in 1.614s
+
+FAILED (failures=8, errors=1)

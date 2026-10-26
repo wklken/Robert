@@ -1,0 +1,27 @@
+import json,sqlite3,subprocess,sys,time
+from contextlib import closing
+from datetime import datetime,timedelta,timezone
+from tests.test_reliability import DurableResultTests
+from robert_agent import run_once,worker_identity,execution_store
+from robert_agent.worker import result
+f=DurableResultTests();f.setUp()
+p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)'],start_new_session=True)
+try:
+ time.sleep(.1)
+ identity=worker_identity.capture_process_identity(p.pid)
+ now=datetime.now(timezone.utc);old=(now-timedelta(minutes=25)).isoformat()
+ with closing(sqlite3.connect(f.db)) as c,c:
+  c.execute("UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,metadata_json=?",(old,old,json.dumps({'dispatch':identity})))
+  task,ws,repo=c.execute('SELECT t.task_id,t.workstream_id,w.repo_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id').fetchone()
+  execution_store.ensure_subject(c,'task',task,'human_request',now.isoformat())
+  c.execute("INSERT INTO worker_phases(phase_id,attempt_id,phase,status,summary,created_at) VALUES('p','attempt-1','analyze','running','analyzing',?)",(old,))
+  print('before',run_once._running_attempt_count(c,repo))
+  run_once._supervise_running_attempts(c,repo,{'stale_after_minutes':20,'hard_timeout_minutes':45},now.isoformat())
+  print('after_stale',c.execute('SELECT status FROM attempts').fetchone()[0],'live',p.poll() is None,'count',run_once._running_attempt_count(c,repo),'global_count',run_once._running_attempt_count_for_repos(c,[repo]))
+  c.execute("UPDATE attempts SET status='running'")
+ print('record_result',result.record_result(f.db,f.payload))
+ with closing(sqlite3.connect(f.db)) as c,c:
+  print('after_result',c.execute('SELECT status FROM attempts').fetchone()[0],'live',p.poll() is None,'count',run_once._running_attempt_count(c,repo))
+  print('supervised_after_result',run_once._supervise_running_attempts(c,repo,{'stale_after_minutes':20,'hard_timeout_minutes':45},now.isoformat()))
+finally:
+ p.terminate();p.wait(timeout=5);f.doCleanups()

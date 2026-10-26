@@ -7,7 +7,7 @@ import sqlite3
 import time
 
 from robert_agent.common import emit
-from robert_agent import storage, wakeup, execution_store, retry_policy
+from robert_agent import storage, wakeup, execution_store, retry_policy, supervise
 from robert_agent import run_once as run_once_module
 from robert_agent import validate_config
 
@@ -24,7 +24,7 @@ def load_config_db_path(config_path, skip_external=False):
     return db_path
 
 
-def load_config_scope(config_path, skip_external=False):
+def load_config_scope(config_path, skip_external=False, *, include_config=False):
     config = validate_config.validate_config(config_path, skip_external=skip_external)
     if not config.get("ok"):
         raise ValueError(config.get("safe_error", "invalid config"))
@@ -39,7 +39,7 @@ def load_config_scope(config_path, skip_external=False):
                 (full_name,),
             ).fetchone()
             repo_ids.append(row[0] if row else f"repo:{full_name}")
-    return db_path, repo_ids
+    return (db_path, repo_ids, config) if include_config else (db_path, repo_ids)
 
 
 def _count(conn, table, where="1 = 1", params=()):
@@ -92,12 +92,85 @@ def _repo_filter(alias, repo_ids):
     return f" AND {column} IN ({placeholders})", repo_ids
 
 
-def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
+def _supervision_transition_due(conn, repo_ids, config, now):
+    """Observe liveness without writing business state or claiming execution."""
+    clause, params = _repo_filter("w", repo_ids)
+    rows = conn.execute(f"""SELECT a.attempt_id,a.task_id,a.status,
+        a.heartbeat_at,a.started_at,a.metadata_json,
+        EXISTS(SELECT 1 FROM worker_results wr WHERE wr.attempt_id=a.attempt_id)
+        FROM attempts a JOIN tasks t ON t.task_id=a.task_id
+        JOIN workstreams w ON w.workstream_id=t.workstream_id
+        WHERE ({supervise.occupied_attempt_sql()}
+               OR (a.status='prepared' AND json_extract(a.metadata_json,'$.result_validation') IS NOT NULL))
+          AND t.lifecycle IN ('queued','running')
+          AND {execution_store.runnable_sql()} {clause}""", params).fetchall()
+    now_dt = run_once_module._parse_time(now)
+    for attempt_id, task_id, attempt_status, heartbeat_at, started_at, raw, received_result in rows:
+        metadata = run_once_module._json_object(raw)
+        if metadata.get('result_validation'):
+            return True
+        if not heartbeat_at or not started_at:
+            if not received_result:
+                continue  # The executor cannot classify an incomplete launch yet.
+            started_at = started_at or metadata.get('worker_started_at') or now
+            heartbeat_at = heartbeat_at or now
+        timeout = ((metadata.get('dispatch') or {}).get('worker_launch') or {}).get('timeout_seconds')
+        try:
+            timeout = int(timeout)
+        except (TypeError, ValueError):
+            timeout = None
+        if timeout is not None and timeout < 1:
+            timeout = None
+        status = supervise.classify_attempt(
+            heartbeat_at, started_at, now=now_dt,
+            stale_after_minutes=config.get('stale_after_minutes', 20),
+            hard_timeout_minutes=config.get('hard_timeout_minutes', 45),
+            hard_timeout_seconds=timeout,
+        )
+        process = run_once_module._dispatch_process_status(metadata)
+        if process['status'] != 'alive_same' or status.get('terminate'):
+            return True
+        if received_result:
+            continue  # Only process exit/timeout can finish receipt supervision.
+        if ((status['status'] == 'stale' and attempt_status != 'stale')
+                or (status['status'] == 'running' and attempt_status == 'stale')):
+            return True
+        if (now_dt - run_once_module._parse_time(started_at)).total_seconds() >= config.get('worker_startup_grace_seconds', 300):
+            phase = conn.execute('SELECT 1 FROM worker_phases WHERE attempt_id=? LIMIT 1',
+                                 (attempt_id,)).fetchone()
+            if not phase and not run_once_module._attempt_command_records(
+                    conn, attempt_id, task_id, persist=False):
+                return True
+    return False
+
+
+def _queued_native_round(conn, repo_ids):
+    tables = [name for name in ('review_sessions', 'vote_sessions')
+              if conn.execute("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (name,)).fetchone()]
+    clause, params = _repo_filter('r', repo_ids)
+    for table in tables:
+        attention = ''.join(f""" AND NOT EXISTS (SELECT 1 FROM {other} blocked
+            WHERE blocked.workstream_id=rs.workstream_id AND blocked.status='attention')"""
+                            for other in tables)
+        if conn.execute(f"""SELECT 1 FROM {table} rs JOIN repos r ON r.full_name=rs.repo
+            WHERE rs.status='queued' AND rs.task_id IS NULL {clause}
+              AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.workstream_id=rs.workstream_id
+                AND t.lifecycle IN ('detected','authorized','classified','queued','running','waiting_for_user'))
+              AND NOT EXISTS (SELECT 1 FROM {table} old JOIN execution_subjects owner
+                ON owner.subject_type='task' AND owner.subject_id=old.task_id
+                WHERE old.workstream_id=rs.workstream_id AND owner.binding_status='attention')
+              {attention} LIMIT 1""", params).fetchone():
+            return True
+    return False
+
+
+def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=None, now=None):
     if repo_id is not None and repo_ids is not None:
         raise ValueError("repo_id and repo_ids are mutually exclusive")
     repo_ids = [repo_id] if repo_id else list(repo_ids or [])
-    now = wakeup.utc_now()
-    wakeup.expire_due_wakeups(conn, now=now)
+    now = now or wakeup.utc_now()
+    if not isinstance(now, str):
+        now = now.isoformat()
     wakeup_repo_clause, wakeup_repo_params = _repo_filter("", repo_ids)
     pending_wakeup = conn.execute(
         f"""
@@ -108,27 +181,18 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
           AND not_before_at <= ?
           AND (expires_at IS NULL OR expires_at > ?)
           {wakeup_repo_clause}
+          AND (reason!='worker_result_ready' OR EXISTS (
+            SELECT 1 FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
+            JOIN tasks t ON t.task_id=a.task_id
+            WHERE (wr.result_id=wakeups.result_id OR a.attempt_id=wakeups.attempt_id)
+              AND a.status='completed' AND NOT COALESCE({supervise.occupied_attempt_sql()},0)
+              AND t.lifecycle IN ('queued','running') AND {execution_store.runnable_sql()}))
         LIMIT 1
         """,
         [now, now] + wakeup_repo_params,
     ).fetchone()
-    if pending_wakeup:
+    if pending_wakeup or _queued_native_round(conn, repo_ids):
         return True
-    review_repo_clause, review_repo_params = _repo_filter("r", repo_ids)
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='review_sessions'").fetchone():
-        queued_review = conn.execute(f"""SELECT 1 FROM review_sessions rs
-            JOIN repos r ON r.full_name=rs.repo
-            WHERE rs.status='queued' AND rs.task_id IS NULL {review_repo_clause}
-              AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.workstream_id=rs.workstream_id
-                AND t.lifecycle IN ('detected','authorized','classified','queued','running','waiting_for_user'))
-              AND NOT EXISTS (SELECT 1 FROM review_sessions blocked
-                WHERE blocked.workstream_id=rs.workstream_id AND blocked.status='attention')
-              AND NOT EXISTS (SELECT 1 FROM review_sessions old
-                JOIN execution_subjects owner ON owner.subject_type='task' AND owner.subject_id=old.task_id
-                WHERE old.workstream_id=rs.workstream_id AND owner.binding_status='attention')
-            LIMIT 1""", review_repo_params).fetchone()
-        if queued_review:
-            return True
     fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
     fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
       JOIN execution_subjects c ON c.subject_type=f.subject_type AND c.subject_id=f.subject_id
@@ -141,21 +205,10 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
     if fact:
         return True
     workstream_repo_clause, workstream_repo_params = _repo_filter("w", repo_ids)
-    supervise_needed = conn.execute(
-        f"""
-        SELECT 1
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        WHERE a.status IN ('running', 'stale')
-          AND t.lifecycle IN ('queued', 'running')
-          AND {execution_store.runnable_sql()}
-          {workstream_repo_clause}
-        LIMIT 1
-        """,
-        workstream_repo_params,
-    ).fetchone()
-    if supervise_needed:
+    if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
+        return True
+    scoped_repos = repo_ids or [row[0] for row in conn.execute('SELECT repo_id FROM repos')]
+    if run_once_module.has_orphaned_classification_result(conn, scoped_repos, now):
         return True
     recovery_pending = conn.execute(
         f"""SELECT 1 FROM attempts a
@@ -181,12 +234,14 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None):
         JOIN tasks t ON t.task_id = a.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE a.status = 'prepared'
+          AND (json_extract(a.metadata_json,'$.resume.not_before_at') IS NULL
+               OR julianday(json_extract(a.metadata_json,'$.resume.not_before_at'))<=julianday(?))
           AND t.lifecycle IN ('queued', 'running')
           AND {execution_store.runnable_sql()}
           {workstream_repo_clause}
         LIMIT 1
         """,
-        workstream_repo_params,
+        [now, *workstream_repo_params],
     ).fetchone()
     if prepared:
         return True
@@ -227,12 +282,13 @@ def run_loop(
     started = time.monotonic()
     if max_publish_actions < 0:
         raise ValueError("max_publish_actions must be at least 0")
-    db_path, repo_ids = load_config_scope(config_path, skip_external=skip_external)
+    db_path, repo_ids, config = load_config_scope(
+        config_path, skip_external=skip_external, include_config=True)
     cycle_results = []
     stop_reason = "max_cycles"
     publish_actions_used = 0
     with closing(_connect(db_path)) as conn, conn:
-        if not has_runnable_local_work(conn, repo_ids=repo_ids):
+        if not has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config):
             summary = {
                 "ok": True,
                 "status": "completed",
@@ -285,7 +341,7 @@ def run_loop(
         with closing(_connect(db_path)) as conn, conn:
             after = snapshot_progress(conn)
             diff = diff_progress(before, after)
-            runnable = has_runnable_local_work(conn, repo_ids=repo_ids)
+            runnable = has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config)
         cycle_results[-1] = {**result, "progress": diff}
         if not diff["changed"]:
             stop_reason = "no_progress"

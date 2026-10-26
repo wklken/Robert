@@ -1,0 +1,24 @@
+import sys,sqlite3,json,subprocess
+from contextlib import closing
+sys.path[:0]=['<TEMP>/robert-verify-764c5e3-d_pwg86h','<TEMP>/robert-verify-764c5e3-d_pwg86h/src']
+from tests.test_pr_remediation_integration import PrRemediationIntegrationTests
+from robert_agent import run_once
+f=PrRemediationIntegrationTests();f.setUp()
+try:
+    f.repo['pr_automation']['ci']['enabled']=False
+    with closing(sqlite3.connect(f.db_path)) as c,c:
+        c.execute("INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,title,state,author_login) VALUES ('source:pr2','repo:example/backend','github:example/backend!14','pull_request',14,'Fix2','open','robert-bot')")
+        c.execute("INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,origin_workstream_id,lifecycle,created_at,updated_at) VALUES ('github:example/backend!14','repo:example/backend','source:pr2','github:example/backend#1','completed','2026-07-27','2026-07-27')")
+    base=f.runner()
+    with closing(sqlite3.connect(f.db_path)) as c,c:
+        def runner(args,**kwargs):
+            try:
+                with closing(sqlite3.connect(f.db_path,timeout=0)) as other,other:
+                    other.execute('BEGIN IMMEDIATE')
+                write='available'
+            except sqlite3.OperationalError as e:write=str(e)
+            print('at_external_api',args[-1],'controller_in_transaction',c.in_transaction,'other_writer',write)
+            return base([arg.replace('/pulls/14','/pulls/13') for arg in args],**kwargs)
+        result=run_once._collect_pr_remediation_decisions(c,'repo:example/backend',f.repo,runner,'2026-10-26T00:00:00Z')
+        print('decisions',len(result))
+finally:f.doCleanups()

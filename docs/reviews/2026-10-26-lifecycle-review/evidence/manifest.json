@@ -1,0 +1,32 @@
+{
+  "checked_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "files_sha256": {
+    "evidence/report-validation.out": "bcee0558d67e7e40d444b3976804c05600c6130b54094932986fe36e1beacd1c",
+    "evidence/report-validation.py.txt": "97a06f813ea0e1f8a3e92f55810bd4d7c3706b2f143dd85f27113f37f3ac3b79",
+    "evidence/reused-evidence-code-hashes.json": "acae1ba4af76cc8ad9d7b27aba54f0be70da71463d05068149817e323586c167",
+    "evidence/robert-review-lifecycle-native-cost.out": "080f533cdfccace2218b8f13bb7de3e3e9e5cc4350b6f97acf5300b3186bfa08",
+    "evidence/robert-review-lifecycle-native-cost.py.txt": "600223098b0941e674ba3b6ecb97d82ba62a6e8fbe2b43c5c67132775c1f1945",
+    "evidence/robert-review-probes.log": "c74cead939145467743b782a7aa128314d4dae22b4e055a3ba6f9d747624f2cd",
+    "evidence/robert-verify-764c5e3-unittest.log": "77ebff2f2ba8e4d4e9a4e4e0aa7fc971301e65b5488a9a699faf25295c59f290",
+    "evidence/robert-verify-agent-lifecycle-results.json": "8e783403350453e95d3e00595a8c3b2ffe59570ed8f942db657bbe7d3f8ab520",
+    "evidence/robert-verify-agent-lifecycle-verdicts.json": "5cebf52a7dc4e09b081f926ce6714bbb31c6bf340d03850e403f19c129f8ad39",
+    "evidence/robert-verify-agent-lifecycle.out": "af614978f92c725b51e0102002356d95e1c7d0152d9773c31bad9231c9d5f79a",
+    "evidence/robert-verify-agent-lifecycle.py.txt": "b6ed16817fcd4743f1688d995eded433585bb132046ed5d889cd8bc492e98ac0",
+    "evidence/robert-verify-agent-process-termination.out": "f2a7169261d7f978d7e87ed7f30dcef7d07febfcaf23a1ca2b8606584f4bd255",
+    "evidence/robert-verify-lifecycle-capacity.out": "b75785f5413f6cdd11cbe2700b4f3735a2b53b0b97827e7b58f814df0909a40e",
+    "evidence/robert-verify-lifecycle-capacity.py.txt": "b0fcf8d7772947640fcf906bd598cc34152afbfb9dc4ba12fcc4cc944b42ac6d",
+    "evidence/robert-verify-lifecycle-remote-close.out": "0cbb10fa0577269c8659827811afddd5a116da5537fe1c4aba9997b9844cc96b",
+    "evidence/robert-verify-lifecycle-remote-close.py.txt": "4ccf00ddbf42b9c11e331095fb4705a6449187fe57cc53cf9dc6854af616ddc4",
+    "evidence/robert-verify-local.out": "a547ecf78480dc24dbf132f03f91c2a87d6f7c05c93e87285f13efed62a9303a",
+    "evidence/robert-verify-local.py.txt": "b6ae4b3f123b33135b07011ab8de0b3633879fa271fe13144034a76d0b24ba92",
+    "evidence/robert-verify-network-lock.out": "ce4487368976250de52f41b46002922c0d5d3a26d17407885ec6ef12c697d48a",
+    "evidence/robert-verify-network-lock.py.txt": "2bf59cf5859603a43dc19f5590a5416891bca9580772bc2c9f4602b6496676dc",
+    "evidence/robert-verify-no-progress.out": "ab748dcd3c8af7469d01e0931ede0d3c4d95d1f9ee758fc49bb6bef7ce120f39",
+    "evidence/robert-verify-no-progress.py.txt": "4cb82397df3c6b7ce7ecf72831695ed9360d9ea724a787d3f4cbb8d4ae744b92",
+    "evidence/robert-verify-rate-gate.out": "901c0507bb87f9d15e4132c9a3a8083c63a8be47087ef68aad375f186147e503",
+    "evidence/robert-verify-rate-gate.py.txt": "85179363943d15e6e7af83a044f0e31f02a15c67b3ca7ce492a1ab2e300cb5e8",
+    "evidence/robert-verify-scheduler-storage.out": "6124cf7cfc1f50d718aa7e56ddbc079ea0672c1631d0ad42e6a1ba382b4d1a5a",
+    "evidence/robert-verify-scheduler-storage.py.txt": "0b92a1911de9b106b4767119b6e23acf684e1e833da2b57f46b7cdb3f54744ec",
+    "evidence/robert-verify-vote-flake.out": "015c24e35c977c4f97fcede459b932974e45be45fc1067d3dbcb4b4958c4fdd4"
+  }
+}

@@ -54,6 +54,15 @@ def atomic_write(path, record):
             temporary.unlink(missing_ok=True)
 
 
+def _archive_rejected(path, record):
+    archive = path.parent / 'rejected'
+    archive.mkdir(mode=0o700, exist_ok=True)
+    if archive.is_symlink():
+        raise ValueError('result archive must not be a symlink')
+    atomic_write(archive / path.name, record)
+    path.unlink(missing_ok=True)
+
+
 def submit(db_path, payload, writer, notifier=None, *, blocking=True):
     from robert_agent import wakeup_notifier
 
@@ -97,7 +106,7 @@ def submit(db_path, payload, writer, notifier=None, *, blocking=True):
         if response["ok"] or response["status"] == "failed_validation":
             path.unlink(missing_ok=True)
         else:
-            atomic_write(
+            _archive_rejected(
                 path,
                 {
                     "status": "rejected",
@@ -144,6 +153,15 @@ def replay(db_path, writer, limit=100):
             counts["rejected"] += 1
             continue
         if record.get("status") != "pending":
+            if record.get('status') == 'rejected':
+                try:
+                    with locked_record(db_path, record['payload']['attempt_id'], blocking=False) as current_path:
+                        if current_path.exists():
+                            current = json.loads(current_path.read_text())
+                            if current.get('status') == 'rejected':
+                                _archive_rejected(current_path, current)
+                except BlockingIOError:
+                    pass
             continue
         processed += 1
         payload = record["payload"]
@@ -166,7 +184,10 @@ def replay(db_path, writer, limit=100):
                     "fingerprint"
                 ) != record.get("fingerprint"):
                     continue
-                atomic_write(locked_path, record)
+                if record['status'] == 'rejected':
+                    _archive_rejected(locked_path, record)
+                else:
+                    atomic_write(locked_path, record)
             if record["status"] == "pending":
                 counts["deferred"] += 1
                 continue

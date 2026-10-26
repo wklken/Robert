@@ -1,0 +1,77 @@
+{
+  "generated_at": "2026-10-26T02:30:49.579020+00:00",
+  "status": "passed",
+  "base_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "changed_paths": 36,
+  "checked_diff_content_sha256": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e",
+  "gate_inputs": 246,
+  "gate_content_sha256": "efb36f8a605c5ece80a01ef7905aa4967434918301d3bc7eb923362bd1caf997",
+  "final_content_matches_recorded_checks": true,
+  "source_report_unchanged": true,
+  "source_report_sha256": "866faa0b69f7d617a637d8376aa0e576fec66adf158de63768fb175deb5f6ece",
+  "source_findings_sha256": "40d4a085497f52dbec5e5913a21ac1889df1ab1b060d78af84ae04e01426a8fe",
+  "runtime": {
+    "python": "Python 3.14.7",
+    "activation": "source .venv/bin/activate",
+    "no_dependency_changes": true
+  },
+  "commands": [
+    {
+      "command": "python3 -B -m unittest discover -s tests",
+      "exit_code": 0,
+      "tests": 1132,
+      "elapsed_seconds": 196.111,
+      "skipped": 1,
+      "log": "remediation-evidence/robert-remediation-full-tests-final.log"
+    },
+    {
+      "command": "python3 -m ruff check src tests",
+      "exit_code": 0,
+      "log": "remediation-evidence/robert-remediation-ruff-final.log"
+    },
+    {
+      "command": "python3 -m mypy src/robert_agent/cli src/robert_agent/paths.py src/robert_agent/route_config.py src/robert_agent/skills.py src/robert_agent/service.py src/robert_agent/migrate.py",
+      "exit_code": 0,
+      "scope": "9 CI-configured source files; reused while all scoped inputs unchanged",
+      "log": "remediation-evidence/robert-remediation-mypy-final.log"
+    },
+    {
+      "command": "python3 -m build",
+      "exit_code": 0,
+      "log": "remediation-evidence/robert-remediation-build-final.log"
+    },
+    {
+      "command": "python3 -m compileall -q src",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "independent_review": {
+    "status": "COMPLETE",
+    "open_findings": 0,
+    "fixed_ids": [
+      "FINAL-01",
+      "FINAL-02",
+      "FINAL-03",
+      "FINAL-04"
+    ],
+    "log": "remediation-evidence/robert-remediation-final-review-final.json"
+  },
+  "skip_reason": "tests/test_review_sandbox.py::test_linux_termination_stops_detached_tool_descendants requires Linux bubblewrap; host is macOS",
+  "limitations": [
+    "ResourceWarning for SQLite/Popen handles appears in test logs; no production leak conclusion or fix claimed.",
+    "No production DB/model/GitHub calls or daemon deployment.",
+    "R19 evidence-retention deletion awaiting policy; R23-R26 contracts preserved; U01 lacks normal-path reproduction.",
+    "Full source-integrity scans retained; synthetic benchmarks do not establish production speedup."
+  ],
+  "publication": {
+    "record": "publication.json",
+    "original_source_hashes_are_historical": true,
+    "public_source_findings_sha256": "292f9aea4a4564d3c7ea219d35f3c7e0e823cabff336ffacddd82de9000ef7ef",
+    "code_and_test_content_unchanged": true,
+    "note": "Public report copies redact local paths and convert workspace links; no source/test or finding verdict changes."
+  }
+}

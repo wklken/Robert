@@ -7,6 +7,8 @@ import re
 import shutil
 import subprocess
 
+from robert_agent.common import run_command
+
 from robert_agent import review_files
 
 
@@ -16,7 +18,7 @@ PRIMARY_FILES = ('context-summary.md', 'source-index.json')
 
 
 def _git(repo, *args):
-    return subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+    return run_command(['git', *args], cwd=repo, check=True, capture_output=True, text=True).stdout
 
 
 def _digest(value):
@@ -63,7 +65,7 @@ def _runtime_info(tree):
         major_minor = '.'.join(version.split('.')[:2])
         interpreter = shutil.which('python' + major_minor)
         if interpreter:
-            reported = subprocess.run([interpreter, '--version'], capture_output=True, text=True, check=True).stdout.strip()
+            reported = run_command([interpreter, '--version'], capture_output=True, text=True, check=True).stdout.strip()
             if reported.removeprefix('Python ').startswith(version):
                 python.update(status='RESOLVED', interpreter=str(Path(interpreter).resolve()),
                               version=reported, reason='Verified executable matches .python-version.')

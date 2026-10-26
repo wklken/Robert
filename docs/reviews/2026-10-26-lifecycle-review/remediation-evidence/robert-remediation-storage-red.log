@@ -1,0 +1,74 @@
+FFFFF
+======================================================================
+FAIL: test_interrupted_conversion_does_not_commit_marker_and_can_retry (tests.test_storage_initialization_remediation.StorageInitializationRemediationTests.test_interrupted_conversion_does_not_commit_marker_and_can_retry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_storage_initialization_remediation.py", line 96, in test_interrupted_conversion_does_not_commit_marker_and_can_retry
+    self.assertEqual(self.markers(), [(name,) for name in DATA_MIGRATIONS])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != [('robert-pr-mainline-workstreams-v1',), ([34 chars]1',)]
+
+Second list contains 2 additional elements.
+First extra element 0:
+('robert-pr-mainline-workstreams-v1',)
+
+- []
++ [('robert-pr-mainline-workstreams-v1',),
++  ('robert-route-recommended-skills-v1',)]
+
+======================================================================
+FAIL: test_late_initialization_failure_does_not_record_completion_early (tests.test_storage_initialization_remediation.StorageInitializationRemediationTests.test_late_initialization_failure_does_not_record_completion_early)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_storage_initialization_remediation.py", line 104, in test_late_initialization_failure_does_not_record_completion_early
+    self.assertEqual(self.markers(), [(name,) for name in DATA_MIGRATIONS])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != [('robert-pr-mainline-workstreams-v1',), ([34 chars]1',)]
+
+Second list contains 2 additional elements.
+First extra element 0:
+('robert-pr-mainline-workstreams-v1',)
+
+- []
++ [('robert-pr-mainline-workstreams-v1',),
++  ('robert-route-recommended-skills-v1',)]
+
+======================================================================
+FAIL: test_legacy_data_is_converted_once_and_records_distinct_markers (tests.test_storage_initialization_remediation.StorageInitializationRemediationTests.test_legacy_data_is_converted_once_and_records_distinct_markers)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_storage_initialization_remediation.py", line 46, in test_legacy_data_is_converted_once_and_records_distinct_markers
+    self.assertEqual(self.markers(), [(name,) for name in DATA_MIGRATIONS])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != [('robert-pr-mainline-workstreams-v1',), ([34 chars]1',)]
+
+Second list contains 2 additional elements.
+First extra element 0:
+('robert-pr-mainline-workstreams-v1',)
+
+- []
++ [('robert-pr-mainline-workstreams-v1',),
++  ('robert-route-recommended-skills-v1',)]
+
+======================================================================
+FAIL: test_reinitialization_does_not_rescan_or_rewrite_converted_history (tests.test_storage_initialization_remediation.StorageInitializationRemediationTests.test_reinitialization_does_not_rescan_or_rewrite_converted_history)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_storage_initialization_remediation.py", line 62, in test_reinitialization_does_not_rescan_or_rewrite_converted_history
+    self.assertFalse(any('select distinct t.task_id, t.lifecycle, gs.repo_id' in sql for sql in normalized))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_wrong_data_migration_checksum_is_rejected (tests.test_storage_initialization_remediation.StorageInitializationRemediationTests.test_wrong_data_migration_checksum_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_storage_initialization_remediation.py", line 78, in test_wrong_data_migration_checksum_is_rejected
+    with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.118s
+
+FAILED (failures=5)

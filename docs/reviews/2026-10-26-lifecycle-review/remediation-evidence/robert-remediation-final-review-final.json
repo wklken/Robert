@@ -1,0 +1,307 @@
+{
+  "status": "COMPLETE",
+  "reviewed_identity": {
+    "snapshot": "<TEMP>/robert-remediation-final-ovtk_ul7",
+    "base": "764c5e3771565899b4b7dcf45044a229a31fb591",
+    "content_sha256": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e",
+    "gate_content_sha256": "efb36f8a605c5ece80a01ef7905aa4967434918301d3bc7eb923362bd1caf997",
+    "manifest": "<TEMP>/robert-remediation-review-manifest-final.json",
+    "prior_manifest": "<TEMP>/robert-remediation-review-manifest-prefinal.json",
+    "prior_content_sha256": "a669934fa57556942c5d82caddf53139215a68f17b042275ed4edd8812abf87b",
+    "changed_paths_verified": 36,
+    "gate_inputs_verified": 246,
+    "manifest_start_mismatches": [],
+    "manifest_end_mismatches": []
+  },
+  "actual_scope": "Bounded FINAL-04 exception-semantics follow-up: compared final snapshot to prefinal; production delta is two timeout catch clauses in run_once.py only, with focused tests in lifecycle/controlplane modules. Traced observation helpers through recovery/audit to _run_repo_pipeline execution_deadline handling and run_once lease/finalization. Confirmed FINAL-01/02/03 implementations otherwise unchanged and reused valid prior independent evidence. Excluded R19/R23-R26/U01 and broad new discovery.",
+  "open_findings": [],
+  "finding_statement": "No verified open findings remain in this reviewed scope. All four prior verified findings are fixed at the target; review completion does not imply release readiness.",
+  "review_points": [
+    {
+      "id": "FINAL-01",
+      "severity": "High",
+      "original_severity": "Not applicable - new remediation regression",
+      "summary": "Recovery observation can overwrite a concurrently accepted final result with failed task/attempt state.",
+      "verdict": "Correct",
+      "introduction": "Yes",
+      "scope": "in scope",
+      "related_source_ids": [
+        "R02",
+        "A/2",
+        "R03",
+        "A/3",
+        "B/I/4",
+        "B/I/8",
+        "B/LATENCY-7"
+      ],
+      "file": "src/robert_agent/run_once.py",
+      "line": 1000,
+      "trigger": "Worker result ingestion or spool replay commits while _inspect_attempt_recovery_with_metadata runs after the new conn.commit; cached received_result remains false.",
+      "impact": "Supervisor continues recovery/failure logic despite accepted worker_results. Isolated no-progress case leaves worker_results=1 but task and attempt failed; completed-only audit cannot consume it. A progress-bearing case can instead initiate an unnecessary resume.",
+      "evidence_reference": [
+        "<TEMP>/robert-remediation-final-review-race-repro.py",
+        "<TEMP>/robert-remediation-final-review-race-repro.json",
+        "snapshot/src/robert_agent/run_once.py:1000-1008",
+        "snapshot/src/robert_agent/run_once.py:1228-1241",
+        "snapshot/src/robert_agent/run_once.py:6002"
+      ],
+      "observed": {
+        "receipt_ok": true,
+        "receipt_status": "recorded",
+        "attempt": "failed",
+        "task": "failed",
+        "worker_results": 1
+      },
+      "suggested_action": "After every released-writer recovery/process operation, acquire the writer and revalidate latest attempt, owner and worker_results before choosing recovery/failure; route a newly received result through receipt supervision. Add this concurrent receipt regression.",
+      "disposition": "Current change",
+      "resolution": "fixed",
+      "target_verification": {
+        "source": [
+          "src/robert_agent/run_once.py:873",
+          "src/robert_agent/run_once.py:964",
+          "src/robert_agent/run_once.py:1026",
+          "src/robert_agent/run_once.py:1240"
+        ],
+        "evidence": [
+          "<TEMP>/robert-remediation-final-review-race-repro.json",
+          "<TEMP>/robert-remediation-final-review-followup-race-repro.json"
+        ],
+        "conclusion": "Writer reacquisition and snapshot/latest-attempt/result-ID/owner revalidation now reject stale observations. Original receipt-during-recovery repro leaves attempt completed and task running with the accepted result, not failed. Tests also cover receipt during timeout cleanup."
+      },
+      "verified_target_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e",
+      "followup_note": "Fix is unchanged from independently reviewed a669934f snapshot except for separately tracked FINAL-04 exception propagation. Prior source/path evidence and fixed-path checks remain valid."
+    },
+    {
+      "id": "FINAL-02",
+      "severity": "Medium",
+      "original_severity": "Not applicable - new remediation regression",
+      "summary": "A control process group exiting at the timeout boundary raises ProcessLookupError and terminates the daemon.",
+      "verdict": "Correct",
+      "introduction": "Yes",
+      "scope": "in scope",
+      "related_source_ids": [
+        "R06",
+        "B/I/1",
+        "B/LATENCY-4",
+        "B/LATENCY-7"
+      ],
+      "file": "src/robert_agent/daemon.py",
+      "line": 119,
+      "trigger": "communicate times out, then the whole group exits before either os.killpg call.",
+      "impact": "Uncaught ProcessLookupError bypasses structured child_timeout and _reconcile_child_result; run_daemon catches it as fatal and stops polling. Managed-run cleanup is postponed until restart/other recovery.",
+      "evidence_reference": [
+        "<TEMP>/robert-remediation-final-review-control-repro.py",
+        "<TEMP>/robert-remediation-final-review-control-repro.jsonl",
+        "snapshot/src/robert_agent/daemon.py:118-134",
+        "snapshot/src/robert_agent/daemon.py:785-799"
+      ],
+      "observed": {
+        "exception": "ProcessLookupError",
+        "message": "group already exited"
+      },
+      "suggested_action": "Handle absent groups around TERM/KILL as an exit race, reap and verify group liveness, and preserve executor_id plus structured child_timeout so managed-run cleanup still executes. Add TERM/KILL exit-race coverage.",
+      "disposition": "Current change",
+      "resolution": "fixed",
+      "target_verification": {
+        "source": [
+          "src/robert_agent/daemon.py:124",
+          "src/robert_agent/daemon.py:132"
+        ],
+        "evidence": [
+          "<TEMP>/robert-remediation-final-review-control-repro.jsonl",
+          "<TEMP>/robert-remediation-final-review-followup-fixed-tests.log"
+        ],
+        "conclusion": "TERM and KILL ProcessLookupError are handled. Reaping plus independent group liveness proof retain structured child_timeout/executor nonce; a missing signal target alone still does not prove group stopped."
+      },
+      "verified_target_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e",
+      "followup_note": "Fix is unchanged from independently reviewed a669934f snapshot except for separately tracked FINAL-04 exception propagation. Prior source/path evidence and fixed-path checks remain valid."
+    },
+    {
+      "id": "FINAL-03",
+      "severity": "Medium",
+      "original_severity": {
+        "B/I/1": "高",
+        "B/LATENCY-4": "Not supplied",
+        "B/LATENCY-7": "Not supplied"
+      },
+      "summary": "Remaining control deadline is still ignored on supported remediation worktree and publication command paths.",
+      "verdict": "Correct",
+      "introduction": "No — pre-existing",
+      "scope": "in scope",
+      "related_source_ids": [
+        "R06",
+        "B/I/1",
+        "B/LATENCY-4",
+        "B/LATENCY-7"
+      ],
+      "file": "src/robert_agent/worktree.py",
+      "line": 207,
+      "trigger": "CI/merge-conflict remediation selects prepare_existing_pr_worktree, or local publication starts near the control deadline.",
+      "impact": "Raw Git calls have no timeout, and publication calls retain a fixed 60-second cap; remaining-budget exhaustion still causes the daemon outer timeout to kill execution during Git/GitHub I/O instead of completing the intended cooperative deadline path. Executor cleanup reduces lease residue but does not complete this R06 subclaim.",
+      "evidence_reference": [
+        "<TEMP>/robert-remediation-final-review-control-repro.py",
+        "<TEMP>/robert-remediation-final-review-control-repro.jsonl",
+        "snapshot/src/robert_agent/worktree.py:207-277",
+        "snapshot/src/robert_agent/run_once.py:3164-3178",
+        "snapshot/src/robert_agent/publish.py:1321-1323",
+        "snapshot/src/robert_agent/run_once.py:4673-4680"
+      ],
+      "observed": {
+        "expired_deadline_still_executed_commands": 5,
+        "all_command_timeouts": null,
+        "worktree_result": "created"
+      },
+      "suggested_action": "Apply common.run_command with runner injection to remaining supported long Git/gh paths, including prepare_existing_pr_worktree and publish bounded_command, and test that an expired deadline prevents invocation. Preserve publication intent/reconciliation handling.",
+      "disposition": "Current change",
+      "resolution": "fixed",
+      "target_verification": {
+        "source": [
+          "src/robert_agent/worktree.py:207",
+          "src/robert_agent/publish.py:1323",
+          "src/robert_agent/run_once.py:4706",
+          "src/robert_agent/run_once.py:252",
+          "src/robert_agent/run_once.py:5145"
+        ],
+        "evidence": [
+          "<TEMP>/robert-remediation-final-review-control-repro.jsonl",
+          "<TEMP>/robert-remediation-deadline-handoff.json",
+          "<TEMP>/robert-remediation-final-review-followup-fixed-tests.log"
+        ],
+        "conclusion": "Identified supported long command paths now call common.run_command with injected runner and remaining deadline. Expired worktree/publish commands are not invoked. New swallowing semantics at two adjacent inspection consumers are separately tracked as FINAL-04."
+      },
+      "verified_target_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e",
+      "followup_note": "Fix is unchanged from independently reviewed a669934f snapshot except for separately tracked FINAL-04 exception propagation. Prior source/path evidence and fixed-path checks remain valid."
+    },
+    {
+      "id": "FINAL-04",
+      "severity": "High",
+      "original_severity": "Not applicable - new follow-up remediation regression",
+      "summary": "Recovery and audit swallow expected command deadline timeouts and use missing observation as evidence of task failure or scope violation.",
+      "verdict": "Correct",
+      "introduction": "Yes",
+      "scope": "in scope",
+      "disposition": "Current change",
+      "resolution": "fixed",
+      "related_source_ids": [
+        "FINAL-03",
+        "R06",
+        "B/I/1",
+        "B/LATENCY-4",
+        "B/LATENCY-7",
+        "R03",
+        "A/3"
+      ],
+      "file": "src/robert_agent/run_once.py",
+      "line": 259,
+      "additional_anchor": "src/robert_agent/run_once.py:5147",
+      "trigger": "Remaining control deadline is exhausted while observing a dead worker worktree or collecting controller-owned Git HEAD/origin scope.",
+      "impact": "_run_inspection_command catches TimeoutExpired under SubprocessError; recovery treats the absent stdout as no_progress and supervisor fails the task/closes the owner despite saved work. _action_scope_for_result also suppresses TimeoutExpired and can audit a valid fork PR action against missing head_owner, rejecting valid output permanently.",
+      "evidence_reference": [
+        "<TEMP>/robert-remediation-final-review-followup-deadline-repro.py",
+        "<TEMP>/robert-remediation-final-review-followup-deadline-repro.json",
+        "<TEMP>/robert-remediation-final-review-followup-audit-repro.py",
+        "<TEMP>/robert-remediation-final-review-followup-audit-repro.json",
+        "snapshot/src/robert_agent/run_once.py:250-266",
+        "snapshot/src/robert_agent/run_once.py:5138-5154"
+      ],
+      "observed": {
+        "recovery_with_budget": {
+          "attempts": [
+            "failed",
+            "prepared"
+          ],
+          "task": "running",
+          "owner": "active"
+        },
+        "recovery_expired_budget": {
+          "attempts": [
+            "failed"
+          ],
+          "task": "failed",
+          "owner": "terminal"
+        },
+        "scope_with_budget": {
+          "head_owner": "wklken",
+          "violation": null
+        },
+        "scope_expired_budget": {
+          "head_owner": null,
+          "violation": "open_pr head owner is outside the assigned repository"
+        }
+      },
+      "suggested_action": "Propagate TimeoutExpired from these evidence-gathering helpers to existing _run_repo_pipeline execution_deadline handling, retaining task/result/owner for a later tick. Add behavior tests that assert no domain failure/resume/rejected audit or incomplete persisted scope on observation timeout.",
+      "proposed_remedy_assessment": "Correct and implemented at reviewed target; no new exception type needed. Any observation timeout aborts incomplete evidence rather than establishing absence of progress or a narrower trusted scope.",
+      "verified_target_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e",
+      "target_verification": {
+        "source": [
+          "src/robert_agent/run_once.py:259",
+          "src/robert_agent/run_once.py:5149",
+          "src/robert_agent/run_once.py:7187"
+        ],
+        "evidence_reference": [
+          "<TEMP>/robert-remediation-final-review-followup-deadline-repro.json",
+          "<TEMP>/robert-remediation-final-review-followup-audit-repro.json",
+          "<TEMP>/robert-remediation-final-review-final-recovery-repro.py",
+          "<TEMP>/robert-remediation-final-review-final-recovery-repro.json",
+          "<TEMP>/robert-remediation-final-review-final-audit-repro.py",
+          "<TEMP>/robert-remediation-final-review-final-audit-repro.json",
+          "<TEMP>/robert-remediation-final-review-final-pipeline-repro.py",
+          "<TEMP>/robert-remediation-final-review-final-pipeline-repro.json"
+        ],
+        "conclusion": "TimeoutExpired propagates from both observation helpers. Independent dirty-worktree comparison retains original behavior with budget (one resume) and, at expired budget, raises TimeoutExpired with original running attempt/task and active owner unchanged, without creating a resume. Scope comparison retains valid fork head_owner without timeout and raises on expiry, preserving accepted action. Full run_once caller returns execution_deadline and releases its run lease while retaining running business state for next tick.",
+        "observed": {
+          "recovery_expired": {
+            "exception": "TimeoutExpired",
+            "attempts": [
+              "running"
+            ],
+            "task": "running",
+            "owner": "active"
+          },
+          "scope_expired": {
+            "exception": "TimeoutExpired",
+            "action_audit_status": "accepted"
+          },
+          "pipeline_expired": {
+            "returned_status": "execution_deadline",
+            "agent_run_leases": [
+              "released",
+              "released"
+            ],
+            "attempts": [
+              "running"
+            ],
+            "task": "running",
+            "owner": "active"
+          }
+        }
+      }
+    }
+  ],
+  "verification": {
+    "performed": [
+      "Compared exact prefinal-to-final production/test delta.",
+      "Verified all 36 changed paths and 246 gate inputs match at start and finish.",
+      "Independently reran original dirty-worktree differential scenario with expected timeout capture.",
+      "Independently reran original fork-owner scope differential scenario with expected timeout capture.",
+      "Exercised complete run_once control-deadline caller path on isolated SQLite fixture; returned execution_deadline, released leases and preserved running task/attempt/active owner."
+    ],
+    "reused": [
+      "Original defect repro evidence from initial241b and prefinala669 snapshots.",
+      "Prior independent FINAL-01 green repro and four focused FINAL-02/03 checks.",
+      "Parent red log: two expected missing-timeout failures; parent green log: 28 related passes.",
+      "Parent reports prior snapshot full suite 1130 passed/1 skipped; this is not represented as final-target gate evidence."
+    ],
+    "not_run": [
+      "Full Python suite/build (parent owns final gates; reported in progress at handoff)",
+      "External network/GitHub/model calls",
+      "Production database or process reconciliation"
+    ]
+  },
+  "limits_and_residual_risk": [
+    "Final full-suite/build result remains parent-owned and was not yet supplied; do not infer it from this read-only review.",
+    "Differential repro uses temporary fixtures and mocked Git/process edges; production frequency and external-service timing were not measured.",
+    "Read-only review preserved all production source files and original reports; only run-owned /tmp evidence/report files were written."
+  ],
+  "memory_context": "Reused earlier MEMORY.md:144 lifecycle acceptance context only; current evidence establishes all dispositions."
+}

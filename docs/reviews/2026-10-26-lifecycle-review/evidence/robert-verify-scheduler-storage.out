@@ -1,0 +1,8 @@
+queued_vote_runnable False
+queued_review_runnable True
+phase_query_plan [(3, 0, 216, 'SCAN worker_phases')]
+phase_lookup_rows 1000 mean_ms 0.026066252030432224
+phase_lookup_rows 100000 mean_ms 4.073697500862181
+default_retention_batch 100
+default_events_per_day_no_progress 34560.0
+default_event_prune_capacity_per_day 28800.0

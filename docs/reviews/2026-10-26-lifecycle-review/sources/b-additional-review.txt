@@ -1,0 +1,203 @@
+我按 daemon → 本地 drain → run_once 流水线 → Worker 派发与心跳 → 结果审核与发布 → retention 清理这条完整链路读完了代码，多模型评审协调器也一并看了。这次没有改任何文件，也没有调用网络或 GitHub。subagent 启动失败（继承的模型不可用），所以评审全部由我直接完成。
+
+**结论：**
+- **最严重的问题是用整条流水线来做进程监督。** 只要有一个 Worker 在跑，daemon 每 5–8 秒就会重新拉起一次完整的 `run_once`，只是为了确认进程还活着。这是最大的"忙碌但不干活"来源，也基本解释了文档里的现象：169 个 task、614 个 attempt，数据库却有 2.05 GB（`docs/reliability-followup-20261024.md:35,68`）。
+- **端到端耗时最长的几段**依次是：
+  - GitHub 事件只在每 300 秒一次的 live poll 时才被发现；
+  - 意图识别太弱，大量请求要多跑一轮 classification Worker；
+  - 全局 45 分钟硬超时截断了 Worker 配置的 90 分钟；
+  - 进程被 SIGKILL 后，repo lease 会卡住 9 分钟，attempt 还会进入需要人工处理的 attention 状态。
+
+## 一、Bug（按严重程度排序）
+
+**1.（高）drain 内部预算等于外部 kill 超时，SIGKILL 会留下脏状态**
+- **问题：**
+  - `daemon.py:68` 把 `--max-seconds 180` 传给 loop_engine；`daemon.py:101` 又把同一个 180 秒用作 `subprocess.run(timeout=)`。
+  - loop_engine 只在每个 cycle 开始前检查预算（`loop_engine.py:255-257`），所以第 170 秒开始的 cycle 一定会被 SIGKILL。
+  - live poll 的 300 秒外部超时也没有对应的内部预算。`worktree.py:96` 和 `review_workspace.py:110` 里的 `git fetch` 都没有设置 timeout。
+- **后果：**
+  - `_run_repo_pipeline` 在 `finally` 里释放 lease 的代码不会执行。该 repo 被锁 9 分钟，期间每次 drain 都返回 `skipped_active_lease`。
+  - 对应的 `agent_runs` 记录永远停在 `running`。retention 只删除 completed、skipped、failed 状态的记录，所以它永远不会被清掉。`reliability_health.py:45-50` 专门统计这类孤儿 run，说明线上已经出现过。
+  - 如果 SIGKILL 正好发生在 dispatch 过程中，`dispatch_inflight` 会残留，下一轮这个 binding 被标成 `dispatch_outcome_unknown` 的 attention 状态，只能人工处理。
+- **修复：**
+  - 内部预算设为外部 timeout 减 60 秒，超时先发 SIGTERM 再 KILL。
+  - 所有 git 和 gh 子进程都加 timeout。
+  - daemon 启动时把自己遗留的 `running` 状态 run 收尾为 failed。
+
+**2.（高）两处并发容量统计口径不同，`max_concurrency` 会被突破**
+- 派发时用的 `_running_attempt_count_for_repos` 只统计 `status='running'`（`run_once.py:2422-2438`）。
+- daemon 判断容量（`daemon_state.py:266,285`）和 `has_runnable_local_work`（`loop_engine.py:150`）统计的却是 running 加 stale。
+- 进入 stale 的 Worker 通常还在运行，只是没写心跳，派发逻辑却会认为有空位，再拉起一个新 Worker。
+- **修复：** 统一成一个计数函数，包含 running、stale，以及终止尚未确认的 attempt。
+
+**3.（高，语义冲突）45 分钟全局硬超时会覆盖所有 attempt 自己的超时**
+
+```31:47:src/robert_agent/supervise.py
+    global_timeout_seconds = hard_timeout_minutes * 60
+    timeout_seconds = global_timeout_seconds
+    if hard_timeout_seconds is not None:
+        timeout_seconds = min(global_timeout_seconds, hard_timeout_seconds)
+
+    if (
+        runtime_seconds >= timeout_seconds
+        or heartbeat_age_seconds >= global_timeout_seconds
+    ):
+        return {
+            "ok": False,
+            "status": "failed_timeout",
+```
+
+- 被截断的配置：
+  - Worker 示例配置是 `timeout_seconds: 5400`（`docs/guides.md:112`）。
+  - 心跳包装器的默认超时也是 5400 秒（`worker/heartbeat.py:141`）。
+  - 评审协调器派发时会算出"所有 Worker 超时之和 + 2 倍首个 Worker 超时 + 600 秒"。
+- 因为取了 `min()`，这些值在 45 分钟时全部被判为 `failed_timeout`。
+- **影响：**
+  - 历史数据里 new-pr 类型 Worker attempt 的 P95 是 5015 秒，超过 2700 秒的任务会被杀掉再 resume，大量工作重做。
+  - 评审排队等 slot 的时间虽然不算进单个 Worker 的超时，却算进父任务这 45 分钟（`docs/multi-model-review.md:54`）。
+- **修复：** 以 attempt 自己的 timeout 为准，全局值只作缺省；至少在 `validate_config` 里对"Worker timeout 大于全局硬超时"给出警告。
+
+**4.（中高）一次短暂的 SQLite 锁冲突就能让一整轮多模型评审失败**
+- 每个评审线程在 `_wait` 里每秒调用一次 `check_active()`，每次都会写 `UPDATE attempts SET heartbeat_at`（`model_execution.py:136-143, 319-349`）。连接的锁等待只有 `timeout=10`（`review_store.py:81`）。
+- run_once 有多处长时间持有写锁（见第 8 条）。等锁超过 10 秒会抛出 `sqlite3.OperationalError`，而 `review_one` 没有捕获这个异常类型：
+
+```112:115:src/robert_agent/review_coordinator.py
+            except ReviewStopped:
+                raise
+            except (ValueError, OSError, RuntimeError) as exc:
+                return None, f"{worker['name']}: {exc}"
+```
+
+- 异常一路冒到 `run()`，整轮被标为 failed，`terminate_children` 会把其它还在跑的评审模型一起杀掉（`review_coordinator.py:164-176`）。
+- **修复：** 心跳降到 30–60 秒一次；`check_active` 遇到锁冲突时跳过本次即可，不要抛出。
+
+**5.（中）主进程已退出、子进程还在时，attempt 永远停在 running 并一直占着容量**
+- `terminate_recorded_identity` 只有在主进程身份核对为 `alive_same` 时才会给整个进程组发信号；主进程已经退出时，不会去清理进程组（`worker_identity.py:325`）。
+- 在"终止未确认"和 `orphaned_command_running` 两个分支里，supervise 每一轮只是重写一次 metadata（`run_once.py:869` 起），attempt 一直是 running，binding 进入 attention。
+- 容量计数不排除 attention，这个槽位就一直被占着。
+- **修复：** 当 pgid 等于原 pid、且进程组仍有成员时，直接 `killpg`（`model_execution._group_finished` 已经是这个思路）；超过上限后转为 failed。
+
+**6.（中）classification 结果在 finalize 中途就提交了，失败时会留下孤儿状态**
+- `run_once.py:5550-5551` 在 `_prepare_worktree` 之前执行了 `conn.commit()`。此时父分类任务已经是 completed，相关事件也已标记为消费，但子任务还没创建。
+- 如果 git 失败或进程被杀，只能靠 `_recover_orphaned_classification_results` 补救。
+- 问题在于 `has_runnable_local_work` 识别不了这种状态，所以实际要等下一次 live poll（5–10 分钟），而且每次都会重试 `git fetch`。
+
+**7.（中）`has_runnable_local_work` 判断 prepared 状态时没有看 `resume.not_before_at`**
+- 真正入队时，`_queue_prepared_attempts` 会跳过还在退避期的 attempt（`run_once.py:4473`），但 has_runnable 只要看到 prepared 就返回 true。
+- 结果是在传输错误退避期间（30–300 秒，最多 5 次），daemon 每 5 秒空跑一次 drain。
+
+**8.（中）写锁持有过长，而且跨越外部 I/O**
+- run_once 全程只用一个连接和一个事务。从 `INSERT agent_runs` 起就持有写锁，一直到 publish 前或 discover 阶段第一次 commit 才释放。
+- 这期间包括：
+  - supervise 阶段的 `ps` 调用，以及每个 attempt 最多约 4 秒的终止等待；
+  - audit 阶段的 `git rev-parse` 和 `git remote get-url`。
+- live poll 时，reconcile 和 PR 健康检查（`run_once.py:2050, 2204`）对每个 PR 串行调用 `gh`，而前面的 upsert（`run_once.py:2939`）已经拿到写锁，所以后续所有 `gh` 调用都在持锁状态下进行。
+- **后果：** Worker 写 snapshot 或 result 时会撞上 busy_timeout，结果被转进 spool 延后处理；多模型评审则直接触发第 4 条。
+
+**9.（中，疑似风险）`init_database` 每次进程启动都会重新执行数据迁移**
+- `storage.py:532-546` 每次调用都会执行 `_migrate_pr_mainline_workstreams` 和 `_migrate_route_recommended_skills`。前者是一个多表 JOIN，再 upsert workstreams 并覆盖 `lifecycle` 和 `active_task_id`。
+- 每次 daemon drain 会调用它两次：loop_engine 一次，run_once 一次。
+- 除了开销，这个迁移可能在系统运行中反复改写 workstream 状态。我没有构造出具体的反例，但这类迁移本应只执行一次。
+- **修复：** 用 `schema_migrations` 或 `PRAGMA user_version` 做版本门控。
+
+**10.（低，迁移遗留的边缘情况）`execution_pending_facts` 没有过期时间，也没有重试上限**
+- `execution_replay.decisions` 在三种情况下不会消费 fact：对应的 worker_result 行缺失、非驱动事件追加失败、驱动事件被跳过。`acknowledge_effects` 也只有找到关联 task 时才消费。
+- 消费不掉的 fact 会让 has_runnable 一直为 true，daemon 每 5 秒空转一次。
+
+**11.（低到中）意图识别用的是子串匹配**
+
+```189:194:src/robert_agent/discover.py
+    if any(word in text for word in ["bug", "fix", "修复", "报错", "失败"]):
+        return "bug_fix"
+    if any(
+        word in text
+        for word in ["分析", "analysis", "analyze", "explain", "discuss", "讨论", "方案"]
+```
+
+- **误判：** "debug、prefix、fixture、suffix"都会被判成 bug_fix，走 new-pr 路线，真的去开一个 PR。"分析一下为什么失败"也会被判成 bug_fix。
+- **漏判：** "实现、支持、add、implement"这类功能请求会落到 unclear，多跑一轮 classification Worker。这类任务历史上的 Worker 耗时 P50 是 103 秒、P95 是 496 秒，还没算排队时间。
+- `small_change` 和 `add_tests` 两种意图永远不会被识别出来。
+
+## 二、导致事件处理变长的机制（按影响大小排序）
+
+- **事件发现靠轮询：** live poll 默认 300 秒一次，容量满时 600 秒一次（`validate_config.py:248-261`），平均多等 2.5–5 分钟。
+- **unclear 意图多跑一轮 Worker：** 见第 11 条。
+- **45 分钟强杀后 resume：** 长任务重复做工，见第 3 条。
+- **9 分钟 lease 空窗：** SIGKILL 之后该 repo 完全停摆，见第 1 条。
+- **死进程发现窗口太长：**
+  - `heartbeat_at` 只有两种情况会更新：Worker 主动调用 snapshot CLI，或者在心跳包装器包住的命令运行期间（每 60 秒一次）。
+  - LLM 长时间思考、不执行命令时，要 20 分钟才被标成 stale，45 分钟才被判超时。
+- **attention 状态占着并发槽位不放：** 见第 5 条，后续任务只能一直排队。
+- **live poll 里串行调用 `gh`：**
+  - 每个活跃 workstream、每个见过的 open PR 都要做一次 reconcile；
+  - 每个 Robert 的 open PR 还要再拉一次 PR 快照和 CI 状态。
+  - PR 一多，单次 live poll 就可能逼近 300 秒超时，又回到第 1 条的问题。
+- **每个 workstream 同时只允许一个活跃 task：** 同一个 PR 上的后续评论只能等前一个任务做完。
+- **多模型评审是三段串行的 LLM 调用：** prepare、review（这一段内部并行）、synthesis，再叠加下一节第 4 点的全仓哈希校验。
+
+## 三、"忙碌但没干活"的机制
+
+**1. 用整条流水线做进程监督（最严重）**
+- 只要存在任何 running 或 stale 状态的 attempt，`has_runnable_local_work` 就返回 true。之后 daemon 每一轮会：
+  - 启动 loop_engine 子进程，执行 `validate_config` 和 `init_database`（包括上面第 9 条的迁移）；
+  - 跑 17 个 `COUNT(*)` 记录进度；
+  - 在进程内调用 `run_once`，它又执行一遍 `validate_config`、`init_database` 和 `replay_pending_results`；
+  - 写 1 条 `agent_runs`、13 条 `run_steps`、每个 repo 8 条 `run_repo_steps`（每条先写 running 再写终态）；
+  - 对每个 running attempt 执行一次 `ps`；
+  - 再跑 17 个 `COUNT(*)`，重写 `latest-loop.json`；
+  - daemon 再写 2 条 `daemon_events`（包含完整命令行）。
+- 一轮下来没有任何进展，sleep 5 秒，然后从头再来。
+- **量化：** 一个 Worker 跑 30 分钟，就要执行约 250–350 次完整的 run_once；如果一直有 Worker 在跑，一天就是上万次。
+- 每次约 22 行记录，外加 2 份 repo 摘要 JSON。retention 每 300 秒删 100 条，每天最多删 28,800 条，所以库存稳定在"7 天 × 每天上万次"，约 8 万个 run，这和 2.05 GB 的数据库对得上。
+- **修复：** 把 supervise 拆成一个轻量检查，只查 attempts 表和进程身份，不写 run_steps。只在 wakeup、进程退出、到达 stale 或超时阈值时才触发完整 drain。
+
+**2. 每次心跳都 INSERT 一行 `worker_phases`，而且永不清理**
+- 插入发生在 `worker/snapshot.py:27-35`，心跳包装器每 60 秒调用一次（`worker/heartbeat.py:142`）。
+- 3 个并发 Worker 一天约产生 4,300 行，retention 完全不覆盖这张表。
+- **修复：** 心跳只做 `UPDATE attempts.heartbeat_at`；只有 phase 真正变化时才 INSERT。
+
+**3. 评审协调器每个线程每秒写一次心跳**
+- 3 个评审模型时，大约每秒写库 3 次，而监督的 stale 阈值是 20 分钟。
+- 等待 slot 时，`launch_with_slot` 也是每秒循环一次，每次都扫描所有已预留的 run（`model_execution.py:222-256`）。
+
+**4. 每轮评审都新建完整 worktree 和两个 ref，从不清理；并且反复做全仓 sha256**
+- `review_workspace.py:108-134` 每轮都会：
+  - 创建 `refs/robert/review-rounds/<round>/{head,base}` 两个 ref；
+  - 执行一次 `git worktree add --detach`。
+- 整个代码库里没有任何 `worktree remove` 或目录清理逻辑。
+- `verify_snapshot`（`review_workspace.py:161-187`）每次调用都会：
+  - 执行 `git status --untracked-files=all` 和 `git ls-files --others`；
+  - 读取所有被追踪文件并计算 sha256。
+- 调用次数：
+  - 每次 `run_phase` 会调用 2–3 次（`model_execution.py:361, 394, 427`）；
+  - 3 个评审模型的一轮至少 12 次；
+  - review 阶段这些调用由多个线程并发执行。
+- 大仓库下这是分钟级的 I/O。
+
+**5. 各种文件只增不减**
+- **result spool：** `.lock` 文件从不删除，被拒绝的 `.json` 永久保留。`result_spool.replay`（`result_spool.py:112-117`）在 daemon 每轮和每次 run_once 启动时都会 glob 并读取全部 `*.json`，只有 2 秒的处理时限。被拒文件一多，可能挤占正常结果的处理时间（这一点是推测）。
+- **其它目录：** `.publication-locks/`、`artifacts/<task_id>`、`*.command.json`、stdout/stderr 日志、prompt 文件、普通任务的 worktree，全部没有清理逻辑。
+
+**6. 其它每轮都重复做的事**
+- **全量扫描：** `_recover_failed_timeout_attempts`、`_recover_orphaned_classification_results`、`_audit_completed_results`、`_finalize_published_results` 每轮都全量扫一遍。
+- **lease 相关的重复写：** 拿不到 lease（`skipped_active_lease`）时，会把该 repo 下所有任务的 wait_state 重写一遍（`run_once.py:808` 起）；拿到 lease 后又全部清除一遍。
+- **live poll 的重复工作：** 每次都 upsert 全部 CI 观测事件，即使没有变化；结束后还总会再跑一次本地 drain。
+- **健康检查和通知：**
+  - 每 300 秒写一条 `reliability_health` 事件。
+  - `reliability_health.collect` 名义上是只读的，实际会 INSERT notifications，并对从不清理的 notifications 表做 `json_extract` 全表扫描。
+  - 配置了通知命令时，`notify.deliver_pending` 每轮都全表扫描一次。
+- **不在 retention 范围内的表：** wakeups、notifications、audit_events、github_events 都不清理，进度统计里 `consumed_wakeups` 的 COUNT 会越来越慢。
+- **文件不会缩小：** 没有执行过 VACUUM 或 `wal_checkpoint(TRUNCATE)`，删掉的页只进 freelist，数据库文件大小不变。
+
+## 四、建议的修复顺序
+
+1. 把进程监督从完整 drain 中拆出来（第三节第 1 点），收益最大。
+2. 子进程预算留出余量；所有 git 和 gh 调用加 timeout；daemon 启动时收尾自己遗留的 run（第 1 条）。
+3. 统一容量计数；主进程退出时按进程组清理（第 2、5 条）。
+4. 让 attempt 自己的 timeout 生效，或者在配置校验时给出警告（第 3 条）。
+5. 评审协调器心跳降频，并容忍锁冲突（第 4 条）。
+6. `init_database` 加版本门控（第 9 条）。
+7. 心跳改成 UPDATE；retention 扩展到 `worker_phases`、notifications、wakeups、spool、lock 文件和 worktree；定期执行 checkpoint 或 vacuum。
+8. 改进意图识别（第 11 条）。
+
+按 AGENTS.md 的要求，每个 bug 修复都要先补一个能复现问题的失败测试。要动手的话，我建议从第 1 或第 2 项开始。

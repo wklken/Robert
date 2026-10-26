@@ -1,0 +1,33 @@
+E
+======================================================================
+ERROR: test_recovery_backfill_does_not_hold_writer_during_git_inspection (tests.test_lifecycle_remediation.LifecycleRemediationTests.test_recovery_backfill_does_not_hold_writer_during_git_inspection)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_lifecycle_remediation.py", line 181, in test_recovery_backfill_does_not_hold_writer_during_git_inspection
+    recovery = run_once._inspect_attempt_recovery_with_metadata(
+        conn, 'attempt-1', 'task-1', {}, directory)
+  File "./src/robert_agent/run_once.py", line 566, in _inspect_attempt_recovery_with_metadata
+    recovery = _inspect_attempt_recovery(
+        conn,
+    ...<2 lines>...
+        metadata.get("dispatch", {}).get("worktree_path") or None,
+    )
+  File "./src/robert_agent/run_once.py", line 508, in _inspect_attempt_recovery
+    git_summary = _git_recovery_summary(worktree_path)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1247, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "./tests/test_lifecycle_remediation.py", line 175, in inspect_git
+    other.execute('BEGIN IMMEDIATE')
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+----------------------------------------------------------------------
+Ran 1 test in 0.221s
+
+FAILED (errors=1)

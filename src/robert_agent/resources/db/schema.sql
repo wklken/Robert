@@ -253,6 +253,9 @@ CREATE TABLE IF NOT EXISTS worker_phases (
   metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE INDEX IF NOT EXISTS idx_worker_phases_attempt_created
+  ON worker_phases(attempt_id, created_at DESC, phase_id DESC);
+
 CREATE TABLE IF NOT EXISTS worker_results (
   result_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
@@ -628,3 +631,9 @@ CREATE INDEX IF NOT EXISTS idx_wakeups_source_run
 ON wakeups(source_run_id);
 CREATE INDEX IF NOT EXISTS idx_wakeups_consumed_run
 ON wakeups(consumed_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_delivery_pending
+ON notifications(channel, status, created_at, notification_id)
+WHERE COALESCE(json_extract(metadata_json, '$.delivery.status'), '') NOT IN ('sent', 'exhausted');
+CREATE INDEX IF NOT EXISTS idx_notifications_delivery_state
+ON notifications(json_extract(metadata_json, '$.delivery.status'));

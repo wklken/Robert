@@ -1,0 +1,40 @@
+{
+  "status": "COMPLETE",
+  "unit": "scheduler",
+  "base_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "files_sha256": {
+    "src/robert_agent/loop_engine.py": "ac4506d1043da3917f25bf99c6cebfb96d78f8ac8ab7c84e73a5b3f6b07208f0",
+    "tests/test_scheduler_remediation.py": "0b8d501ce20e9713c9921cadcfd1e7fd96b63b5efb1c7f6cf159c2424603b063"
+  },
+  "groups": [
+    "R08",
+    "R10",
+    "R12",
+    "R11 helper integration"
+  ],
+  "logs": [
+    "<TEMP>/robert-remediation-scheduler-cycle1-red.log",
+    "<TEMP>/robert-remediation-scheduler-cycle1-green.log",
+    "<TEMP>/robert-remediation-scheduler-compat.log",
+    "<TEMP>/robert-remediation-scheduler-scoped-final.log",
+    "<TEMP>/robert-remediation-scheduler-final-compatible.log",
+    "<TEMP>/robert-remediation-scheduler-ruff.log",
+    "<TEMP>/robert-remediation-scheduler-reference-audit.log"
+  ],
+  "interfaces": {
+    "has_runnable_local_work": "(conn,repo_id=None,repo_ids=None,*,config_result=None,now=None)",
+    "load_config_scope": "(config_path,skip_external=False,*,include_config=False); default tuple2, include_config tuple3"
+  },
+  "dependencies": [
+    "run_once._attempt_command_records(...persist=False)",
+    "run_once.has_orphaned_classification_result(conn,repo_ids,now)",
+    "supervise.occupied_attempt_sql(alias)"
+  ],
+  "limitations": [
+    "This pure probe never expires wakeups; parent owns maintenance expiry.",
+    "No state mutation/lease claiming occurs here; run_once remains authoritative after observations race.",
+    "No whole-run child deadline propagation changes were made.",
+    "No full suite or build run; parent owns combined gates."
+  ],
+  "cycles_used": 3
+}

@@ -1,0 +1,261 @@
+{
+  "base_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "python": "Python 3.14.7",
+  "source_findings_sha256": "40d4a085497f52dbec5e5913a21ac1889df1ab1b060d78af84ae04e01426a8fe",
+  "source_path_mapping": {
+    "robert-remediation-final-review-final-recovery-repro.json": {
+      "source": "<TEMP>/robert-remediation-final-review-final-recovery-repro.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-final-recovery-repro.json"
+    },
+    "robert-remediation-final-review-initial.json": {
+      "source": "<TEMP>/robert-remediation-final-review-initial.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-initial.json"
+    },
+    "robert-remediation-final-review-followup-audit-repro.json": {
+      "source": "<TEMP>/robert-remediation-final-review-followup-audit-repro.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-followup-audit-repro.json"
+    },
+    "robert-remediation-review-manifest-final.json": {
+      "source": "<TEMP>/robert-remediation-review-manifest-final.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-review-manifest-final.json"
+    },
+    "robert-remediation-review-manifest-prefinal.json": {
+      "source": "<TEMP>/robert-remediation-review-manifest-prefinal.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-review-manifest-prefinal.json"
+    },
+    "robert-remediation-deadline-observation-green.log": {
+      "source": "<TEMP>/robert-remediation-deadline-observation-green.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-deadline-observation-green.log"
+    },
+    "robert-remediation-final-review-final-pipeline-repro.py": {
+      "source": "<TEMP>/robert-remediation-final-review-final-pipeline-repro.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-final-pipeline-repro.py"
+    },
+    "robert-remediation-final-checks.log": {
+      "source": "<TEMP>/robert-remediation-final-checks.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-checks.log"
+    },
+    "robert-remediation-startup-lock-red.log": {
+      "source": "<TEMP>/robert-remediation-startup-lock-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-startup-lock-red.log"
+    },
+    "robert-remediation-final-review-final-audit-repro.json": {
+      "source": "<TEMP>/robert-remediation-final-review-final-audit-repro.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-final-audit-repro.json"
+    },
+    "robert-remediation-lifecycle-red.log": {
+      "source": "<TEMP>/robert-remediation-lifecycle-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-lifecycle-red.log"
+    },
+    "robert-remediation-final-review-control-repro.jsonl": {
+      "source": "<TEMP>/robert-remediation-final-review-control-repro.jsonl",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-control-repro.jsonl"
+    },
+    "robert-remediation-final-review-final.json": {
+      "source": "<TEMP>/robert-remediation-final-review-final.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-final.json"
+    },
+    "robert-remediation-build-final.log": {
+      "source": "<TEMP>/robert-remediation-build-final.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-build-final.log"
+    },
+    "robert-remediation-deadline-observation-red.log": {
+      "source": "<TEMP>/robert-remediation-deadline-observation-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-deadline-observation-red.log"
+    },
+    "robert-remediation-full-tests-prefinal.log": {
+      "source": "<TEMP>/robert-remediation-full-tests-prefinal.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-full-tests-prefinal.log"
+    },
+    "robert-remediation-final-review-followup-deadline-repro.json": {
+      "source": "<TEMP>/robert-remediation-final-review-followup-deadline-repro.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-followup-deadline-repro.json"
+    },
+    "robert-remediation-final-review-followup-race-repro.json": {
+      "source": "<TEMP>/robert-remediation-final-review-followup-race-repro.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-followup-race-repro.json"
+    },
+    "robert-remediation-final-review-final-pipeline-repro.json": {
+      "source": "<TEMP>/robert-remediation-final-review-final-pipeline-repro.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-final-pipeline-repro.json"
+    },
+    "robert-remediation-final-review-followup-fixed-tests.log": {
+      "source": "<TEMP>/robert-remediation-final-review-followup-fixed-tests.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-followup-fixed-tests.log"
+    },
+    "robert-remediation-final-review-followup-deadline-repro.py": {
+      "source": "<TEMP>/robert-remediation-final-review-followup-deadline-repro.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-followup-deadline-repro.py"
+    },
+    "robert-remediation-final-review-race-repro.json": {
+      "source": "<TEMP>/robert-remediation-final-review-race-repro.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-race-repro.json"
+    },
+    "robert-remediation-storage-red.log": {
+      "source": "<TEMP>/robert-remediation-storage-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-storage-red.log"
+    },
+    "robert-remediation-final-review-race-repro.py": {
+      "source": "<TEMP>/robert-remediation-final-review-race-repro.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-race-repro.py"
+    },
+    "robert-remediation-storage-handoff.json": {
+      "source": "<TEMP>/robert-remediation-storage-handoff.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-storage-handoff.json"
+    },
+    "robert-remediation-scheduler-cycle1-red.log": {
+      "source": "<TEMP>/robert-remediation-scheduler-cycle1-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-scheduler-cycle1-red.log"
+    },
+    "robert-remediation-worker-final-baseline-red.log": {
+      "source": "<TEMP>/robert-remediation-worker-final-baseline-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-worker-final-baseline-red.log"
+    },
+    "robert-remediation-final-review-final-recovery-repro.py": {
+      "source": "<TEMP>/robert-remediation-final-review-final-recovery-repro.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-final-recovery-repro.py"
+    },
+    "robert-remediation-refactor-audit.md": {
+      "source": "<TEMP>/robert-remediation-refactor-audit.md",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-refactor-audit.md"
+    },
+    "robert-remediation-final-review-followup-1.json": {
+      "source": "<TEMP>/robert-remediation-final-review-followup-1.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-followup-1.json"
+    },
+    "robert-remediation-cost-probe.py": {
+      "source": "<TEMP>/robert-remediation-cost-probe.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-cost-probe.py"
+    },
+    "robert-remediation-controlplane-red.log": {
+      "source": "<TEMP>/robert-remediation-controlplane-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-controlplane-red.log"
+    },
+    "robert-remediation-mypy-final.log": {
+      "source": "<TEMP>/robert-remediation-mypy-final.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-mypy-final.log"
+    },
+    "robert-remediation-worker-handoff.json": {
+      "source": "<TEMP>/robert-remediation-worker-handoff.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-worker-handoff.json"
+    },
+    "robert-remediation-storage-cost.out": {
+      "source": "<TEMP>/robert-remediation-storage-cost.out",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-storage-cost.out"
+    },
+    "robert-remediation-final-review-followup-audit-repro.py": {
+      "source": "<TEMP>/robert-remediation-final-review-followup-audit-repro.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-followup-audit-repro.py"
+    },
+    "robert-remediation-final-review-final-audit-repro.py": {
+      "source": "<TEMP>/robert-remediation-final-review-final-audit-repro.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-final-audit-repro.py"
+    },
+    "robert-remediation-deadline-red.log": {
+      "source": "<TEMP>/robert-remediation-deadline-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-deadline-red.log"
+    },
+    "robert-remediation-audit-deadline-red.log": {
+      "source": "<TEMP>/robert-remediation-audit-deadline-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-audit-deadline-red.log"
+    },
+    "robert-remediation-ruff-final.log": {
+      "source": "<TEMP>/robert-remediation-ruff-final.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-ruff-final.log"
+    },
+    "robert-remediation-race-red.log": {
+      "source": "<TEMP>/robert-remediation-race-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-race-red.log"
+    },
+    "robert-remediation-deadline-handoff.json": {
+      "source": "<TEMP>/robert-remediation-deadline-handoff.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-deadline-handoff.json"
+    },
+    "robert-remediation-full-tests-final.log": {
+      "source": "<TEMP>/robert-remediation-full-tests-final.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-full-tests-final.log"
+    },
+    "robert-remediation-cost-before.json": {
+      "source": "<TEMP>/robert-remediation-cost-before.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-cost-before.json"
+    },
+    "robert-remediation-full-tests.log": {
+      "source": "<TEMP>/robert-remediation-full-tests.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-full-tests.log"
+    },
+    "robert-remediation-cost-after.json": {
+      "source": "<TEMP>/robert-remediation-cost-after.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-cost-after.json"
+    },
+    "robert-remediation-backfill-lock-red.log": {
+      "source": "<TEMP>/robert-remediation-backfill-lock-red.log",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-backfill-lock-red.log"
+    },
+    "robert-remediation-scheduler-handoff.json": {
+      "source": "<TEMP>/robert-remediation-scheduler-handoff.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-scheduler-handoff.json"
+    },
+    "robert-remediation-final-review-control-repro.py": {
+      "source": "<TEMP>/robert-remediation-final-review-control-repro.py",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-final-review-control-repro.py"
+    },
+    "robert-remediation-review-manifest.json": {
+      "source": "<TEMP>/robert-remediation-review-manifest.json",
+      "persisted": "docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-review-manifest.json"
+    }
+  },
+  "evidence_files": {
+    "robert-remediation-final-review-final-recovery-repro.json": "582873962399e9633a95a8b53cf1037a358eade6ba15757c1797e77ab1be7a08",
+    "robert-remediation-final-review-initial.json": "d7eae1544034d487209a39918d35b33e6a43799d522ff8ba20bd9ba996293ce0",
+    "robert-remediation-final-review-followup-audit-repro.json": "4f01b714585187e9fbdad29faa8e1c2212852b80c8cd1118e03923c41083cc28",
+    "robert-remediation-review-manifest-final.json": "5326eaabc1321eaa6da29e9f5d07a8d133ee79d97577a8779a5814b61176592c",
+    "robert-remediation-review-manifest-prefinal.json": "8c4073198089a257c7e4f9510ef8d94bfeca8c38f7361d67a9298256d66bab19",
+    "robert-remediation-deadline-observation-green.log": "7db78e184fe385101396a4d14a02fe8ea3f87c72dbb9c156f5a1b15ca29bd459",
+    "robert-remediation-final-review-final-pipeline-repro.py": "4218609ebd9db7793621fcdbd4e42dee5e956e75d9c2b3461efdc3545642ae34",
+    "robert-remediation-final-checks.log": "d5f324ad07cc5b8fa7f3761dd61789a78fe6b9c02f23a6b95b9eb7c94dd1ada1",
+    "robert-remediation-startup-lock-red.log": "c60374708c3cb3e230249d57834f56003fe13f9148778642ba59506986f439ab",
+    "robert-remediation-final-review-final-audit-repro.json": "caaac31699c138edfee4a26abcc398a30f7fc8a7e3bfaa0abc7f7c62d9db776c",
+    "robert-remediation-lifecycle-red.log": "feefcbb010666cc4c10771f2c2e8350dd924f36469f7c313e651480b153041de",
+    "robert-remediation-final-review-control-repro.jsonl": "858b2f7b92c8d4baba5fc07527f72922033252923f9753d5f6b2240f1a5a3434",
+    "robert-remediation-final-review-final.json": "502b844a346e242def1432156aba638c8c5940a13813a18b947715a60305f06b",
+    "robert-remediation-build-final.log": "7573795e40280829f28c8e160aef8f9c2fa7cea27512b13a9775db58a978f66d",
+    "robert-remediation-deadline-observation-red.log": "f16d35366542d4a75ffd21f7e51a3c6790e5d1bfdc89cd0fec603987a2a68512",
+    "robert-remediation-full-tests-prefinal.log": "b8e11260c051a89a447069a74631d5ce4e58cd4b7d934978b67daa1af28d3a3a",
+    "robert-remediation-final-review-followup-deadline-repro.json": "8a3a315947d0721861946052c825a580e3ac17175a3da1e1e8f1f2ada3112b91",
+    "robert-remediation-final-review-followup-race-repro.json": "a0bd956917b3ec11d0b5d27451f0932ad58a788ea74cdbb8edbd62d6c64712bf",
+    "robert-remediation-final-review-final-pipeline-repro.json": "f5a6354070658fda8acf200dc28e3c62f7fa852ae4c0a0839064f0d471a10d8e",
+    "robert-remediation-final-review-followup-fixed-tests.log": "c180bc4ca5b2b082520e1a8c9f4fe2a316b5c5ed7d488bef35aee5cfddd6f610",
+    "robert-remediation-final-review-followup-deadline-repro.py": "0c96646204170544bd27bad8e56c62ee0f82a28a187c049a548ade81f1de8310",
+    "robert-remediation-final-review-race-repro.json": "d9375677ce0c1af5f1b71625a33ffc2509ae02061a693d4690efb55cfff11c4d",
+    "robert-remediation-storage-red.log": "1cb565b79e0d88bd71a8174ca6febb0b70d0df59238f2f3cf4a91288a8934112",
+    "robert-remediation-final-review-race-repro.py": "edbd254744216bf108ff5d147e76123ca23ec9cc4c4f87cdee15e0f75f9b0126",
+    "robert-remediation-storage-handoff.json": "0a44f2e5ea28cdfde3a4484dc51919948514e54fef3efcf76258e831f7925575",
+    "robert-remediation-scheduler-cycle1-red.log": "7eaf4db140ce7aa93da3e3209cffc5121e10e3f024dd8af4156b512d3e40ba1a",
+    "robert-remediation-worker-final-baseline-red.log": "082737d17e3461e85e3894921db33c95c3675760a40a7645b0136ebf829215a7",
+    "robert-remediation-final-review-final-recovery-repro.py": "84243fbcb0e4fc1c902891b9448d6e5a10d113a782500e4c10d45fb33bd5bcfa",
+    "robert-remediation-refactor-audit.md": "57ddc57b32f31ea4e2cd56cdb355739b36b8af41811229d345ffc09c13c7f3b1",
+    "robert-remediation-final-review-followup-1.json": "f8de5659ea92dfc0491777578052ddf2c50f9912fe89513855eafd756bb0552c",
+    "robert-remediation-cost-probe.py": "99b1aa09ea037aab062d38f4d0636cbd74743de1d8d894d73ad3707b9f7ee690",
+    "robert-remediation-controlplane-red.log": "ca5b7daf02c652ea27f8b4bc07487de8df7ac360b6c080e3e0fcd8b9658ef8d4",
+    "robert-remediation-mypy-final.log": "46984ca20bf69f7b14ec1fd9bd82101d56a4e109e68f016fd2a04f22481b09b3",
+    "robert-remediation-worker-handoff.json": "a71aa85cdae30834e3084c9750d04db5f112366cd4814b39a55f933dfdb5570d",
+    "robert-remediation-storage-cost.out": "0dcbff5558b8c2b4bcc1ad12c6c5f33f21a968011b210e59ff6b83940f350704",
+    "robert-remediation-final-review-followup-audit-repro.py": "dcad71e6899b7b32a4f5081898602b0cb99018d85abc6865d6480d7331b0f0e3",
+    "robert-remediation-final-review-final-audit-repro.py": "4407db916604c7e0365dbec9b197ca3ade69b83a309954b7ec5c19b022e46dfb",
+    "robert-remediation-deadline-red.log": "6c252496f2d13140d584068e4fa4c40c6aebb0a6c13f7d472c83194d0ee7882e",
+    "robert-remediation-audit-deadline-red.log": "82a8a080f7e9a569272a7fb47302a3f960f028c1426a983333c17e374a59745f",
+    "robert-remediation-ruff-final.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+    "robert-remediation-race-red.log": "99f0799f94cd1ae697bcb4b5f1eadce5ec434fdd67a1761c7c75cd3e62591385",
+    "robert-remediation-deadline-handoff.json": "869e1646852d63db340f91c55712fba289019a568d84104836bc087633ca87c3",
+    "robert-remediation-full-tests-final.log": "8b487038c309c93ce9b8c01feaf156c1f770caadac8654e34f65a0e9693c5be2",
+    "robert-remediation-cost-before.json": "3478b2284ab3162d1bf9b81c16e307ac2cb565ed4b4a46913615a92b27c837a5",
+    "robert-remediation-full-tests.log": "236d578f7304d46775b3a8b2d0ee945338d460044ed05abfa927bdc534bfddcb",
+    "robert-remediation-cost-after.json": "1048804e0ca7d53c3810167b84c83783792e55788f58bc865b46ad511428fd37",
+    "robert-remediation-backfill-lock-red.log": "08aa807ca05d4149676528c02bea140c18e8602f3ca951cc1af231dac25e2ca0",
+    "robert-remediation-scheduler-handoff.json": "d8a79c258a35adbafa9aec6c9ce0a02e595737682eef69a4a3ace676ec821f00",
+    "robert-remediation-final-review-control-repro.py": "4fe628ad0da13e8448f01806febae95d3916d09f7f27abff3911b804a519abb3",
+    "robert-remediation-review-manifest.json": "8b5fdd566707e8101b1a29c4be5b0981d2d3d6a40094877634ecc2316c913ca0"
+  },
+  "publication_record": "../publication.json",
+  "public_source_findings_sha256": "292f9aea4a4564d3c7ea219d35f3c7e0e823cabff336ffacddd82de9000ef7ef"
+}

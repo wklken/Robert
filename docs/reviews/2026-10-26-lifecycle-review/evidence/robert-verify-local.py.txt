@@ -1,0 +1,42 @@
+import sys,sqlite3,tempfile,json,subprocess
+from pathlib import Path
+from datetime import datetime,timedelta,timezone
+from contextlib import closing
+from unittest.mock import patch
+SNAP='<TEMP>/robert-verify-764c5e3-d_pwg86h'
+sys.path[:0]=[SNAP,SNAP+'/src']
+from robert_agent import storage,run_once,loop_engine,execution_replay,discover,route,result_spool,reliability_health
+from robert_agent.worker import snapshot
+root=Path(tempfile.mkdtemp(prefix='robert-verify-local-')); db=root/'r.sqlite3';storage.init_database(db)
+now=datetime.now(timezone.utc).isoformat(); future=(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat()
+with closing(sqlite3.connect(db)) as c,c:
+ c.execute("INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('r','example/r','bot','main','/repo','/worktrees')")
+ c.execute("INSERT INTO workstreams(workstream_id,repo_id,lifecycle,active_task_id,created_at,updated_at) VALUES ('w','r','active','t',?,?)",(now,now))
+ c.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,priority,created_at,updated_at) VALUES ('t','w','queued','P1',?,?)",(now,now))
+ c.execute("INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at) VALUES ('task','t','human_request','active',?,?)",(now,now))
+ c.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,metadata_json) VALUES ('a','t',1,'prepared',?)",(json.dumps({'resume':{'not_before_at':future}}),))
+ c.execute("INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at) VALUES ('prompt','t','a','prompt','<TEMP>/not-executed-prompt',?)",(now,))
+ print('prepared_future_runnable',loop_engine.has_runnable_local_work(c,repo_ids=['r']))
+ queue=[];print('prepared_future_queued',run_once._queue_prepared_attempts(c,'r',{},queue,1),'queue',queue)
+ c.execute("UPDATE tasks SET lifecycle='waiting_for_user' WHERE task_id='t'")
+ c.execute("UPDATE attempts SET status='completed' WHERE attempt_id='a'")
+ event={'workstream_id':'w','event_fingerprint':'comment:5','authorization_status':'accepted_context','drives_execution':False}
+ c.execute("INSERT INTO execution_pending_facts(source_signal_id,subject_type,subject_id,topic,dedupe_key,fact_id,disposition,repo_id,task_id,payload_json,not_before_at) VALUES ('s','task','t','subject-events','d','comment:5','github_event','r','t',?,?)",(json.dumps(event),now))
+ print('waiting_context_runnable',loop_engine.has_runnable_local_work(c,repo_ids=['r']))
+ print('waiting_context_decisions',execution_replay.decisions(c,'r',now,[]))
+ print('waiting_context_consumed',c.execute("SELECT consumed_at FROM execution_pending_facts WHERE source_signal_id='s'").fetchone()[0])
+for text in ['debug','prefix','fixture','suffix','分析一下为什么失败','实现用户登录','支持增量同步','add a feature','implement pagination']:
+ intent=discover.infer_intent('',text,'comment','bot');print('intent',repr(text),intent,'issue_route',route.route_task({'intent':intent,'source_type':'issue'})['route_id'])
+for _ in range(3):snapshot.record_snapshot(db,'t','a','verify','running','Command still running')
+with closing(sqlite3.connect(db)) as c:print('identical_heartbeat_phase_rows',c.execute('SELECT count(*) FROM worker_phases').fetchone()[0])
+# Deterministic slow-read clock: preserved rejected entries can exhaust the replay budget
+spool=result_spool.directory(db);spool.mkdir(exist_ok=True)
+for name,status in [('000','rejected'),('001','rejected'),('zzz','pending')]:
+ (spool/(name+'.json')).write_text(json.dumps({'status':status,'payload':{'attempt_id':'a','task_id':'t'}}))
+clock_values=[0,0,1,3]
+for n in range(2):
+ calls=[]
+ with patch.object(result_spool.time,'monotonic',side_effect=clock_values):
+  counts=result_spool.replay(db,lambda *a,**k:calls.append(True) or {'ok':True,'status':'recorded'})
+ print('spool_slow_read_simulation',n,'writer_calls',len(calls),'counts',counts,'pending_still_exists',(spool/'zzz.json').exists())
+print('temporary_db',str(db))
