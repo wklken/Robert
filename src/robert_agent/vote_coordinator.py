@@ -4,15 +4,9 @@ import json
 from pathlib import Path
 import signal
 
-from robert_agent import vote_files, vote_store, vote_tally, vote_workspace, review_sandbox
+from robert_agent import vote_files, vote_store, vote_tally, vote_workspace
 from robert_agent.model_execution import StageCoordinator, ReviewStopped, ReviewSuperseded, _active, terminate_children
 from robert_agent.worker import result as worker_result
-
-
-def sandbox(manifest, output, data, prompt, readable, **kwargs):
-    prefix, environment = review_sandbox.launch_policy(manifest, output, data, prompt, readable, **kwargs)
-    environment['ROBERT_VOTE_OUTPUT_DIR'] = environment.pop('ROBERT_REVIEW_OUTPUT_DIR')
-    return prefix, environment
 
 
 class Coordinator(StageCoordinator):
@@ -24,7 +18,6 @@ class Coordinator(StageCoordinator):
     workflow_name = 'vote'
 
     def __init__(self, *args, source_reader=vote_workspace.read_source, **kwargs):
-        kwargs.setdefault('sandbox', sandbox)
         super().__init__(*args, **kwargs)
         self.source_reader = source_reader
 
@@ -124,8 +117,7 @@ class Coordinator(StageCoordinator):
             path = output / 'synthesis.json'
             vote_files.read_synthesis(path, self.manifest, records, inputs_hash)
             return {'synthesis_path': str(path), 'synthesis_sha256': vote_files.digest(path)}
-        result = self.run_phase('synthesis', self.request['workers'][0], prompt, validate,
-                                readable_files=[str(inputs), *[r['ballot_path'] for r in records]], input_hash=inputs_hash)
+        result = self.run_phase('synthesis', self.request['workers'][0], prompt, validate, input_hash=inputs_hash)
         ballots = vote_files.selected_ballots(self.manifest, records)
         summary = vote_files.read_synthesis(result['synthesis_path'], self.manifest, records, inputs_hash)
         body = vote_files.render(self.manifest, records, ballots, tally, summary)

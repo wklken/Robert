@@ -52,9 +52,9 @@ Issue 纯讨论使用独立 context 目录，不要求源码 worktree。准备�
 
 ## 投票和报告
 
-准备完成后冻结问题、选项、标准、参与者、上下文和 `voter-prompt.md`。所有 voter 读取字节相同的 prompt，使用独立模型会话，只能写自己的 `ROBERT_VOTE_OUTPUT_DIR`；不同 CLI 内置系统提示不属于字节一致保证。
+准备完成后冻结问题、选项、标准、参与者、上下文和 `voter-prompt.md`。所有 voter 读取字节相同的 prompt，使用独立模型会话，按 prompt 约定写入自己的 `ROBERT_VOTE_OUTPUT_DIR`；不同 CLI 内置系统提示不属于字节一致保证。
 
-每个 voter 原子写入 `ballot.json`，包含 round、snapshot、spec hash、`choice_id`、非空 `reason_summary`、主要取舍、证据引用和未知项。`choice_id: null` 是弃权，必须说明 `abstain_reason`；该字段只要出现，都必须是有长度上限的非空文本。输出必须通过身份、选项、来源和文件校验，stdout/stderr 仅作诊断。进程组退出后，Robert 把普通交接文件复制到生产者不可写的封存目录，汇总只读封存副本。
+每个 voter 原子写入 `ballot.json`，包含 round、snapshot、spec hash、`choice_id`、非空 `reason_summary`、主要取舍、证据引用和未知项。`choice_id: null` 是弃权，必须说明 `abstain_reason`；该字段只要出现，都必须是有长度上限的非空文本。输出必须通过身份、选项、来源和文件校验，stdout/stderr 仅作诊断。已登记的进程组退出后，Robert 把普通交接文件复制到独立的封存目录，汇总读取封存副本并核对 hash；该交接校验不限制同账户进程访问封存目录。
 
 第一版采用单选、等权、一参与者一票。重试和 fallback 不增加票数，准备和汇总本身也不产生选票。所有参与者都必须返回有效选票，包括明确弃权；技术失败不算弃权，缺票时不能发布完整结论。
 
@@ -74,6 +74,6 @@ PR 和 Issue 都发布一条普通 Conversation comment，经原有审计、reda
 - 发布用 repository/source/number/round 稳定去重，保留 `robert-comment` 并添加 `robert-vote` marker。响应丢失后分页查询评论，核对账号、marker 和完整正文，再决定是否重试；未知状态不重复 POST。
 - CLI status 与 Board 执行历史显示投票轮次、各阶段/模型、失败原因和共享额度。历史产物保留在 `data_dir/artifacts/votes`，源码 worktree 位于仓库配置的 worktrees 目录。
 
-macOS 使用 `sandbox-exec`，Linux 使用 `bubblewrap`；沿用 [多模型 review 的沙箱与 Claude 配置要求](multi-model-review.md)。缺少隔离工具时明确失败，不降低为不受限执行。不增加 Python runtime 依赖，也不把模型/GitHub 凭据写入配置或产物。
+macOS 和 Linux 均直接启动配置的模型 CLI，无需 `sandbox-exec`、`bubblewrap` 或 namespace 权限；此模式取代历史设计文档中的 OS 沙箱要求。CLI 使用运行 Robert 的账户已有的登录、配置及文件权限，`CLAUDE_CONFIG_DIR` 可选。各轮 context、worktree、输出和阶段 `.tmp` 目录仍分开建立；应用层保留输入完整性、身份、封存副本和 hash 校验，但不以 OS 策略阻止 CLI 读写宿主机或其他轮次结果。沿用 [多模型 review 的直接执行与配置要求](multi-model-review.md#多轮恢复和运行约束)，保留并发、心跳、超时、重试、取消及恢复机制。监督覆盖已登记进程组，脱离该组的后代不能靠 namespace 保证退出；未知归属继续进入需处理状态。不增加 Python runtime 依赖，也不把模型/GitHub 凭据写入配置或产物。
 
 关闭开关阻止新轮次，已登记轮次按冻结配置继续，或由操作者显式取消。回退旧二进制前必须确认 vote 协调器与模型已停止；旧版本不识别 vote 的运行额度，不能与其并行运行。保留数据库新表和产物，不在回退时删除历史。

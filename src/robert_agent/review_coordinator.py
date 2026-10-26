@@ -134,8 +134,6 @@ class Coordinator(StageCoordinator):
             return {'evaluation_path': str(path), 'evaluation_sha256': store.digest(path)}
 
         result = self.run_phase('synthesis', self.request['workers'][0], prompt, validate,
-                                readable_files=[inputs['path'], *[record[kind + '_path']
-                                    for record in records for kind in ('result', 'report')]],
                                 input_hash=inputs['sha256'])
         evaluation = review_files.read_evaluation(result['evaluation_path'], self.manifest, records)
         body = review_files.render_merged(self.manifest, records, evaluation)

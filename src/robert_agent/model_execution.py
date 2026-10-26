@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 
-from robert_agent import dispatch, execution_store, review_files, review_sandbox, review_workspace, worker_identity
+from robert_agent import dispatch, execution_store, model_environment, review_files, review_workspace, worker_identity
 from robert_agent import review_store as store
 from robert_agent.publication_lock import task_publication_lock
 from robert_agent.worker import snapshot
@@ -118,11 +118,11 @@ class StageCoordinator:
     workflow_name = 'review'
 
     def __init__(self, db_path, task_id, attempt_id, *, fetch_pr=read_pr,
-                 launcher=dispatch.dispatch_worker, sandbox=review_sandbox.launch_policy,
+                 launcher=dispatch.dispatch_worker,
                  poll_seconds=1):
         store = self.store
         self.db_path, self.task_id, self.attempt_id = str(db_path), task_id, attempt_id
-        self.fetch_pr, self.launcher, self.sandbox = fetch_pr, launcher, sandbox
+        self.fetch_pr, self.launcher = fetch_pr, launcher
         self.poll_seconds = poll_seconds
         self.stopping = threading.Event()
         self.processes = {}
@@ -248,7 +248,7 @@ class StageCoordinator:
                 with self.store.connect(self.db_path) as conn:
                     run_store.release_finished_slot(conn, run)
 
-    def launch_with_slot(self, run, worker, prompt_path, prefix, environment):
+    def launch_with_slot(self, run, worker, prompt_path, environment):
         store = self.store
         while True:
             self.check_active()
@@ -269,7 +269,7 @@ class StageCoordinator:
                             task_id=self.task_id, attempt_id=run['run_id'], prompt_path=prompt_path,
                             worktree_path=self.manifest['worktree_path'], worker_agent_config=worker,
                             model=run['model'], reasoning_effort=worker['default_effort'],
-                            trusted_environment=environment, command_prefix=prefix, log_dir=run['output_dir'], dry_run=False,
+                            trusted_environment=environment, log_dir=run['output_dir'], dry_run=False,
                         )
                         # Retain our Popen even when another thread's dispatch
                         # reaps the shared registry before this waiter polls it.
@@ -300,11 +300,11 @@ class StageCoordinator:
         return {**artifact, 'run_id': run['run_id'], 'worker_id': run['worker_id']}
 
     def sealed_output(self, run):
-        """Copy only the handoff files outside the producer's writable sandbox.
+        """Copy handoff files to a separate registration directory and hash them.
 
-        A detached descendant is not necessarily in the registered process
-        group. It can no longer mutate the accepted inputs through its output
-        directory. The marker also recovers a seal committed before SQLite.
+        Later writes to the original outputs do not change these copies. This
+        is an application-level snapshot, not an OS access restriction on the
+        CLI. The marker also recovers a seal committed before SQLite.
         """
         store = self.store
         names = self.handoff_files[run['stage']]
@@ -384,7 +384,7 @@ class StageCoordinator:
         if launched.get('returncode', 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
 
-    def run_phase(self, stage, worker, prompt_path, validate, *, readable_files=(), input_hash=None):
+    def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""
         store = self.store
         self.workspace.verify_snapshot(self.manifest)
@@ -442,9 +442,9 @@ class StageCoordinator:
                                 self.manifest['artifact_root'], prompt_hash, model=model)
             store.update_run(conn, run['run_id'], status='waiting')
         try:
-            prefix, environment = self.sandbox(self.manifest, run['output_dir'], self.data_dir,
-                                               prompt_path, readable_files, worker_agent=worker['agent'])
-            launched = self.launch_with_slot(run, worker, prompt_path, prefix, environment)
+            environment = model_environment.stage_environment(
+                self.manifest, run['output_dir'], self.data_dir, workflow_name=self.workflow_name)
+            launched = self.launch_with_slot(run, worker, prompt_path, environment)
             if not launched.get('ok'):
                 if launched.get('pid') and not _wait_for_group_exit(launched):
                     raise ReviewStopped('failed model launch left a process group; inspect remaining processes')
