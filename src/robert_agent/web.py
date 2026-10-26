@@ -61,7 +61,8 @@ WEB_ASSETS = {
     "/": ("board.html", "text/html; charset=utf-8"),
     "/work": ("index.html", "text/html; charset=utf-8"),
     "/board": ("board.html", "text/html; charset=utf-8"),
-    "/favicon.ico": ("robert-logo.svg", "image/svg+xml"),
+    "/favicon.ico": ("robert-favicon.svg", "image/svg+xml"),
+    "/assets/robert-favicon.svg": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-logo.svg": ("robert-logo.svg", "image/svg+xml"),
     "/assets/github-shell.css": ("github-shell.css", "text/css; charset=utf-8"),
     "/assets/operations.css": ("operations.css", "text/css; charset=utf-8"),
@@ -1374,7 +1375,7 @@ def render_dashboard_html():
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Robert Operations</title>
-  <link rel="icon" type="image/svg+xml" href="/assets/robert-logo.svg">
+  <link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">
   <script>
     (function () {
       const savedTheme = localStorage.getItem('robertWorkbenchTheme') || 'system';

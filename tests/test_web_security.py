@@ -3,6 +3,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 from robert_agent import storage
 from robert_agent.web import (
@@ -75,17 +76,34 @@ class WebSecurityTests(unittest.TestCase):
         self.assertIn("https://robert.example.com:9443", context.allowed_origins)
         self.assertIn("http://127.0.0.1:8765", context.allowed_origins)
 
-    def test_pages_share_readme_logo_favicon(self):
+    def test_readme_logo_remains_available(self):
         logo = (Path(__file__).resolve().parents[1] / "docs/imgs/robert-logo.svg").read_bytes()
-        for route in ("/assets/robert-logo.svg", "/favicon.ico"):
+        status, headers, body = build_http_response("/assets/robert-logo.svg", "unused.sqlite3")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-type"], "image/svg+xml")
+        self.assertEqual(body, logo)
+
+    def test_favicon_uses_only_robot_avatar_in_square_canvas(self):
+        logo = ET.parse(Path(__file__).resolve().parents[1] / "docs/imgs/robert-logo.svg").getroot()
+        for route in ("/assets/robert-favicon.svg", "/favicon.ico"):
             status, headers, body = build_http_response(route, "unused.sqlite3")
             self.assertEqual(status, 200, route)
             self.assertEqual(headers["content-type"], "image/svg+xml")
-            self.assertEqual(body, logo)
-        for route in ("/", "/board", "/work", "/operations"):
+            icon = ET.fromstring(body)
+            _, _, width, height = map(float, icon.attrib["viewBox"].split())
+            self.assertEqual(width, height)
+            groups = icon.findall("{http://www.w3.org/2000/svg}g")
+            self.assertEqual(len(groups), 1)
+            self.assertEqual(
+                [ET.tostring(shape) for shape in groups[0]],
+                [ET.tostring(shape) for shape in logo.find("{http://www.w3.org/2000/svg}g")],
+            )
+
+    def test_pages_use_robot_avatar_favicon(self):
+        for route in ("/", "/?bucket=history", "/board", "/work", "/operations"):
             status, _, body = build_http_response(route, "unused.sqlite3")
             self.assertEqual(status, 200, route)
-            self.assertIn(b'<link rel="icon" type="image/svg+xml" href="/assets/robert-logo.svg">', body)
+            self.assertIn(b'<link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">', body)
             self.assertEqual(body.count(b'rel="icon"'), 1, route)
 
     def test_artifact_preview_selects_the_requested_historical_artifact(self):
