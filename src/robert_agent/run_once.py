@@ -24,7 +24,7 @@ from robert_agent import publish
 from robert_agent import route
 from robert_agent.run_history import SUMMARY_REFERENCE
 from robert_agent import route_config
-from robert_agent import review_store
+from robert_agent import review_store, vote_store, native_rounds
 from robert_agent import skills
 from robert_agent import supervise
 from robert_agent import validate_config
@@ -491,7 +491,7 @@ def _terminal_transport_failure(logs):
 
 
 def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
-    review = review_store.session(conn, task_id=task_id) if conn is not None else None
+    review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
     if review:
         return {
             "status": "recoverable_progress" if review["status"] not in {"canceled", "superseded", "attention"} else "unrecoverable",
@@ -3109,7 +3109,7 @@ def _retrieve_project_memories(conn, repo_id, workstream_id, route_result, event
 
 
 def _prepare_worktree(repo, event, route_result, dry_run):
-    if route_result.get("native_review_workers"):
+    if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         # The native coordinator fetches and pins this round after admission.
         return None
     skill_status = route_result.get("skill_status")
@@ -3243,6 +3243,20 @@ def _effective_route(config_result, repo, event, route_id=None):
                 allowed_github_actions=["submit_pr_review"],
                 required_skills=[], recommended_skills=[],
             )
+    if resolved["id"] == "vote":
+        settings = resolved.get("multi_agent_vote") or {}
+        if (not settings.get("enabled") or not event.get("mentions_dd")
+                or not discover.bot_requests(event.get("body"), repo["github_account"])
+                or event.get("actor_login") not in repo.get("trusted_actors", [])
+                or not (route_id == "vote" or discover.is_vote_request(event.get("body"), repo["github_account"]))):
+            # Preserve the request as a visible explanation, never substitute a single-model vote.
+            resolved.update(id="waiting-for-user", expected_output="waiting_for_user",
+                            allowed_github_actions=["comment"], required_skills=[], recommended_skills=[],
+                            routing_block_reason="Multi-Agent voting requires routes.vote.multi_agent_vote.enabled, at least two configured workers, and an explicit trusted @ request. Explain this missing configuration/authority; do not perform a single-model substitute vote.")
+        else:
+            configured = {worker["name"]: worker for worker in config_result["workers"]}
+            resolved.update(native_vote_workers=[configured[name] for name in settings["workers"]],
+                            required_skills=[], recommended_skills=[])
     installed = skills.discover_skill_names(
         config_result["skills"]["search_paths"]
     )
@@ -3544,7 +3558,7 @@ def _prepare_github_retrigger_tasks(
             task_event,
             route_id=parent_route_id,
         )
-        saved_review = review_store.session(conn, task_id=parent_task_id)
+        saved_review = native_rounds.session(conn, task_id=parent_task_id)
         if saved_review:
             route_result = saved_review["request"]["route"]
         try:
@@ -3597,17 +3611,61 @@ def _prepare_github_retrigger_tasks(
     return prepared_workstreams
 
 
+def _resume_waiting_vote(conn, repo, event, run_now):
+    if (event.get('actor_login') not in repo.get('trusted_actors', []) or not event.get('mentions_dd')
+            or not discover.bot_requests(event.get('body'), repo['github_account'])
+            or event.get('authorization_status') not in {'accepted_context', 'authorized_trigger'}
+            or event.get('intent') not in {None, 'unclear', 'analysis', 'discussion', 'requirement_analysis'}):
+        return False
+    row = conn.execute("""SELECT vs.round_id,vs.task_id FROM vote_sessions vs JOIN tasks t ON t.task_id=vs.task_id
+        WHERE vs.workstream_id=? AND vs.status='waiting_for_user' AND t.lifecycle='waiting_for_user'
+        AND vs.source_type=? AND vs.number=?""", (event['workstream_id'], event['source_type'], event['number'])).fetchone()
+    if not row:
+        return False
+    if _event_has_terminal_trigger(conn, event['event_fingerprint']):
+        return True  # Already-used replies cannot answer another question on polling.
+    event_time = event.get('event_at')
+    if not event_time:
+        observed = conn.execute('SELECT event_at FROM github_events WHERE event_id=?',
+                                (_event_id(event['event_fingerprint']),)).fetchone()
+        event_time = observed[0] if observed else None
+    question = conn.execute("SELECT created_at FROM worker_results WHERE task_id=? AND output_type='waiting_for_user' ORDER BY created_at DESC LIMIT 1", (row[1],)).fetchone()
+    try:
+        # GitHub comment times have second precision; avoid a false rejection due to local microseconds.
+        if not event_time or not question or _parse_time(event_time) < _parse_time(question[0]).replace(microsecond=0):
+            return True
+    except (ValueError, TypeError):
+        return True
+    entry = vote_store.session(conn, round_id=row[0])
+    if entry['manifest'].get('frozen'):
+        return False
+    request = entry['request']
+    if any(item.get('event_fingerprint') == event['event_fingerprint'] for item in request['event'].get('clarifications', [])):
+        return True
+    request['event'].setdefault('clarifications', []).append(event)
+    conn.execute("UPDATE tasks SET lifecycle='completed',updated_at=? WHERE task_id=?", (run_now, row[1]))
+    _close_task_binding_if_terminal(conn, row[1], run_now)
+    conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",
+                 (run_now, event['workstream_id']))
+    vote_store.update(conn, row[0], task_id=None, status='queued', manifest_json=None,
+                      request_json=json.dumps(request, ensure_ascii=False))
+    conn.execute("INSERT OR IGNORE INTO task_events(task_id,event_id,relationship,created_at) VALUES (?,?,'consumed',?)",
+                 (row[1], _event_id(event['event_fingerprint']), run_now))
+    return True
+
+
 def _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
-                            dry_run, dispatch_queue, dispatch_budget):
-    queued = conn.execute("""SELECT round_id FROM review_sessions rs
+                            dry_run, dispatch_queue, dispatch_budget, round_store=review_store):
+    table = "vote_sessions" if round_store is vote_store else "review_sessions"
+    queued = conn.execute(f"""SELECT round_id FROM {table} rs
         WHERE rs.repo=? AND rs.task_id IS NULL AND rs.status='queued'
         ORDER BY rs.created_at, rs.round_id""", (repo["full_name"],)).fetchall()
     for (round_id,) in queued:
-        entry = review_store.session(conn, round_id=round_id)
-        if conn.execute("""SELECT 1 FROM review_sessions WHERE workstream_id=?
+        entry = round_store.session(conn, round_id=round_id)
+        if conn.execute(f"""SELECT 1 FROM {table} WHERE workstream_id=?
             AND status='attention'""", (entry["workstream_id"],)).fetchone():
             continue
-        if conn.execute("""SELECT 1 FROM review_sessions old
+        if conn.execute(f"""SELECT 1 FROM {table} old
             JOIN execution_subjects owner ON owner.subject_type='task' AND owner.subject_id=old.task_id
             WHERE old.workstream_id=? AND owner.binding_status='attention'""",
             (entry["workstream_id"],)).fetchone():
@@ -3616,12 +3674,16 @@ def _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
             AND lifecycle IN ('detected','authorized','classified','queued','running','waiting_for_user')""",
             (entry["workstream_id"],)).fetchone():
             continue
+        if any(conn.execute(f"SELECT 1 FROM {other} WHERE workstream_id=? AND status='attention'",
+                            (entry['workstream_id'],)).fetchone()
+               for other in ('review_sessions', 'vote_sessions')):
+            continue
         event = entry["request"]["event"]
         if _record_current_state_closed_source_if_needed(
             conn, repo_id, _source_id(event["source_key"]),
             _event_id(event["event_fingerprint"]), event, run_now
         ):
-            review_store.update(conn, round_id, status="canceled", error="source_closed")
+            round_store.update(conn, round_id, status="canceled", error="source_closed")
             continue
         task_info = _create_task_attempt_and_prompt(
             conn, data_dir, db_path, repo, repo_id, event, entry["request"]["route"],
@@ -3669,7 +3731,7 @@ def _create_task_attempt_and_prompt(
     task_lifecycle = "failed" if blocked else "queued"
     attempt_status = "failed" if blocked else "prepared"
     related_events = list(related_events or [event])
-    if route_result.get("native_review_workers"):
+    if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         related_events = [event]
     workstream_id = stream["workstream_id"]
     source_id = _source_id(event["source_key"])
@@ -3806,9 +3868,11 @@ def _create_task_attempt_and_prompt(
     if not _execution_task_active(conn, task_id, run_now):
         conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         return None
-    if route_result.get("native_review_workers"):
-        review = review_store.enqueue(conn, repo, event, route_result, route_result["native_review_workers"])
-        review_store.update(conn, review["round_id"], task_id=task_id, status="queued", error=None)
+    if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
+        round_store = vote_store if route_result.get("native_vote_workers") else review_store
+        workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
+        entry = round_store.enqueue(conn, repo, event, route_result, workers)
+        round_store.update(conn, entry["round_id"], task_id=task_id, status="queued", error=None)
     if blocked and event.get("task_kind", "human_request") == "human_request":
         conn.execute(
             "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
@@ -4789,7 +4853,7 @@ def _dispatch_queued_locked(
             "dry_run": dry_run,
         }
         with closing(sqlite3.connect(db_path)) as conn:
-            native_review = review_store.session(conn, task_id=task_info["task_id"])
+            native_review = native_rounds.session(conn, task_id=task_info["task_id"])
         if native_review:
             configured = native_review["request"]["workers"]
             timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
@@ -4798,7 +4862,7 @@ def _dispatch_queued_locked(
             worker_kwargs.update(
                 worktree_path=str(Path(db_path).resolve().parent),
                 worker_agent_config={"agent": "command", "command_argv": [
-                    sys.executable, "-m", "robert_agent.review_coordinator", "--db", str(Path(db_path).resolve()),
+                    sys.executable, "-m", ("robert_agent.vote_coordinator" if "source_type" in native_review else "robert_agent.review_coordinator"), "--db", str(Path(db_path).resolve()),
                     "--task-id", task_info["task_id"], "--attempt-id", task_info["attempt_id"],
                 ], "timeout_seconds": timeout, "environment_allowlist": environment_names},
             )
@@ -5039,6 +5103,16 @@ def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
             review_base_sha=review["manifest"]["base_sha"], review_base_ref=review["manifest"]["base_ref"],
             review_report_path=review["report_path"], review_report_sha256=review["report_sha256"],
         )
+    vote = vote_store.session(conn, task_id=task_id)
+    if vote and vote['manifest'] and vote['report_path']:
+        from robert_agent import vote_files
+        manifest_path = str(Path(vote['manifest']['context_dir']) / 'manifest.json')
+        target_kind = 'pull' if vote['source_type'] == 'pull_request' else 'issues'
+        action_scope.update(vote_round_id=vote['round_id'], vote_snapshot_id=vote['manifest']['snapshot_id'],
+            vote_report_path=vote['report_path'], vote_report_sha256=vote['report_sha256'],
+            vote_manifest_path=manifest_path, vote_manifest_sha256=vote_files.digest(manifest_path),
+            vote_target_url=f"https://github.com/{vote['repo']}/{target_kind}/{vote['number']}",
+            vote_publisher=vote['request']['repo']['github_account'])
     episode_id = task_metadata.get("remediation_episode_id")
     if row[5] in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
         episode = remediation.load_episode(conn, episode_id)
@@ -5168,11 +5242,9 @@ def _pending_events_for_task(conn, task_id, consumed_fingerprints):
 def _finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
     if not _execution_task_active(conn, task_id, run_now):
         return False
-    if review_store.session(conn, task_id=task_id):
-        from robert_agent.review_coordinator import terminate_children
-        if terminate_children(conn, task_id) == "attention":
-            review = review_store.session(conn, task_id=task_id)
-            review_store.update(conn, review["round_id"], status="attention", error="review child identity unknown")
+    round_store, entry = native_rounds.owner(conn, task_id)
+    if entry and native_rounds.terminate_children(conn, task_id) == "attention":
+        round_store.update(conn, entry["round_id"], status="attention", error="model child identity unknown")
     conn.execute(
         "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
         (run_now, task_id),
@@ -5537,6 +5609,9 @@ def _result_actions_all_published(conn, result_id):
     ).fetchone()
     metadata = _json_object(result_row[0] if result_row else None)
     action_scope = (metadata.get("audit") or {}).get("action_scope")
+    if isinstance(action_scope, dict) and action_scope.get("vote_round_id"):
+        vote = vote_store.session(conn, round_id=action_scope["vote_round_id"])
+        return bool(vote and vote["status"] == "superseded")
     if isinstance(action_scope, dict) and action_scope.get("review_round_id"):
         review = review_store.session(conn, round_id=action_scope["review_round_id"])
         return bool(review and review["status"] == "superseded")
@@ -6643,6 +6718,17 @@ def _run_repo_pipeline(
 
         for event in decisions:
             source_id, event_id = _insert_source_and_event(conn, repo_id, event, run_now)
+            if (event.get('authorization_status') in {'authorized_trigger', 'accepted_context'}
+                    and event.get('actor_login') in repo.get('trusted_actors', [])
+                    and event.get('intent') == 'vote'):
+                if conn.execute('SELECT 1 FROM task_events WHERE event_id=? LIMIT 1', (event_id,)).fetchone():
+                    continue  # Never reinterpret an event that already drove or informed a task.
+                vote_route = _effective_route(config_result, repo, event)
+                if vote_route.get('native_vote_workers'):
+                    vote_store.enqueue(conn, repo, event, vote_route, vote_route['native_vote_workers'])
+                    continue
+            if _resume_waiting_vote(conn, repo, event, run_now):
+                continue
             # New review requests are independent durable rounds. They never
             # become pending context that a still-running reviewer can consume.
             if (event.get("source_type") == "pull_request"
@@ -6748,6 +6834,10 @@ def _run_repo_pipeline(
                     )
                     if task_info is None:
                         continue
+                    waiting_vote = vote_store.session(conn, task_id=waiting_task['task_id'])
+                    if waiting_vote and waiting_vote['status'] == 'waiting_for_user':
+                        vote_store.update(conn, waiting_vote['round_id'], status='superseded',
+                            error=f"waiting vote replaced by independent {route_result['route_id']} request")
                     _close_task_binding_if_terminal(conn,waiting_task['task_id'],run_now)
                     _queue_dispatch(
                         dispatch_queue,
@@ -6931,6 +7021,8 @@ def _run_repo_pipeline(
 
         _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
                                 dry_run, dispatch_queue, dispatch_budget)
+        _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
+                                dry_run, dispatch_queue, dispatch_budget, round_store=vote_store)
         execution_replay.acknowledge_effects(conn,repo_id,run_now)
 
         if invalidation_attempt_ids:

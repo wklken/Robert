@@ -552,6 +552,8 @@ def init_database(db_path, schema_path=None):
         _migrate_pr_remediation(conn)
         from robert_agent import review_store
         review_store.initialize(conn)
+        from robert_agent import vote_store
+        vote_store.initialize(conn)
         tables = sorted(
             row[0]
             for row in conn.execute(

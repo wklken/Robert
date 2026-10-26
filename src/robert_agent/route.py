@@ -65,6 +65,12 @@ def verification_policy_for(route_id):
 
 
 ROUTES = {
+    "vote": {
+        "route_id": "vote", "expected_output": "multi_agent_vote_report",
+        "allowed_github_actions": ["comment"], "needs_worktree": False,
+        "workspace_mode": "none", "confidence": "high",
+        "verification_policy": {"mode": "optional", "required_statuses": ["passed"], "allow_skipped": True},
+    },
     "local-result": {
         "route_id": "local-result",
         "expected_output": "local_result",
@@ -192,6 +198,8 @@ def route_task(task):
         )
         return result
     intent = task.get("intent")
+    if intent == "vote" and task.get("origin_type") != "web":
+        return dict(ROUTES["vote"])
     if task.get("origin_type") == "web" and intent in {
         "analysis",
         "discussion",

@@ -2,6 +2,7 @@
 
 Classification turns authorized GitHub events into one of the fixed output types:
 
+- `multi_agent_vote_report` (request intent and route: `vote`)
 - `comment_analysis`
 - `new_pr`
 - `update_existing_pr`
@@ -17,3 +18,13 @@ field to create the follow-up task; free-form handoff text is not a routing
 signal.
 
 Routes are data, not dispatcher code. Add or reorder route entries in `routes.yml`; keep the agent orchestration independent from route-specific keywords.
+
+The strong vote heuristic requires a trusted request addressed to the configured
+bot account with an explicit voting action (投票, 表决, vote), not a reference to a
+voting implementation inside a fix/explanation request. Generic comparisons
+retain their existing analysis/fix intent; the classifier may recommend `vote`
+when the original request actually asks for independent voting.
+Ignore quoted/background/negated voting text and requests to implement a voting
+feature. A classification result may recommend `vote`; follow-up creation still
+checks the original request, trusted actor, enabled route, workers and scope.
+Do not initiate voting automatically from review requests or assignments.

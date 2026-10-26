@@ -37,6 +37,9 @@ routes:
 
 ## 并发额度
 
+`model_max_concurrency` 是共享模型额度的新名称，`review_max_concurrency` 保留为兼容别名；同时配置时必须相同。
+开启 [多 Agent 投票](multi-agent-vote.md) 后，两种内建流程共享该额度，避免各自启动一个独立池。
+
 `max_concurrency` 继续限制任务数，一轮多模型 review 从准备到汇总仍算一个任务。
 顶层 `review_max_concurrency` 单独限制实际运行的 review 模型子进程，默认 `4`，必须是正整数，
 不支持 repository 或 route 覆盖。同一 Robert 数据库/数据目录下的所有仓库和轮次共享这个上限；

@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from robert_agent.common import emit
-from robert_agent import redaction, review_publish
+from robert_agent import redaction, review_publish, vote_publish
 
 
 PUBLIC_TEXT_FIELDS = {
@@ -28,6 +28,7 @@ EXPECTED_ACTIONS_FOR_OUTPUT = {
     "review_comment": {"comment"},
     "pr_review_comment": {"comment"},
     "multi_agent_review_report": {"submit_pr_review"},
+    "multi_agent_vote_report": {"comment"},
     "waiting_for_user": {"comment"},
 }
 VALID_OPERATOR_QUESTION_KINDS = {
@@ -42,6 +43,7 @@ IMPLEMENTABLE_VERDICTS = {"correct", "partially_correct"}
 REMEDIATION_TASK_KINDS = {"ci_remediation", "merge_conflict_remediation"}
 VALID_VERIFICATION_STATUSES = {"passed", "failed", "skipped"}
 CLASSIFICATION_RECOMMENDED_ROUTES = {
+    "vote",
     "comment-analysis",
     "new-pr",
     "update-existing-pr",
@@ -230,6 +232,11 @@ def action_scope_violation(actions, action_scope):
                 return str(exc)
             continue
         if action_type == "comment":
+            if vote_publish.is_vote(action):
+                try:
+                    vote_publish.validate_action(action, action_scope)
+                except (ValueError, OSError, TypeError, KeyError) as exc:
+                    return str(exc)
             target = _github_source_target(_string_value(action, "target_url", "url"))
             if target is None:
                 return "comment target is not a GitHub issue or pull request"
@@ -283,6 +290,8 @@ def action_scope_violation(actions, action_scope):
 
 
 def _audit_expected_actions(output_type, actual_types):
+    if output_type == "multi_agent_vote_report" and actual_types != ["comment"]:
+        return "multi_agent_vote_report requires exactly one comment"
     expected_types = EXPECTED_ACTIONS_FOR_OUTPUT.get(output_type, set())
     if output_type == "multi_agent_review_report" and actual_types != ["submit_pr_review"]:
         return "multi_agent_review_report requires exactly one submit_pr_review action"
@@ -617,6 +626,9 @@ def audit_result(
             "status": "policy_violation",
             "violations": ["web_origin_github_action"],
         }
+    if result.get('output_type') == 'multi_agent_vote_report' and (
+            len(actions) != 1 or not vote_publish.is_vote(actions[0]) or not isinstance(action_scope, dict)):
+        return {'ok': False, 'status': 'policy_violation', 'safe_error': 'vote report requires its registered round and scope'}
     scope_violation = action_scope_violation(actions, action_scope)
     if scope_violation:
         return {

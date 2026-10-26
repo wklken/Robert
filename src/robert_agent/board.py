@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import urlsplit
 
-from robert_agent import work_items, work_item_control, execution_store, review_store
+from robert_agent import work_items, work_item_control, execution_store, review_store, vote_store
 from robert_agent.board_execution import execution_summary, attempt_history, publication_history, safe_text
 
 
@@ -270,6 +270,7 @@ def _project_item(conn, row):
         "task_lifecycle": task["lifecycle"] if task else None,
         "execution": execution,
         "review": review_store.board_status(conn, task["task_id"]) if task else None,
+        "vote": vote_store.board_status(conn, task["task_id"]) if task else None,
         "publication": {"failures": failures, "pending": len(facts["actions"]), "retry_pending": facts["publication_retry_pending"], "blocked_reason": "Publication reconciliation is blocked by the audit or ownership boundary. Cancel this task and resolve the reported cause before creating new work." if facts["publication_retry_blocked"] else None},
         "action_blocked_reason": "publication_in_progress" if publication_in_progress and not failures else None,
         "branch": attempt["branch_name"] if attempt else None,
@@ -509,6 +510,7 @@ def get_work_item_detail(db_path, work_item_id):
                         "updated_at": task["updated_at"],
                         "attempts": attempts,
                         "review": review_store.board_status(conn, task["task_id"]),
+                        "vote": vote_store.board_status(conn, task["task_id"]),
                         "publication_actions": publication_history(conn, task["task_id"]),
                     }
                 )

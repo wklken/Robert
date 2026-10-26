@@ -1,3 +1,4 @@
+from robert_agent import model_execution
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import json
@@ -392,7 +393,7 @@ print(int(acquired))
                 super().submit(*args, **kwargs)
                 raise review_coordinator.ReviewStopped('termination during submission')
 
-        with patch.object(review_coordinator, 'ThreadPoolExecutor', InterruptedSubmission):
+        with patch.object(model_execution, 'ThreadPoolExecutor', InterruptedSubmission):
             with self.assertRaisesRegex(review_coordinator.ReviewStopped, 'termination during submission'):
                 driver.parallel([1, 2], lambda item: observed.append(driver.stopping.wait(.5)))
         self.assertEqual(observed, [True])

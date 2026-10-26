@@ -8,6 +8,7 @@ ALLOWED_ROUTE_OVERRIDE_FIELDS = {
     "required_skills",
     "recommended_skills",
     "multi_agent_review",
+    "multi_agent_vote",
 }
 
 
@@ -64,6 +65,8 @@ def resolve_route_config(config, repo, route_policy):
     result.setdefault("recommended_skills", [])
     if "multi_agent_review" in result:
         _validate_multi_review(result, workers)
+    if "multi_agent_vote" in result:
+        _validate_multi_vote(result, workers)
     return result
 
 
@@ -104,3 +107,18 @@ def review_workers_for_author(route, pr_author):
     ):
         return list(settings["workers"])
     return [route["worker"]]
+
+
+def _validate_multi_vote(route, workers):
+    settings = route['multi_agent_vote']
+    if route['id'] != 'vote' or not isinstance(settings, dict) or set(settings) - {'enabled', 'workers'}:
+        raise ValueError('multi_agent_vote is only supported by vote and requires enabled/workers')
+    if type(settings.get('enabled', False)) is not bool:
+        raise ValueError('multi_agent_vote.enabled must be a boolean')
+    names = settings.get('workers', [])
+    known = set(workers) if isinstance(workers, dict) else {w['name'] for w in workers}
+    if (not isinstance(names, list) or len(names) < 2
+            or any(not isinstance(n, str) or n not in known for n in names)
+            or len(set(names)) != len(names) or names[0] != route['worker']):
+        raise ValueError('multi_agent_vote requires at least two distinct known workers with the main worker first')
+    route['multi_agent_vote'] = {'enabled': settings.get('enabled', False), 'workers': list(names)}

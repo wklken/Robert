@@ -180,6 +180,7 @@ robert config validate --config ~/.config/robert/config.yml --output json
 | Setting | Default | Scope |
 | --- | --- | --- |
 | `max_concurrency` | 3 | Global active-worker limit. |
+| `model_max_concurrency` | 4 | Global model-process limit shared by native review and vote. `review_max_concurrency` remains a compatible alias; simultaneous values must match. |
 | `stale_after_minutes` | 20 | Worker heartbeat staleness threshold. |
 | `hard_timeout_minutes` | 45 | Supervision wall-time limit, independent of worker adapter timeout. |
 | `worker_startup_grace_seconds` | 300 | Grace period for a starting worker. |
@@ -522,3 +523,11 @@ This runtime was retired. Existing deployments must follow the
 side-by-side tooling, drain/stop, backup, rehearsal, offline apply and postchecks.
 The former DBOS design is historical; its SQL migration checksums and records
 remain readable. Never restore stale business state after new external effects.
+
+### Multi-Agent voting
+
+The opt-in `vote` route accepts explicit trusted mentions on Issues and PRs,
+prepares one fixed question/options/context, collects independent equal ballots,
+and posts a source-preserving report to the triggering conversation. See
+[Multi-Agent voting](multi-agent-vote.md) for configuration, abstentions, round
+isolation, recovery and publication rules.

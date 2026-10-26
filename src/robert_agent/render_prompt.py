@@ -455,6 +455,7 @@ task_id: {task["task_id"]}
 attempt_id: {task["attempt_id"]}
 workstream_id: {task["workstream_id"]}
 task_kind: {task_kind}
+routing_block_reason: {route_result.get("routing_block_reason", "")}
 expected_output: {route_result["expected_output"]}
 allowed_github_actions: {json.dumps(route_result["allowed_github_actions"], ensure_ascii=False)}
 required_skills: {json.dumps(required_skills, ensure_ascii=False)}
@@ -589,7 +590,7 @@ JSON
 
 For `classification_result`, set `recommended_route` to one of
 `new-pr`, `update-existing-pr`, `review-comment`, `review-pr`,
-`comment-analysis`, or `waiting-for-user` when the work should continue through
+`comment-analysis`, `vote`, or `waiting-for-user` when the work should continue through
 that route. Leave it
 empty only when no follow-up task should be created.
 For `new-pr`, also set `branch_slug` to a meaningful lowercase English
