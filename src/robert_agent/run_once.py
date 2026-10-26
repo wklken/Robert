@@ -36,7 +36,7 @@ from robert_agent import execution_store
 from robert_agent import worker_identity
 from robert_agent import workflow_events
 from robert_agent.publication_lock import task_publication_lock
-from robert_agent.common import emit, run_command
+from robert_agent.common import ControlDeadlineExceeded, emit, run_command
 from robert_agent import project_memory, runtime_knowledge, storage, usage, wakeup, work_items
 from robert_agent.worker import heartbeat as command_heartbeat, snapshot as worker_snapshot
 
@@ -634,6 +634,11 @@ def _safe_publish_error(exc):
 
 
 def _safe_route_error(exc):
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return {
+            'ok': False, 'status': 'failed_route', 'error_type': type(exc).__name__,
+            'safe_error': f'Worktree preparation command timed out after {exc.timeout} seconds.',
+        }
     if isinstance(exc, subprocess.CalledProcessError):
         cmd = exc.cmd if isinstance(exc.cmd, (list, tuple)) else [exc.cmd]
         command = [str(part) for part in cmd]
@@ -889,6 +894,14 @@ def _supervision_observation_current(conn, attempt_id, task_id, snapshot, receiv
                 and _execution_task_active(conn, task_id, run_now))
 
 
+def _defer_attempt_inspection(conn, attempt_id, task_id, snapshot, received_result, run_now, exc):
+    if _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now):
+        deferred = {'status': 'inspection_timeout', 'retryable': True, 'timeout_seconds': exc.timeout}
+        if _json_object(snapshot[2]).get('supervise') != deferred:
+            conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.supervise',json(?)) WHERE attempt_id=?",
+                         (json.dumps(deferred), attempt_id))
+
+
 def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=None, db_path=None, repo=None):
     rows = conn.execute(
         f"""
@@ -1018,13 +1031,14 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 (attempt_id,),
             ).fetchone()
             conn.commit()
-            recovery = _inspect_attempt_recovery_with_metadata(
-                conn,
-                attempt_id,
-                task_id,
-                metadata,
-                worktree_row[0] if worktree_row else None,
-            )
+            try:
+                recovery = _inspect_attempt_recovery_with_metadata(
+                    conn, attempt_id, task_id, metadata, worktree_row[0] if worktree_row else None)
+            except ControlDeadlineExceeded:
+                raise
+            except subprocess.TimeoutExpired as exc:
+                _defer_attempt_inspection(conn, attempt_id, task_id, snapshot, received_result, run_now, exc)
+                continue
             if not _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now):
                 continue
             if (
@@ -1360,13 +1374,13 @@ def _recover_failed_timeout_attempts(
         if process_status["status"] != "dead":
             continue
         conn.commit()
-        recovery = _inspect_attempt_recovery_with_metadata(
-            conn,
-            attempt_id,
-            task_id,
-            metadata,
-            worktree_path,
-        )
+        try:
+            recovery = _inspect_attempt_recovery_with_metadata(conn, attempt_id, task_id, metadata, worktree_path)
+        except ControlDeadlineExceeded:
+            raise
+        except subprocess.TimeoutExpired as exc:
+            _defer_attempt_inspection(conn, attempt_id, task_id, snapshot, None, run_now, exc)
+            continue
         if not _supervision_observation_current(conn, attempt_id, task_id, snapshot, None, run_now):
             continue
         if recovery["status"] not in {"recoverable_progress", "transport_interrupted"}:
@@ -3627,7 +3641,9 @@ def _prepare_github_retrigger_tasks(
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
             worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except ControlDeadlineExceeded:
+            raise
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
             continue
         stream = {
             "workstream_id": workstream_id,
@@ -5624,6 +5640,8 @@ def _create_child_task_for_recommended_route(
     conn.commit()  # Persist the handoff before external Git; do not pin the writer.
     try:
         worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
+    except ControlDeadlineExceeded:
+        raise
     except (OSError, subprocess.SubprocessError) as exc:
         failure = retry_policy.failure_state(handoff, getattr(exc, 'stderr', None) or str(exc), run_now)
         conn.execute("""UPDATE tasks SET metadata_json=json_set(metadata_json,
@@ -5971,20 +5989,25 @@ def _recover_orphaned_classification_results(
             "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
             (payload["task_id"],),
         ).fetchone()[0]
-        _finalize_accepted_result(
-            conn,
-            data_dir,
-            db_path,
-            repo,
-            repo_id,
-            payload,
-            workstream_id,
-            run_now,
-            dry_run,
-            dispatch_queue,
-            dispatch_budget,
-            config_result=config_result,
-        )
+        try:
+            _finalize_accepted_result(
+                conn,
+                data_dir,
+                db_path,
+                repo,
+                repo_id,
+                payload,
+                workstream_id,
+                run_now,
+                dry_run,
+                dispatch_queue,
+                dispatch_budget,
+                config_result=config_result,
+            )
+        except ControlDeadlineExceeded:
+            raise
+        except subprocess.TimeoutExpired:
+            continue
         after_children = conn.execute(
             "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
             (payload["task_id"],),
@@ -6064,12 +6087,14 @@ def _audit_completed_results(
         origin_type = origin_row[0] if origin_row else "github"
         _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
         conn.commit()
-        action_scope = _action_scope_for_result(
-            conn,
-            payload["task_id"],
-            payload["attempt_id"],
-            workstream_id,
-        )
+        try:
+            action_scope = _action_scope_for_result(conn, payload['task_id'], payload['attempt_id'], workstream_id)
+        except ControlDeadlineExceeded:
+            raise
+        except subprocess.TimeoutExpired as exc:
+            conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit_observation',json(?)) WHERE result_id=?",
+                         (json.dumps({'status': 'inspection_timeout', 'retryable': True, 'timeout_seconds': exc.timeout}), payload['result_id']))
+            continue
         remediation_context = None
         remediation_attestation = None
         if task_kind in {"ci_remediation", "merge_conflict_remediation"}:
@@ -6159,20 +6184,25 @@ def _audit_completed_results(
         )
         _record_result_project_memory_status(conn, payload["result_id"], memory_status)
         if _result_actions_all_published(conn, payload["result_id"]):
-            _finalize_accepted_result(
-                conn,
-                data_dir,
-                db_path,
-                repo,
-                repo_id,
-                payload,
-                workstream_id,
-                run_now,
-                dry_run,
-                dispatch_queue,
-                dispatch_budget,
-                config_result=config_result,
-            )
+            try:
+                _finalize_accepted_result(
+                    conn,
+                    data_dir,
+                    db_path,
+                    repo,
+                    repo_id,
+                    payload,
+                    workstream_id,
+                    run_now,
+                    dry_run,
+                    dispatch_queue,
+                    dispatch_budget,
+                    config_result=config_result,
+                )
+            except ControlDeadlineExceeded:
+                raise
+            except subprocess.TimeoutExpired:
+                continue
         else:
             _mark_task_waiting_for_publish(conn, payload["task_id"], workstream_id, run_now)
         audited += 1
@@ -6235,20 +6265,25 @@ def _finalize_published_results(
             run_id=run_id,
             now=run_now,
         )
-        _finalize_accepted_result(
-            conn,
-            data_dir,
-            db_path,
-            repo,
-            repo_id,
-            payload,
-            workstream_id,
-            run_now,
-            dry_run,
-            dispatch_queue,
-            dispatch_budget,
-            config_result=config_result,
-        )
+        try:
+            _finalize_accepted_result(
+                conn,
+                data_dir,
+                db_path,
+                repo,
+                repo_id,
+                payload,
+                workstream_id,
+                run_now,
+                dry_run,
+                dispatch_queue,
+                dispatch_budget,
+                config_result=config_result,
+            )
+        except ControlDeadlineExceeded:
+            raise
+        except subprocess.TimeoutExpired:
+            continue
         finalized += 1
     return finalized
 
@@ -6684,6 +6719,8 @@ def _run_repo_pipeline(
                 if discovery_runner is not None:
                     discovery_kwargs["runner"] = discovery_runner
                 raw_events = discover.collect_live_events(repo, **discovery_kwargs)
+            except ControlDeadlineExceeded:
+                raise
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as exc:
                 error = _safe_discovery_error(exc)
                 summary["status"] = "failed"
@@ -6916,7 +6953,9 @@ def _run_repo_pipeline(
                     try:
                         conn.commit()  # External Git I/O must not retain the SQLite writer lock.
                         worktree_result = _prepare_worktree(repo, event, route_result, dry_run)
-                    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                    except ControlDeadlineExceeded:
+                        raise
+                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
                         route_failures.append({
                             **_safe_route_error(exc),
                             "event_fingerprint": event["event_fingerprint"],
@@ -6982,7 +7021,9 @@ def _run_repo_pipeline(
                                 dry_run,
                                 config_result=config_result,
                             )
-                        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                        except ControlDeadlineExceeded:
+                            raise
+                        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
                             route_failures.append({
                                 **_safe_route_error(exc),
                                 "event_fingerprint": event["event_fingerprint"],
@@ -7026,7 +7067,9 @@ def _run_repo_pipeline(
                 try:
                     conn.commit()  # External Git I/O must not retain the SQLite writer lock.
                     worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
-                except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                except ControlDeadlineExceeded:
+                    raise
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
                     route_failures.append({
                         **_safe_route_error(exc),
                         "event_fingerprint": event["event_fingerprint"],
@@ -7096,7 +7139,9 @@ def _run_repo_pipeline(
             try:
                 conn.commit()  # External Git I/O must not retain the SQLite writer lock.
                 worktree_result = _prepare_worktree(repo, event, route_result, dry_run)
-            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            except ControlDeadlineExceeded:
+                raise
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
                 route_failures.append({
                     **_safe_route_error(exc),
                     "event_fingerprint": event["event_fingerprint"],
@@ -7184,7 +7229,7 @@ def _run_repo_pipeline(
             },
         )
         return summary
-    except subprocess.TimeoutExpired:
+    except ControlDeadlineExceeded:
         summary.update(status='failed', failure_status='execution_deadline',
                        safe_error='Control command exceeded its execution deadline.')
         return summary

@@ -106,6 +106,16 @@ def _short_text(value, max_chars=2000):
     return f"{text[:max_chars]}...[truncated {len(text) - max_chars} chars]"
 
 
+def _process_group_stopped(pgid):
+    """A failed observation cannot prove that executor ownership is releasable."""
+    from robert_agent import run_once as executor
+
+    try:
+        return not executor._live_process_group(pgid)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
     executor_id = None
     group_stopped = False
@@ -133,12 +143,10 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
                     except ProcessLookupError:
                         pass
                     process.communicate(timeout=CONTROL_KILL_REAP_SECONDS)
-                from robert_agent import run_once as executor
-                group_stopped = not executor._live_process_group(process.pid)
+                group_stopped = _process_group_stopped(process.pid)
                 raise
             completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-            from robert_agent import run_once as executor
-            group_stopped = not executor._live_process_group(process.pid)
+            group_stopped = _process_group_stopped(process.pid)
         else:
             completed = runner(command, cwd=str(AGENTS_ROOT), text=True, capture_output=True,
                                timeout=timeout_seconds, check=False)
@@ -469,13 +477,12 @@ def _reconcile_abandoned_executors(context):
         rows = conn.execute("""SELECT json_extract(summary_json,'$.executor_id'),
             json_extract(summary_json,'$.executor_identity') FROM agent_runs
             WHERE status='running' AND json_type(summary_json,'$.executor_identity')='object'""").fetchall()
-    from robert_agent import run_once as executor
     for executor_id, raw in rows:
         identity = json.loads(raw)
         if (not executor_id or identity.get('process_group_id') != identity.get('pid')
                 or worker_identity.inspect_recorded_identity(identity) != 'dead'):
             continue
-        if not executor._live_process_group(identity['pid']):
+        if _process_group_stopped(identity['pid']):
             _finish_stopped_executor(context, executor_id)
 
 

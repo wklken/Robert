@@ -1,0 +1,116 @@
+{
+  "repository": "wklken/Robert",
+  "branch": "codex/fix-followup-lifecycle-timeouts",
+  "source_pr": 47,
+  "source_pr_base": "d5ce073e9f74e54cc2982270bc8e8be22dfa376f",
+  "source_pr_head": "e7da71767212d277872ed011b3594b48dc5de2f1",
+  "checked_base": "4dd582724f8505b4cd037c9de1963fbab2027de2",
+  "checked_diff_content_sha256": "ddfad1871a9e929e934685171e58b47813327a2479eb4efd4c4ce79920921f85",
+  "original_source_sha256": "54eb7f33d59a64f1cb6c35fda3b0ee216e94360b3d461ec8f5e43ccf894a10ee",
+  "public_source_sha256": "cd9fc01e496f8c137860c552c84f7bd6bae373526ed2fbb5a4619bc56e4a2cc0",
+  "source_note": "The report copy replaces only its unavailable temporary artifact directory with a placeholder; IDs, claims and suggested remedies are retained.",
+  "authority": "Local repair, verification, commit, push and one follow-up PR; no merge/release authority for the follow-up PR.",
+  "excluded": "New finding discovery and unrelated retention/lifecycle policy changes.",
+  "findings": [
+    {
+      "finding_id": "1",
+      "severity": "High",
+      "summary": "Ordinary command timeouts abort remaining repository work as execution_deadline.",
+      "verdict": "Partially correct",
+      "introduced": "Yes",
+      "scope": "in scope",
+      "disposition": "Follow-up",
+      "resolution": "fixed",
+      "status": "fixed",
+      "evidence_reference": "source-report.md#finding-1",
+      "verification": "Five baseline regressions failed: default cap, timeout taxonomy, supervision starvation, per-result scope deferral and per-event routing. Base-to-PR diff confirms introduction.",
+      "qualification": "Supervision happens before audit/publication/discovery, so its timeout can starve those stages. A routing timeout happens after those stages; it cannot retroactively skip them.",
+      "change_test_evidence": [
+        "src/robert_agent/common.py:ControlDeadlineExceeded,run_command",
+        "src/robert_agent/run_once.py:supervision,audit,classification finalization,event routing",
+        "tests/test_followup_timeout_isolation.py"
+      ],
+      "fix": "Distinguish shared deadline from a command cap. Defer incomplete per-attempt/result observations, isolate event errors, and retain the original uncapped behavior when neither a deadline nor an explicit timeout is supplied."
+    },
+    {
+      "finding_id": "2",
+      "severity": "Medium",
+      "summary": "Process-group observation errors can discard successful child output or terminate the daemon.",
+      "verdict": "Correct",
+      "introduced": "Yes",
+      "scope": "in scope",
+      "disposition": "Follow-up",
+      "resolution": "fixed",
+      "status": "fixed",
+      "evidence_reference": "source-report.md#finding-2",
+      "verification": "Real local child plus injected ps nonzero/OSError/TimeoutExpired reproduces payload loss and daemon/startup failure; base/PR call reachability comparison confirms introduction.",
+      "qualification": "ps failures are injected; BusyBox itself was not tested. Unknown process-group state must retain ownership.",
+      "change_test_evidence": [
+        "src/robert_agent/daemon.py:_process_group_stopped,run_child_json,_reconcile_abandoned_executors",
+        "tests/test_followup_daemon_intent.py:FollowupDaemonTests"
+      ],
+      "fix": "Use a daemon-local conservative observation adapter: failed group proof remains false, real child payload/timeout is preserved, and lease cleanup requires positive stop proof."
+    },
+    {
+      "finding_id": "3",
+      "severity": "Medium",
+      "summary": "Generic analysis keywords override bug indicators in mixed ordinary bug reports.",
+      "verdict": "Correct",
+      "introduced": "Yes",
+      "scope": "in scope",
+      "disposition": "Follow-up",
+      "resolution": "fixed",
+      "status": "fixed",
+      "evidence_reference": "source-report.md#finding-3",
+      "verification": "All three supplied cases change from base bug_fix/new-pr to PR analysis/comment-analysis through the real issue producer and router.",
+      "qualification": "Explicit prefix requests, vote/review precedence, English word boundaries and negative fix requests remain supported.",
+      "change_test_evidence": [
+        "src/robert_agent/discover.py:infer_intent",
+        "tests/test_followup_daemon_intent.py:FollowupIntentTests"
+      ],
+      "fix": "Restore bug-first ordering only in the generic fallback after explicit request handling."
+    }
+  ],
+  "verification": {
+    "status": "passed",
+    "python": "3.14.7",
+    "full_suite": {
+      "command": "python3 -B -m unittest discover -s tests",
+      "tests": 1145,
+      "seconds": 195.254,
+      "skipped": 1,
+      "exit_code": 0
+    },
+    "focused": [
+      "164 timeout/lifecycle/deadline/run_once tests passed",
+      "87 daemon/discovery/vote tests passed",
+      "4 additional independent review checks passed"
+    ],
+    "additional_checks": [
+      "python3 -m ruff check src tests",
+      "CI-scoped mypy: 9 source files",
+      "python3 -m compileall -q src",
+      "python3 -m build",
+      "git diff --check"
+    ],
+    "independent_review": {
+      "assignment_status": "COMPLETE",
+      "new_findings": [],
+      "checked_diff_content_sha256": "ddfad1871a9e929e934685171e58b47813327a2479eb4efd4c4ce79920921f85",
+      "scope": "4 production files and 2 new test modules; original three findings only"
+    },
+    "first_full_suite": {
+      "tests": 1145,
+      "seconds": 198.917,
+      "failures": 1,
+      "test": "test_live_dispatch_accepts_fast_successful_worker_subprocess_result",
+      "assertion": "notification_count 1 != 0"
+    },
+    "nonreproduced_failure_note": "One existing fast-worker test failed once during the first full suite. Twenty unchanged focused repetitions passed, and the final unchanged full-suite rerun passed. Notification type/root cause was not captured. No claim that this issue was fixed or proven pre-existing.",
+    "limits": [
+      "ps faults injected; BusyBox itself was not tested",
+      "No live model/GitHub workflow exercised",
+      "Source/test bytes matched the independently reviewed frozen snapshot throughout final checks"
+    ]
+  }
+}

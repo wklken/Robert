@@ -206,14 +206,14 @@ def infer_intent(title, body, event_type, github_account=None):
         return 'add_tests'
     if re.match(prefix + r'(?:implement\b|add\b|build\b|create\b|support\b|实现|支持|增加|添加)', instruction):
         return 'small_change'
+    if (not re.search(r"(?:不要|无需|别).{0,8}修复|\b(?:do not|don't)\s+fix\b", instruction)
+            and re.search(r'\b(?:bug|fix|fixes|fixed)\b|修复|报错|失败', text)):
+        return 'bug_fix'
     if any(
         word in text
         for word in ["分析", "analysis", "analyze", "explain", "discuss", "讨论", "方案"]
     ):
         return "analysis"
-    if (not re.search(r"(?:不要|无需|别).{0,8}修复|\b(?:do not|don't)\s+fix\b", instruction)
-            and re.search(r'\b(?:bug|fix|fixes|fixed)\b|修复|报错|失败', text)):
-        return 'bug_fix'
     return "unclear"
 
 
