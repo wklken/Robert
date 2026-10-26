@@ -74,8 +74,7 @@ class VoteCoordinatorTests(unittest.TestCase):
 
     def driver(self):
         task, attempt = self.fixture.current()
-        return vote_coordinator.Coordinator(self.db, task, attempt, source_reader=self.source, launcher=self.launcher,
-            sandbox=lambda manifest, output, *args, **kwargs: ([], {'ROBERT_VOTE_OUTPUT_DIR': str(output)}))
+        return vote_coordinator.Coordinator(self.db, task, attempt, source_reader=self.source, launcher=self.launcher)
 
     def start(self):
         self.fixture.cycle([self.event()])

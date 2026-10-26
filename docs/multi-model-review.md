@@ -92,9 +92,10 @@ Robert 冻结 manifest 和一次生成的 `reviewer-prompt.md`。所有 reviewer
 reviewer 自行阅读 manifest、完整 diff、摘要、源码索引及相关源码，写 `result.json.tmp`，
 关闭后原子重命名为 `result.json`。stdout/stderr 只用于诊断。结果必须包含轮次、快照、head SHA、
 稳定 finding id、位置、严重性、触发条件、影响、证据、建议、排除项、覆盖范围及合并建议。
-Robert 确认已登记的进程组结束，将指定交接文件复制到生产者沙箱不可写的 `sealed` 目录，
+Robert 确认已登记的进程组结束，将指定交接文件复制到独立的 `sealed` 目录，
 校验路径、schema、身份和共享输入完整性，再登记封存副本的 hash。汇总读取封存副本，
-生产者之后修改自己的原始输出不会改变已接纳的结果。封存完成但 SQLite 登记前崩溃也可恢复。
+生产者之后修改自己的原始输出不会改变已接纳的副本；恢复和使用时继续核对封存 hash。
+这是应用层的文件交接校验，不会阻止同账户进程直接访问封存目录。封存完成但 SQLite 登记前崩溃也可恢复。
 
 全部模型结果通过后，Robert 创建 `synthesis/inputs.json`，列出本轮选中的每个结果和派生报告的路径、hash。
 主 agent 以新会话读取这些文件并逐项复核，写 `evaluation.json`。
@@ -115,21 +116,20 @@ Robert 固定渲染中文 `merged-review.md`，经现有审计链路提交绑定
 - 发布按 repository、PR、round 去重；遇到模糊响应先分页查询 PR Reviews，核对 marker、commit 和完整正文，不能确认时不重复发布。
 - `robert status` 任务详情和 Board 执行历史显示轮次、SHA、各阶段/模型状态及失败原因。
 
-macOS 需要系统 `sandbox-exec`，Linux 需要可用的 `bubblewrap` (`bwrap`)。
-隔离策略允许读取共享源码/context、写当前输出目录，并屏蔽 Robert 数据目录中的其他模型结果。
-缺少隔离工具会失败并保留诊断，不能自动改用不受限模式。CLI 自身的模型认证/会话缓存仍使用当前运行账户；
-同一个 Unix 账户的管理员进程不是隔离对象。Linux 使用独立 PID namespace，bwrap 被终止时一并结束沙箱内的工具后代；
-macOS 进程监督只保证已登记的进程组，`setsid` 等创建的独立后代不属于该组。
-prompt 禁止后台/脱离进程，封存副本还会隔离潜在晚写。
+Robert 在 macOS 和 Linux 上直接启动配置的模型 CLI，无需 `sandbox-exec`、`bubblewrap` (`bwrap`)
+或 namespace 权限。此执行模式取代历史设计文档中的 OS 沙箱要求，没有额外 Python runtime 依赖。
+CLI 沿用运行 Robert 的账户已有的登录、配置和文件权限，可以按该账户权限访问宿主机文件及其他轮次产物；
+Robert 不再以 OS 策略限制这些读写。每轮 worktree、context、阶段输出和 `.tmp` 目录仍分别建立，
+prompt 约定模型只写本阶段输出，并禁止后台或脱离进程；输入完整性、结果身份和封存 hash 仍由 Robert 校验。
 
-`CLAUDE_CONFIG_DIR` 在两种平台上都会传入模型并允许写入，必须指向已存在的独立配置目录，
-不能与 Robert 数据、源码或上下文目录重叠。Linux 的 `claude`/`tclaude` reviewer **必须设置该变量**，
-并预先用同一目录完成 Claude 登录；缺少时明确失败。默认 `~/.claude.json` 的单文件 bind 无法支持
-相邻 lock/temp 文件和原子替换，所以 Robert 不自动迁移认证文件，也不将 HOME 整体设为可写。
-macOS 的默认 Claude 配置方式继续支持。
+两种平台继续监督已登记的模型进程组，保留并发额度、心跳、超时、重试、取消和恢复机制。
+`setsid` 等创建的独立后代不属于原进程组，不能依靠 namespace 保证其退出；无法确认归属或退出的 run
+仍进入需处理状态，并按上面的人工恢复流程处理。
 
-受控子进程已验证 macOS 文件隔离及 Linux bubblewrap 的文件隔离、配置原子更新和后代终止；
-真实模型认证/调用仍未实测。没有额外 Python runtime 依赖。
+`CODEX_HOME` 和 `CLAUDE_CONFIG_DIR` 在设置时传给模型 CLI；未设置时沿用 CLI 自身的默认配置方式。
+`CLAUDE_CONFIG_DIR` 在两种平台上都可选，Linux 的 `claude`/`tclaude` 不再要求额外配置目录。
+若显式设置，必须指向已存在的独立配置目录，不能与 Robert 数据、源码或上下文目录重叠；
+应使用同一目录完成 Claude 登录。Robert 不自动迁移认证文件，也不把模型或 GitHub 凭据写入配置或产物。
 
 产物保存在 `data_dir/artifacts/reviews`，代码放在 repository 配置的 worktrees 根目录下。
 历史 worktree 和产物保留用于排查与审计；当前不自动清理。模型二进制与认证应在运行 Robert 的账户下配置好。

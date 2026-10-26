@@ -80,7 +80,6 @@ def dispatch_worker(
     dry_run=True,
     startup_probe_seconds=0.2,
     trusted_environment=None,
-    command_prefix=(),
     log_dir=None,
 ):
     prompt_path = Path(prompt_path)
@@ -105,7 +104,7 @@ def dispatch_worker(
             "error_type": type(exc).__name__,
             "prompt_path": str(prompt_path),
         }
-    command = [*command_prefix, *launch.command]
+    command = list(launch.command)
     if dry_run:
         return {
             "ok": True,

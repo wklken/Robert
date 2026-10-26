@@ -85,7 +85,6 @@ sys.exit(int(sys.argv[3]))
                 ORDER BY a.attempt_no DESC LIMIT 1''', (number,)).fetchone()
         driver = review_coordinator.Coordinator(self.fixture.db, task, attempt,
             fetch_pr=lambda repo, n: self.fixture.pr(repo, n) | {'number': n}, launcher=self.launcher,
-            sandbox=lambda manifest, output, data, prompt, readable, **kwargs: ([], {'ROBERT_REVIEW_OUTPUT_DIR': str(output)}),
             poll_seconds=.02)
         driver.prepare()
         return driver
@@ -256,7 +255,7 @@ sys.exit(int(sys.argv[3]))
             first.review()
         self.assertEqual(self.pool()['in_use'], 2)
         restarted = review_coordinator.Coordinator(self.fixture.db, first.task_id, first.attempt_id,
-            fetch_pr=self.fixture.pr, launcher=self.launcher, sandbox=first.sandbox, poll_seconds=.02)
+            fetch_pr=self.fixture.pr, launcher=self.launcher, poll_seconds=.02)
         with ThreadPoolExecutor(1) as executor:
             future = executor.submit(restarted.run)
             try:
@@ -319,7 +318,7 @@ sys.exit(int(sys.argv[3]))
         self.assertEqual(successful['worker_id'], 'claude')
         self.exit_codes.clear()
         retried = review_coordinator.Coordinator(self.fixture.db, driver.task_id, driver.attempt_id,
-            fetch_pr=self.fixture.pr, launcher=self.launcher, sandbox=driver.sandbox, poll_seconds=.02)
+            fetch_pr=self.fixture.pr, launcher=self.launcher, poll_seconds=.02)
         retried.run()
         self.assertEqual(len(self.launched), 3)
         reviews = [call for call in self.fixture.calls if call[0] == 'review']
