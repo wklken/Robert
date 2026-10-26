@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-labelledby="title desc">
+  <title id="title">Robert</title>
+  <desc id="desc">A teal robot with a terminal face and a completion check.</desc>
+  <g transform="translate(11 -2)">
+    <path d="M88 33v22" fill="none" stroke="#0d9488" stroke-width="12" stroke-linecap="round"/>
+    <circle cx="88" cy="22" r="12" fill="#0d9488"/>
+    <rect x="2" y="94" width="20" height="47" rx="10" fill="#0d9488"/>
+    <rect x="154" y="94" width="20" height="47" rx="10" fill="#0d9488"/>
+    <rect x="15" y="51" width="146" height="125" rx="36" fill="#0d9488"/>
+    <rect x="31" y="69" width="114" height="83" rx="23" fill="#142b38"/>
+    <path d="m51 91 18 18-18 18m39 0h26" fill="none" stroke="#a7f3d0" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="145" cy="164" r="28" fill="#a7f3d0" stroke="#142b38" stroke-width="6"/>
+    <path d="m132 164 9 9 17-20" fill="none" stroke="#142b38" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
