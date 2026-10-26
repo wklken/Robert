@@ -27,6 +27,12 @@ to `~/.local/share/robert/`. Review the generated
 [configuration layout](reference.md#configuration), including the named worker's
 adapter, real repository branch, and trusted actors.
 
+If Robert runs as root in an already restricted container and uses `claude`
+or `tclaude`, apply the
+[root container worker configuration](guides.md#claude-workers-as-root-in-a-restricted-container)
+before starting. It uses an `env IS_SANDBOX=1` command prefix while preserving
+the selected adapter; setting this variable does not provide container isolation.
+
 Then follow the [Supervisor setup](guides.md#daemon-service) to create
 `~/.config/robert/supervisord.conf` for both daemon and web. After readiness
 checks:

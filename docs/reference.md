@@ -433,6 +433,14 @@ Worker subprocesses receive `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`,
 `SHELL`, and `USER`. Additional names must be listed in
 `environment_allowlist`; values stay in the host environment.
 
+Workers do not accept an `env` or `environment` mapping. For non-secret values,
+an explicit command prefix such as
+`command: ["env", "IS_SANDBOX=1", "tclaude"]` sets the variable for that worker
+without an allowlist entry. Use this particular prefix only for root execution
+in an already restricted container; see the
+[Claude container deployment guide](guides.md#claude-workers-as-root-in-a-restricted-container).
+Keep credentials out of commands and YAML.
+
 ```bash
 ROBERT_CONFIG=/etc/robert/config.yml \
 ROBERT_DATA_DIR=/var/lib/robert \
