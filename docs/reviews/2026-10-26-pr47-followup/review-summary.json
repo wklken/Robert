@@ -1,0 +1,37 @@
+{
+  "base": "4dd582724f8505b4cd037c9de1963fbab2027de2",
+  "checked_diff_content_sha256": "ddfad1871a9e929e934685171e58b47813327a2479eb4efd4c4ce79920921f85",
+  "paths_sha256": {
+    "src/robert_agent/common.py": "f24d0bcbe98150e505dd9df7bb9bf366e06e12046172cd4622e8e0f833e0a4d7",
+    "src/robert_agent/daemon.py": "183a892b182202046baa1b42bb77b937612edbfb6c8e4a98842c7cb556bd2ac3",
+    "src/robert_agent/discover.py": "a3964553adb06c2b7042fead75e01eaddd7b89c797a9027b108b14566c8fbf79",
+    "src/robert_agent/run_once.py": "59a390aec85c43606ee2d1cb47ec1aefafa89f1ff5bc4b52b8aadd9f45268580",
+    "tests/test_followup_daemon_intent.py": "08fb94a9cbc39a543f5b3b068c747de362a37e3a9292e51fe6608fdcde828d7c",
+    "tests/test_followup_timeout_isolation.py": "47bf5c8a22d994b9ef0f534cb88bbc9009bd2cc113a2b0df9896aa4453c2c2f1"
+  },
+  "status": "COMPLETE",
+  "new_findings": [],
+  "independent_checks": [
+    {
+      "check": "classification handoff with ordinary TimeoutExpired",
+      "runtime": "./.venv/bin/python3 -B; PYTHONPATH=snapshot/src; cwd=snapshot",
+      "result": "PASS: repository pipeline completes; one preparation; handoff retry count 1, retryable pending; no child created"
+    },
+    {
+      "check": "classification handoff with ControlDeadlineExceeded",
+      "result": "PASS: execution_deadline; one preparation; handoff remains exactly pending with no retry_count or child"
+    },
+    {
+      "check": "concurrent attempt metadata update during recovery inspection",
+      "result": "PASS: separate SQLite writer can update outside inspection transaction; subsequent timeout deferral revalidates and retains concurrent metadata"
+    },
+    {
+      "check": "failed-timeout recovery ordinary inspection timeout plus independent event",
+      "result": "PASS: original attempt remains failed with unchanged failed_timeout cause; retryable inspection_timeout diagnostic; independent event creates one prompt; cycle completes"
+    }
+  ],
+  "limitations": [
+    "Read-only bounded review; full-suite/build gates owned by parent.",
+    "Review inputs limited to the supplied three findings and their fixes."
+  ]
+}
