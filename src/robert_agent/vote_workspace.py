@@ -7,14 +7,17 @@ import subprocess
 from robert_agent import review_workspace, vote_files
 
 
-def api(repo, endpoint):
-    completed = subprocess.run(['gh', 'api', f'repos/{repo}/{endpoint}'],
-                               capture_output=True, text=True, check=True, timeout=60)
+def api(repo, endpoint, *, run_command=None):
+    completed = (run_command or subprocess.run)(['gh', 'api', f'repos/{repo}/{endpoint}'],
+                               capture_output=True, text=True, timeout=60)
+    if completed.returncode:
+        raise ValueError('vote source query failed')
     return json.loads(completed.stdout)
 
 
-def read_source(repo, number, source_type):
-    value = api(repo, f'{"pulls" if source_type == "pull_request" else "issues"}/{number}')
+def read_source(repo, number, source_type, *, run_command=None):
+    endpoint = f'{"pulls" if source_type == "pull_request" else "issues"}/{number}'
+    value = api(repo, endpoint, run_command=run_command) if run_command else api(repo, endpoint)
     if not isinstance(value, dict) or value.get('number') != number:
         raise ValueError('invalid GitHub vote source')
     discussion = []
@@ -22,8 +25,10 @@ def read_source(repo, number, source_type):
     if source_type == 'pull_request':
         endpoints.extend([('review_comment', f'pulls/{number}/comments'), ('review', f'pulls/{number}/reviews')])
     for kind, endpoint in endpoints:
-        result = subprocess.run(['gh', 'api', f'repos/{repo}/{endpoint}?per_page=100', '--paginate', '--slurp'],
-                                capture_output=True, text=True, check=True, timeout=60)
+        result = (run_command or subprocess.run)(['gh', 'api', f'repos/{repo}/{endpoint}?per_page=100', '--paginate', '--slurp'],
+                                capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            raise ValueError('vote discussion query failed')
         pages = json.loads(result.stdout)
         if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
             raise ValueError('invalid paginated vote discussion')
@@ -110,11 +115,12 @@ def prepare(repo, data_dir, round_id, event, workers, source):
 
 
 def add_issue_code(manifest, repo):
-    tree = Path(repo['worktree_root']) / 'vote' / manifest['round_id']
     git = review_workspace._git
     ref = f"refs/robert/vote-rounds/{manifest['round_id']}/head"
     git(repo['repo_root'], 'fetch', 'upstream', f'+HEAD:{ref}')
     sha = git(repo['repo_root'], 'rev-parse', ref).strip()
+    # Siblings preserve both prior revisions and the legacy vote/<round> layout.
+    tree = Path(repo['worktree_root']) / 'vote' / f"{manifest['round_id']}-{sha}"
     if not tree.exists():
         tree.parent.mkdir(parents=True, exist_ok=True)
         git(repo['repo_root'], 'worktree', 'add', '--detach', str(tree), sha)

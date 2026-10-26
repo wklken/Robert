@@ -3246,8 +3246,9 @@ def _effective_route(config_result, repo, event, route_id=None):
     if resolved["id"] == "vote":
         settings = resolved.get("multi_agent_vote") or {}
         if (not settings.get("enabled") or not event.get("mentions_dd")
+                or not discover.bot_requests(event.get("body"), repo["github_account"])
                 or event.get("actor_login") not in repo.get("trusted_actors", [])
-                or not (route_id == "vote" or discover.is_vote_request(event.get("body")))):
+                or not (route_id == "vote" or discover.is_vote_request(event.get("body"), repo["github_account"]))):
             # Preserve the request as a visible explanation, never substitute a single-model vote.
             resolved.update(id="waiting-for-user", expected_output="waiting_for_user",
                             allowed_github_actions=["comment"], required_skills=[], recommended_skills=[],
@@ -3612,8 +3613,9 @@ def _prepare_github_retrigger_tasks(
 
 def _resume_waiting_vote(conn, repo, event, run_now):
     if (event.get('actor_login') not in repo.get('trusted_actors', []) or not event.get('mentions_dd')
+            or not discover.bot_requests(event.get('body'), repo['github_account'])
             or event.get('authorization_status') not in {'accepted_context', 'authorized_trigger'}
-            or event.get('intent') == 'vote'):
+            or event.get('intent') not in {None, 'unclear', 'analysis', 'discussion', 'requirement_analysis'}):
         return False
     row = conn.execute("""SELECT vs.round_id,vs.task_id FROM vote_sessions vs JOIN tasks t ON t.task_id=vs.task_id
         WHERE vs.workstream_id=? AND vs.status='waiting_for_user' AND t.lifecycle='waiting_for_user'
@@ -6719,6 +6721,8 @@ def _run_repo_pipeline(
             if (event.get('authorization_status') in {'authorized_trigger', 'accepted_context'}
                     and event.get('actor_login') in repo.get('trusted_actors', [])
                     and event.get('intent') == 'vote'):
+                if conn.execute('SELECT 1 FROM task_events WHERE event_id=? LIMIT 1', (event_id,)).fetchone():
+                    continue  # Never reinterpret an event that already drove or informed a task.
                 vote_route = _effective_route(config_result, repo, event)
                 if vote_route.get('native_vote_workers'):
                     vote_store.enqueue(conn, repo, event, vote_route, vote_route['native_vote_workers'])
@@ -6830,6 +6834,10 @@ def _run_repo_pipeline(
                     )
                     if task_info is None:
                         continue
+                    waiting_vote = vote_store.session(conn, task_id=waiting_task['task_id'])
+                    if waiting_vote and waiting_vote['status'] == 'waiting_for_user':
+                        vote_store.update(conn, waiting_vote['round_id'], status='superseded',
+                            error=f"waiting vote replaced by independent {route_result['route_id']} request")
                     _close_task_binding_if_terminal(conn,waiting_task['task_id'],run_now)
                     _queue_dispatch(
                         dispatch_queue,

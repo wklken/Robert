@@ -264,13 +264,13 @@ class VoteCoordinatorTests(unittest.TestCase):
                 value = {'id': 77, 'body': body, 'user': {'login': 'robert-bot'}}
             elif 'comments?' in command[2]:
                 value = [[]]
-            elif command[2].endswith('/reviews/123'):
-                value = review
+            elif '/reviews?' in command[2]:
+                value = [[review]]
             else:
                 value = source
             return SimpleNamespace(returncode=0, stdout=json.dumps(value))
         self.assertTrue(vote_publish.publish(action, scope, transport)['ok'])
-        self.assertTrue(any(c[2].endswith('/pulls/42/reviews/123') for c in calls))
+        self.assertTrue(any('/pulls/42/reviews?' in c[2] for c in calls))
 
     def test_issue_can_request_source_before_ballot_freeze(self):
         self.need_code = True

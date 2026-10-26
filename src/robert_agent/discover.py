@@ -153,29 +153,44 @@ def infer_dd_workstream_from_pr_body(body, repo_full_name):
     return {}
 
 
-def is_vote_request(body):
-    """Recognize an addressed decision request, ignoring quoted/background text."""
+def bot_requests(body, github_account):
+    """Extract unquoted instruction segments addressed to this exact configured account."""
+    if not github_account:
+        return []
     text = re.sub(r"```[\s\S]*?```", "", body or "")
     text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith('>'))
-    addressed = re.search(r"@[^\s]+\s+([\s\S]+)", text)
-    if not addressed:
-        return False
-    request = addressed.group(1).strip()
-    if re.match(r"(?:please\s+)?review\b", request, re.I):
-        return False
-    if re.search(r"(?:不要|不需要|先不|别|无需).{0,8}(?:投票|表决|对比|比较)|(?:do not|don't|no need to)\s+(?:vote|compare)", request, re.I):
-        return False
-    if re.match(r"(?:(?:如何|怎么|怎样|how\b).{0,30})?(?:请|帮我|please\s+)?(?:实现|开发|增加|支持|implement|build|add)\s*", request, re.I):
-        return False
-    return bool(re.search(r"投票|表决|\bvote\b|(?:多个模型|各模型|多\s*agent|multiple\s+(?:models|agents)).{0,80}(?:选择|比较|推荐|choose|compare|decide)|(?:对比|比较).{0,80}(?:方案|选项|推荐|选择)|\bcompare\b.{0,100}\b(?:and|versus|vs|recommend|choose)\b", request, re.I))
+    mention = rf"(?<![\w@])@{re.escape(github_account)}(?=$|[\s,:：，])"
+    return [re.split(r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]*", text[match.end():], maxsplit=1)[0].strip(' \t\n,:：，')
+            for match in re.finditer(mention, text, re.I)]
 
 
-def infer_intent(title, body, event_type):
-    if is_vote_request(body):
-        return "vote"
-    text = f"{title or ''}\n{body or ''}".lower()
+def is_vote_request(body, github_account=None):
+    """Recognize conservative voting commands, leaving ambiguous wording to classification."""
+    chinese_prefix = r"(?:请(?:你|帮我)?|帮我|麻烦(?:你)?)?"
+    chinese_actors = r"(?:(?:组织|让|调用)(?:多个模型|各模型|多个\s*Agent|多\s*Agent))?"
+    chinese_vote = r"(?:投票|表决)(?=$|[\s:：，,。]|选择|选|决定)"
+    english_prefix = r"(?:(?:please(?:\s+help)?|(?:can|could|would)\s+you(?:\s+please)?)\s+)?"
+    english_vote = r"vote(?=\s*(?:$|[:：]|for\b|on\b|between\b|[A-Z](?:\b|/)))"
+    commands = (
+        chinese_prefix + chinese_actors + r"(?:进行|发起|组织)?" + chinese_vote,
+        english_prefix + r"(?:(?:organize|run|start|hold)\s+(?:a\s+)?|(?:let|have)\s+(?:multiple\s+)?(?:models|agents)\s+)?" + english_vote,
+        chinese_prefix + r"(?:比较|对比)[^\n;。！？]{0,160}(?:并|然后|再)(?:请)?" + chinese_vote,
+        english_prefix + r"compare\b[^\n;.!?]{0,160}\b(?:and|then)\s+" + english_vote,
+    )
+    for request in bot_requests(body, github_account):
+        if re.search(r"(?:不要|不需要|先不|别|无需).{0,8}(?:投票|表决)|(?:do not|don't|no need to)\s+vote", request, re.I):
+            continue
+        if any(re.match(pattern, request, re.I) for pattern in commands):
+            return True
+    return False
+
+
+def infer_intent(title, body, event_type, github_account=None):
     if event_type == "review_request":
         return "review_request"
+    if is_vote_request(body, github_account):
+        return "vote"
+    text = f"{title or ''}\n{body or ''}".lower()
     if re.search(r"@\S+\s+(?:please\s+)?review\b", body or "", re.I):
         return "review_request"
     if any(word in text for word in ["bug", "fix", "修复", "报错", "失败"]):
@@ -191,7 +206,7 @@ def infer_intent(title, body, event_type):
 _infer_intent = infer_intent
 
 
-def _issue_search_to_raw(item, event_type):
+def _issue_search_to_raw(item, event_type, github_account=None):
     source_type = "pull_request" if item.get("isPullRequest") else "issue"
     author = item.get("author") or {}
     body = item.get("body") or ""
@@ -205,7 +220,7 @@ def _issue_search_to_raw(item, event_type):
         "body": body,
         "url": item.get("url"),
         "event_at": item.get("updatedAt"),
-        "intent": _infer_intent(item.get("title", ""), body, event_type),
+        "intent": _infer_intent(item.get("title", ""), body, event_type, github_account),
     }
     if item.get("id"):
         raw["id"] = item.get("id")
@@ -537,7 +552,7 @@ def _discussion_events(raw, repo_config, runner, predicate):
             repo_config=repo_config,
             runner=runner,
         )
-        enriched["intent"] = _infer_intent(raw.get("title"), enriched.get("body"), event_type)
+        enriched["intent"] = _infer_intent(raw.get("title"), enriched.get("body"), event_type, repo_config["github_account"])
         matched.append(enriched)
 
     return sorted(matched, key=_event_sort_key), True
@@ -756,7 +771,7 @@ def collect_live_events(
         runner=runner,
     )
     for item in assigned:
-        raw = _issue_search_to_raw(item, "assigned")
+        raw = _issue_search_to_raw(item, "assigned", github_account)
         raw = _enrich_pull_request_metadata(raw, repo_config, runner)
         raw_events.append(_timeline_assignment(raw, repo_config, runner))
 
@@ -780,7 +795,7 @@ def collect_live_events(
         runner=runner,
     )
     for item in mentions:
-        raw = _issue_search_to_raw(item, "mention")
+        raw = _issue_search_to_raw(item, "mention", github_account)
         if raw.get("author_association") in {None, "", "UNKNOWN"}:
             raw["actor_permission"] = _actor_permission(repo_config, raw.get("actor_login"), runner)
         raw = _enrich_pull_request_metadata(raw, repo_config, runner)

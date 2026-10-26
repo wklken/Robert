@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+from subprocess import SubprocessError
 
 from robert_agent import review_publish, vote_files, vote_workspace
 
@@ -91,28 +92,14 @@ def publish(action, scope, run_command, scope_guard=None):
         return {'ok': False, 'status': 'publish_failed', 'reason_code': 'vote_lookup_unknown',
                 'safe_error': 'Vote lookup is unknown; reconcile before posting again.'}
     try:
-        # Inject the publisher's transport while using the same capture/freshness code.
-        def api(endpoint):
-            result = run_command(['gh', 'api', f"repos/{manifest['repo']}/{endpoint}"], capture_output=True, text=True)
-            if result.returncode:
-                raise ValueError('source query failed')
-            return json.loads(result.stdout)
-        current = api(f"{'pulls' if manifest['source_type'] == 'pull_request' else 'issues'}/{manifest['number']}")
-        current['discussion'] = []
-        for key, source in manifest['sources'].items():
-            if key == 'source-1':
-                continue
-            prefix = (f"pulls/{manifest['number']}/reviews/" if source['kind'] == 'review' else
-                      'pulls/comments/' if source['kind'] == 'review_comment' else 'issues/comments/')
-            endpoint = prefix + str(source['id'])
-            comment = api(endpoint)
-            if not isinstance(comment, dict) or comment.get('id') != source['id']:
-                raise ValueError('invalid source comment')
-            current['discussion'].append({**comment, 'kind': source['kind']})
+        # Complete paginated snapshots distinguish missing adopted comments from
+        # failed lookups and avoid one request per historical comment.
+        current = vote_workspace.read_source(manifest['repo'], manifest['number'], manifest['source_type'],
+                                             run_command=run_command)
         same = vote_workspace.same_sources(manifest, current)
         if manifest.get('source_worktree') and manifest['source_type'] == 'issue':
-            same = same and api('commits/HEAD').get('sha') == manifest['head_sha']
-    except (ValueError, OSError, TypeError, KeyError):
+            same = same and vote_workspace.api(manifest['repo'], 'commits/HEAD', run_command=run_command).get('sha') == manifest['head_sha']
+    except (ValueError, OSError, TypeError, KeyError, SubprocessError):
         return {'ok': False, 'status': 'publish_failed', 'reason_code': 'vote_source_query_failed',
                 'safe_error': 'Cannot verify current vote source.'}
     if not same:

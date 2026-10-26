@@ -78,7 +78,7 @@ def read_ballot(path, manifest):
     if 'choice_id' not in value or (choice is not None and (not isinstance(choice, str) or choice not in options)):
         raise ValueError('ballot has unknown choice')
     text(value.get('reason_summary'), 'reason_summary', 1500)
-    if choice is None:
+    if choice is None or 'abstain_reason' in value:
         text(value.get('abstain_reason'), 'abstain_reason')
     for field in ('tradeoffs', 'uncertainties', 'evidence_refs'):
         strings(value.get(field, []), field)

@@ -19,8 +19,11 @@ signal.
 
 Routes are data, not dispatcher code. Add or reorder route entries in `routes.yml`; keep the agent orchestration independent from route-specific keywords.
 
-An explicit trusted @ request to vote or compare multiple proposals and choose
-one routes to `vote`, before generic bug/analysis or existing-PR update rules.
+The strong vote heuristic requires a trusted request addressed to the configured
+bot account with an explicit voting action (投票, 表决, vote), not a reference to a
+voting implementation inside a fix/explanation request. Generic comparisons
+retain their existing analysis/fix intent; the classifier may recommend `vote`
+when the original request actually asks for independent voting.
 Ignore quoted/background/negated voting text and requests to implement a voting
 feature. A classification result may recommend `vote`; follow-up creation still
 checks the original request, trusted actor, enabled route, workers and scope.
