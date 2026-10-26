@@ -4,6 +4,7 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
+import time
 
 
 COUNT_TABLES = ('run_steps', 'run_repo_steps', 'agent_runs', 'daemon_events', 'leases')
@@ -79,7 +80,8 @@ def _prune_batch(conn, cutoffs, batch_size, apply):
 
 
 def prune_database(db_path, *, apply=False, now=None, batch_size=100, max_batches=1,
-                   run_retention_days=7, failed_run_retention_days=30, event_retention_days=7):
+                   run_retention_days=7, failed_run_retention_days=30, event_retention_days=7,
+                   max_seconds=None):
     """Inspect one batch by default; only apply=True deletes diagnostic rows.
 
     Each transaction selects at most batch_size runs, events and leases. Steps
@@ -88,6 +90,9 @@ def prune_database(db_path, *, apply=False, now=None, batch_size=100, max_batche
     """
     _positive_int(batch_size, 'batch_size', maximum=500)
     _positive_int(max_batches, 'max_batches', maximum=1000)
+    if max_seconds is not None and (isinstance(max_seconds, bool) or max_seconds <= 0):
+        raise ValueError('max_seconds must be positive')
+    started = time.monotonic()
     for name, value in (('run_retention_days', run_retention_days),
                         ('failed_run_retention_days', failed_run_retention_days),
                         ('event_retention_days', event_retention_days)):
@@ -100,7 +105,8 @@ def prune_database(db_path, *, apply=False, now=None, batch_size=100, max_batche
                     (run_retention_days, failed_run_retention_days, event_retention_days))
     result = {'ok': True, 'status': 'pruned' if apply else 'planned', 'dry_run': not apply,
               'batch_size': batch_size, 'batches': 0, 'counts': dict.fromkeys(COUNT_TABLES, 0),
-              'cutoffs': dict(zip(('successful_runs', 'failed_runs', 'daemon_events'), cutoffs))}
+              'cutoffs': dict(zip(('successful_runs', 'failed_runs', 'daemon_events'), cutoffs)),
+              'more_work': False}
     path = Path(db_path).expanduser().resolve()
     try:
         with closing(sqlite3.connect(path.as_uri() + ('?mode=rw' if apply else '?mode=ro'),
@@ -109,7 +115,10 @@ def prune_database(db_path, *, apply=False, now=None, batch_size=100, max_batche
             if not apply:
                 conn.execute('PRAGMA query_only=ON')
             for _ in range(max_batches if apply else 1):
+                if result['batches'] and max_seconds is not None and time.monotonic() - started >= max_seconds:
+                    break
                 counts = _prune_batch(conn, cutoffs, batch_size, apply)
+                result['more_work'] = any(counts[t] >= batch_size for t in ('agent_runs', 'daemon_events', 'leases'))
                 result['batches'] += 1
                 for table, count in counts.items():
                     result['counts'][table] += count

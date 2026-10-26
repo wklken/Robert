@@ -1,0 +1,20 @@
+import sys,sqlite3,subprocess,json
+from contextlib import closing
+sys.path[:0]=['<TEMP>/robert-verify-764c5e3-d_pwg86h','<TEMP>/robert-verify-764c5e3-d_pwg86h/src']
+from tests.test_daemon import DaemonSchedulingTests
+from robert_agent import daemon,storage
+f=DaemonSchedulingTests();f.setUp()
+try:
+ config=f._write_config();storage.init_database(f.db_path); now='2026-07-03T00:00:00+00:00'
+ with closing(sqlite3.connect(f.db_path)) as c,c:
+  f._insert_repo(c)
+  c.execute("INSERT INTO wakeups(wakeup_id,repo_id,reason,dedupe_key,status,not_before_at,created_at,updated_at) VALUES ('w','repo-1','manual_operator_request','k','pending',?,?,?)",(now,now,now))
+ calls=[]
+ def child(command,**kwargs):
+  calls.append(command)
+  return {'ok':True,'status':'completed','child':{'returncode':0}}
+ def rates(*a,**k):
+  return subprocess.CompletedProcess(a,0,json.dumps({'resources':{'core':{'remaining':5000},'search':{'remaining':0}}}),'')
+ r=daemon.run_daemon(config,once=True,child_runner=child,rate_limit_runner=rates,now=now)
+ print('decision',r['decision'],'reason',r['rate_limit']['reason'],'commands',calls)
+finally:f.doCleanups()

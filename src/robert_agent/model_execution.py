@@ -1,11 +1,13 @@
 """Shared supervised model stages for review and vote rounds."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
+import sqlite3
 import threading
 import time
 
@@ -124,6 +126,8 @@ class StageCoordinator:
         self.poll_seconds = poll_seconds
         self.stopping = threading.Event()
         self.processes = {}
+        self._heartbeat_lock = threading.Lock()
+        self._next_heartbeat_at = 0.0
         with store.connect(db_path) as conn:
             self.session = store.session(conn, task_id=task_id)
         if not self.session:
@@ -140,7 +144,32 @@ class StageCoordinator:
         with store.connect(self.db_path) as conn:
             if not _active(conn, self.task_id, self.attempt_id):
                 raise ReviewStopped('review attempt is no longer current')
-            conn.execute('UPDATE attempts SET heartbeat_at=? WHERE attempt_id=?', (store.now(), self.attempt_id))
+        # Ownership/cancellation is checked on every poll. The shared parent
+        # heartbeat is diagnostic and must not turn a busy writer into a failed
+        # model round or make every reviewer contend on the same UPDATE.
+        now = time.monotonic()
+        if now < self._next_heartbeat_at or not self._heartbeat_lock.acquire(blocking=False):
+            return
+        try:
+            if now < self._next_heartbeat_at:
+                return
+            try:
+                with closing(sqlite3.connect(self.db_path, timeout=0.1)) as conn, conn:
+                    if not _active(conn, self.task_id, self.attempt_id):
+                        raise ReviewStopped('review attempt is no longer current')
+                    conn.execute('UPDATE attempts SET heartbeat_at=? WHERE attempt_id=?',
+                                 (store.now(), self.attempt_id))
+            except sqlite3.OperationalError as exc:
+                message = str(exc)
+                if message not in {'database is locked', 'database table is locked',
+                                   'database schema is locked'} and not message.startswith(
+                        ('database table is locked:', 'database schema is locked:')):
+                    raise
+                self._next_heartbeat_at = now + 1
+            else:
+                self._next_heartbeat_at = now + 30
+        finally:
+            self._heartbeat_lock.release()
 
     def phase(self, status):
         store = self.store

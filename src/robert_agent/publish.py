@@ -20,7 +20,7 @@ from robert_agent import (
     execution_operations,
     execution_store,
 )
-from robert_agent.common import emit
+from robert_agent.common import emit, run_command as control_command
 from robert_agent.publication_lock import task_publication_lock
 
 PUBLISH_COMMAND_TIMEOUT_SECONDS = 60
@@ -1320,7 +1320,7 @@ def _ready_actions(conn, limit, repo_id=None, task_ids=None):
 def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subprocess.run, repo_id=None, task_ids=None):
     def bounded_command(*args, **kwargs):
         kwargs["timeout"] = min(kwargs.get("timeout") or PUBLISH_COMMAND_TIMEOUT_SECONDS, PUBLISH_COMMAND_TIMEOUT_SECONDS)
-        return run_command(*args, **kwargs)
+        return control_command(*args, runner=run_command, **kwargs)
 
     with closing(sqlite3.connect(db_path)) as conn:
         execution_store.require_migrated(conn)

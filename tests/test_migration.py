@@ -177,4 +177,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(markers[1], (2, "dd-github-agent-work-item-control-v1", "legacy-checksum"))
         self.assertEqual(markers[2][0], 3)
         self.assertEqual(markers[3], (4, storage.WORKFLOW_MIGRATION_NAME, storage.WORKFLOW_MIGRATION_CHECKSUM))
-        self.assertEqual(len(markers), 4)
+        self.assertEqual(len(markers), 6)
+        self.assertEqual({row[1] for row in markers[4:]}, {
+            storage.PR_MAINLINE_MIGRATION_NAME, storage.RECOMMENDED_SKILLS_MIGRATION_NAME,
+        })

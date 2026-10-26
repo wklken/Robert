@@ -1,0 +1,41 @@
+{
+  "status": "COMPLETE",
+  "base_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "files_sha256": {
+    "src/robert_agent/worker/heartbeat.py": "2ef53b3f7bea51463d362306b11170f1d799834389f004c174035e10fea3ea70",
+    "src/robert_agent/worker/snapshot.py": "a400b5932aa655d1a03bdf27dfe41077667f8e159efba4bf799d5e3afdfc2691",
+    "src/robert_agent/model_execution.py": "40572bb4bf9eb09852a093ddba6daebdc7bae7a63892aded42b7c8bca92598bc",
+    "src/robert_agent/review_files.py": "34c7dfa41da8e9a00ef652c95078360e00358d0bcda4c8673cf6b598b4d71036",
+    "src/robert_agent/review_store.py": "3189d712125e05589c1c45479329c5f47a3589aa3388667343973d5e6714a86e",
+    "src/robert_agent/vote_store.py": "82cbc632d69875b7edd582b770a8e737aff52000231df5914302d6f26bb4e735",
+    "src/robert_agent/resources/db/schema.sql": "7ba66fcf853467e7c7f5dfe6c3307e8cc73e3f3bc0de6972627e992d4f0ae2e0",
+    "tests/test_runtime_remediation.py": "e2c0690b320690a3d9c083cac2254f58760420ceb2a1ffb5001a8ba4d49be1f4",
+    "tests/test_vote_recovery.py": "68981c89e9efb103963513f864ae91c59e38ebf638d995e52d1e3546cceb4a48"
+  },
+  "groups": [
+    "R04",
+    "R07",
+    "R15",
+    "R16",
+    "R17 activity/phase indexes",
+    "R18 streaming hash memory only",
+    "T01"
+  ],
+  "logs": [
+    "<TEMP>/robert-remediation-worker-cycle1-red.log",
+    "<TEMP>/robert-remediation-worker-cycle1-green.log",
+    "<TEMP>/robert-remediation-worker-cycle2-red.log",
+    "<TEMP>/robert-remediation-worker-cycle2-green.log",
+    "<TEMP>/robert-remediation-worker-final-baseline-red.log",
+    "<TEMP>/robert-remediation-worker-final-focused.log",
+    "<TEMP>/robert-remediation-worker-compat.log",
+    "<TEMP>/robert-remediation-worker-ruff.log"
+  ],
+  "cycles_used": 3,
+  "limitations": [
+    "No full suite or package build run; parent owns combined gates.",
+    "All repeated whole-source verification remains; only file hashing memory is bounded.",
+    "Other history scans beyond active model slots and worker phase lookup remain parent scope.",
+    "SQLite errors from ownership reads remain fail-closed; only busy diagnostic heartbeat writes are deferred."
+  ]
+}

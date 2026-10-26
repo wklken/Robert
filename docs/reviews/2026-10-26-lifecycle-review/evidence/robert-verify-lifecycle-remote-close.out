@@ -1,0 +1,4 @@
+remote_close_returned True elapsed 2.04
+task canceled attempt canceled
+coordinator_exit -9 model_alive True
+session preparing model_run [('running', 1)]

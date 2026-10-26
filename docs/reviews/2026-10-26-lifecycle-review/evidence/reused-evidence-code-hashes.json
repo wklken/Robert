@@ -1,0 +1,23 @@
+{
+  "original_head": "1b23d3b635d3b319e02f3f73029ff5676f30eb26",
+  "checked_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "unchanged_files": {
+    "src/robert_agent/daemon.py": "c1a54582d333f90db3137d86200b0cfbe5e482d82d0599cdc8d71aef121afe31",
+    "src/robert_agent/daemon_state.py": "0c0054266137efbeda10154a28f06aaccae80512a8784feaed8d236ecddc15f4",
+    "src/robert_agent/loop_engine.py": "2e1de0bfe3ad8432d4ef5e5d356284b3fea8e327ba521a994d73441c6bc2b0e2",
+    "src/robert_agent/retention.py": "ee6c821b7cec732d28df517d7e3743313d0c32e69820ffabfa998066c21f0809",
+    "src/robert_agent/worker/heartbeat.py": "5883a231d57e4d848907d7d790aa06db348915f5c98a9b059c6f143c5cb4433e",
+    "src/robert_agent/worker/result.py": "6d1e7874e763c5a2156bf0da7c2c181159cea3f1e5720219d041aa8358fcb5df",
+    "src/robert_agent/model_execution.py": "e37267262a083c303acdacc2041792e3725123dca533f680eca93e57776164c2",
+    "src/robert_agent/model_pool.py": "eb35dd3a7d98f6cd4f81044491fdd4f0429b19b279f7f6d6fa8be21c080313a7",
+    "src/robert_agent/review_workspace.py": "687a9590563c44ef12d821a3d3c258317d0524f61ac0e4cf7f03287505117678",
+    "src/robert_agent/review_files.py": "5639732c29e0d2fe67afd52369cf7f8304578bf3c9583f6394ce986874dd1991",
+    "src/robert_agent/review_store.py": "34ed10e5a9130e50754a949d1d89d43fb2b00bea166b7ccfd333bb22b94a7c55",
+    "src/robert_agent/worker_identity.py": "e928c9d9e04ce979801bf70827aa317017e21936802d3677f6de13c9fb8f5f82"
+  },
+  "unchanged_measurement_fixture": [
+    "tests/test_review_coordinator.py",
+    "tests/test_review_workspace.py"
+  ],
+  "runtime": "existing .venv Python 3.14.7; PyYAML 6.0.3"
+}

@@ -32,7 +32,7 @@ def _reap_background_processes():
 
 def _worker_environment(allowed_names=(), environ=None):
     source = dict(os.environ if environ is None else environ)
-    names = DEFAULT_WORKER_ENV | set(allowed_names)
+    names = (DEFAULT_WORKER_ENV | set(allowed_names)) - {'_ROBERT_EXECUTOR_ID', '_ROBERT_CONTROL_DEADLINE'}
     result = {
         name: source[name]
         for name in names

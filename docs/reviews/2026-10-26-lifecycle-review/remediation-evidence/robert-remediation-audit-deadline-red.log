@@ -1,0 +1,19 @@
+F
+======================================================================
+FAIL: test_expired_control_deadline_prevents_audit_and_recovery_git_calls (tests.test_controlplane_remediation.ControlplaneRemediationTests.test_expired_control_deadline_prevents_audit_and_recovery_git_calls)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_controlplane_remediation.py", line 32, in test_expired_control_deadline_prevents_audit_and_recovery_git_calls
+    runner.assert_not_called()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 947, in assert_not_called
+    raise AssertionError(msg)
+AssertionError: Expected 'run' to not have been called. Called 3 times.
+Calls: [call(['git', 'status', '--short'], cwd=PosixPath('<TEMP>/tmp0gc8u8cs'), text=True, capture_output=True, timeout=5),
+ call(['git', 'rev-parse', 'HEAD'], cwd='/repo/.worktrees/task-1', capture_output=True, text=True, timeout=5),
+ call(['git', 'remote', 'get-url', 'origin'], cwd='/repo/.worktrees/task-1', capture_output=True, text=True, timeout=5)].
+
+----------------------------------------------------------------------
+Ran 1 test in 0.026s
+
+FAILED (failures=1)

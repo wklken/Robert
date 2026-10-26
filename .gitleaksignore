@@ -1,0 +1,5 @@
+# Exact false positives: reviewed source-file SHA256 values indexed by github_api.py.
+# Both values match the public file at revision 764c5e3; no credential is present.
+# Limit these exceptions to the original evidence commit, file, rule and line.
+59e0eed5c81d72d51f0386bfb498c149f1b8978d:docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-review-manifest-final.json:generic-api-key:71
+59e0eed5c81d72d51f0386bfb498c149f1b8978d:docs/reviews/2026-10-26-lifecycle-review/remediation-evidence/robert-remediation-review-manifest-prefinal.json:generic-api-key:71

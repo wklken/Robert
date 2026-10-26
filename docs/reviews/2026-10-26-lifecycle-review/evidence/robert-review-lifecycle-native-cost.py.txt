@@ -1,0 +1,33 @@
+import json,sqlite3,tempfile,time
+from pathlib import Path
+from unittest.mock import patch
+from tests.test_review_coordinator import ReviewCoordinatorTests
+from robert_agent import review_workspace,review_store,model_pool
+f=ReviewCoordinatorTests();f.setUp()
+try:
+ g=f.git_fixture
+ (g.upstream/'large.bin').write_bytes(b'x'*(32*1024*1024))
+ extra=g.upstream/'many';extra.mkdir()
+ for i in range(1000):(extra/f'{i}.txt').write_text('x'*1024)
+ g.git(g.upstream,'add','.');g.git(g.upstream,'commit','-m','synthetic tracked fixture')
+ g.head=g.git(g.upstream,'rev-parse','HEAD');g.git(g.upstream,'update-ref','refs/pull/42/head','HEAD')
+ f.cycle([f.event()])
+ scans=[];original=review_workspace._source_hashes
+ def measure(tree):
+  start=time.perf_counter();result=original(tree)
+  scans.append((len(result),sum((tree/name).stat().st_size for name in result),time.perf_counter()-start))
+  return result
+ start=time.perf_counter()
+ with patch.object(review_workspace,'_source_hashes',side_effect=measure):f.coordinator().run()
+ print('full_review_seconds',round(time.perf_counter()-start,3),'source_scans',len(scans),'source_MiB_per_scan',round(scans[0][1]/1024**2,3),'total_source_MiB',round(sum(x[1] for x in scans)/1024**2,3),'source_hash_seconds',round(sum(x[2] for x in scans),3))
+finally:f.doCleanups()
+for history in (1000,100000):
+ with sqlite3.connect(':memory:') as c:
+  c.execute('CREATE TABLE review_process_pool(singleton INTEGER PRIMARY KEY,max_concurrency INTEGER)');c.execute('INSERT INTO review_process_pool VALUES(1,4)')
+  for table in ('review_runs','vote_runs'):
+   c.execute(f'CREATE TABLE {table}(run_id TEXT PRIMARY KEY,round_id TEXT,stage TEXT,status TEXT,slot_reserved INTEGER,dispatch_json TEXT,artifact_json TEXT,created_at TEXT)')
+   c.executemany(f'INSERT INTO {table} VALUES(?,?,?, ?,0,NULL,NULL,?)',((str(i),'r','review','succeeded','2026') for i in range(history)))
+  start=time.perf_counter()
+  for i in range(20):
+   review_store.reserved_runs(c);model_pool.status(c)
+  print('history_rows_per_table',history,'reclaim_plus_pool_status_mean_ms',round((time.perf_counter()-start)*1000/20,3),'query_plan',list(c.execute('EXPLAIN QUERY PLAN SELECT COUNT(*) FROM review_runs WHERE slot_reserved=1')))

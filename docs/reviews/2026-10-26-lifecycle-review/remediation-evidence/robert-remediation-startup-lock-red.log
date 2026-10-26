@@ -1,0 +1,28 @@
+E
+======================================================================
+ERROR: test_startup_command_inspection_releases_writer (tests.test_lifecycle_remediation.LifecycleRemediationTests.test_startup_command_inspection_releases_writer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_lifecycle_remediation.py", line 201, in test_startup_command_inspection_releases_writer
+    run_once._supervise_running_attempts(conn, repo, {}, now)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "./src/robert_agent/run_once.py", line 1190, in _supervise_running_attempts
+    has_worker_phase = bool(_attempt_command_records(conn, attempt_id, task_id))
+                            ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1247, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "./tests/test_lifecycle_remediation.py", line 195, in inspect_commands
+    other.execute('BEGIN IMMEDIATE')
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+----------------------------------------------------------------------
+Ran 1 test in 0.229s
+
+FAILED (errors=1)

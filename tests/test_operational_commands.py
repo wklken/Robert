@@ -5871,6 +5871,7 @@ class OperationalCommandTests(unittest.TestCase):
         stdout_path.write_text("stdout tail\n", encoding="utf-8")
         stderr_path.write_text("stderr tail\n", encoding="utf-8")
         dispatch_metadata = {
+            "process_stopped_at": now,
             "dispatch": {
                 "ok": True,
                 "status": "running",

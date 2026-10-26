@@ -1,0 +1,85 @@
+E...FFF.FFFF
+======================================================================
+ERROR: test_busy_heartbeat_write_does_not_fail_active_waiter (test_runtime_remediation.CoordinatorHeartbeatRemediationTests.test_busy_heartbeat_write_does_not_fail_active_waiter)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 138, in test_busy_heartbeat_write_does_not_fail_active_waiter
+    self.driver.check_active()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/private<TEMP>/robert-verify-764c5e3-d_pwg86h/src/robert_agent/model_execution.py", line 143, in check_active
+    conn.execute('UPDATE attempts SET heartbeat_at=? WHERE attempt_id=?', (store.now(), self.attempt_id))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+======================================================================
+FAIL: test_repeated_activity_checks_coalesce_parent_heartbeat (test_runtime_remediation.CoordinatorHeartbeatRemediationTests.test_repeated_activity_checks_coalesce_parent_heartbeat)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 124, in test_repeated_activity_checks_coalesce_parent_heartbeat
+    self.assertEqual(actual, timestamps[0])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '2026-10-26T00:00:05+00:00' != '2026-10-26T00:00:01+00:00'
+- 2026-10-26T00:00:05+00:00
+?                   ^
++ 2026-10-26T00:00:01+00:00
+?                   ^
+
+
+======================================================================
+FAIL: test_activity_queries_do_not_scan_completed_history (test_runtime_remediation.RuntimeRemediationTests.test_activity_queries_do_not_scan_completed_history)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 70, in test_activity_queries_do_not_scan_completed_history
+    self.assertTrue(any('USING INDEX' in row[3] for row in plan), (table, plan))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ('review_runs', [(2, 0, 216, 'SCAN review_runs')])
+
+======================================================================
+FAIL: test_command_completion_does_not_wait_for_heartbeat_deadline (test_runtime_remediation.RuntimeRemediationTests.test_command_completion_does_not_wait_for_heartbeat_deadline)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 42, in test_command_completion_does_not_wait_for_heartbeat_deadline
+    self.assertLess(time.monotonic() - started, 1.0)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1.5325289159081876 not less than 1.0
+
+======================================================================
+FAIL: test_file_hash_preserves_digest_with_bounded_memory (test_runtime_remediation.RuntimeRemediationTests.test_file_hash_preserves_digest_with_bounded_memory)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 104, in test_file_hash_preserves_digest_with_bounded_memory
+    self.assertLess(peak, 4 * 1024 * 1024)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 16778061 not less than 4194304
+
+======================================================================
+FAIL: test_identical_snapshots_refresh_liveness_without_duplicating_history (test_runtime_remediation.RuntimeRemediationTests.test_identical_snapshots_refresh_liveness_without_duplicating_history)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 52, in test_identical_snapshots_refresh_liveness_without_duplicating_history
+    self.assertEqual(conn.execute('SELECT count(*) FROM worker_phases').fetchone()[0], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 3 != 1
+
+======================================================================
+FAIL: test_legacy_model_tables_upgrade_before_activity_index_creation (test_runtime_remediation.RuntimeRemediationTests.test_legacy_model_tables_upgrade_before_activity_index_creation) (store='robert_agent.review_store')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 87, in test_legacy_model_tables_upgrade_before_activity_index_creation
+    self.assertTrue(any('USING INDEX' in row[3] for row in plan), plan)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : [(2, 0, 216, 'SCAN review_runs')]
+
+======================================================================
+FAIL: test_legacy_model_tables_upgrade_before_activity_index_creation (test_runtime_remediation.RuntimeRemediationTests.test_legacy_model_tables_upgrade_before_activity_index_creation) (store='robert_agent.vote_store')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<TEMP>/robert-remediation-runtime-baseline-tests/test_runtime_remediation.py", line 87, in test_legacy_model_tables_upgrade_before_activity_index_creation
+    self.assertTrue(any('USING INDEX' in row[3] for row in plan), plan)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : [(2, 0, 216, 'SCAN vote_runs')]
+
+----------------------------------------------------------------------
+Ran 11 tests in 13.420s
+
+FAILED (failures=7, errors=1)

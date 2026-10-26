@@ -1,0 +1,960 @@
+{
+  "source_report": "report.md",
+  "source_findings_sha256": "40d4a085497f52dbec5e5913a21ac1889df1ab1b060d78af84ae04e01426a8fe",
+  "base_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "checked_diff_content_sha256": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e",
+  "gate_content_sha256": "efb36f8a605c5ece80a01ef7905aa4967434918301d3bc7eb923362bd1caf997",
+  "initial_tracked_diff": "clean",
+  "authority": "local remediation only; no commit, push, GitHub or production writes",
+  "scope_decision": "automatic evidence deletion pending user retention preference; existing contracts preserved; U01 needs evidence",
+  "counts": {
+    "fixed": 26,
+    "pending": 11,
+    "rejected": 1
+  },
+  "groups": {
+    "R01": {
+      "status": "fixed",
+      "source_ids": [
+        "A/1"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "run_once.py / lifecycle:remote_close_stops_registered_native_models"
+      ],
+      "reason": "远端关闭先持久化 fence，在写锁外停止 coordinator 与注册的独立模型；未知进程保留 attention。"
+    },
+    "R02": {
+      "status": "fixed",
+      "source_ids": [
+        "A/2"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "worker/result.py + supervise.py + retry_policy.py / lifecycle:received_result,fast_receipt,result_arriving; controlplane:publication_requires_recorded_worker_process_stop"
+      ],
+      "reason": "结果接收保留实际进程所有权、容量及监督；确认进程组停止后才完成审计与发布。"
+    },
+    "R03": {
+      "status": "fixed",
+      "source_ids": [
+        "A/3",
+        "B/I/4",
+        "B/I/8",
+        "B/LATENCY-7"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "run_once.py / lifecycle:health_reads,backfill_does_not_hold_writer,startup_command_inspection,result_arriving"
+      ],
+      "reason": "远端读取、Git、进程检查和停止移出域写事务；重新拿写锁后核对 attempt/heartbeat/metadata/result/控制权；命令 phase 回填安排在外部观察之后。Git 观察超时直接中止本轮，不能当成无进展或不合法 scope。"
+    },
+    "R04": {
+      "status": "fixed",
+      "source_ids": [
+        "B/I/4"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "model_execution.py / runtime:busy_heartbeat_write,non_contention_heartbeat_errors,cancellation_is_checked"
+      ],
+      "reason": "诊断 heartbeat 的 SQLITE_BUSY 短等待并延后重试；取消/ownership 每次检查，非锁错误仍上抛。"
+    },
+    "R05": {
+      "status": "fixed",
+      "source_ids": [
+        "A/4",
+        "B/I/2"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "daemon_state.py + supervise.py / lifecycle:stale_live_worker_keeps_dispatch_capacity"
+      ],
+      "reason": "仓库和全局 admission 共用 occupied 谓词；stale 及已收结果但未确认退出的进程都占容量。"
+    },
+    "R06": {
+      "status": "fixed",
+      "source_ids": [
+        "B/I/1",
+        "B/LATENCY-4",
+        "B/LATENCY-7"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "daemon.py + common.py + worktree.py + publish.py + run_once.py / deadline:8 regressions; controlplane:timed_out_control_child,expired_control_deadline"
+      ],
+      "reason": "Git/GitHub 命令继承剩余控制 deadline；外层 child 有独立 executor nonce、进程组清理和精确 run/lease 收尾；启动时核查遗留 executor；TERM/KILL 退出竞态容错；TTL 纳入 rate 与 cleanup 预算。"
+    },
+    "R07": {
+      "status": "fixed",
+      "source_ids": [
+        "A/5"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "worker/heartbeat.py / runtime:command_completion_does_not_wait"
+      ],
+      "reason": "用 Popen.wait(timeout) 等待下一个心跳或命令退出，命令结束立即返回。"
+    },
+    "R08": {
+      "status": "fixed",
+      "source_ids": [
+        "A/6",
+        "B/III/1"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "loop_engine.py / scheduler:healthy_worker_does_not_create_business_runs,observation_is_read_only,dead_worker_is_runnable"
+      ],
+      "reason": "健康且无状态转换的 worker 使用只读 liveness probe；死亡、超时、首次 stale、结果待完成才进入完整业务流水线。"
+    },
+    "R09": {
+      "status": "fixed",
+      "source_ids": [
+        "A/7",
+        "B/III/1",
+        "B/III/6"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "daemon.py + retention.py / controlplane:maintenance_catches_up_more_than_one_event_batch"
+      ],
+      "reason": "沿用保留期，单次维护最多 3 批/1 秒，存在 backlog 时缩短再次维护间隔；health 保持独立正常周期。"
+    },
+    "R10": {
+      "status": "fixed",
+      "source_ids": [
+        "A/8"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "loop_engine.py / scheduler:queued_vote_is_discovered,native_queue_scope"
+      ],
+      "reason": "queued review/vote 使用统一有 repo/workstream/attention 约束的探测。"
+    },
+    "R11": {
+      "status": "fixed",
+      "source_ids": [
+        "B/I/6"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "run_once.py + loop_engine.py / lifecycle:classification_handoff_survives_git_failure; scheduler:orphaned_classification"
+      ],
+      "reason": "Git 前持久化分类 handoff，失败有 3 次/10 分钟上限及 durable backoff，耗尽转 attention；本地探测与恢复共享查询。"
+    },
+    "R12": {
+      "status": "fixed",
+      "source_ids": [
+        "B/I/7"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "loop_engine.py / scheduler:prepared_backoff_waits_until_due"
+      ],
+      "reason": "prepared.resume.not_before_at 未到时不触发 drain；真实超时配置传入 probe。"
+    },
+    "R13": {
+      "status": "fixed",
+      "source_ids": [
+        "B/I/11",
+        "B/LATENCY-2"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "discover.py / controlplane:analysis_and_implementation_intents"
+      ],
+      "reason": "明确分析指令优先，英文 bug/fix 使用单词边界；明确实现和补测试请求直接进入对应 route。"
+    },
+    "R14": {
+      "status": "fixed",
+      "source_ids": [
+        "A/9"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "daemon.py / controlplane:search_floor_does_not_disable_core_only_publication"
+      ],
+      "reason": "search 低配额不再把仅用 core 的本地 publication 全部关闭；core 门槛与失败反馈保留。"
+    },
+    "R15": {
+      "status": "fixed",
+      "source_ids": [
+        "B/III/2"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "worker/snapshot.py / runtime:identical_snapshots,duplicate_snapshot"
+      ],
+      "reason": "事务内按 attempt 合并连续相同 phase/status/summary/next_step；每次仍刷新 heartbeat，真实转换保留。"
+    },
+    "R16": {
+      "status": "fixed",
+      "source_ids": [
+        "B/III/3"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "model_execution.py / runtime:repeated_activity_checks,parent_heartbeat_refreshes"
+      ],
+      "reason": "多 reviewer 共享父 heartbeat 的 30 秒刷新预算；忙锁后 1 秒重试，取消探测频率不降低。"
+    },
+    "R17": {
+      "status": "fixed",
+      "source_ids": [
+        "A/PERFORMANCE-1",
+        "B/III/3",
+        "B/III/6"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "review_store.py + vote_store.py + schema.sql + loop_engine.py / runtime:activity_queries,legacy_model_tables; scheduler:healthy_worker"
+      ],
+      "reason": "添加 reserved 活动子集、attempt phase 时间线及通知索引，减少无进展轮次；实际业务推进的进度统计仍保留。"
+    },
+    "R18": {
+      "status": "fixed",
+      "source_ids": [
+        "A/PERFORMANCE-2",
+        "B/LATENCY-9",
+        "B/III/4"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "review_files.py / runtime:file_hash_preserves_digest_with_bounded_memory"
+      ],
+      "reason": "分块 SHA256 降低大文件峰值内存；所有原有全源完整性验证继续执行，未证明可安全合并的扫描不删除。"
+    },
+    "R19": {
+      "status": "pending",
+      "source_ids": [
+        "B/III/4",
+        "B/III/5"
+      ],
+      "scope": "needs decision",
+      "change_test_evidence": [
+        "report.md#r19"
+      ],
+      "reason": "自动删除 worktree/refs/日志/审计证据仍需保留期限、归档与恢复策略；等待用户答复。未在线删除稳定 lock inode。"
+    },
+    "R20": {
+      "status": "fixed",
+      "source_ids": [
+        "B/III/5"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "result_spool.py / controlplane:rejected_spool_prefix"
+      ],
+      "reason": "rejected 原子归档到独立子目录，旧 rejected 在持有稳定 attempt 锁后移出 pending glob；保留证据与锁 inode。"
+    },
+    "R21": {
+      "status": "fixed",
+      "source_ids": [
+        "B/I/9"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "storage.py / storage_initialization:5 regressions; test_migration + run_once:legacy_backfill"
+      ],
+      "reason": "PR mainline 与 recommended-skills 数据迁移按独立 name/checksum 门控；失败不提前记录完成，既有迁移序号与必要兼容入口保留。"
+    },
+    "R22": {
+      "status": "fixed",
+      "source_ids": [
+        "B/III/6"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "daemon.py + schema.sql + reliability_health.py / controlplane:notification_delivery_queries_only_pending_history,maintenance_catches_up"
+      ],
+      "reason": "health 与 backlog 清理分开节流，通知投递命中 pending 索引；修正 health 写通知的 docstring，保留业务事实，不自动 VACUUM。"
+    },
+    "R23": {
+      "status": "pending",
+      "source_ids": [
+        "B/I/3",
+        "B/LATENCY-3"
+      ],
+      "scope": "preserved contract",
+      "change_test_evidence": [
+        "report.md#r23"
+      ],
+      "reason": "全局 hard timeout 是现有配置契约；没有擅自改成长模型配置覆盖全局上限。"
+    },
+    "R24": {
+      "status": "pending",
+      "source_ids": [
+        "B/I/5",
+        "B/LATENCY-6"
+      ],
+      "scope": "preserved contract",
+      "change_test_evidence": [
+        "report.md#r24"
+      ],
+      "reason": "未知进程/后代的 attention 和容量保留属于既有安全边界；没有取消身份核验或强制释放。"
+    },
+    "R25": {
+      "status": "pending",
+      "source_ids": [
+        "B/LATENCY-1",
+        "B/LATENCY-7"
+      ],
+      "scope": "preserved contract",
+      "change_test_evidence": [
+        "report.md#r25"
+      ],
+      "reason": "修复已确认 deadline/写锁子项；轮询周期与串行远端采集策略尚需实际负载数据，未擅自改变。"
+    },
+    "R26": {
+      "status": "pending",
+      "source_ids": [
+        "B/LATENCY-8",
+        "B/LATENCY-9"
+      ],
+      "scope": "preserved contract",
+      "change_test_evidence": [
+        "report.md#r26"
+      ],
+      "reason": "同 workstream 顺序和 prepare/review/synthesis 三阶段是现有契约；未删阶段或放开冲突任务并行。"
+    },
+    "N01": {
+      "status": "rejected",
+      "source_ids": [
+        "B/LATENCY-5"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "report.md#n01"
+      ],
+      "reason": "原说法被当前代码和隔离证据反驳，维持 Incorrect；不实施相反修复。"
+    },
+    "U01": {
+      "status": "pending",
+      "source_ids": [
+        "B/I/10"
+      ],
+      "scope": "needs evidence",
+      "change_test_evidence": [
+        "report.md#u01"
+      ],
+      "reason": "缺少常规生产路径的 pending fact 反复触发复现；未改幂等事实或直接丢弃 pending 数据。"
+    },
+    "T01": {
+      "status": "fixed",
+      "source_ids": [
+        "A/VALIDATION-1"
+      ],
+      "scope": "in scope",
+      "change_test_evidence": [
+        "tests/test_vote_recovery.py / dual unknown launch regression"
+      ],
+      "reason": "Barrier 确定两个 unknown launch 均已持久化；只确认一个拒绝释放，确认全部才回收，去掉测试竞态。"
+    }
+  },
+  "findings": [
+    {
+      "finding_id": "A/1",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r01"
+      ],
+      "canonical_groups": [
+        "R01"
+      ],
+      "change_test_evidence": [
+        "R01: run_once.py / lifecycle:remote_close_stops_registered_native_models"
+      ],
+      "reason_or_next_action": "R01: 远端关闭先持久化 fence，在写锁外停止 coordinator 与注册的独立模型；未知进程保留 attention。"
+    },
+    {
+      "finding_id": "A/2",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r02"
+      ],
+      "canonical_groups": [
+        "R02"
+      ],
+      "change_test_evidence": [
+        "R02: worker/result.py + supervise.py + retry_policy.py / lifecycle:received_result,fast_receipt,result_arriving; controlplane:publication_requires_recorded_worker_process_stop"
+      ],
+      "reason_or_next_action": "R02: 结果接收保留实际进程所有权、容量及监督；确认进程组停止后才完成审计与发布。"
+    },
+    {
+      "finding_id": "A/3",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r03"
+      ],
+      "canonical_groups": [
+        "R03"
+      ],
+      "change_test_evidence": [
+        "R03: run_once.py / lifecycle:health_reads,backfill_does_not_hold_writer,startup_command_inspection,result_arriving"
+      ],
+      "reason_or_next_action": "R03: 远端读取、Git、进程检查和停止移出域写事务；重新拿写锁后核对 attempt/heartbeat/metadata/result/控制权；命令 phase 回填安排在外部观察之后。Git 观察超时直接中止本轮，不能当成无进展或不合法 scope。"
+    },
+    {
+      "finding_id": "A/4",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r05"
+      ],
+      "canonical_groups": [
+        "R05"
+      ],
+      "change_test_evidence": [
+        "R05: daemon_state.py + supervise.py / lifecycle:stale_live_worker_keeps_dispatch_capacity"
+      ],
+      "reason_or_next_action": "R05: 仓库和全局 admission 共用 occupied 谓词；stale 及已收结果但未确认退出的进程都占容量。"
+    },
+    {
+      "finding_id": "A/5",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r07"
+      ],
+      "canonical_groups": [
+        "R07"
+      ],
+      "change_test_evidence": [
+        "R07: worker/heartbeat.py / runtime:command_completion_does_not_wait"
+      ],
+      "reason_or_next_action": "R07: 用 Popen.wait(timeout) 等待下一个心跳或命令退出，命令结束立即返回。"
+    },
+    {
+      "finding_id": "A/6",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r08"
+      ],
+      "canonical_groups": [
+        "R08"
+      ],
+      "change_test_evidence": [
+        "R08: loop_engine.py / scheduler:healthy_worker_does_not_create_business_runs,observation_is_read_only,dead_worker_is_runnable"
+      ],
+      "reason_or_next_action": "R08: 健康且无状态转换的 worker 使用只读 liveness probe；死亡、超时、首次 stale、结果待完成才进入完整业务流水线。"
+    },
+    {
+      "finding_id": "A/7",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r09"
+      ],
+      "canonical_groups": [
+        "R09"
+      ],
+      "change_test_evidence": [
+        "R09: daemon.py + retention.py / controlplane:maintenance_catches_up_more_than_one_event_batch"
+      ],
+      "reason_or_next_action": "R09: 沿用保留期，单次维护最多 3 批/1 秒，存在 backlog 时缩短再次维护间隔；health 保持独立正常周期。"
+    },
+    {
+      "finding_id": "A/8",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r10"
+      ],
+      "canonical_groups": [
+        "R10"
+      ],
+      "change_test_evidence": [
+        "R10: loop_engine.py / scheduler:queued_vote_is_discovered,native_queue_scope"
+      ],
+      "reason_or_next_action": "R10: queued review/vote 使用统一有 repo/workstream/attention 约束的探测。"
+    },
+    {
+      "finding_id": "A/9",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r14"
+      ],
+      "canonical_groups": [
+        "R14"
+      ],
+      "change_test_evidence": [
+        "R14: daemon.py / controlplane:search_floor_does_not_disable_core_only_publication"
+      ],
+      "reason_or_next_action": "R14: search 低配额不再把仅用 core 的本地 publication 全部关闭；core 门槛与失败反馈保留。"
+    },
+    {
+      "finding_id": "A/PERFORMANCE-1",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r17"
+      ],
+      "canonical_groups": [
+        "R17"
+      ],
+      "change_test_evidence": [
+        "R17: review_store.py + vote_store.py + schema.sql + loop_engine.py / runtime:activity_queries,legacy_model_tables; scheduler:healthy_worker"
+      ],
+      "reason_or_next_action": "R17: 添加 reserved 活动子集、attempt phase 时间线及通知索引，减少无进展轮次；实际业务推进的进度统计仍保留。"
+    },
+    {
+      "finding_id": "A/PERFORMANCE-2",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r18"
+      ],
+      "canonical_groups": [
+        "R18"
+      ],
+      "change_test_evidence": [
+        "R18: review_files.py / runtime:file_hash_preserves_digest_with_bounded_memory"
+      ],
+      "reason_or_next_action": "R18: 分块 SHA256 降低大文件峰值内存；所有原有全源完整性验证继续执行，未证明可安全合并的扫描不删除。"
+    },
+    {
+      "finding_id": "A/VALIDATION-1",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#t01"
+      ],
+      "canonical_groups": [
+        "T01"
+      ],
+      "change_test_evidence": [
+        "T01: tests/test_vote_recovery.py / dual unknown launch regression"
+      ],
+      "reason_or_next_action": "T01: Barrier 确定两个 unknown launch 均已持久化；只确认一个拒绝释放，确认全部才回收，去掉测试竞态。"
+    },
+    {
+      "finding_id": "B/I/1",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r06"
+      ],
+      "canonical_groups": [
+        "R06"
+      ],
+      "change_test_evidence": [
+        "R06: daemon.py + common.py + worktree.py + publish.py + run_once.py / deadline:8 regressions; controlplane:timed_out_control_child,expired_control_deadline"
+      ],
+      "reason_or_next_action": "R06: Git/GitHub 命令继承剩余控制 deadline；外层 child 有独立 executor nonce、进程组清理和精确 run/lease 收尾；启动时核查遗留 executor；TERM/KILL 退出竞态容错；TTL 纳入 rate 与 cleanup 预算。"
+    },
+    {
+      "finding_id": "B/I/2",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r05"
+      ],
+      "canonical_groups": [
+        "R05"
+      ],
+      "change_test_evidence": [
+        "R05: daemon_state.py + supervise.py / lifecycle:stale_live_worker_keeps_dispatch_capacity"
+      ],
+      "reason_or_next_action": "R05: 仓库和全局 admission 共用 occupied 谓词；stale 及已收结果但未确认退出的进程都占容量。"
+    },
+    {
+      "finding_id": "B/I/3",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r23"
+      ],
+      "canonical_groups": [
+        "R23"
+      ],
+      "change_test_evidence": [
+        "R23: report.md#r23"
+      ],
+      "reason_or_next_action": "R23: 全局 hard timeout 是现有配置契约；没有擅自改成长模型配置覆盖全局上限。"
+    },
+    {
+      "finding_id": "B/I/4",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r04",
+        "report.md#r03"
+      ],
+      "canonical_groups": [
+        "R04",
+        "R03"
+      ],
+      "change_test_evidence": [
+        "R04: model_execution.py / runtime:busy_heartbeat_write,non_contention_heartbeat_errors,cancellation_is_checked",
+        "R03: run_once.py / lifecycle:health_reads,backfill_does_not_hold_writer,startup_command_inspection,result_arriving"
+      ],
+      "reason_or_next_action": "R04: 诊断 heartbeat 的 SQLITE_BUSY 短等待并延后重试；取消/ownership 每次检查，非锁错误仍上抛。 R03: 远端读取、Git、进程检查和停止移出域写事务；重新拿写锁后核对 attempt/heartbeat/metadata/result/控制权；命令 phase 回填安排在外部观察之后。Git 观察超时直接中止本轮，不能当成无进展或不合法 scope。"
+    },
+    {
+      "finding_id": "B/I/5",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r24"
+      ],
+      "canonical_groups": [
+        "R24"
+      ],
+      "change_test_evidence": [
+        "R24: report.md#r24"
+      ],
+      "reason_or_next_action": "R24: 未知进程/后代的 attention 和容量保留属于既有安全边界；没有取消身份核验或强制释放。"
+    },
+    {
+      "finding_id": "B/I/6",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r11"
+      ],
+      "canonical_groups": [
+        "R11"
+      ],
+      "change_test_evidence": [
+        "R11: run_once.py + loop_engine.py / lifecycle:classification_handoff_survives_git_failure; scheduler:orphaned_classification"
+      ],
+      "reason_or_next_action": "R11: Git 前持久化分类 handoff，失败有 3 次/10 分钟上限及 durable backoff，耗尽转 attention；本地探测与恢复共享查询。"
+    },
+    {
+      "finding_id": "B/I/7",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r12"
+      ],
+      "canonical_groups": [
+        "R12"
+      ],
+      "change_test_evidence": [
+        "R12: loop_engine.py / scheduler:prepared_backoff_waits_until_due"
+      ],
+      "reason_or_next_action": "R12: prepared.resume.not_before_at 未到时不触发 drain；真实超时配置传入 probe。"
+    },
+    {
+      "finding_id": "B/I/8",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r03"
+      ],
+      "canonical_groups": [
+        "R03"
+      ],
+      "change_test_evidence": [
+        "R03: run_once.py / lifecycle:health_reads,backfill_does_not_hold_writer,startup_command_inspection,result_arriving"
+      ],
+      "reason_or_next_action": "R03: 远端读取、Git、进程检查和停止移出域写事务；重新拿写锁后核对 attempt/heartbeat/metadata/result/控制权；命令 phase 回填安排在外部观察之后。Git 观察超时直接中止本轮，不能当成无进展或不合法 scope。"
+    },
+    {
+      "finding_id": "B/I/9",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r21"
+      ],
+      "canonical_groups": [
+        "R21"
+      ],
+      "change_test_evidence": [
+        "R21: storage.py / storage_initialization:5 regressions; test_migration + run_once:legacy_backfill"
+      ],
+      "reason_or_next_action": "R21: PR mainline 与 recommended-skills 数据迁移按独立 name/checksum 门控；失败不提前记录完成，既有迁移序号与必要兼容入口保留。"
+    },
+    {
+      "finding_id": "B/I/10",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#u01"
+      ],
+      "canonical_groups": [
+        "U01"
+      ],
+      "change_test_evidence": [
+        "U01: report.md#u01"
+      ],
+      "reason_or_next_action": "U01: 缺少常规生产路径的 pending fact 反复触发复现；未改幂等事实或直接丢弃 pending 数据。"
+    },
+    {
+      "finding_id": "B/I/11",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r13"
+      ],
+      "canonical_groups": [
+        "R13"
+      ],
+      "change_test_evidence": [
+        "R13: discover.py / controlplane:analysis_and_implementation_intents"
+      ],
+      "reason_or_next_action": "R13: 明确分析指令优先，英文 bug/fix 使用单词边界；明确实现和补测试请求直接进入对应 route。"
+    },
+    {
+      "finding_id": "B/LATENCY-1",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r25"
+      ],
+      "canonical_groups": [
+        "R25"
+      ],
+      "change_test_evidence": [
+        "R25: report.md#r25"
+      ],
+      "reason_or_next_action": "R25: 修复已确认 deadline/写锁子项；轮询周期与串行远端采集策略尚需实际负载数据，未擅自改变。"
+    },
+    {
+      "finding_id": "B/LATENCY-2",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r13"
+      ],
+      "canonical_groups": [
+        "R13"
+      ],
+      "change_test_evidence": [
+        "R13: discover.py / controlplane:analysis_and_implementation_intents"
+      ],
+      "reason_or_next_action": "R13: 明确分析指令优先，英文 bug/fix 使用单词边界；明确实现和补测试请求直接进入对应 route。"
+    },
+    {
+      "finding_id": "B/LATENCY-3",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r23"
+      ],
+      "canonical_groups": [
+        "R23"
+      ],
+      "change_test_evidence": [
+        "R23: report.md#r23"
+      ],
+      "reason_or_next_action": "R23: 全局 hard timeout 是现有配置契约；没有擅自改成长模型配置覆盖全局上限。"
+    },
+    {
+      "finding_id": "B/LATENCY-4",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r06"
+      ],
+      "canonical_groups": [
+        "R06"
+      ],
+      "change_test_evidence": [
+        "R06: daemon.py + common.py + worktree.py + publish.py + run_once.py / deadline:8 regressions; controlplane:timed_out_control_child,expired_control_deadline"
+      ],
+      "reason_or_next_action": "R06: Git/GitHub 命令继承剩余控制 deadline；外层 child 有独立 executor nonce、进程组清理和精确 run/lease 收尾；启动时核查遗留 executor；TERM/KILL 退出竞态容错；TTL 纳入 rate 与 cleanup 预算。"
+    },
+    {
+      "finding_id": "B/LATENCY-5",
+      "status": "rejected",
+      "evidence_reference": [
+        "report.md#n01"
+      ],
+      "canonical_groups": [
+        "N01"
+      ],
+      "change_test_evidence": [
+        "N01: report.md#n01"
+      ],
+      "reason_or_next_action": "N01: 原说法被当前代码和隔离证据反驳，维持 Incorrect；不实施相反修复。"
+    },
+    {
+      "finding_id": "B/LATENCY-6",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r24"
+      ],
+      "canonical_groups": [
+        "R24"
+      ],
+      "change_test_evidence": [
+        "R24: report.md#r24"
+      ],
+      "reason_or_next_action": "R24: 未知进程/后代的 attention 和容量保留属于既有安全边界；没有取消身份核验或强制释放。"
+    },
+    {
+      "finding_id": "B/LATENCY-7",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r25",
+        "report.md#r06",
+        "report.md#r03"
+      ],
+      "canonical_groups": [
+        "R25",
+        "R06",
+        "R03"
+      ],
+      "change_test_evidence": [
+        "R25: report.md#r25",
+        "R06: daemon.py + common.py + worktree.py + publish.py + run_once.py / deadline:8 regressions; controlplane:timed_out_control_child,expired_control_deadline",
+        "R03: run_once.py / lifecycle:health_reads,backfill_does_not_hold_writer,startup_command_inspection,result_arriving"
+      ],
+      "reason_or_next_action": "R25: 修复已确认 deadline/写锁子项；轮询周期与串行远端采集策略尚需实际负载数据，未擅自改变。 R06: Git/GitHub 命令继承剩余控制 deadline；外层 child 有独立 executor nonce、进程组清理和精确 run/lease 收尾；启动时核查遗留 executor；TERM/KILL 退出竞态容错；TTL 纳入 rate 与 cleanup 预算。 R03: 远端读取、Git、进程检查和停止移出域写事务；重新拿写锁后核对 attempt/heartbeat/metadata/result/控制权；命令 phase 回填安排在外部观察之后。Git 观察超时直接中止本轮，不能当成无进展或不合法 scope。"
+    },
+    {
+      "finding_id": "B/LATENCY-8",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r26"
+      ],
+      "canonical_groups": [
+        "R26"
+      ],
+      "change_test_evidence": [
+        "R26: report.md#r26"
+      ],
+      "reason_or_next_action": "R26: 同 workstream 顺序和 prepare/review/synthesis 三阶段是现有契约；未删阶段或放开冲突任务并行。"
+    },
+    {
+      "finding_id": "B/LATENCY-9",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r26",
+        "report.md#r18"
+      ],
+      "canonical_groups": [
+        "R26",
+        "R18"
+      ],
+      "change_test_evidence": [
+        "R26: report.md#r26",
+        "R18: review_files.py / runtime:file_hash_preserves_digest_with_bounded_memory"
+      ],
+      "reason_or_next_action": "R26: 同 workstream 顺序和 prepare/review/synthesis 三阶段是现有契约；未删阶段或放开冲突任务并行。 R18: 分块 SHA256 降低大文件峰值内存；所有原有全源完整性验证继续执行，未证明可安全合并的扫描不删除。"
+    },
+    {
+      "finding_id": "B/III/1",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r08",
+        "report.md#r09"
+      ],
+      "canonical_groups": [
+        "R08",
+        "R09"
+      ],
+      "change_test_evidence": [
+        "R08: loop_engine.py / scheduler:healthy_worker_does_not_create_business_runs,observation_is_read_only,dead_worker_is_runnable",
+        "R09: daemon.py + retention.py / controlplane:maintenance_catches_up_more_than_one_event_batch"
+      ],
+      "reason_or_next_action": "R08: 健康且无状态转换的 worker 使用只读 liveness probe；死亡、超时、首次 stale、结果待完成才进入完整业务流水线。 R09: 沿用保留期，单次维护最多 3 批/1 秒，存在 backlog 时缩短再次维护间隔；health 保持独立正常周期。"
+    },
+    {
+      "finding_id": "B/III/2",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r15"
+      ],
+      "canonical_groups": [
+        "R15"
+      ],
+      "change_test_evidence": [
+        "R15: worker/snapshot.py / runtime:identical_snapshots,duplicate_snapshot"
+      ],
+      "reason_or_next_action": "R15: 事务内按 attempt 合并连续相同 phase/status/summary/next_step；每次仍刷新 heartbeat，真实转换保留。"
+    },
+    {
+      "finding_id": "B/III/3",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r16",
+        "report.md#r17"
+      ],
+      "canonical_groups": [
+        "R16",
+        "R17"
+      ],
+      "change_test_evidence": [
+        "R16: model_execution.py / runtime:repeated_activity_checks,parent_heartbeat_refreshes",
+        "R17: review_store.py + vote_store.py + schema.sql + loop_engine.py / runtime:activity_queries,legacy_model_tables; scheduler:healthy_worker"
+      ],
+      "reason_or_next_action": "R16: 多 reviewer 共享父 heartbeat 的 30 秒刷新预算；忙锁后 1 秒重试，取消探测频率不降低。 R17: 添加 reserved 活动子集、attempt phase 时间线及通知索引，减少无进展轮次；实际业务推进的进度统计仍保留。"
+    },
+    {
+      "finding_id": "B/III/4",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r18",
+        "report.md#r19"
+      ],
+      "canonical_groups": [
+        "R18",
+        "R19"
+      ],
+      "change_test_evidence": [
+        "R18: review_files.py / runtime:file_hash_preserves_digest_with_bounded_memory",
+        "R19: report.md#r19"
+      ],
+      "reason_or_next_action": "R18: 分块 SHA256 降低大文件峰值内存；所有原有全源完整性验证继续执行，未证明可安全合并的扫描不删除。 R19: 自动删除 worktree/refs/日志/审计证据仍需保留期限、归档与恢复策略；等待用户答复。未在线删除稳定 lock inode。"
+    },
+    {
+      "finding_id": "B/III/5",
+      "status": "pending",
+      "evidence_reference": [
+        "report.md#r19",
+        "report.md#r20"
+      ],
+      "canonical_groups": [
+        "R19",
+        "R20"
+      ],
+      "change_test_evidence": [
+        "R19: report.md#r19",
+        "R20: result_spool.py / controlplane:rejected_spool_prefix"
+      ],
+      "reason_or_next_action": "R19: 自动删除 worktree/refs/日志/审计证据仍需保留期限、归档与恢复策略；等待用户答复。未在线删除稳定 lock inode。 R20: rejected 原子归档到独立子目录，旧 rejected 在持有稳定 attempt 锁后移出 pending glob；保留证据与锁 inode。"
+    },
+    {
+      "finding_id": "B/III/6",
+      "status": "fixed",
+      "evidence_reference": [
+        "report.md#r17",
+        "report.md#r22",
+        "report.md#r09"
+      ],
+      "canonical_groups": [
+        "R17",
+        "R22",
+        "R09"
+      ],
+      "change_test_evidence": [
+        "R17: review_store.py + vote_store.py + schema.sql + loop_engine.py / runtime:activity_queries,legacy_model_tables; scheduler:healthy_worker",
+        "R22: daemon.py + schema.sql + reliability_health.py / controlplane:notification_delivery_queries_only_pending_history,maintenance_catches_up",
+        "R09: daemon.py + retention.py / controlplane:maintenance_catches_up_more_than_one_event_batch"
+      ],
+      "reason_or_next_action": "R17: 添加 reserved 活动子集、attempt phase 时间线及通知索引，减少无进展轮次；实际业务推进的进度统计仍保留。 R22: health 与 backlog 清理分开节流，通知投递命中 pending 索引；修正 health 写通知的 docstring，保留业务事实，不自动 VACUUM。 R09: 沿用保留期，单次维护最多 3 批/1 秒，存在 backlog 时缩短再次维护间隔；health 保持独立正常周期。"
+    }
+  ],
+  "verification": {
+    "status": "passed",
+    "record": "verification.json",
+    "evidence_directory": "remediation-evidence",
+    "full_suite": "1132 tests, 196.111s, OK, 1 skipped",
+    "independent_review_open_findings": 0,
+    "final_content_matches_recorded_checks": true
+  },
+  "remediation_review_findings": [
+    {
+      "finding_id": "FINAL-01",
+      "status": "fixed",
+      "evidence_reference": "remediation-evidence/robert-remediation-final-review-final.json",
+      "verified_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e"
+    },
+    {
+      "finding_id": "FINAL-02",
+      "status": "fixed",
+      "evidence_reference": "remediation-evidence/robert-remediation-final-review-final.json",
+      "verified_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e"
+    },
+    {
+      "finding_id": "FINAL-03",
+      "status": "fixed",
+      "evidence_reference": "remediation-evidence/robert-remediation-final-review-final.json",
+      "verified_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e"
+    },
+    {
+      "finding_id": "FINAL-04",
+      "status": "fixed",
+      "evidence_reference": "remediation-evidence/robert-remediation-final-review-final.json",
+      "verified_identity": "8ce32bc5b70789bd35a871d5a314bac0708d2b37d002de7784c85973f86c451e"
+    }
+  ],
+  "publication": {
+    "record": "publication.json",
+    "original_source_hashes_are_historical": true,
+    "public_source_findings_sha256": "292f9aea4a4564d3c7ea219d35f3c7e0e823cabff336ffacddd82de9000ef7ef",
+    "code_and_test_content_unchanged": true,
+    "note": "Public report copies redact local paths and convert workspace links; no source/test or finding verdict changes."
+  }
+}

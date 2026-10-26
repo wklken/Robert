@@ -206,7 +206,12 @@ def run_command_with_heartbeat(
                     timed_out = True
                     _kill_command(proc)
                     break
-                time.sleep(min(heartbeat_interval_seconds, remaining))
+                try:
+                    proc.wait(timeout=min(heartbeat_interval_seconds, remaining))
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    break
                 if proc.poll() is None:
                     _record_command_snapshot(
                         db_path=db_path,

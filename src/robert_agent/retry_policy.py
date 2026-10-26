@@ -118,6 +118,10 @@ def failure_state(previous, message, now, *, retryable=True):
 def publication_ready_sql(alias="github_actions"):
     """Use the same eligibility predicate before LIMIT and in scheduler probes."""
     return f"""{alias}.audit_status = 'accepted' AND {alias}.publish_status = 'not_published'
+      AND NOT EXISTS (SELECT 1 FROM attempts process JOIN worker_results result
+          ON result.attempt_id=process.attempt_id WHERE result.result_id={alias}.result_id
+          AND json_type(process.metadata_json,'$.dispatch.pid')='integer'
+          AND json_extract(process.metadata_json,'$.process_stopped_at') IS NULL)
       AND COALESCE(json_extract({alias}.metadata_json, '$.publish.retryable'), 1) != 0
       AND (json_extract({alias}.metadata_json, '$.publish.next_retry_at') IS NULL
            OR julianday(json_extract({alias}.metadata_json, '$.publish.next_retry_at')) <= julianday(?))

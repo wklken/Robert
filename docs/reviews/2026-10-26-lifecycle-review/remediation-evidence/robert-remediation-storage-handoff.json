@@ -1,0 +1,37 @@
+{
+  "status": "COMPLETE",
+  "unit": "storage initialization gates",
+  "base_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "files_sha256": {
+    "src/robert_agent/storage.py": "9cae441642268a47c715d0f09955442bb308309ed49c6f2643c5f096158c37a7",
+    "tests/test_storage_initialization_remediation.py": "4ca6e3baa3c56a29b4ad1cb086cfc185fe645acac7a098277132030b4a39a866"
+  },
+  "groups": [
+    "R21 verified mainline and route data migration hot-path subclaim"
+  ],
+  "logs": [
+    "<TEMP>/robert-remediation-storage-red.log",
+    "<TEMP>/robert-remediation-storage-green.log",
+    "<TEMP>/robert-remediation-storage-focused-green.log",
+    "<TEMP>/robert-remediation-storage-ruff.log",
+    "<TEMP>/robert-remediation-storage-cost.out"
+  ],
+  "new_migrations": [
+    "robert-pr-mainline-workstreams-v1",
+    "robert-route-recommended-skills-v1"
+  ],
+  "checks": {
+    "red": "5 new tests failed against prior code",
+    "focused_green": "26 tests passed: storage_initialization_remediation + sqlite_migration + package_layout",
+    "combined": "32 tests, one expected legacy test_migration marker count assertion (6 != 4), remaining 31 passed",
+    "before_after": "warm mainline history JOIN 1->0; route history UPDATE 1->0; intentionally empty current recommended_skills preserved"
+  },
+  "cycles_used": 2,
+  "limitations": [
+    "Parent must update old test_migration len(markers)==4 to account for two new migration markers.",
+    "Parent must repair test_run_once legacy fixture that inserts unmigrated shapes after successful initialization; this worker did not edit either test.",
+    "Existing executescript transaction boundaries are retained; the whole initialization is not claimed atomic, and late failed initialization may have applied idempotent conversion without completion markers.",
+    "Work-item/workflow conversion guards, legacy control import, and necessary initialization/backfill remain active.",
+    "No full suite, build, commit or external actions."
+  ]
+}

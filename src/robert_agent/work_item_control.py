@@ -1,5 +1,6 @@
 """Shared lifecycle facts and safe operator recovery for a work item."""
 import json
+from robert_agent import supervise
 
 from robert_agent.board_execution import safe_text
 from robert_agent.publication_lock import task_publication_lock
@@ -20,7 +21,7 @@ def lifecycle_facts(conn, item):
         JOIN tasks t ON t.task_id=a.task_id
         JOIN workstreams w ON w.workstream_id=t.workstream_id
         LEFT JOIN github_sources gs ON gs.source_id=w.primary_source_id WHERE t.workstream_id IN ({placeholders})
-        AND a.status IN ('running', 'stale')""", streams,
+        AND {supervise.occupied_attempt_sql()}""", streams,
     )]
     cleanup = []
     for attempt in attempts:
@@ -118,6 +119,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
         if outcome.get('status') not in {'terminated', 'not_found', 'already_dead'}:
             raise work_items.WorkItemConflictError('Worker could not be stopped: ' + str(outcome.get('reason') or outcome.get('status')))
         metadata['termination'] = outcome
+        metadata['process_stopped_at'] = now
         conn.execute('UPDATE attempts SET metadata_json=? WHERE attempt_id=?', (json.dumps(metadata), attempt['attempt_id']))
     # This is an explicit operator attestation, never an automatic inference
     # that an unrecorded process died. The task locks prevent concurrent spawn.

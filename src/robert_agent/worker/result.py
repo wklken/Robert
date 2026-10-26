@@ -333,11 +333,17 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
         cur = conn.execute(
             """
             UPDATE attempts
-            SET status = 'completed', finished_at = ?
+            SET status = CASE
+                  WHEN json_type(metadata_json,'$.dispatch.pid')='integer' THEN 'running'
+                  ELSE 'completed' END,
+                finished_at = CASE
+                  WHEN json_type(metadata_json,'$.dispatch.pid')='integer' THEN NULL
+                  ELSE ? END,
+                metadata_json = json_set(metadata_json, '$.result_received_at', ?)
             WHERE attempt_id = ? AND task_id = ?
               AND status IN ('running', 'prepared', 'stale')
             """,
-            (result_created_at, payload["attempt_id"], payload["task_id"]),
+            (result_created_at, result_created_at, payload["attempt_id"], payload["task_id"]),
         )
         if cur.rowcount == 0:
             conn.rollback()

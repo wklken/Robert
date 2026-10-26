@@ -1,0 +1,31 @@
+import sys,sqlite3,tempfile,time,json
+from pathlib import Path
+sys.path.insert(0,'<TEMP>/robert-verify-764c5e3-d_pwg86h/src')
+from robert_agent import storage,loop_engine,retention,daemon_state,daemon
+from robert_agent.validate_config import DAEMON_DEFAULTS
+from unittest.mock import patch
+root=Path(tempfile.mkdtemp(prefix='robert-review-schedule-')); db=root/'db.sqlite3'; storage.init_database(db)
+now='2026-10-26T00:00:00+00:00'; old='2026-01-01T00:00:00+00:00'
+with sqlite3.connect(db) as c:
+    c.execute("INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('repo:r','example/r','bot','main','/repo','/worktrees')")
+    c.execute("INSERT INTO workstreams(workstream_id,repo_id,lifecycle,created_at,updated_at) VALUES ('ws','repo:r','completed',?,?)",(old,old))
+    c.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,priority,created_at,updated_at) VALUES ('t','ws','completed','P1',?,?)",(old,old))
+    c.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at,finished_at) VALUES ('a','t',1,'completed',?,?)",(old,old))
+    c.execute("INSERT INTO vote_sessions(round_id,repo,number,source_type,workstream_id,trigger_fingerprint,status,request_json,created_at,updated_at) VALUES ('vote-q','example/r',1,'issue','ws','comment:2','queued','{}',?,?)",(old,old))
+    print('queued_vote_runnable',loop_engine.has_runnable_local_work(c,repo_ids=['repo:r']))
+    c.execute("INSERT INTO review_sessions(round_id,repo,pr_number,workstream_id,trigger_fingerprint,status,request_json,created_at,updated_at) VALUES ('review-q','example/r',1,'ws','comment:3','queued','{}',?,?)",(old,old))
+    print('queued_review_runnable',loop_engine.has_runnable_local_work(c,repo_ids=['repo:r']))
+    c.execute("DELETE FROM review_sessions")
+    plan=c.execute("EXPLAIN QUERY PLAN SELECT 1 FROM worker_phases WHERE attempt_id = ? LIMIT 1",('not-found',)).fetchall()
+    print('phase_query_plan',plan)
+    for size in (1000,100000):
+        c.execute('DELETE FROM worker_phases')
+        c.executemany("INSERT INTO worker_phases(phase_id,attempt_id,phase,status,summary,created_at) VALUES (?,'a','verify','running','Command still running',?)",((f'p-{i}',old) for i in range(size)))
+        start=time.perf_counter()
+        for _ in range(100):c.execute("SELECT 1 FROM worker_phases WHERE attempt_id = ? LIMIT 1",('not-found',)).fetchone()
+        print('phase_lookup_rows',size,'mean_ms',(time.perf_counter()-start)*10)
+    daemon_state.start_daemon_run(c,config_path='/x',owner_id='d',now=old)
+    c.executemany("INSERT INTO daemon_events(daemon_event_id,daemon_run_id,event_type,status,created_at) VALUES (?,'d','local_drain_completed','ok',?)",((f'ev-{i}',old) for i in range(120)))
+print('default_retention_batch',retention.prune_database(db,apply=True,now=now)['counts']['daemon_events'])
+print('default_events_per_day_no_progress',86400/DAEMON_DEFAULTS['local_poll_seconds']*2)
+print('default_event_prune_capacity_per_day',86400/DAEMON_DEFAULTS['maintenance_interval_seconds']*DAEMON_DEFAULTS['maintenance_batch_size'])

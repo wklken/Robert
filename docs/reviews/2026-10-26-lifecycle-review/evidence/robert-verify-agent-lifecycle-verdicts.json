@@ -1,0 +1,169 @@
+{
+  "assignment_status": "COMPLETE",
+  "checked_head": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "snapshot": "<TEMP>/robert-verify-764c5e3-d_pwg86h",
+  "introduced_for_all": "Not applicable",
+  "scope_for_all": "in scope",
+  "rows": [
+    {
+      "finding_id": "B/I/1",
+      "original_severity": "高",
+      "summary": "Drain软预算和父进程硬超时相同，已提交的run/lease可在硬杀后残留。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "src/robert_agent/daemon.py:432-452",
+        "src/robert_agent/daemon.py:101-122",
+        "src/robert_agent/loop_engine.py:255-273",
+        "src/robert_agent/run_once.py:808-853",
+        "src/robert_agent/run_once.py:7070-7072",
+        "src/robert_agent/run_once.py:4881-4888",
+        "src/robert_agent/retention.py:20-29",
+        "src/robert_agent/reliability_health.py:45-50",
+        "<TEMP>/robert-verify-agent-lifecycle-results.json#B/I/1"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "source_reference": "<TEMP>/robert-verify-manifest.json#B/I/1",
+      "details": [
+        "Correct subclaim: daemon passes the same local_drain_timeout_seconds to --max-seconds and subprocess.run(timeout); loop checks only before each complete run_once cycle. Actual daemon child timeout probe leaves committed run=running, lease=active, finally marker absent; next lease acquisition is skipped_active_lease.",
+        "Correct subclaim: retention excludes running agent_runs; source search finds no daemon startup reconciliation of abandoned agent_runs. dispatch_inflight is committed before spawn and, when encountered later, changes execution binding to attention/dispatch_outcome_unknown.",
+        "Unsupported/inaccurate: a cycle starting at 170 seconds is killed only if it exceeds the remaining deadline, not inevitably. Repo lease expiry is acquisition+540 seconds by default; post-kill delay is the remaining TTL, not another full 9 minutes. The orphan-run health query is instrumentation, not evidence that production already observed orphans.",
+        "Evidence limit: probe invokes actual daemon.run_child_json and actual lease helpers in a temporary child, rather than reproducing the entire 180-second production drain; exact outer/inner budget equality and finally location are source verified."
+      ],
+      "proposed_fix_assessment": "Keep graceful shutdown, bounded external calls, reserved shutdown margin and abandoned-run reconciliation. A fixed 60-second margin alone cannot bound a blocking fetch; propagate deadlines. Before marking prior runs failed/releasing ownership, prove previous owner and descendants stopped and reconcile possible external effects; never blanket-finalize all running rows."
+    },
+    {
+      "finding_id": "B/I/3",
+      "original_severity": "高，语义冲突",
+      "summary": "全局默认45分钟确实限制90分钟worker配置，但这是明确声明的上限策略。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "src/robert_agent/supervise.py:17-44",
+        "docs/reference.md:180-198",
+        "docs/guides.md:112-119",
+        "docs/multi-model-review.md:54",
+        "<TEMP>/robert-verify-agent-lifecycle-results.json#B/I/3"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "source_reference": "<TEMP>/robert-verify-manifest.json#B/I/3",
+      "details": [
+        "Correct subclaim: supervise.classify_attempt computes min(global timeout, launch timeout); fresh heartbeat plus runtime=45 minutes, global=45, launch=5400 returns failed_timeout and timeout_seconds=2700.",
+        "Counterevidence to bug interpretation: docs/reference.md:185 declares an independent supervision wall-time limit; :197-198 explicitly states increasing workers timeout alone does not raise global hard timeout. docs/multi-model-review.md:54 explicitly preserves parent total time while waiting for slots. docs/reference.md:197-198 is already documented in commit 9484286a (2026-10-23), not a new post-report correction.",
+        "Historical new-pr P95=5015 and a production causal claim of widespread repeated work were not verified by this scope; deployed hard_timeout_minutes is unknown. Default45 does not establish actual production setting."
+      ],
+      "proposed_fix_assessment": "Reject changing to attempt timeout precedence as an ordinary bug fix: it changes the documented global cap. A diagnostic showing effective=min(global,worker), a configuration warning, and an explicit operator choice of parent budget are compatible follow-ups. Policy change requires a separate behavioral decision."
+    },
+    {
+      "finding_id": "B/I/4",
+      "original_severity": "中高",
+      "summary": "持续超过10秒的SQLite写锁可使正常等待中的多模型review整轮失败并终止同轮模型。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "src/robert_agent/model_execution.py:136-143",
+        "src/robert_agent/model_execution.py:319-349",
+        "src/robert_agent/review_store.py:79-84",
+        "src/robert_agent/review_coordinator.py:110-120",
+        "src/robert_agent/review_coordinator.py:164-175",
+        "<TEMP>/robert-verify-agent-lifecycle-results.json#B/I/4"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "source_reference": "<TEMP>/robert-verify-manifest.json#B/I/4",
+      "details": [
+        "Actual _wait invokes check_active, which validates owner then UPDATEs heartbeat through store.connect(timeout=10). sqlite3.OperationalError is outside review_one caught types; outer Coordinator.run catches Exception and marks session failed, then terminate_children.",
+        "Real temporary SQLite writer held 11 seconds; actual Coordinator.run -> _wait -> check_active raised OperationalError: database is locked, session became failed and an actual registered independent model process exited via SIGTERM (-15); measured11.05 seconds.",
+        "Boundary: not every short lock collision causes failure; it must outlast the10-second connection wait. Source-supported source paths holding writer across I/O are separately assigned B/I/8/root finding."
+      ],
+      "proposed_fix_assessment": "Do not skip check_active wholesale on lock failure: that is also the active-attempt/cancellation fence. Separate heartbeat persistence from ownership validation, use bounded contention handling, retain cancellation checks, and fix long writer transactions first. 30-60-second heartbeat is a design option, not a demonstrated required value."
+    },
+    {
+      "finding_id": "B/I/5",
+      "original_severity": "中",
+      "summary": "Leader退出但仍有未验证后代时会保留容量并进入人工attention；直接killpg建议不满足身份边界。",
+      "verdict": "Partially correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "src/robert_agent/run_once.py:1410-1424",
+        "src/robert_agent/run_once.py:937-962",
+        "src/robert_agent/run_once.py:976-994",
+        "src/robert_agent/run_once.py:1182-1194",
+        "src/robert_agent/run_once.py:2407-2438",
+        "src/robert_agent/worker_identity.py:234-270",
+        "src/robert_agent/worker_identity.py:325-366",
+        "src/robert_agent/execution_store.py:297-302",
+        "src/robert_agent/model_execution.py:32-43",
+        "tests/test_process_termination.py:15-60",
+        "<TEMP>/robert-verify-agent-process-termination.out"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "source_reference": "<TEMP>/robert-verify-manifest.json#B/I/5",
+      "details": [
+        "Correct subclaim: dead recorded leader is never authority to signal an unknown remaining group. _dispatch_process_status detects live group, returns unknown/unverified_descendants_running, supervisor records attention while leaving attempt running; admission counts running regardless of attention.",
+        "Inaccurate: after binding attention the task is excluded by runnable_sql and active claim; it is not necessarily repeatedly processed by ordinary local supervision. orphaned_command_running is a different branch for discovered command records and is bounded by hard timeout unless cleanup remains unverified.",
+        "Counterevidence to proposed fix: worker_identity requires PID, PGID, process start token and command fingerprint. model_execution._group_finished invokes killpg(pgid,0) only as observation, not authority to kill. Numeric PGID==old PID alone does not prove the same owner after restart/reuse.",
+        "Existing controlled real-process tests explicitly require refusal to terminate unverified orphans; tests.test_process_termination ran3 tests successfully in2.240 seconds. Thus retained capacity is an intentional safety choice, though recovery operability can be improved; indefinite occupancy depends on descendants remaining alive and no operator cleanup."
+      ],
+      "proposed_fix_assessment": "Reject automatic killpg from a numeric PGID and unconditional failed/capacity release after a timer. Preserve fail-closed ownership; improve persisted descendant identities/explicit operator recovery, and release capacity only after confirmed exit or an explicitly authorized attestation."
+    },
+    {
+      "finding_id": "B/I/6",
+      "original_severity": "中",
+      "summary": "Classification父任务提交完成后Git准备失败，会留下无法被本地runnable探测唤醒的可恢复状态。",
+      "verdict": "Correct",
+      "introduced": "Not applicable",
+      "scope": "in scope",
+      "evidence_reference": [
+        "src/robert_agent/run_once.py:5999-6005",
+        "src/robert_agent/run_once.py:5683-5717",
+        "src/robert_agent/run_once.py:5550-5565",
+        "src/robert_agent/run_once.py:5797-5857",
+        "src/robert_agent/loop_engine.py:95-206",
+        "tests/test_run_once.py:2709-2829",
+        "<TEMP>/robert-verify-agent-lifecycle-results.json#B/I/6"
+      ],
+      "disposition": "Follow-up",
+      "resolution": "open",
+      "source_reference": "<TEMP>/robert-verify-manifest.json#B/I/6",
+      "details": [
+        "Actual finalization first consumes events/wakeup and completes parent; _create_child_task_for_recommended_route commits before _prepare_worktree, then only creates child. That pre-I/O commit is necessary to avoid writer locks across Git, but there is no durable runnable successor intent.",
+        "Simulated Git failure in actual _prepare_worktree call gave failed_route, parent completed, child count0, only wakeup consumed; has_runnable_local_work=False. A subsequent manual run_once recovered and dispatched1 child through _recover_orphaned_classification_results.",
+        "Latency depends on next external poll/other runnable work and configuration; default external schedules are300/600 seconds, but another active local task or explicit run can recover sooner. Repeated fetch requires persistent preparation failure; does not prove unavoidable duplicate network work after successful recovery."
+      ],
+      "proposed_fix_assessment": "Keep the commit before external Git I/O. Add a durable handoff/recovery intent or teach local eligibility to detect this accepted completed classification with no child, including bounded retry scheduling and attention on deterministic failure; do not restore one giant transaction across fetch."
+    }
+  ],
+  "artifacts": [
+    "<TEMP>/robert-verify-agent-lifecycle.py",
+    "<TEMP>/robert-verify-agent-lifecycle.out",
+    "<TEMP>/robert-verify-agent-lifecycle-results.json",
+    "<TEMP>/robert-verify-agent-process-termination.out"
+  ],
+  "commands": [
+    {
+      "cwd": "<TEMP>/robert-verify-764c5e3-d_pwg86h",
+      "command": "PYTHONPATH=<snapshot>/src:<snapshot> ./.venv/bin/python -B <TEMP>/robert-verify-agent-lifecycle.py",
+      "result": "exit0; B/I/1,B/I/3,B/I/4,B/I/6 reproduced as detailed"
+    },
+    {
+      "cwd": "<TEMP>/robert-verify-764c5e3-d_pwg86h",
+      "command": "PYTHONPATH=<snapshot>/src:<snapshot> ./.venv/bin/python -B -m unittest tests.test_process_termination",
+      "result": "3 tests passed,2.240s"
+    }
+  ],
+  "limits": [
+    "No production database/config inspected",
+    "No external GitHub/model calls",
+    "No repository files changed",
+    "Original historical percentile/online occurrence claims not verified",
+    "All real child processes created by probes were reaped/cleaned"
+  ]
+}

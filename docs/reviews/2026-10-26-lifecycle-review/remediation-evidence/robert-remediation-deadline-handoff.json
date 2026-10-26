@@ -1,0 +1,60 @@
+{
+  "status": "COMPLETE",
+  "scope": [
+    "FINAL-02",
+    "FINAL-03",
+    "R06 confirmed lease TTL omission"
+  ],
+  "cwd": ".",
+  "base": "764c5e3771565899b4b7dcf45044a229a31fb591",
+  "changed_files": [
+    "src/robert_agent/daemon.py",
+    "src/robert_agent/worktree.py",
+    "src/robert_agent/publish.py",
+    "src/robert_agent/run_once.py",
+    "tests/test_deadline_remediation.py"
+  ],
+  "inspected_unchanged": [
+    "src/robert_agent/common.py"
+  ],
+  "hashes": {
+    "src/robert_agent/daemon.py": "511e749d38969464f7157a1875ef0f0a07214c59ed8b4ec7813a47d40f13486c",
+    "src/robert_agent/worktree.py": "ec74f2f4f4022806fd87ce831da32f028a9d58bb9c735eab607b769a92f6e2a3",
+    "src/robert_agent/publish.py": "e33a21c5c3d61765dd895cda3f32d6c48274d6bee645bfd123b2e0783428a4da",
+    "src/robert_agent/common.py": "68a1fade2c83febc2f122d6cf0af959e492fa2541b76bb7033ddc44cfba3a36a",
+    "src/robert_agent/run_once.py": "f7bd7e2bcf5be40ca249a5fb1aaf610666795ee0fd1f159fe5d51fda326a7190",
+    "tests/test_deadline_remediation.py": "0690849d87e6b4337473b671f72c0c75ff689d2d69871abda04991fda33f639f"
+  },
+  "run_once_owned_function_sha256": "4ea8ef4ddbb42377c7a01b0b2f9fc128fcae9b6d16e0b0dd25b2b55fc2d64a7e",
+  "run_once_scope": "Only _can_materialize_worktree plus common.run_command import. Parent concurrent changes elsewhere are excluded from our ownership.",
+  "red": {
+    "command": "source .venv/bin/activate && python3 -B -m unittest tests.test_deadline_remediation",
+    "result": "7 tests, 6 failures and 3 errors (includes subtests), expected ProcessLookupError and ignored deadline/TTL assertions",
+    "log": "<TEMP>/robert-remediation-deadline-red.log"
+  },
+  "green": {
+    "command": "source .venv/bin/activate && python3 -B -m unittest tests.test_deadline_remediation",
+    "result": "8 tests passed in 0.101s",
+    "log": "<TEMP>/robert-remediation-deadline-green.log"
+  },
+  "focused": {
+    "command": "source .venv/bin/activate && python3 -B -m unittest tests.test_deadline_remediation tests.test_daemon tests.test_controlplane_remediation tests.test_worktree_safety tests.test_pr_remediation_integration tests.test_publication_reconcile tests.test_publish_dedupe_acceptance tests.test_reliability",
+    "result": "94 tests passed in 11.150s",
+    "log": "<TEMP>/robert-remediation-deadline-focused-green.log"
+  },
+  "lint": {
+    "command": "source .venv/bin/activate && python3 -m ruff check src/robert_agent/daemon.py src/robert_agent/worktree.py src/robert_agent/publish.py src/robert_agent/common.py src/robert_agent/run_once.py tests/test_deadline_remediation.py",
+    "result": "All checks passed",
+    "log": "<TEMP>/robert-remediation-deadline-ruff.log"
+  },
+  "diff_check": "git diff --check passed",
+  "cycles": 2,
+  "limits": [
+    "No full suite/build; parent owns those gates.",
+    "Process exit races mocked; existing actual child timeout/nonce lease reconciliation integration passed.",
+    "Unknown group liveness does not authorize reconciliation.",
+    "TTL includes known sequential rate/child/cleanup budgets; original heartbeat margin remains for maintenance and other operations, not an absolute bound for arbitrary filesystem/delivery stalls.",
+    "run_once._trusted_action_scope still uses two raw Git calls capped at five seconds, outside owned function scope; parent notified.",
+    "common.py was inspected and reused without modification."
+  ]
+}

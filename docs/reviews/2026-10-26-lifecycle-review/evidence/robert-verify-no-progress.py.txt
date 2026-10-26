@@ -1,0 +1,42 @@
+import sys, time, json, sqlite3, tempfile, subprocess
+from pathlib import Path
+from datetime import datetime, timezone
+from unittest.mock import patch
+sys.path.insert(0, '<TEMP>/robert-verify-764c5e3-d_pwg86h/src')
+from robert_agent import storage, run_once, loop_engine, execution_store
+from robert_agent.worker import heartbeat
+
+root = Path(tempfile.mkdtemp(prefix='robert-review-probe-'))
+repo = root/'repo'; repo.mkdir(); (repo/'.git').mkdir()
+data = root/'data'; data.mkdir(); db = data/'robert.sqlite3'
+config = root/'config.yml'
+config.write_text(f'''data_dir: {data}
+database: robert.sqlite3
+max_concurrency: 1
+repos:
+  - full_name: example/repo
+    github_account: robot
+    trusted_actors: [owner]
+    default_base_branch: main
+    repo_root: {repo}
+    worktree_root: {repo}/.worktrees
+''')
+storage.init_database(db)
+now=datetime.now(timezone.utc).isoformat()
+with sqlite3.connect(db) as c:
+    c.execute("INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('repo:example/repo','example/repo','robot','main',?,?)",(str(repo),str(repo/'.worktrees')))
+    c.execute("INSERT INTO workstreams(workstream_id,repo_id,lifecycle,active_task_id,created_at,updated_at) VALUES ('ws','repo:example/repo','active','task',?,?)",(now,now))
+    c.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,priority,created_at,updated_at) VALUES ('task','ws','running','P1',?,?)",(now,now))
+    c.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at,heartbeat_at) VALUES ('attempt','task',1,'running',?,?)",(now,now))
+    c.execute("INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at) VALUES ('task','task','human_request','active',?,?)",(now,now))
+
+def counts():
+    with sqlite3.connect(db) as c:
+        return {t:c.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('agent_runs','run_steps','run_repo_steps','leases','tasks','attempts','worker_phases','wakeups')}
+print(json.dumps({'root':str(root),'before':counts()}),flush=True)
+start=time.monotonic(); results=[]
+with patch.object(run_once,'_dispatch_process_status',return_value={'status':'alive'}):
+    for _ in range(10):
+        result=loop_engine.run_loop(config,dry_run=True,skip_external=True,skip_publish=True)
+        results.append({'ok':result['ok'],'cycles':result['cycles'],'stop_reason':result['stop_reason']})
+print(json.dumps({'probe':'ten_no_progress_drains','elapsed':time.monotonic()-start,'after':counts(),'results':results,'db_bytes':db.stat().st_size}),flush=True)

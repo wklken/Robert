@@ -1,0 +1,49 @@
+import json,sqlite3,subprocess,sys,time
+from contextlib import closing
+from datetime import datetime,timezone
+from tests.test_review_coordinator import ReviewCoordinatorTests
+from robert_agent import review_store,run_once,worker_identity
+f=ReviewCoordinatorTests();f.setUp();f.cycle([f.event()]);d=f.coordinator();d.prepare()
+model=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)'],start_new_session=True)
+coordinator=None
+try:
+ identity=worker_identity.capture_process_identity(model.pid)
+ with review_store.connect(f.db) as c:
+  run=review_store.new_run(c,d.round_id,'review','codex',d.attempt_id,d.manifest['artifact_root'],d.manifest['prompt_sha256'])
+  review_store.update_run(c,run['run_id'],status='running',slot_reserved=1,dispatch_json=json.dumps(identity))
+ ready=f.root/'coordinator-ready'
+ program='''import signal,sys,time
+from pathlib import Path
+from robert_agent.review_coordinator import Coordinator
+d=Coordinator(sys.argv[1],sys.argv[2],sys.argv[3])
+signal.signal(signal.SIGTERM,lambda *_:d.stopping.set())
+def prepare():
+ Path(sys.argv[4]).touch()
+ while True:
+  d.check_active()
+  time.sleep(.05)
+d.prepare=prepare
+d.run()
+'''
+ coordinator=subprocess.Popen([sys.executable,'-B','-c',program,str(f.db),d.task_id,d.attempt_id,str(ready)],start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ deadline=time.monotonic()+5
+ while not ready.exists() and time.monotonic()<deadline:time.sleep(.01)
+ assert ready.exists()
+ top=worker_identity.capture_process_identity(coordinator.pid)
+ now=datetime.now(timezone.utc).isoformat()
+ with closing(sqlite3.connect(f.db)) as c,c:
+  c.execute("UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,metadata_json=? WHERE attempt_id=?",(now,now,json.dumps({'dispatch':top}),d.attempt_id))
+ with closing(sqlite3.connect(f.db)) as c,c:
+  repo,ws,source,key,typ,num=c.execute('SELECT w.repo_id,w.workstream_id,gs.source_id,gs.source_key,gs.source_type,gs.number FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id JOIN github_sources gs ON gs.source_id=w.primary_source_id WHERE t.task_id=?',(d.task_id,)).fetchone()
+  started=time.monotonic()
+  answer=run_once._record_remote_terminal_state(c,repo,ws,source,key,typ,num,d.task_id,{'state':'closed','closed_at':now},'canceled','remote_pr_closed',now)
+  print('remote_close_returned',answer,'elapsed',round(time.monotonic()-started,2))
+  print('task',c.execute('SELECT lifecycle FROM tasks WHERE task_id=?',(d.task_id,)).fetchone()[0],'attempt',c.execute('SELECT status FROM attempts WHERE attempt_id=?',(d.attempt_id,)).fetchone()[0])
+ print('coordinator_exit',coordinator.wait(timeout=3),'model_alive',model.poll() is None)
+ with review_store.connect(f.db) as c:
+  print('session',review_store.session(c,task_id=d.task_id)['status'],'model_run',[(x['status'],x['slot_reserved']) for x in review_store.runs(c,d.round_id) if x['run_id']==run['run_id']])
+finally:
+ for p in (model,coordinator):
+  if p and p.poll() is None:p.kill()
+  if p:p.wait(timeout=3)
+ f.doCleanups()

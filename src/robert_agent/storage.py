@@ -22,6 +22,25 @@ WORKFLOW_MIGRATION_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+PR_MAINLINE_MIGRATION_VERSION = 4
+PR_MAINLINE_MIGRATION_NAME = "robert-pr-mainline-workstreams-v1"
+PR_MAINLINE_MIGRATION_CHECKSUM = hashlib.sha256(
+    PR_MAINLINE_MIGRATION_NAME.encode("utf-8")
+).hexdigest()
+RECOMMENDED_SKILLS_MIGRATION_VERSION = 5
+RECOMMENDED_SKILLS_MIGRATION_NAME = "robert-route-recommended-skills-v1"
+RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(
+    RECOMMENDED_SKILLS_MIGRATION_NAME.encode("utf-8")
+).hexdigest()
+
+
+def _data_migration_pending(conn, name, checksum):
+    marker = conn.execute("SELECT checksum FROM schema_migrations WHERE name=?", (name,)).fetchone()
+    if marker and marker[0] != checksum:
+        raise RuntimeError(f"{name} migration checksum mismatch")
+    return marker is None
+
+
 def _migration_version(conn, preferred):
     # Legacy DD installations may already use this ordinal for another name.
     # Names and checksums identify migrations; retain their historical ordinals.
@@ -541,9 +560,16 @@ def init_database(db_path, schema_path=None):
 
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.executescript(schema)
-        _migrate_pr_mainline_workstreams(conn)
+        pending = []
+        pr_pending = _data_migration_pending(conn, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM)
+        skills_pending = _data_migration_pending(conn, RECOMMENDED_SKILLS_MIGRATION_NAME, RECOMMENDED_SKILLS_MIGRATION_CHECKSUM)
+        if pr_pending:
+            _migrate_pr_mainline_workstreams(conn)
+            pending.append((PR_MAINLINE_MIGRATION_VERSION, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM))
         _migrate_github_action_publish_status(conn)
-        _migrate_route_recommended_skills(conn)
+        if skills_pending:
+            _migrate_route_recommended_skills(conn)
+            pending.append((RECOMMENDED_SKILLS_MIGRATION_VERSION, RECOMMENDED_SKILLS_MIGRATION_NAME, RECOMMENDED_SKILLS_MIGRATION_CHECKSUM))
         _migrate_work_item_control(conn)
         _migrate_workflow_storage(conn)
         from robert_agent import execution_store
@@ -554,6 +580,15 @@ def init_database(db_path, schema_path=None):
         review_store.initialize(conn)
         from robert_agent import vote_store
         vote_store.initialize(conn)
+        # Keep data conversions before work-item backfill, but record their
+        # success only after all initialization completes. This preserves old
+        # work-item/workflow ordinals and leaves failed upgrades retryable.
+        for preferred, name, checksum in pending:
+            if _data_migration_pending(conn, name, checksum):
+                conn.execute(
+                    "INSERT INTO schema_migrations(version,name,checksum,applied_at) VALUES (?,?,?,datetime('now'))",
+                    (_migration_version(conn, preferred), name, checksum),
+                )
         tables = sorted(
             row[0]
             for row in conn.execute(

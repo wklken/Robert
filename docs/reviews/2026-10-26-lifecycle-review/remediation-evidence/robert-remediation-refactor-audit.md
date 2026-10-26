@@ -1,0 +1,16 @@
+# Changed-boundary audit
+
+Base: 764c5e3771565899b4b7dcf45044a229a31fb591. Final patch identity and full code/test gate identity are in robert-remediation-review-manifest-final.json. This is a read-only audit of boundaries changed by the remediation, not a repository-wide dead-code claim.
+
+- Inventoried source additions/extractions and imports from the actual Git diff. Searched exact new/old symbols in src and tests; references captured in robert-remediation-symbol-references.log during work. All new production helpers have production callers. No public CLI entrypoint or package export was removed.
+- `supervise.occupied_attempt_sql` is consumed by daemon_state admission, scheduler, supervision and work-item control. Existing private run_once count helpers remain delegates because their current callers/tests use that seam; duplicate SQL was removed.
+- Scheduler signature additions are keyword-only. `load_config_scope` retains the default two-value return; only include_config=True produces three. The production daemon and loop forward real validated timeout config; compatibility tests exercise both forms.
+- Recovery evidence was split into observation and `_backfill_command_phases`. File/PID observations complete before any backfill write. Recovery Git inspection completes before phase writes; one metadata-path/fallback choice replaces repeated inspection. Existing durable completion/aliased-file tests retain exactly-once command phase evidence. Startup and scheduler probes pass persist=False.
+- Every released supervision observation is followed by a writer lock and current attempt/heartbeat/metadata/result/execution-control check before a transition. Two isolated concurrent accepted-result regressions plus command/Git writer-contention regressions cover these boundaries.
+- `common.run_command` is used at supported control Git/GitHub command seams and keeps runner injection; worker environments exclude control deadline and executor nonce. Standalone worker lifetimes retain their own configured budgets. Publication keeps trusted scope and durable intent handling.
+- Daemon cleanup uses its persisted executor nonce, exact process identity and group-exit evidence. It does not release worker/model ownership through agent-run cleanup. Unknown process identity remains attention.
+- New data migration markers and indexes are initialized with legacy column upgrade order preserved. CLI registration and package resource schema paths remain unchanged. No dependency was added or upgraded.
+- Consecutive phase deduplication retains phase/status/summary/next_step changes and all heartbeats. Rejected spool evidence is archived; stable publication/spool lock inodes remain. All full source-integrity scans remain.
+- Fresh Ruff covers unused imports and the scoped Mypy check covers configured CI paths. Full suite/build and final immutable-snapshot review results are recorded separately; no AST-only search is claimed to prove dynamically referenced symbols unused.
+
+Limits: no production database, external model/GitHub call, runtime deployment, historical evidence deletion, or software downgrade was performed. Existing repository-wide forwarding helpers and unrelated dead code were outside scope.

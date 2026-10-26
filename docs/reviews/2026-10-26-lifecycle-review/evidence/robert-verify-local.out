@@ -1,0 +1,18 @@
+prepared_future_runnable True
+prepared_future_queued 0 queue []
+waiting_context_runnable True
+waiting_context_decisions []
+waiting_context_consumed 2026-10-26T00:46:23.117699+00:00
+intent 'debug' bug_fix issue_route new-pr
+intent 'prefix' bug_fix issue_route new-pr
+intent 'fixture' bug_fix issue_route new-pr
+intent 'suffix' bug_fix issue_route new-pr
+intent '分析一下为什么失败' bug_fix issue_route new-pr
+intent '实现用户登录' unclear issue_route classification-result
+intent '支持增量同步' unclear issue_route classification-result
+intent 'add a feature' unclear issue_route classification-result
+intent 'implement pagination' unclear issue_route classification-result
+identical_heartbeat_phase_rows 3
+spool_slow_read_simulation 0 writer_calls 0 counts {'recorded': 0, 'deferred': 0, 'rejected': 0} pending_still_exists True
+spool_slow_read_simulation 1 writer_calls 0 counts {'recorded': 0, 'deferred': 0, 'rejected': 0} pending_still_exists True
+temporary_db <TEMP>/robert-verify-local-by47lexn/r.sqlite3

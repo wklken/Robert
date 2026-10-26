@@ -1,0 +1,109 @@
+...........From /private<TEMP>/tmpspn__dt8/controlled/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (new branch 'codex/dd-77-fix-controlled-e2e-acceptance')
+branch 'codex/dd-77-fix-controlled-e2e-acceptance' set up to track 'upstream/main'.
+HEAD is now at 96a5ea5 initial acceptance fixture
+....................................................................................................From /private<TEMP>/tmp6c52ouwc/controlled-e2e/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (new branch 'codex/dd-77-fix-controlled-e2e-acceptance')
+branch 'codex/dd-77-fix-controlled-e2e-acceptance' set up to track 'upstream/main'.
+HEAD is now at 3a6e758 initial acceptance fixture
+......................................................................................................................................From /private<TEMP>/tmp7jtjrskk/worktree-acceptance/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (new branch 'codex/dd-77-fix-worktree-acceptance')
+branch 'codex/dd-77-fix-worktree-acceptance' set up to track 'upstream/main'.
+HEAD is now at 5f84174 initial acceptance fixture
+.From <TEMP>/tmpfl2qh54c/upstream
+ * branch            main       -> FETCH_HEAD
+ * [new branch]      main       -> upstream/main
+From <TEMP>/tmpfl2qh54c/upstream
+ * [new ref]         refs/pull/13/head -> refs/robert/reviews/pr-13
+Preparing worktree (new branch 'review/pr-13-review-feature')
+HEAD is now at ad5aa6d topic
+From <TEMP>/tmpfl2qh54c/upstream
+ * branch            main       -> FETCH_HEAD
+From <TEMP>/tmpfl2qh54c/upstream
+   ad5aa6d..6ea8a40  refs/pull/13/head -> refs/robert/reviews/pr-13
+HEAD is now at 6ea8a40 update PR
+..From <TEMP>/tmpca_5mxc1/upstream
+ * branch            main       -> FETCH_HEAD
+ * [new branch]      main       -> upstream/main
+From <TEMP>/tmpca_5mxc1/upstream
+ * [new ref]         refs/pull/13/head -> refs/robert/reviews/pr-13
+Preparing worktree (new branch 'review/pr-13-review-feature')
+HEAD is now at 83e5586 topic
+................................................................................................................../.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10880e2f0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10880e110>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10910cd60>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10910c5e0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10910f100>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10910f790>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10910f010>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109154040>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109154130>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109154220>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109154310>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109154400>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1091545e0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109155a80>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+....................................................................................................................................................../opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10889e6b0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+........................................................................................................................s......................................................................................................................................................................................................................................................................................................................................................................./src/robert_agent/storage.py:594: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x108e1da80>
+  for row in conn.execute(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./src/robert_agent/storage.py:594: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x108e1c8b0>
+  for row in conn.execute(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..........................................................................................................................................From <TEMP>/tmpqtdj_kl6/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (detached HEAD 0e74b0e)
+HEAD is now at 0e74b0e initial
+.From <TEMP>/tmpmx_mcm6z/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (detached HEAD 879a2ae)
+HEAD is now at 879a2ae initial
+From <TEMP>/tmpmx_mcm6z/upstream
+ * branch            main       -> FETCH_HEAD
+   879a2ae..0757e66  main       -> upstream/main
+HEAD is now at 0757e66 advance
+.From <TEMP>/tmp42e91fof/upstream
+ * branch            main       -> FETCH_HEAD
+From <TEMP>/tmp42e91fof/upstream
+ * [new ref]         refs/pull/42/head -> refs/robert/reviews/pr-42
+Preparing worktree (new branch 'review/pr-42-title')
+HEAD is now at 879a2ae initial
+..
+----------------------------------------------------------------------
+Ran 1132 tests in 196.111s
+
+OK (skipped=1)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1139: ResourceWarning: subprocess 91720 is still running

@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime, timezone
 
 from robert_agent import discover, redaction
+from robert_agent.common import run_command
 
 
 SUCCESSFUL_CONCLUSIONS = {"success", "neutral", "skipped"}
@@ -56,8 +57,8 @@ def fetch_pr_snapshot(repo_full_name, number, runner=subprocess.run):
 
 def _try_run_text(args, runner):
     try:
-        completed = runner(
-            args,
+        completed = run_command(
+            args, runner=runner,
             text=True,
             capture_output=True,
             check=True,

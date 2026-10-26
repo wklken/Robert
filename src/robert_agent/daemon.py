@@ -4,6 +4,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
+import os
 from pathlib import Path
 import signal
 import sqlite3
@@ -13,7 +14,7 @@ import time
 from uuid import uuid4
 
 from robert_agent.common import emit
-from robert_agent import daemon_state, execution_store, redaction, retention, storage, wakeup_notifier
+from robert_agent import daemon_state, execution_store, redaction, retention, storage, wakeup_notifier, wakeup, worker_identity
 from robert_agent import loop_engine
 from robert_agent import validate_config
 from robert_agent import notify
@@ -22,6 +23,11 @@ from robert_agent import notify
 SCRIPT_ROOT = Path(__file__).resolve().parent
 AGENTS_ROOT = SCRIPT_ROOT.parents[1]
 _STOP_REQUESTED = False
+RATE_LIMIT_TIMEOUT_SECONDS = 30
+CONTROL_TERM_GRACE_SECONDS = 2
+CONTROL_KILL_REAP_SECONDS = 2
+# run_once._live_process_group bounds its ps inspection at five seconds.
+CONTROL_GROUP_PROOF_SECONDS = 5
 
 
 @dataclass
@@ -41,6 +47,8 @@ class DaemonContext:
     rate_limit_decision_cache: dict | None = None
     rate_limit_cache_expires_at: str | None = None
     next_maintenance_at: float = 0.0
+    runtime_config: dict | None = None
+    next_health_at: float = 0.0
 
 
 def _script_path(name):
@@ -99,15 +107,41 @@ def _short_text(value, max_chars=2000):
 
 
 def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
+    executor_id = None
+    group_stopped = False
     try:
-        completed = runner(
-            command,
-            cwd=str(AGENTS_ROOT),
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        if runner is subprocess.run:
+            executor_id = uuid4().hex
+            margin = min(30, max(.05, timeout_seconds * .1))
+            environment = {**os.environ, '_ROBERT_EXECUTOR_ID': executor_id,
+                           '_ROBERT_CONTROL_DEADLINE': str(time.monotonic() + max(.01, timeout_seconds - margin))}
+            process = subprocess.Popen(command, cwd=str(AGENTS_ROOT), env=environment,
+                                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       start_new_session=True)
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass  # The owned group exited between timeout and signal.
+                try:
+                    process.communicate(timeout=min(CONTROL_TERM_GRACE_SECONDS, max(.1, margin)))
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.communicate(timeout=CONTROL_KILL_REAP_SECONDS)
+                from robert_agent import run_once as executor
+                group_stopped = not executor._live_process_group(process.pid)
+                raise
+            completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            from robert_agent import run_once as executor
+            group_stopped = not executor._live_process_group(process.pid)
+        else:
+            completed = runner(command, cwd=str(AGENTS_ROOT), text=True, capture_output=True,
+                               timeout=timeout_seconds, check=False)
     except subprocess.TimeoutExpired as exc:
         return {
             "ok": False,
@@ -118,6 +152,8 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
                 "timeout_seconds": timeout_seconds,
                 "stdout": _short_text(getattr(exc, "stdout", "")),
                 "stderr": _short_text(getattr(exc, "stderr", "")),
+                "executor_id": executor_id,
+                "process_group_stopped": group_stopped,
             },
         }
     stdout = completed.stdout.strip()
@@ -126,6 +162,8 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
         "returncode": completed.returncode,
         "stdout": _short_text(completed.stdout),
         "stderr": _short_text(completed.stderr),
+        "executor_id": executor_id,
+        "process_group_stopped": group_stopped,
     }
     try:
         payload = json.loads(stdout)
@@ -186,7 +224,7 @@ def should_skip_live_poll_for_rate_limit(rate_limit, daemon_config):
 def fetch_rate_limit(runner=subprocess.run):
     result = run_child_json(
         ["gh", "api", "rate_limit"],
-        timeout_seconds=30,
+        timeout_seconds=RATE_LIMIT_TIMEOUT_SECONDS,
         runner=runner,
     )
     if not result.get("ok", True):
@@ -226,8 +264,14 @@ def _iso_after(now, seconds):
 
 def _lease_ttl_seconds(daemon_config):
     heartbeat_margin = max(daemon_config["local_poll_seconds"] * 3, 30)
+    # A live decision performs the rate query, live child, and local child in
+    # sequence before the next heartbeat. Each child may need timeout cleanup.
+    child_cleanup = (CONTROL_TERM_GRACE_SECONDS + CONTROL_KILL_REAP_SECONDS
+                     + CONTROL_GROUP_PROOF_SECONDS)
     return (
-        daemon_config["live_run_timeout_seconds"]
+        RATE_LIMIT_TIMEOUT_SECONDS
+        + 3 * child_cleanup
+        + daemon_config["live_run_timeout_seconds"]
         + daemon_config["local_drain_timeout_seconds"]
         + heartbeat_margin
     )
@@ -347,7 +391,7 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
             {"resource_key": resource_key, "dry_run": dry_run},
             now=now,
         )
-    return DaemonContext(
+    context = DaemonContext(
         config_path=str(config_path),
         workflow_path=str(workflow_path) if workflow_path else None,
         db_path=db_path,
@@ -359,7 +403,10 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
         repo_ids=repo_ids,
         dry_run=dry_run,
         startup_live_poll_pending=daemon_config.get("run_on_start", False),
-    ), None
+        runtime_config=config_result,
+    )
+    _reconcile_abandoned_executors(context)
+    return context, None
 
 
 def _event_result(result):
@@ -393,6 +440,45 @@ def _event_result(result):
     return json.loads(safe["text"]) if safe["ok"] else {"status": "omitted_sensitive"}
 
 
+def _finish_stopped_executor(context, executor_id):
+    """Only a proven-stopped managed executor may release its repository leases."""
+    now = daemon_state.utc_now()
+    error = json.dumps({'status': 'executor_interrupted',
+                        'safe_error': 'Control executor stopped before recording its outcome.'})
+    with closing(daemon_state.connect(context.db_path)) as conn, conn:
+        run_ids = [row[0] for row in conn.execute("""SELECT run_id FROM agent_runs
+            WHERE status='running' AND json_extract(summary_json,'$.executor_id')=?""", (executor_id,))]
+        for run_id in run_ids:
+            conn.execute("""UPDATE leases SET status='released',released_at=?,heartbeat_at=?
+                WHERE resource_type='agent_run' AND owner_id=? AND status='active'""", (now, now, run_id))
+            for table in ('run_steps', 'run_repo_steps'):
+                conn.execute(f"""UPDATE {table} SET status=CASE WHEN status='running' THEN 'failed' ELSE 'skipped' END,
+                    finished_at=?,error_json=? WHERE run_id=? AND status IN ('running','pending')""", (now, error, run_id))
+            conn.execute("""UPDATE agent_runs SET status='failed',finished_at=?,error_json=?
+                WHERE run_id=? AND status='running'""", (now, error, run_id))
+
+
+def _reconcile_child_result(context, result):
+    child = result.get('child') or {}
+    if child.get('executor_id') and child.get('process_group_stopped'):
+        _finish_stopped_executor(context, child['executor_id'])
+
+
+def _reconcile_abandoned_executors(context):
+    with closing(daemon_state.connect(context.db_path)) as conn:
+        rows = conn.execute("""SELECT json_extract(summary_json,'$.executor_id'),
+            json_extract(summary_json,'$.executor_identity') FROM agent_runs
+            WHERE status='running' AND json_type(summary_json,'$.executor_identity')='object'""").fetchall()
+    from robert_agent import run_once as executor
+    for executor_id, raw in rows:
+        identity = json.loads(raw)
+        if (not executor_id or identity.get('process_group_id') != identity.get('pid')
+                or worker_identity.inspect_recorded_identity(identity) != 'dead'):
+            continue
+        if not executor._live_process_group(identity['pid']):
+            _finish_stopped_executor(context, executor_id)
+
+
 def _maybe_prune(context, *, now):
     if not context.daemon_config.get("maintenance_enabled", True):
         return
@@ -403,13 +489,22 @@ def _maybe_prune(context, *, now):
     result = retention.prune_database(
         context.db_path, apply=True, now=now,
         batch_size=config.get("maintenance_batch_size", 100),
+        max_batches=3, max_seconds=1,
         run_retention_days=config.get("run_retention_days", 7),
         failed_run_retention_days=config.get("failed_run_retention_days", 30),
         event_retention_days=config.get("event_retention_days", 7),
     )
-    delay = config["local_poll_seconds"] if result["status"] == "busy" else config.get("maintenance_interval_seconds", 300)
+    delay = config["local_poll_seconds"] if result["status"] == "busy" or result.get('more_work') else config.get("maintenance_interval_seconds", 300)
     context.next_maintenance_at = current + delay
     if result['status'] != 'busy':
+        try:
+            with closing(daemon_state.connect(context.db_path)) as conn, conn:
+                conn.execute('PRAGMA busy_timeout=100')
+                wakeup.expire_due_wakeups(conn, now=now)
+        except sqlite3.OperationalError:
+            pass
+    if result['status'] != 'busy' and current >= context.next_health_at:
+        context.next_health_at = current + config.get('maintenance_interval_seconds', 300)
         try:
             from robert_agent import reliability_health
             health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
@@ -434,7 +529,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
         context.config_path,
         context.workflow_path,
         dry_run=context.dry_run,
-        max_seconds=context.daemon_config["local_drain_timeout_seconds"],
+        max_seconds=max(1, int(context.daemon_config["local_drain_timeout_seconds"] * .9)),
         skip_publish=skip_publish,
     )
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
@@ -450,6 +545,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
         command,
         timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
     )
+    _reconcile_child_result(context, result)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
             conn,
@@ -481,6 +577,7 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
         command,
         timeout_seconds=context.daemon_config["live_run_timeout_seconds"],
     )
+    _reconcile_child_result(context, result)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
             conn,
@@ -538,7 +635,9 @@ def run_once_decision(
         notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
     repo_ids = context.repo_ids or [context.repo_id]
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
-        local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids)
+        local_work = loop_engine.has_runnable_local_work(
+            conn, repo_ids=repo_ids, config_result=context.runtime_config, now=now,
+        )
         capacity_full = daemon_state.capacity_full_for_repos(
             conn,
             repo_ids,
@@ -582,7 +681,10 @@ def run_once_decision(
         rate_decision = _rate_limit_decision(context, rate_limit_runner, now=now)
         result = _run_local_drain(
             context,
-            skip_publish=rate_decision["skip"],
+            skip_publish=bool(rate_decision['skip'] and (
+                rate_decision.get('reason') != 'search_rate_limit_floor'
+                or (rate_decision.get('rate_limit') or {}).get('core', {}).get('remaining', 0)
+                < context.daemon_config['min_core_remaining'])),
             child_runner=child_runner,
             now=now,
         )

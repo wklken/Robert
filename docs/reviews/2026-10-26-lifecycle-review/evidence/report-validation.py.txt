@@ -1,0 +1,47 @@
+from pathlib import Path
+import json,re,hashlib,subprocess
+root=Path('./docs/reviews/2026-10-26-lifecycle-review'); p=json.loads((root/'findings.json').read_text())
+assert len(p['findings'])==38
+source_ids=[i['id'] for source in p['sources'].values() for i in source['items']]
+ids=[i['finding_id'] for i in p['findings']]
+assert ids==source_ids and len(set(ids))==38
+assert len(p['canonical_groups'])==29
+for r in p['findings']:
+ assert r['verdict'] in {'Correct','Partially correct','Incorrect','Unverified'}
+ assert r['introduced']=='Not applicable'
+ assert r['scope'] in {'in scope','out of scope','needs decision'}
+ assert r['disposition'] in {'Current change','Follow-up','Reject','Need evidence'}
+ assert r['resolution'] in {'open','fixed','already fixed'}
+ assert r['controlling_code']
+for source in p['sources'].values():
+ for item in source['items']:
+  assert item['original_claim'] and 'reviewer_proposed_fix' in item
+  assert item['source_group'] and isinstance(item['synthetic'],bool)
+  if item['synthetic']:assert item['original_id'] is None
+assert hashlib.sha256((root/'sources/b-additional-review.txt').read_bytes()).hexdigest()==p['sources']['B']['sha256']
+report=(root/'report.md').read_text()
+ledger=report.split('## 6. 完整原始 finding ledger',1)[1].split('### 各原ID的判定理由',1)[0]
+for id in ids:assert len(re.findall(r'(?m)^\| '+re.escape(id)+r' \|',ledger))==1,id
+snapshot=Path(p['scope']['snapshot']);repo=Path(p['scope']['repository'])
+for r in p['findings']:
+ for ref in r['controlling_code']:
+  rel,number=ref.rsplit(':',1);lines=(snapshot/rel).read_text().splitlines()
+  assert 1<=int(number)<=len(lines)
+  assert (repo/rel).read_bytes()==(snapshot/rel).read_bytes(),rel
+for target in re.findall(r'\]\(([^)]+)\)',report):
+ if target.startswith('#'):
+  assert f'id="{target[1:]}"' in report,target
+ elif target.startswith('/'):
+  path=re.sub(r':\d+$','',target);assert Path(path).exists(),target
+ else:assert (root/target).is_file(),target
+inventory=json.loads((root/'evidence/manifest.json').read_text())
+for file,digest in inventory['files_sha256'].items():assert hashlib.sha256((root/file).read_bytes()).hexdigest()==digest
+for file in [root/'report.md',root/'findings.json',root/'sources/a-previous-review.md']:
+ for n,line in enumerate(file.read_text().splitlines(),1):assert line==line.rstrip(),(file,n)
+assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip()==p['scope']['checked_head']
+# --no-index lets whitespace checking include each new authored file without staging it.
+for file in [root/'report.md',root/'findings.json',root/'sources/a-previous-review.md']:
+ r=subprocess.run(['git','diff','--no-index','--check','/dev/null',str(file)],cwd=repo,text=True,capture_output=True)
+ assert r.returncode in {0,1} and not r.stdout and not r.stderr,(file,r.returncode,r.stdout,r.stderr)
+print('PASS: 38 unique original IDs; 29 canonical groups; all contract enums, source order, original input hash, code identities/lines, links, evidence hashes and authored whitespace checks')
+print(json.dumps(p['counts'],ensure_ascii=False))

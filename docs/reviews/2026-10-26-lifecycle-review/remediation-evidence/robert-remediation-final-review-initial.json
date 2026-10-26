@@ -1,0 +1,145 @@
+{
+  "status": "COMPLETE",
+  "reviewed_identity": {
+    "snapshot": "<TEMP>/robert-remediation-review-9x6tsw9m",
+    "base": "764c5e3771565899b4b7dcf45044a229a31fb591",
+    "content_sha256": "241b329f30ab2f117d84b0a8d5e1c6d737f4e361ef112ad1e80deae79e1c39a1",
+    "manifest": "<TEMP>/robert-remediation-review-manifest.json",
+    "paths_verified": 32,
+    "mismatches_at_start_and_end": []
+  },
+  "scope": "Bounded final review of task.patch and five explicitly supplied new test modules for R01-R14/R20, safe R15-R18/R21-R22 and T01. Supporting callers, lifecycle controls, native process cleanup, publication fences, migration contracts and focused tests traced. Original report treated as immutable context; no broad new review of excluded subjects.",
+  "findings": [
+    {
+      "id": "FINAL-01",
+      "severity": "High",
+      "original_severity": "Not applicable - new remediation regression",
+      "summary": "Recovery observation can overwrite a concurrently accepted final result with failed task/attempt state.",
+      "verdict": "Correct",
+      "introduction": "Yes",
+      "scope": "in scope",
+      "related_source_ids": [
+        "R02",
+        "A/2",
+        "R03",
+        "A/3",
+        "B/I/4",
+        "B/I/8",
+        "B/LATENCY-7"
+      ],
+      "file": "src/robert_agent/run_once.py",
+      "line": 1000,
+      "trigger": "Worker result ingestion or spool replay commits while _inspect_attempt_recovery_with_metadata runs after the new conn.commit; cached received_result remains false.",
+      "impact": "Supervisor continues recovery/failure logic despite accepted worker_results. Isolated no-progress case leaves worker_results=1 but task and attempt failed; completed-only audit cannot consume it. A progress-bearing case can instead initiate an unnecessary resume.",
+      "evidence_reference": [
+        "<TEMP>/robert-remediation-final-review-race-repro.py",
+        "<TEMP>/robert-remediation-final-review-race-repro.json",
+        "snapshot/src/robert_agent/run_once.py:1000-1008",
+        "snapshot/src/robert_agent/run_once.py:1228-1241",
+        "snapshot/src/robert_agent/run_once.py:6002"
+      ],
+      "observed": {
+        "receipt_ok": true,
+        "receipt_status": "recorded",
+        "attempt": "failed",
+        "task": "failed",
+        "worker_results": 1
+      },
+      "suggested_action": "After every released-writer recovery/process operation, acquire the writer and revalidate latest attempt, owner and worker_results before choosing recovery/failure; route a newly received result through receipt supervision. Add this concurrent receipt regression.",
+      "disposition": "Current change",
+      "resolution": "open"
+    },
+    {
+      "id": "FINAL-02",
+      "severity": "Medium",
+      "original_severity": "Not applicable - new remediation regression",
+      "summary": "A control process group exiting at the timeout boundary raises ProcessLookupError and terminates the daemon.",
+      "verdict": "Correct",
+      "introduction": "Yes",
+      "scope": "in scope",
+      "related_source_ids": [
+        "R06",
+        "B/I/1",
+        "B/LATENCY-4",
+        "B/LATENCY-7"
+      ],
+      "file": "src/robert_agent/daemon.py",
+      "line": 119,
+      "trigger": "communicate times out, then the whole group exits before either os.killpg call.",
+      "impact": "Uncaught ProcessLookupError bypasses structured child_timeout and _reconcile_child_result; run_daemon catches it as fatal and stops polling. Managed-run cleanup is postponed until restart/other recovery.",
+      "evidence_reference": [
+        "<TEMP>/robert-remediation-final-review-control-repro.py",
+        "<TEMP>/robert-remediation-final-review-control-repro.jsonl",
+        "snapshot/src/robert_agent/daemon.py:118-134",
+        "snapshot/src/robert_agent/daemon.py:785-799"
+      ],
+      "observed": {
+        "exception": "ProcessLookupError",
+        "message": "group already exited"
+      },
+      "suggested_action": "Handle absent groups around TERM/KILL as an exit race, reap and verify group liveness, and preserve executor_id plus structured child_timeout so managed-run cleanup still executes. Add TERM/KILL exit-race coverage.",
+      "disposition": "Current change",
+      "resolution": "open"
+    },
+    {
+      "id": "FINAL-03",
+      "severity": "Medium",
+      "original_severity": {
+        "B/I/1": "高",
+        "B/LATENCY-4": "Not supplied",
+        "B/LATENCY-7": "Not supplied"
+      },
+      "summary": "Remaining control deadline is still ignored on supported remediation worktree and publication command paths.",
+      "verdict": "Correct",
+      "introduction": "No — pre-existing",
+      "scope": "in scope",
+      "related_source_ids": [
+        "R06",
+        "B/I/1",
+        "B/LATENCY-4",
+        "B/LATENCY-7"
+      ],
+      "file": "src/robert_agent/worktree.py",
+      "line": 207,
+      "trigger": "CI/merge-conflict remediation selects prepare_existing_pr_worktree, or local publication starts near the control deadline.",
+      "impact": "Raw Git calls have no timeout, and publication calls retain a fixed 60-second cap; remaining-budget exhaustion still causes the daemon outer timeout to kill execution during Git/GitHub I/O instead of completing the intended cooperative deadline path. Executor cleanup reduces lease residue but does not complete this R06 subclaim.",
+      "evidence_reference": [
+        "<TEMP>/robert-remediation-final-review-control-repro.py",
+        "<TEMP>/robert-remediation-final-review-control-repro.jsonl",
+        "snapshot/src/robert_agent/worktree.py:207-277",
+        "snapshot/src/robert_agent/run_once.py:3164-3178",
+        "snapshot/src/robert_agent/publish.py:1321-1323",
+        "snapshot/src/robert_agent/run_once.py:4673-4680"
+      ],
+      "observed": {
+        "expired_deadline_still_executed_commands": 5,
+        "all_command_timeouts": null,
+        "worktree_result": "created"
+      },
+      "suggested_action": "Apply common.run_command with runner injection to remaining supported long Git/gh paths, including prepare_existing_pr_worktree and publish bounded_command, and test that an expired deadline prevents invocation. Preserve publication intent/reconciliation handling.",
+      "disposition": "Current change",
+      "resolution": "open"
+    }
+  ],
+  "verification": {
+    "performed": [
+      "Read task.patch and new tests; traced controlling callers and supporting conventions.",
+      "Matched all 32 manifest path hashes at start and finish.",
+      "Two focused isolated repro scripts run using supplied existing .venv, cwd snapshot and explicit snapshot PYTHONPATH. Database fixtures and worktree directories were temporary; process/command boundaries mocked for race/deadline edges."
+    ],
+    "reused_parent_evidence": "Parent reports targeted20 integration, Ruff, CI-scoped Mypy, worker177 and scheduler67 passes; not rerun or independently promoted to complete-suite evidence.",
+    "not_run": [
+      "Full Python suite (parent owns it)",
+      "Build and production migrations",
+      "External GitHub/model calls",
+      "Production runtime/process reconciliation"
+    ]
+  },
+  "limits_and_residual_risk": [
+    "Review complete for this pinned snapshot only; parent is remediating and must provide a new pinned identity for affected follow-up review.",
+    "Focused repro confirms causal boundaries; no claim that production frequency or timing was measured.",
+    "No further confirmed findings in the inspected scope. This does not imply release readiness.",
+    "Global configured timeout minimum, same-workstream sequencing, native review stages, unknown-identity fail-closed and source integrity scans were traced and no introduced violation was verified."
+  ],
+  "memory_context": "MEMORY.md:144 used only as lifecycle acceptance reminder; all findings established against this snapshot."
+}

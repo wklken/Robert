@@ -75,6 +75,9 @@ def initialize(conn):
         conn.execute('ALTER TABLE review_runs ADD COLUMN started_at TEXT')
         conn.execute("UPDATE review_runs SET started_at=created_at WHERE status IN ('starting','running')")
 
+    # Build after legacy columns are upgraded, not in the initial schema loop.
+    conn.execute("CREATE INDEX IF NOT EXISTS review_runs_reserved ON review_runs(slot_reserved) WHERE slot_reserved=1")
+
 
 @contextmanager
 def connect(db_path):

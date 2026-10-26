@@ -1,0 +1,3 @@
+full_review_seconds 3.654 source_scans 12 source_MiB_per_scan 32.977 total_source_MiB 395.719 source_hash_seconds 1.037
+history_rows_per_table 1000 reclaim_plus_pool_status_mean_ms 0.101 query_plan [(3, 0, 216, 'SCAN review_runs')]
+history_rows_per_table 100000 reclaim_plus_pool_status_mean_ms 7.179 query_plan [(3, 0, 216, 'SCAN review_runs')]

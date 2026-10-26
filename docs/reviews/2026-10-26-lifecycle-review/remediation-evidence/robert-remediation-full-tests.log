@@ -1,0 +1,394 @@
+...........From /private<TEMP>/tmpwm8ery56/controlled/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (new branch 'codex/dd-77-fix-controlled-e2e-acceptance')
+branch 'codex/dd-77-fix-controlled-e2e-acceptance' set up to track 'upstream/main'.
+HEAD is now at 745c6b4 initial acceptance fixture
+....................................................................................................From /private<TEMP>/tmpt_rrk864/controlled-e2e/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (new branch 'codex/dd-77-fix-controlled-e2e-acceptance')
+branch 'codex/dd-77-fix-controlled-e2e-acceptance' set up to track 'upstream/main'.
+HEAD is now at 667bf66 initial acceptance fixture
+......................................................................................................................From /private<TEMP>/tmpdqccw271/worktree-acceptance/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (new branch 'codex/dd-77-fix-worktree-acceptance')
+branch 'codex/dd-77-fix-worktree-acceptance' set up to track 'upstream/main'.
+HEAD is now at 2a6ce8c initial acceptance fixture
+.From <TEMP>/tmpzfidndde/upstream
+ * branch            main       -> FETCH_HEAD
+ * [new branch]      main       -> upstream/main
+From <TEMP>/tmpzfidndde/upstream
+ * [new ref]         refs/pull/13/head -> refs/robert/reviews/pr-13
+Preparing worktree (new branch 'review/pr-13-review-feature')
+HEAD is now at f198ca7 topic
+From <TEMP>/tmpzfidndde/upstream
+ * branch            main       -> FETCH_HEAD
+From <TEMP>/tmpzfidndde/upstream
+   f198ca7..36e7528  refs/pull/13/head -> refs/robert/reviews/pr-13
+HEAD is now at 36e7528 update PR
+..From <TEMP>/tmplt5_21un/upstream
+ * branch            main       -> FETCH_HEAD
+ * [new branch]      main       -> upstream/main
+From <TEMP>/tmplt5_21un/upstream
+ * [new ref]         refs/pull/13/head -> refs/robert/reviews/pr-13
+Preparing worktree (new branch 'review/pr-13-review-feature')
+HEAD is now at fd95677 topic
+...................................................................................F.FFFFFFFFFFFFFFFFFFFFFEFFFFFE./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109722890>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1097227a0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10997f970>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10997c6d0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10997fd30>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10997c7c0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10997e3e0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd31f0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd0220>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd1e40>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd2d40>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd3790>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd35b0>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./.venv/lib/python3.14/site-packages/yaml/scanner.py:286: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd2c50>
+  for level in list(self.possible_simple_keys):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+....................................................................................................................................................../opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x109bd2e30>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+........................................................................................................................s............................................................................................................................................................................................................................................................................................................................................................../opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10997db70>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10997c8b0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..................................................................................................................................................From <TEMP>/tmpx2_i14aw/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (detached HEAD 61fff90)
+HEAD is now at 61fff90 initial
+.From <TEMP>/tmp1cjglwcf/upstream
+ * branch            main       -> FETCH_HEAD
+Preparing worktree (detached HEAD 61fff90)
+HEAD is now at 61fff90 initial
+From <TEMP>/tmp1cjglwcf/upstream
+ * branch            main       -> FETCH_HEAD
+   61fff90..377bb49  main       -> upstream/main
+HEAD is now at 377bb49 advance
+.From <TEMP>/tmpmeo2edk7/upstream
+ * branch            main       -> FETCH_HEAD
+From <TEMP>/tmpmeo2edk7/upstream
+ * [new ref]         refs/pull/42/head -> refs/robert/reviews/pr-42
+Preparing worktree (new branch 'review/pr-42-title')
+HEAD is now at c90e40c initial
+..
+======================================================================
+ERROR: test_publish_success_resolves_previous_failure_notification (test_operational_commands.OperationalCommandTests.test_publish_success_resolves_previous_failure_notification)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5809, in test_publish_success_resolves_previous_failure_notification
+    due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
+          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+KeyError: 'publish'
+
+======================================================================
+ERROR: test_repeated_publish_failure_updates_existing_notification (test_operational_commands.OperationalCommandTests.test_repeated_publish_failure_updates_existing_notification)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5748, in test_repeated_publish_failure_updates_existing_notification
+    due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
+          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+KeyError: 'publish'
+
+======================================================================
+FAIL: test_publish_failure_keeps_action_retryable_and_records_notification (test_operational_commands.OperationalCommandTests.test_publish_failure_keeps_action_retryable_and_records_notification)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5678, in test_publish_failure_keeps_action_retryable_and_records_notification
+    self.assertFalse(result["ok"], result)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : {'ok': True, 'status': 'published', 'pending_count': 0, 'published_count': 0, 'deduplicated_count': 0, 'skipped_count': 0, 'failed_count': 0, 'failures': []}
+
+======================================================================
+FAIL: test_publish_ready_comment_action_marks_published_with_external_id (test_operational_commands.OperationalCommandTests.test_publish_ready_comment_action_marks_published_with_external_id)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 3738, in test_publish_ready_comment_action_marks_published_with_external_id
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_comment_reuses_existing_comment_with_same_marker (test_operational_commands.OperationalCommandTests.test_publish_ready_comment_reuses_existing_comment_with_same_marker)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 3855, in test_publish_ready_comment_reuses_existing_comment_with_same_marker
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_comment_without_marker_fails_without_posting (test_operational_commands.OperationalCommandTests.test_publish_ready_comment_without_marker_fails_without_posting)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 3889, in test_publish_ready_comment_without_marker_fails_without_posting
+    self.assertFalse(result["ok"], result)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : {'ok': True, 'status': 'published', 'pending_count': 0, 'published_count': 0, 'deduplicated_count': 0, 'skipped_count': 0, 'failed_count': 0, 'failures': []}
+
+======================================================================
+FAIL: test_publish_ready_existing_pr_with_audited_head_stops_when_remote_lookup_fails (test_operational_commands.OperationalCommandTests.test_publish_ready_existing_pr_with_audited_head_stops_when_remote_lookup_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4368, in test_publish_ready_existing_pr_with_audited_head_stops_when_remote_lookup_fails
+    self.assertFalse(result["ok"], result)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : {'ok': True, 'status': 'published', 'pending_count': 0, 'published_count': 0, 'deduplicated_count': 0, 'skipped_count': 0, 'failed_count': 0, 'failures': []}
+
+======================================================================
+FAIL: test_publish_ready_new_pr_pushes_branch_before_opening_pr (test_operational_commands.OperationalCommandTests.test_publish_ready_new_pr_pushes_branch_before_opening_pr)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4069, in test_publish_ready_new_pr_pushes_branch_before_opening_pr
+    self.assertEqual(result["published_count"], 2)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 2
+
+======================================================================
+FAIL: test_publish_ready_new_pr_stops_open_pr_when_branch_push_fails (test_operational_commands.OperationalCommandTests.test_publish_ready_new_pr_stops_open_pr_when_branch_push_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4272, in test_publish_ready_new_pr_stops_open_pr_when_branch_push_fails
+    self.assertFalse(result["ok"], result)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : {'ok': True, 'status': 'published', 'pending_count': 0, 'published_count': 0, 'deduplicated_count': 0, 'skipped_count': 0, 'failed_count': 0, 'failures': []}
+
+======================================================================
+FAIL: test_publish_ready_open_pr_action_creates_pr_and_records_url (test_operational_commands.OperationalCommandTests.test_publish_ready_open_pr_action_creates_pr_and_records_url)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 3947, in test_publish_ready_open_pr_action_creates_pr_and_records_url
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_open_pr_does_not_reuse_different_owner_head_pr (test_operational_commands.OperationalCommandTests.test_publish_ready_open_pr_does_not_reuse_different_owner_head_pr)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4726, in test_publish_ready_open_pr_does_not_reuse_different_owner_head_pr
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_open_pr_empty_stdout_does_not_crash (test_operational_commands.OperationalCommandTests.test_publish_ready_open_pr_empty_stdout_does_not_crash)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4772, in test_publish_ready_open_pr_empty_stdout_does_not_crash
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_open_pr_ignores_same_head_pr_without_marker (test_operational_commands.OperationalCommandTests.test_publish_ready_open_pr_ignores_same_head_pr_without_marker)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4540, in test_publish_ready_open_pr_ignores_same_head_pr_without_marker
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_open_pr_reuses_existing_head_pr (test_operational_commands.OperationalCommandTests.test_publish_ready_open_pr_reuses_existing_head_pr)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4444, in test_publish_ready_open_pr_reuses_existing_head_pr
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_open_pr_reuses_same_owner_head_pr_with_different_marker (test_operational_commands.OperationalCommandTests.test_publish_ready_open_pr_reuses_same_owner_head_pr_with_different_marker)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4644, in test_publish_ready_open_pr_reuses_same_owner_head_pr_with_different_marker
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_open_pr_uses_fork_owner_from_published_push_action (test_operational_commands.OperationalCommandTests.test_publish_ready_open_pr_uses_fork_owner_from_published_push_action)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4198, in test_publish_ready_open_pr_uses_fork_owner_from_published_push_action
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_push_existing_pr_allows_remote_ancestor_of_result (test_operational_commands.OperationalCommandTests.test_publish_ready_push_existing_pr_allows_remote_ancestor_of_result)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5480, in test_publish_ready_push_existing_pr_allows_remote_ancestor_of_result
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_push_existing_pr_pushes_branch (test_operational_commands.OperationalCommandTests.test_publish_ready_push_existing_pr_pushes_branch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4819, in test_publish_ready_push_existing_pr_pushes_branch
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_push_existing_pr_retries_ancestry_check_errors (test_operational_commands.OperationalCommandTests.test_publish_ready_push_existing_pr_retries_ancestry_check_errors)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5568, in test_publish_ready_push_existing_pr_retries_ancestry_check_errors
+    self.assertFalse(result["ok"], result)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : {'ok': True, 'status': 'published', 'pending_count': 0, 'published_count': 0, 'deduplicated_count': 0, 'skipped_count': 0, 'failed_count': 0, 'failures': []}
+
+======================================================================
+FAIL: test_publish_ready_push_existing_pr_skips_diverged_result_actions (test_operational_commands.OperationalCommandTests.test_publish_ready_push_existing_pr_skips_diverged_result_actions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5377, in test_publish_ready_push_existing_pr_skips_diverged_result_actions
+    self.assertEqual(result["skipped_count"], 2)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 2
+
+======================================================================
+FAIL: test_publish_ready_push_existing_pr_uses_audited_head_sha_for_lease (test_operational_commands.OperationalCommandTests.test_publish_ready_push_existing_pr_uses_audited_head_sha_for_lease)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5268, in test_publish_ready_push_existing_pr_uses_audited_head_sha_for_lease
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_push_existing_pr_without_audited_head_and_target_url_uses_fast_forward_push (test_operational_commands.OperationalCommandTests.test_publish_ready_push_existing_pr_without_audited_head_and_target_url_uses_fast_forward_push)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5617, in test_publish_ready_push_existing_pr_without_audited_head_and_target_url_uses_fast_forward_push
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push (test_operational_commands.OperationalCommandTests.test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5190, in test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push
+    self.assertEqual(result["published_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_publish_revalidates_comment_target_against_audited_scope (test_operational_commands.OperationalCommandTests.test_publish_revalidates_comment_target_against_audited_scope)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 3821, in test_publish_revalidates_comment_target_against_audited_scope
+    self.assertFalse(result["ok"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_remediation_publish_failure_skips_following_comment (test_operational_commands.OperationalCommandTests.test_remediation_publish_failure_skips_following_comment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5084, in test_remediation_publish_failure_skips_following_comment
+    self.assertFalse(result["ok"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_remediation_publish_rejects_head_changed_after_audit (test_operational_commands.OperationalCommandTests.test_remediation_publish_rejects_head_changed_after_audit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5147, in test_remediation_publish_rejects_head_changed_after_audit
+    self.assertFalse(result["ok"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_remediation_publish_revalidates_snapshot_and_records_result_head (test_operational_commands.OperationalCommandTests.test_remediation_publish_revalidates_snapshot_and_records_result_head)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4890, in test_remediation_publish_revalidates_snapshot_and_records_result_head
+    self.assertIn(
+    ~~~~~~~~~~~~~^
+        ["git", "push", "origin", "repair-1:refs/heads/codex/fix"],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        calls,
+        ^^^^^^
+    )
+    ^
+AssertionError: ['git', 'push', 'origin', 'repair-1:refs/heads/codex/fix'] not found in []
+
+======================================================================
+FAIL: test_remediation_publish_skips_push_and_comment_when_snapshot_changed (test_operational_commands.OperationalCommandTests.test_remediation_publish_skips_push_and_comment_when_snapshot_changed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 5031, in test_remediation_publish_skips_push_and_comment_when_snapshot_changed
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        statuses,
+        ^^^^^^^^^
+    ...<3 lines>...
+        ],
+        ^^
+    )
+    ^
+AssertionError: Lists differ: [('push_existing_pr', 'not_published'), ('comment', 'not_published')] != [('push_existing_pr', 'skipped'), ('comment', 'skipped')]
+
+First differing element 0:
+('push_existing_pr', 'not_published')
+('push_existing_pr', 'skipped')
+
+- [('push_existing_pr', 'not_published'), ('comment', 'not_published')]
+?                        ^^^^ ^^^^^^                   ^^^^ ^^^^^^
+
++ [('push_existing_pr', 'skipped'), ('comment', 'skipped')]
+?                        ^^^ ^                   ^^^ ^
+
+
+======================================================================
+FAIL: test_remediation_retry_recognizes_already_pushed_result (test_operational_commands.OperationalCommandTests.test_remediation_retry_recognizes_already_pushed_result)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "./tests/test_operational_commands.py", line 4951, in test_remediation_retry_recognizes_already_pushed_result
+    self.assertEqual(result["deduplicated_count"], 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+----------------------------------------------------------------------
+Ran 1116 tests in 203.468s
+
+FAILED (failures=27, errors=2, skipped=1)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1139: ResourceWarning: subprocess 982 is still running

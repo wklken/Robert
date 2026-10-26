@@ -1,4 +1,4 @@
-"""Bounded, read-only health measurements and deduplicated delay notices."""
+"""Bounded health measurements that persist deduplicated delay notices."""
 
 import json
 import os

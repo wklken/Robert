@@ -6,6 +6,8 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
+from robert_agent import supervise
+
 
 def _id(prefix):
     return f"{prefix}-{uuid4().hex[:12]}"
@@ -257,13 +259,13 @@ def release_daemon_lease(conn, lease_id, now=None):
 
 def running_attempt_count(conn, repo_id):
     return conn.execute(
-        """
+        f"""
         SELECT COUNT(*)
         FROM attempts a
         JOIN tasks t ON t.task_id = a.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE w.repo_id = ?
-          AND a.status IN ('running', 'stale')
+          AND {supervise.occupied_attempt_sql()}
           AND t.lifecycle IN ('queued', 'running')
         """,
         (repo_id,),
@@ -282,7 +284,7 @@ def running_attempt_count_for_repos(conn, repo_ids):
         JOIN tasks t ON t.task_id = a.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         WHERE w.repo_id IN ({placeholders})
-          AND a.status IN ('running', 'stale')
+          AND {supervise.occupied_attempt_sql()}
           AND t.lifecycle IN ('queued', 'running')
         """,
         repo_ids,
