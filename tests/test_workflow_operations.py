@@ -223,6 +223,91 @@ class WorkflowOperationsTests(unittest.TestCase):
             execution_store.mark_binding_attention(conn,'task','task-1',NOW)
             self.assertIsNone(execution_operations.claim_subject(conn,'task','task-1',now=NOW))
 
+class MigratedSubjectClaimTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        # Before remediation support, task_kind did not exist. ALTER TABLE
+        # appends it, while the fresh schema places it before lifecycle.
+        self.conn.executescript(
+            """
+            CREATE TABLE tasks (
+              task_id TEXT PRIMARY KEY,
+              workstream_id TEXT NOT NULL,
+              lifecycle TEXT NOT NULL,
+              parent_task_id TEXT,
+              priority TEXT NOT NULL DEFAULT 'P2',
+              route_id TEXT,
+              expected_output TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              routing_mode TEXT NOT NULL DEFAULT 'auto',
+              requested_worker TEXT
+            );
+            CREATE TABLE github_events (event_id TEXT PRIMARY KEY);
+            """
+        )
+        storage._migrate_pr_remediation(self.conn)
+        execution_store.initialize(self.conn)
+
+    def test_claim_migrated_task_respects_kind_and_lifecycle(self):
+        from robert_agent import execution_operations
+
+        for row_factory in (None, sqlite3.Row):
+            self.conn.row_factory = row_factory
+            for lifecycle in ("queued", "running", "completed", "failed", "canceled", "ignored"):
+                with self.subTest(row_factory=row_factory, lifecycle=lifecycle):
+                    self.conn.execute("DELETE FROM execution_subjects")
+                    self.conn.execute("DELETE FROM tasks")
+                    self.conn.execute(
+                        "INSERT INTO tasks(task_id, workstream_id, lifecycle, created_at, updated_at) VALUES ('task', 'ws', ?, ?, ?)",
+                        (lifecycle, NOW, NOW),
+                    )
+                    binding = execution_operations.claim_subject(
+                        self.conn, "task", "task", now=NOW
+                    )
+                    if lifecycle in {"queued", "running"}:
+                        self.assertEqual(binding["binding_status"], "active")
+                    else:
+                        self.assertIsNone(binding)
+                        self.assertIsNone(execution_store.get_binding(self.conn, "task", "task"))
+            for task_kind in ("ci_remediation", "merge_conflict_remediation"):
+                with self.subTest(row_factory=row_factory, task_kind=task_kind):
+                    self.conn.execute(
+                        "UPDATE tasks SET task_kind = ?, lifecycle = 'queued'",
+                        (task_kind,),
+                    )
+                    with self.assertRaisesRegex(ValueError, "not an eligible human task"):
+                        execution_operations.claim_subject(self.conn, "task", "task", now=NOW)
+
+    def test_claim_migrated_episode_does_not_reopen_terminal_status(self):
+        from robert_agent import execution_operations
+
+        for row_factory in (None, sqlite3.Row):
+            self.conn.row_factory = row_factory
+            for status in ("queued", "resolved", "exhausted", "superseded", "canceled"):
+                with self.subTest(row_factory=row_factory, status=status):
+                    self.conn.execute("DELETE FROM execution_subjects")
+                    self.conn.execute("DELETE FROM pr_remediation_episodes")
+                    self.conn.execute(
+                        """
+                        INSERT INTO pr_remediation_episodes(
+                          episode_id, workstream_id, episode_kind, subject_key,
+                          observed_head_sha, observed_base_sha, status,
+                          first_seen_at, updated_at
+                        ) VALUES ('episode', 'ws', 'ci', 'pr', 'head', 'base', ?, ?, ?)
+                        """,
+                        (status, NOW, NOW),
+                    )
+                    binding = execution_operations.claim_subject(
+                        self.conn, "remediation_episode", "episode", now=NOW
+                    )
+                    if status == "queued":
+                        self.assertEqual(binding["binding_status"], "active")
+                    else:
+                        self.assertIsNone(binding)
+                        self.assertIsNone(execution_store.get_binding(self.conn, "remediation_episode", "episode"))
 
 
 if __name__ == "__main__":
