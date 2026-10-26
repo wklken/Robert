@@ -307,9 +307,14 @@ def claim_subject(conn, subject_type, subject_id, *, now):
 
     _validate_subject_type(subject_type)
     if subject_type == "task":
-        task = _load_task(conn, subject_id)
-        task_kind = task["task_kind"] if isinstance(task, sqlite3.Row) else task[2]
-        lifecycle = task["lifecycle"] if isinstance(task, sqlite3.Row) else task[3]
+        task = _row(
+            conn,
+            "SELECT task_kind, lifecycle FROM tasks WHERE task_id = ?",
+            (subject_id,),
+        )
+        if task is None:
+            raise ValueError("workflow task subject does not exist")
+        task_kind, lifecycle = task
         if task_kind != "human_request":
             raise ValueError("workflow task subject is not an eligible human task")
         return _claim(
