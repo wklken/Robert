@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -155,6 +156,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
     def test_timed_out_control_child_releases_only_its_own_run_lease(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / 'db.sqlite3'
+            ready = Path(tmp) / 'child-ready'
             storage.init_database(db)
             now = datetime.now(timezone.utc).isoformat()
             with closing(daemon_state.connect(db)) as conn, conn:
@@ -162,6 +164,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 conn.execute("INSERT INTO agent_runs(run_id,status,started_at) VALUES ('unrelated','running',?)", (now,))
             program = '''import json,os,sqlite3,sys,time
 from datetime import datetime,timezone
+from pathlib import Path
 from robert_agent import run_once
 now=datetime.now(timezone.utc).isoformat()
 conn=sqlite3.connect(sys.argv[1])
@@ -169,14 +172,42 @@ conn.execute("INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALU
              (now,json.dumps({'executor_id':os.environ.get('_ROBERT_EXECUTOR_ID')})))
 run_once._acquire_agent_lease(conn,'repo:x','timed',now,9)
 conn.commit()
+Path(sys.argv[2]).touch()
 time.sleep(30)
 '''
             context = daemon.DaemonContext('/config', None, db, 'repo:x', 1,
                 {**DAEMON_DEFAULTS, 'local_drain_timeout_seconds': .3}, 'daemon', 'lease')
-            command = [sys.executable, '-B', '-c', program, str(db)]
-            with mock.patch.object(daemon, 'build_loop_command', return_value=command):
+            command = [sys.executable, '-B', '-c', program, str(db), str(ready)]
+            original_popen = subprocess.Popen
+
+            def start_ready_child(argv, *args, **kwargs):
+                process = original_popen(argv, *args, **kwargs)
+                if argv != command:
+                    return process
+
+                def cleanup():
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=5)
+                    for stream in (process.stdout, process.stderr):
+                        if stream:
+                            stream.close()
+
+                self.addCleanup(cleanup)
+                # Start the cleanup deadline only after the fixture run/lease
+                # exists; interpreter startup can exceed 0.3s on loaded CI.
+                deadline = time.monotonic() + 10
+                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(ready.exists(), 'control child did not persist its run and lease')
+                return process
+
+            with mock.patch.object(daemon, 'build_loop_command', return_value=command), \
+                    mock.patch.object(daemon.subprocess, 'Popen', side_effect=start_ready_child):
                 response = daemon._run_local_drain(context)
             self.assertFalse(response['ok'])
+            self.assertEqual(response['status'], 'child_timeout')
+            self.assertTrue(response['child']['process_group_stopped'])
             with closing(sqlite3.connect(db)) as conn:
                 self.assertEqual(conn.execute("SELECT status FROM agent_runs WHERE run_id='timed'").fetchone()[0], 'failed')
                 self.assertEqual(conn.execute("SELECT status FROM leases WHERE owner_id='timed'").fetchone()[0], 'released')
