@@ -2,3 +2,6 @@
 # checker (runs 39971801097 and 39990011030). Content verified 2026-10-24.
 # Recheck manually when updating this reference; all other URLs remain checked.
 ^https://openai\.com/index/harness-engineering/$
+
+# Synthetic Issue URL in the archived lifecycle reproducer, not a live reference.
+^https://github\.com/example/backend/issues/16$
