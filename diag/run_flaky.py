@@ -44,7 +44,7 @@ model_execution._wait_for_group_exit = wait
 
 TESTS = [
     "tests.test_vote_processes.VoteProcessTests.test_cancel_stops_both_registered_voters_and_does_not_seal_votes",
-    "tests.test_lifecycle_remediation.LifecycleRemediationTests.test_remote_close_stops_registered_native_models",
+
 ]
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 40
 summary = collections.Counter()
