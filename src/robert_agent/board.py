@@ -231,6 +231,8 @@ def _project_item(conn, row):
         column, reason_code, reason_summary = "waiting", "publication_failed", failures[0]["reason"] or "Publication failed; retry the existing result."
     elif unavailable and not running and not publication_in_progress:
         column, reason_code, reason_summary = "waiting", "manual_worker_unavailable", unavailable["summary"]
+    elif attention and all(a["type"] == "operator_decision_required" for a in attention) and not facts["approval_task_id"] and not running and not publication_in_progress:
+        column, reason_code, reason_summary = "waiting", "no_runnable_task", "No active task remains for this decision. Refresh the source state or cancel this item."
     elif task and task["lifecycle"] in {"detected", "authorized", "classified", "queued"} and not running and not publication_in_progress and not any(a["type"] == "operator_decision_required" for a in attention):
         column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
     elif attention and (not running or attention[0]["type"] == "operator_decision_required") and not publication_in_progress and not (pr and attention[0]["type"] in {"publication_failed", "unmerged_pr_closed", "review_attention"}):
@@ -250,7 +252,7 @@ def _project_item(conn, row):
     elif not row["activated_at"]:
         column, reason_code, reason_summary = "backlog", "draft", "Requirement is editable"
     else:
-        column, reason_code, reason_summary = "todo", "activated", "Activated work is pending"
+        column, reason_code, reason_summary = "waiting", "no_runnable_task", "No runnable task is available. Inspect the source state or cancel this item."
 
     routing_mode = task["routing_mode"] if task else row["routing_mode"]
     requested_worker = task["requested_worker"] if task else row["requested_worker"]
@@ -310,6 +312,11 @@ def _project_item(conn, row):
                 card["valid_commands"] = ([] if pending or ownership_blocked else ["retrigger"]) + ["cancel"]
             else:
                 card["valid_commands"] = ["retry", "cancel"]
+    if not facts["approval_task_id"] and any(a["type"] == "operator_decision_required" for a in attention):
+        if not any(a["type"] == "completion_acceptance_requested" for a in attention):
+            card["valid_commands"] = [command for command in card["valid_commands"] if command != "approve"]
+    if column == "done" and facts["source_closed"]:
+        card["valid_commands"] = []
     return card
 
 
