@@ -2134,6 +2134,30 @@ repos:
         self.assertEqual(relationship, "consumed")
         self.assertEqual(publish_step["finalized_task_count"], 1)
 
+        from robert_agent import board
+        with closing(sqlite3.connect(db_path)) as conn:
+            item_id, completed_at = conn.execute(
+                "SELECT work_item_id, completed_at FROM work_items"
+            ).fetchone()
+        self.assertIsNotNone(completed_at)
+        self.assertEqual(board.get_work_item_detail(db_path, item_id)["column"], "done")
+
+        self.fixture_path.write_text(json.dumps({"events": [{
+            "id": "analysis-followup", "number": 123, "source_type": "issue",
+            "event_type": "assigned", "actor_login": "wklken",
+            "assigned_to": "robert-bot", "assignment_actor_login": "wklken",
+            "body": "Please analyze the token flow too", "intent": "analysis",
+        }]}), encoding="utf-8")
+        followup = run_once.run_once(
+            self.config_path, workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path, dry_run=True, skip_external=True,
+        )
+        self.assertTrue(followup["ok"], followup)
+        detail = board.get_work_item_detail(db_path, item_id)
+        self.assertEqual(detail["column"], "todo")
+        self.assertIsNone(detail["completed_at"])
+        self.assertNotEqual(detail["task_id"], task_id)
+
     def test_audit_rejects_comment_target_outside_task_repository(self):
         from robert_agent.worker import result
         from robert_agent import run_once

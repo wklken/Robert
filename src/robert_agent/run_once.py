@@ -3943,7 +3943,7 @@ def _create_task_attempt_and_prompt(
             run_now,
         ),
     )
-    work_items.ensure_github_work_item(
+    item = work_items.ensure_github_work_item(
         conn,
         repo_id=repo_id,
         source_id=source_id,
@@ -3952,6 +3952,12 @@ def _create_task_attempt_and_prompt(
         route_confidence=route_result.get("confidence", "low"),
         now=run_now,
     )
+    if item["origin_type"] == "github" and item["completed_at"] and not item["canceled_at"]:
+        conn.execute(
+            """UPDATE work_items SET completed_at=NULL, updated_at=?, version=version+1
+            WHERE work_item_id=? AND completed_at IS NOT NULL AND canceled_at IS NULL""",
+            (run_now, item["work_item_id"]),
+        )
     _record_review_participant(conn, workstream_id, event, route_result, run_now)
     for related_event in related_events:
         related_source_id = _source_id(related_event["source_key"])
@@ -6289,6 +6295,70 @@ def _audit_completed_results(
     return audited
 
 
+def _complete_published_analysis_items(conn, repo_id, run_now):
+    cursor = conn.execute(
+        """
+        SELECT wi.*, t.task_id AS analysis_task_id, wr.result_id AS analysis_result_id
+        FROM work_items wi
+        JOIN github_sources gs ON gs.source_id=wi.origin_source_id
+        JOIN workstreams w ON w.workstream_id=wi.workstream_id
+        JOIN tasks t ON t.workstream_id=w.workstream_id
+        JOIN worker_results wr ON wr.task_id=t.task_id
+        WHERE wi.repo_id=? AND wi.origin_type='github'
+          AND wi.completed_at IS NULL AND wi.canceled_at IS NULL
+          AND gs.source_type='issue' AND lower(gs.state)='open'
+          AND w.lifecycle='completed' AND w.active_task_id IS NULL
+          AND t.lifecycle='completed' AND wr.output_type='comment_analysis'
+          AND json_extract(wr.metadata_json,'$.audit.status')='accepted'
+          AND EXISTS (SELECT 1 FROM github_actions ga WHERE ga.result_id=wr.result_id
+            AND ga.action_type='comment' AND ga.audit_status='accepted' AND ga.publish_status='published')
+          AND NOT EXISTS (SELECT 1 FROM github_actions ga WHERE ga.result_id=wr.result_id
+            AND (ga.audit_status!='accepted' OR ga.publish_status!='published'))
+          AND NOT EXISTS (SELECT 1 FROM workstreams related
+            JOIN github_sources pr ON pr.source_id=related.primary_source_id
+            WHERE (related.workstream_id=w.workstream_id OR related.origin_workstream_id=w.workstream_id)
+              AND pr.source_type='pull_request')
+          AND NOT EXISTS (SELECT 1 FROM tasks newer WHERE newer.workstream_id=t.workstream_id
+            AND (newer.created_at, newer.task_id)>(t.created_at, t.task_id))
+          AND NOT EXISTS (SELECT 1 FROM task_events te WHERE te.task_id=t.task_id
+            AND te.relationship IN ('pending','context'))
+        """,
+        (repo_id,),
+    )
+    columns = [column[0] for column in cursor.description]
+    rows = cursor.fetchall()
+    completed = 0
+    previous_row_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        for row in rows:
+            item = dict(zip(columns, row))
+            facts = work_item_control.lifecycle_facts(conn, item)
+            current = work_items._active_or_latest_task(conn, item["workstream_id"])
+            if not current or current["task_id"] != item["analysis_task_id"]:
+                continue
+            if facts["running"] or facts["actions"] or facts["cleanup_pending"] or facts["workflow_attention"]:
+                continue
+            if work_items._unresolved_event(conn, item["work_item_id"], work_items.QUESTION_EVENTS | work_items.DECISION_EVENTS):
+                continue
+            work_items.record_system_event(
+                conn, item["work_item_id"], event_type="completed",
+                idempotency_key=f"analysis-completed:{item['analysis_result_id']}",
+                body="Analysis result was accepted and published to GitHub.",
+                metadata={"task_id": item["analysis_task_id"], "result_id": item["analysis_result_id"]},
+                now=run_now,
+            )
+            conn.execute(
+                """UPDATE work_items SET completed_at=?, updated_at=?, version=version+1
+                WHERE work_item_id=? AND completed_at IS NULL AND canceled_at IS NULL""",
+                (run_now, run_now, item["work_item_id"]),
+            )
+            completed += 1
+        return completed
+    finally:
+        conn.row_factory = previous_row_factory
+
+
 def _finalize_published_results(
     conn,
     repo_id,
@@ -6365,6 +6435,7 @@ def _finalize_published_results(
         except subprocess.TimeoutExpired:
             continue
         finalized += 1
+    _complete_published_analysis_items(conn, repo_id, run_now)
     return finalized
 
 
