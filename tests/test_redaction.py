@@ -84,6 +84,31 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("/home/runner", result["text"])
         self.assertIn("<local-path>", result["text"])
 
+    def test_repository_relative_paths_with_local_path_segments_are_kept(self):
+        from robert_agent import redaction
+
+        text = (
+            "see `src/dashboard/apigateway/apigateway/data/apigw-definitions/resources.yaml:1894`, "
+            "app/tmp/cache.py, my-home/root/x and pkg.data/tmp/y"
+        )
+
+        result = redaction.redact_text(text)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["text"], text)
+
+    def test_absolute_local_paths_after_punctuation_are_replaced(self):
+        from robert_agent import redaction
+
+        result = redaction.redact_text(
+            "see `/data/workspace/app`, (/tmp/robert.log), file:///root/report.md and \"/home/runner/x\""
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["text"].count("<local-path>"), 4)
+        for leaked in ("/data/workspace", "/tmp/robert.log", "/root/report.md", "/home/runner"):
+            self.assertNotIn(leaked, result["text"])
+
     def test_redact_and_truncate_never_returns_unredacted_suffix(self):
         from robert_agent import redaction
 
