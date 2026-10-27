@@ -20,6 +20,7 @@ def render_systemd_unit(executable: Path, config_path: Path) -> str:
             "run",
             "--config",
             config_path,
+            "--wait-for-lease",
         ]
     )
     return (
@@ -44,6 +45,7 @@ def render_launch_agent(executable: Path, config_path: Path) -> str:
             "run",
             "--config",
             str(config_path),
+            "--wait-for-lease",
         ],
         "RunAtLoad": True,
         "KeepAlive": True,
@@ -71,6 +73,7 @@ def render_supervisord_config(
             "run",
             "--config",
             config_path,
+            "--wait-for-lease",
         ]
     )
     web_command = " ".join(
@@ -108,6 +111,8 @@ def render_supervisord_config(
         "autorestart=true\n"
         "startsecs=5\n"
         "stopsignal=TERM\n"
+        # TERM grace + KILL reap + process-group proof for the active child.
+        "stopwaitsecs=30\n"
         f"stdout_logfile={log_dir / 'daemon.out.log'}\n"
         f"stderr_logfile={log_dir / 'daemon.err.log'}\n\n"
         "[program:robert-web]\n"

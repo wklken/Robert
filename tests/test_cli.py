@@ -47,6 +47,14 @@ class CliTests(unittest.TestCase):
         ]:
             self.assertIn(command, output.getvalue())
 
+    def test_daemon_run_forwards_wait_for_lease(self):
+        from robert_agent.cli import main as cli_main
+
+        with mock.patch.object(cli_main.daemon, "main", return_value=0) as daemon_main:
+            main(["daemon", "run", "--config", "/tmp/robert-config.yml", "--wait-for-lease"])
+
+        self.assertIn("--wait-for-lease", daemon_main.call_args.args[0])
+
     def test_init_help_documents_non_interactive_values(self):
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
