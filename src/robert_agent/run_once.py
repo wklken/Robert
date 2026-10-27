@@ -561,6 +561,7 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         "git": git_summary,
         "commands": commands,
         "transport_failure": transport_failure,
+        "rate_limit_failure": retry_policy.terminal_rate_limit(logs),
         "error_class": category,
     }
 
@@ -572,12 +573,27 @@ def _inspect_attempt_recovery_with_metadata(
     metadata,
     worktree_path,
 ):
-    return _inspect_attempt_recovery(
+    recovery = _inspect_attempt_recovery(
         conn,
         attempt_id,
         task_id,
         metadata.get("dispatch", {}).get("worktree_path") or worktree_path,
     )
+    if recovery.get("rate_limit_failure"):
+        recorded = metadata.get("dispatch") or {}
+        previous_fallback = (metadata.get("resume") or {}).get("model_fallback")
+        fallback = recorded.get("fallback_model")
+        if fallback and recorded.get("model") and fallback != recorded["model"] and not previous_fallback:
+            recovery["model_fallback"] = {
+                "worker_name": recorded.get("worker_name"), "model": fallback,
+                "previous_model": recorded["model"], "reason_code": "rate_limited",
+            }
+            if recovery["status"] != "orphaned_command_running":
+                recovery["status"] = "rate_limited"
+        elif recovery["status"] != "orphaned_command_running":
+            recovery["status"] = "unrecoverable"
+        recovery["error_class"] = "rate_limited"
+    return recovery
 
 
 def _safe_discovery_error(exc):
@@ -1067,7 +1083,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 recovery.get("transport_failure") and transport_failure_count >= MAX_TRANSPORT_RESUMES
             )
             if (
-                recovery["status"] in {"recoverable_progress", "transport_interrupted"}
+                recovery["status"] in {"recoverable_progress", "transport_interrupted", "rate_limited"}
                 and not transport_exhausted
                 and data_dir is not None
                 and db_path is not None
@@ -1084,6 +1100,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                     ),
                     "terminate": False,
                     "recovery": recovery,
+                    "error_class": recovery.get("error_class"),
                 }
                 metadata["supervise"] = status
                 recovery_subject_type, recovery_subject_id = _recovery_subject(
@@ -1100,7 +1117,10 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 if recovery_decision == "attention":
                     supervised += 1
                     reason = recovery.get('reason_code') or 'recovery_budget_exhausted'
-                    conn.execute("UPDATE attempts SET status='failed',finished_at=?,failure_json=? WHERE attempt_id=?",(run_now,json.dumps({'status':reason}),attempt_id))
+                    failure = {'status': reason}
+                    if recovery.get("rate_limit_failure"):
+                        failure.update(error_class="rate_limited", recovery=recovery)
+                    conn.execute("UPDATE attempts SET status='failed',finished_at=?,failure_json=? WHERE attempt_id=?",(run_now,json.dumps(failure),attempt_id))
                     conn.execute("UPDATE tasks SET lifecycle='failed',updated_at=? WHERE task_id=?",(run_now,task_id))
                     conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",(run_now,workstream_id))
                     metadata["supervise"] = {
@@ -1194,6 +1214,10 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                     "terminate": False,
                 }
             category = recovery.get("error_class")
+            if recovery.get("rate_limit_failure"):
+                status = {**status, "status": "rate_limited", "error_class": "rate_limited",
+                          "reason_code": "rate_limited", "recovery": recovery,
+                          "safe_error": recovery["rate_limit_failure"]["message"]}
             if category and category not in {"transient_failure", "rate_limited"}:
                 status = {**status, "status": category, "reason_code": category,
                           "safe_error": "Worker stopped: " + category,
@@ -4256,8 +4280,11 @@ def _create_resume_attempt_and_prompt(
             "recovery_artifact_path": str(recovery_path),
         }
     }
+    previous_resume = _json_object(previous_metadata_json).get("resume") or {}
+    model_fallback = recovery_context.get("model_fallback") or previous_resume.get("model_fallback")
+    if model_fallback:
+        attempt_metadata["resume"]["model_fallback"] = model_fallback
     if recovery_context.get("transport_failure"):
-        previous_resume = _json_object(previous_metadata_json).get("resume") or {}
         failure_count = int(previous_resume.get("transport_failure_count", 0)) + 1
         delay_seconds = min(300, TRANSPORT_RESUME_DELAY_SECONDS * 2 ** (failure_count - 1))
         attempt_metadata["resume"].update(
@@ -4816,6 +4843,11 @@ def _model_for_dispatch(
     primary_model,
 ):
     fallback_model = selected_worker.get("fallback_model")
+    current = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+    model_fallback = (_json_object(current[0] if current else None).get("resume") or {}).get("model_fallback")
+    if (model_fallback and model_fallback.get("worker_name") == selected_worker.get("name")
+            and model_fallback.get("model") == fallback_model):
+        return fallback_model
     if not fallback_model:
         return primary_model
     rows = conn.execute(
@@ -5019,13 +5051,14 @@ def _dispatch_queued_locked(
                 "task_id": task_info["task_id"],
                 "attempt_id": task_info["attempt_id"],
             }
+        dispatch_logs = ({
+            kind: {"tail": _tail_file(dispatch_result.get(f"{kind}_path"))}
+            for kind in ("stdout", "stderr")
+        } if not dispatch_result.get("ok", True) and dispatch_result.get("pid") else {})
         if (
             not dispatch_result.get("ok", True)
             and dispatch_result.get("pid")
-            and _terminal_transport_failure({
-                kind: {"tail": _tail_file(dispatch_result.get(f"{kind}_path"))}
-                for kind in ("stdout", "stderr")
-            })
+            and (_terminal_transport_failure(dispatch_logs) or retry_policy.terminal_rate_limit(dispatch_logs))
         ):
             # Even an exit during the startup probe must pass through the same
             # supervised, bounded continuation path as a later stream failure.
@@ -5033,6 +5066,11 @@ def _dispatch_queued_locked(
                 **dispatch_result, "ok": True, "status": "running",
                 "original_status": dispatch_result.get("status"), "process_exited": True,
             }
+        dispatch_result = {
+            **dispatch_result, "worker_name": selected_worker["name"], "model": model,
+            "fallback_model": selected_worker.get("fallback_model"),
+            "reasoning_effort": worker_kwargs["reasoning_effort"],
+        }
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA busy_timeout = 5000")
