@@ -17,7 +17,7 @@ SECRET_PATTERNS = [
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b", re.I),
 ]
 
-LOCAL_PATH = re.compile(r"(?:/Users|/home|/root|/data|/tmp|/var/folders)/[^\s:;,)]+")
+LOCAL_PATH = re.compile(r"(?<![\w.-])(?:/Users|/home|/root|/data|/tmp|/var/folders)/[^\s:;,)]+")
 INTERNAL_IP = re.compile(r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b")
 INTERNAL_DOMAIN = re.compile(r"\b[A-Za-z0-9.-]+\.(?:woa\.com|corp|internal|local)\b")
 
