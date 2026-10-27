@@ -529,7 +529,8 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     identity_status = _recovery_identity_status(evidence)
     logs = evidence.get("logs", {}) if isinstance(evidence, dict) else {}
     terminal_error = retry_policy.worker_error(logs)
-    category = retry_policy.error_class(terminal_error)
+    rate_limit = retry_policy.terminal_rate_limit(logs)
+    category = "rate_limited" if rate_limit else retry_policy.error_class(terminal_error)
     if category not in {"transient_failure", "rate_limited"}:
         _mark_recovery_attention(conn, binding, now)
         if binding:
@@ -563,6 +564,14 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
         isinstance(evidence, dict)
         and evidence.get("status") == "transport_interrupted"
         and evidence.get("transport_failure")
+        and evidence.get("task_id")
+        and evidence.get("previous_attempt_id") == attempt_id
+    )
+    valid_progress = valid_progress or bool(
+        isinstance(evidence, dict)
+        and evidence.get("status") == "rate_limited"
+        and rate_limit
+        and evidence.get("model_fallback")
         and evidence.get("task_id")
         and evidence.get("previous_attempt_id") == attempt_id
     )

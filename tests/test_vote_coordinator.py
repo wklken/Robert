@@ -11,6 +11,30 @@ from robert_agent import vote_coordinator, vote_files, vote_store, vote_publish,
 
 
 class VoteCoordinatorTests(unittest.TestCase):
+    def test_rate_limit_automatically_switches_only_affected_voter(self):
+        config = yaml.safe_load(self.fixture.config_path.read_text())
+        config['workers']['claude'].update(model='primary-model', fallback_model='fallback-model')
+        self.fixture.config_path.write_text(yaml.safe_dump(config))
+        driver = self.start()
+        original = driver.launcher
+        models = []
+
+        def limited(**kwargs):
+            if kwargs['worker_agent_config']['name'] == 'claude':
+                models.append(kwargs['model'])
+                if kwargs['model'] == 'primary-model':
+                    log = Path(kwargs['log_dir']) / 'stdout.log'
+                    log.write_text(json.dumps({'type': 'turn.failed', 'error': {'message': '429 Too Many Requests'}}))
+                    return {'ok': False, 'pid': 1073741824, 'process_exited': True,
+                            'returncode': 1, 'stdout_path': str(log), 'safe_error': 'worker exited with code 1'}
+            return original(**kwargs)
+
+        driver.launcher = limited
+        report = driver.run()
+        self.assertTrue(report.is_file())
+        self.assertEqual(models, ['primary-model', 'fallback-model'])
+        self.assertEqual(sum(call[0:2] == ('vote', 'codex') for call in self.calls), 1)
+
     def setUp(self):
         self.fixture = review_fixture.ReviewCoordinatorTests()
         self.fixture.setUp()

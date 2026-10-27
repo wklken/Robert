@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 
-from robert_agent import dispatch, execution_store, model_environment, review_files, review_workspace, worker_identity
+from robert_agent import dispatch, execution_store, model_environment, retry_policy, review_files, review_workspace, worker_identity
 from robert_agent import review_store as store
 from robert_agent.publication_lock import task_publication_lock
 from robert_agent.worker import snapshot
@@ -28,6 +28,27 @@ class ReviewStopped(RuntimeError):
 
 class ReviewSuperseded(RuntimeError):
     pass
+
+
+class ModelRateLimited(RuntimeError):
+    pass
+
+
+def _raise_rate_limit(launched):
+    logs = {}
+    for kind in ('stdout', 'stderr'):
+        path = launched.get(kind + '_path')
+        if not path:
+            continue
+        try:
+            with Path(path).open('rb') as stream:
+                stream.seek(max(0, Path(path).stat().st_size - 32768))
+                logs[kind] = {'tail': stream.read(32768).decode('utf-8', errors='replace')}
+        except OSError:
+            continue
+    failure = retry_policy.terminal_rate_limit(logs)
+    if failure:
+        raise ModelRateLimited('rate_limited: ' + failure['message'])
 
 
 def _group_finished(recorded):
@@ -381,6 +402,7 @@ class StageCoordinator:
         if not _wait_for_group_exit(launched):
             raise ReviewStopped('review leader exited but process group remains; inspect and stop remaining processes before retry')
         self.release_slot(run)
+        _raise_rate_limit(launched)
         if launched.get('returncode', 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
 
@@ -433,7 +455,14 @@ class StageCoordinator:
             previous = [r for r in store.runs(conn, self.round_id)
                         if r['stage'] == stage and r['worker_id'] == worker['name']]
             model = worker['default_model']
-            if worker.get('fallback_model') and len(previous) >= 2 and all(
+            limited = [r for r in previous if r['prompt_sha256'] == prompt_hash
+                       and r['status'] == 'failed' and (r['error'] or '').startswith('rate_limited: ')]
+            if limited:
+                fallback = worker.get('fallback_model')
+                if not fallback or any(r['model'] == fallback for r in limited):
+                    raise ModelRateLimited(limited[-1]['error'])
+                model = fallback
+            elif worker.get('fallback_model') and len(previous) >= 2 and all(
                 r['status'] == 'failed' and r['error'] == 'review worker timed out'
                 for r in previous[-2:]
             ):
@@ -449,6 +478,7 @@ class StageCoordinator:
                 if launched.get('pid') and not _wait_for_group_exit(launched):
                     raise ReviewStopped('failed model launch left a process group; inspect remaining processes')
                 self.release_slot(run)
+                _raise_rate_limit(launched)
                 raise RuntimeError(launched.get('safe_error', 'review launch failed'))
             self._wait(run, launched, worker['timeout_seconds'])
             if store.digest(prompt_path) != prompt_hash:
@@ -467,6 +497,9 @@ class StageCoordinator:
                 if current['status'] == 'starting' and not current['dispatch']:
                     raise ReviewStopped('model launch outcome unknown; inspect before retry') from exc
                 store.update_run(conn, run['run_id'], status='failed', error=str(exc))
+            if (isinstance(exc, ModelRateLimited) and worker.get('fallback_model')
+                    and model != worker['fallback_model']):
+                return self.run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
             raise
 
     def prompt(self, name, text):

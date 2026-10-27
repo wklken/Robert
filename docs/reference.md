@@ -167,6 +167,15 @@ preceding terminal attempts in the same workstream both end in
 `failed_timeout`. A successful attempt or any other failure type resets the
 sequence. The fallback changes only the model; the selected worker and effort
 remain unchanged.
+When a worker exits with a terminal HTTP 429 or rate-limit error, Robert
+automatically resumes the same task once using that worker's `fallback_model`,
+even if no progress was saved. The switch is persisted across daemon restarts
+and consumes the existing one-shot automatic recovery quota. A missing fallback,
+the same model configured as fallback, an exhausted quota, or a rate-limited
+fallback stops automatic recovery and records the failure. Quoted error text
+and errors followed by a successful protocol completion do not trigger a switch.
+Native review/vote stages apply the same switch per stage and worker, preserve
+their shared prompt and snapshot, and stop if the fallback is also rate limited.
 `pr_automation` is optional and defaults to disabled. Enabling CI remediation
 requires a non-empty `check_allowlist`; its limits are per durable PR snapshot
 episode. Conflict remediation and CI publication use ordinary non-force pushes

@@ -209,6 +209,111 @@ class ReviewCoordinatorTests(unittest.TestCase):
             self.assertEqual(fallback['artifact']['model'], 'fallback-model')
             self.assertIn('fallback-model', json.dumps(review_store.board_status(conn, driver.task_id)))
 
+    def test_rate_limit_automatically_switches_only_affected_reviewer(self):
+        config = yaml.safe_load(self.config_path.read_text())
+        config['workers']['claude'].update(model='primary-model', fallback_model='fallback-model')
+        self.config_path.write_text(yaml.safe_dump(config))
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        original = driver.launcher
+
+        def limited(**kwargs):
+            if kwargs['worker_agent_config']['name'] == 'claude' and kwargs['model'] == 'primary-model':
+                output = Path(kwargs['log_dir'])
+                log = output / 'stdout.log'
+                log.write_text(json.dumps({'type': 'turn.failed', 'error': {'message': '429 Too Many Requests'}}) + '\n')
+                self.calls.append(('review', 'claude', Path(kwargs['prompt_path']).read_bytes(),
+                                   kwargs['worktree_path'], str(output), kwargs['model']))
+                return {'ok': False, 'pid': 1073741824, 'process_exited': True,
+                        'returncode': 1, 'stdout_path': str(log), 'safe_error': 'worker exited with code 1'}
+            return original(**kwargs)
+
+        driver.launcher = limited
+        report = driver.run()
+        reviews = [call for call in self.calls if call[0] == 'review']
+        self.assertEqual([call[5] for call in reviews if call[1] == 'claude'], ['primary-model', 'fallback-model'])
+        self.assertEqual(sum(call[1] == 'codex' for call in reviews), 1)
+        self.assertEqual(len({call[2] for call in reviews}), 1)
+        self.assertIn('fallback-model', report.read_text())
+
+    def test_rate_limited_fallback_stops_and_survives_coordinator_restart(self):
+        config = yaml.safe_load(self.config_path.read_text())
+        config['workers']['claude'].update(model='primary-model', fallback_model='fallback-model')
+        self.config_path.write_text(yaml.safe_dump(config))
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        original = driver.launcher
+        limited_models = []
+
+        def limited(**kwargs):
+            if kwargs['worker_agent_config']['name'] == 'claude':
+                limited_models.append(kwargs['model'])
+                log = Path(kwargs['log_dir']) / 'stderr.log'
+                log.write_text('HTTP 429 Too Many Requests')
+                return {'ok': False, 'pid': 1073741824, 'process_exited': True,
+                        'returncode': 1, 'stderr_path': str(log), 'safe_error': 'worker exited with code 1'}
+            return original(**kwargs)
+
+        driver.launcher = limited
+        with self.assertRaisesRegex(RuntimeError, 'rate_limited'):
+            driver.run()
+        restarted = self.coordinator()
+        restarted.launcher = limited
+        with self.assertRaisesRegex(RuntimeError, 'rate_limited'):
+            restarted.run()
+        self.assertEqual(limited_models, ['primary-model', 'fallback-model'])
+
+    def test_rate_limit_switch_after_running_worker_exits(self):
+        config = yaml.safe_load(self.config_path.read_text())
+        config['workers']['claude'].update(model='primary-model', fallback_model='fallback-model')
+        self.config_path.write_text(yaml.safe_dump(config))
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        original = driver.launcher
+        models = []
+
+        def limited(**kwargs):
+            if kwargs['worker_agent_config']['name'] == 'claude':
+                models.append(kwargs['model'])
+                if kwargs['model'] == 'primary-model':
+                    log = Path(kwargs['log_dir']) / 'stdout.log'
+                    log.write_text(json.dumps({'type': 'turn.failed', 'error': {'message': '429 Too Many Requests'}}))
+                    return {'ok': True, 'pid': 1073741824, 'process_exited': True,
+                            'returncode': 1, 'stdout_path': str(log)}
+            return original(**kwargs)
+
+        driver.launcher = limited
+        self.assertTrue(driver.run().is_file())
+        self.assertEqual(models, ['primary-model', 'fallback-model'])
+
+    def test_rate_limit_without_distinct_fallback_does_not_relaunch_stage(self):
+        for fallback in (None, 'primary-model'):
+            with self.subTest(fallback=fallback):
+                fixture = ReviewCoordinatorTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                config = yaml.safe_load(fixture.config_path.read_text())
+                config['workers']['claude'].update(model='primary-model', fallback_model=fallback)
+                fixture.config_path.write_text(yaml.safe_dump(config))
+                fixture.cycle([fixture.event()])
+                driver = fixture.coordinator()
+                original = driver.launcher
+                calls = []
+
+                def limited(**kwargs):
+                    if kwargs['worker_agent_config']['name'] == 'claude':
+                        calls.append(kwargs['model'])
+                        log = Path(kwargs['log_dir']) / 'stdout.log'
+                        log.write_text(json.dumps({'type': 'turn.failed', 'error': {'message': '429 Too Many Requests'}}))
+                        return {'ok': False, 'pid': 1073741824, 'process_exited': True,
+                                'returncode': 1, 'stdout_path': str(log), 'safe_error': 'worker exited with code 1'}
+                    return original(**kwargs)
+
+                driver.launcher = limited
+                with self.assertRaisesRegex(RuntimeError, 'rate_limited'):
+                    driver.run()
+                self.assertEqual(calls, ['primary-model'])
+
     def test_sealing_rejects_fifo_without_waiting_for_a_writer(self):
         self.cycle([self.event()])
         driver = self.coordinator()

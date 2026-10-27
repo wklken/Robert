@@ -158,3 +158,38 @@ def worker_error(logs):
                 if event.get("type") == "turn.failed":
                     break
     return "\n".join(messages)
+
+
+def terminal_rate_limit(logs):
+    """Recognize a worker's terminal rate limit, excluding quoted/recovered errors."""
+    errors = []
+    stderr = []
+    for kind, payload in logs.items():
+        tail = str(payload.get("tail", ""))
+        if "stderr" in kind:
+            stderr.append(tail)
+            continue
+        for line in reversed(tail.splitlines()):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "turn.completed":
+                return None
+            if event.get("type") == "result":
+                if not event.get("is_error"):
+                    return None
+                errors.append({"type": "result", "message": str(event.get("errors") or event.get("result") or "")})
+                break
+            if event.get("type") in {"error", "turn.failed"}:
+                error = event.get("error") or event.get("message") or ""
+                message = str(error.get("message", "")) if isinstance(error, dict) else str(error)
+                errors.append({"type": event["type"], "message": message})
+                break
+    # A terminal protocol error takes precedence over diagnostic stderr.
+    message = "\n".join(error["message"] for error in errors) if errors else "\n".join(stderr)
+    if error_class(message) != "rate_limited":
+        return None
+    return {"type": errors[0]["type"] if errors else "stderr", "message": message}

@@ -117,6 +117,13 @@ The global hard worker timeout defaults to 45 minutes. If the two immediately
 preceding terminal attempts in one workstream both end in `failed_timeout`, the
 next run uses `fallback_model`. Other failure types and successful attempts
 reset the sequence. The configured effort is unchanged.
+For a terminal HTTP 429 or rate-limit error, Robert automatically switches to
+the configured fallback on the next attempt of the same task. This uses the
+task's existing one-shot automatic recovery quota and preserves its worker,
+effort, worktree and context. It also works before the worker saves any progress.
+If the fallback is absent, identical to the failed model, or also rate limited,
+Robert records the failure and stops automatic retries. Native review/vote
+switch only the affected stage and worker and retain their prompt and snapshot.
 
 Built-in adapters are `codex`, `tcodex`, `claude`, `tclaude`, `opencode`,
 `cbc`, and `command`. The generic adapter requires a YAML command sequence:

@@ -9,6 +9,19 @@ from robert_agent import retry_policy, run_once
 
 
 class RetryClassificationTests(unittest.TestCase):
+    def test_terminal_rate_limit_ignores_quoted_recovered_and_superseded_errors(self):
+        import json
+        failed = json.dumps({'type': 'turn.failed', 'error': {'message': '429 Too Many Requests'}})
+        quoted = json.dumps({'type': 'item.completed', 'item': {'aggregated_output': failed}})
+        for tail in (quoted, failed + '\n' + json.dumps({'type': 'turn.completed'}),
+                     failed + '\n' + json.dumps({'type': 'turn.failed', 'error': {'message': '401 Unauthorized'}}),
+                     failed + '\n' + json.dumps({'type': 'result', 'is_error': False})):
+            with self.subTest(tail=tail):
+                self.assertIsNone(retry_policy.terminal_rate_limit({'stdout': {'tail': tail}}))
+        for tail in (failed, json.dumps({'type': 'result', 'is_error': True, 'errors': ['429 Too Many Requests']})):
+            self.assertIsNotNone(retry_policy.terminal_rate_limit({'stdout': {'tail': tail}}))
+        self.assertIsNotNone(retry_policy.terminal_rate_limit({'stderr': {'tail': 'HTTP 429 Too Many Requests'}}))
+
     def test_permission_403_and_rate_limit_403_are_distinct(self):
         self.assertEqual(retry_policy.error_class('HTTP 403 Forbidden'), 'permission_required')
         self.assertEqual(retry_policy.error_class('HTTP 403: API rate limit exceeded'), 'rate_limited')
