@@ -48,12 +48,17 @@ appears in exactly one column according to durable SQLite state:
 | Doing | A worker attempt is running or accepted GitHub publication is in progress. |
 | Waiting for you | An unresolved Agent question, completion decision, startup failure, or publication failure requires operator action. |
 | Review | An associated PR is open, or PR-specific attention such as an unmerged close must be handled. |
-| Done | Completion has been accepted or an associated PR was merged. |
+| Done | Completion has been accepted, an issue analysis was accepted and published, or an associated PR was merged. |
 
 Canceled items remain in history and are excluded from the default six-column
 response. Structured state wins over timestamps and text heuristics. Resolving
 an attention event prevents an old failure or question from returning the card
 to Waiting.
+
+GitHub issue analysis without an associated PR completes automatically after
+its result passes audit, all publication actions succeed, and no request or
+worker remains pending. The same check repairs missing completion markers from
+earlier runs. Creating a new GitHub task clears the prior completion marker.
 
 ## Task commands
 
