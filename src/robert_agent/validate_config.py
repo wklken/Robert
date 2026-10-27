@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from pathlib import Path
+import sys
 
 import yaml
 
@@ -530,7 +531,7 @@ def validate_config(config_path, skip_external=False):
             raise ValueError("model_max_concurrency and review_max_concurrency disagree")
         if type(review_max_concurrency) is not int or review_max_concurrency < 1:
             raise ValueError("review_max_concurrency must be a positive integer")
-        python_bin_value = config.get("python_bin", "python3")
+        python_bin_value = config.get("python_bin", sys.executable or "python3")
         python_bin = (
             ""
             if python_bin_value is None

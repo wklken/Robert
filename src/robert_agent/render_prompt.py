@@ -412,7 +412,7 @@ def render_prompt(
     branch_name = runtime_context.get("branch_name", "")
     target_base_branch = runtime_context.get("target_base_branch", "")
     task_kind = task.get("task_kind", "human_request")
-    python_bin = runtime_context.get("python_bin", "python3")
+    python_bin = runtime_context.get("python_bin", sys.executable or "python3")
     recommended_skills = route_result.get("recommended_skills", route_result.get("required_skills", []))
     required_skills = route_result.get("required_skills", [])
     verification_policy = _verification_policy(route_result)
