@@ -1,6 +1,7 @@
 from contextlib import closing
 import json
 import sqlite3
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -244,7 +245,7 @@ repos:
         self.assertEqual(result["db_path"], str(self.data_dir / "dd.sqlite3"))
         self.assertEqual(result["repos"][0]["trusted_actors"], ["wklken"])
         self.assertEqual(result["worker_startup_grace_seconds"], 300)
-        self.assertEqual(result["python_bin"], "python3")
+        self.assertEqual(result["python_bin"], sys.executable)
         self.assertEqual(result["default_worker"]["name"], "default")
         self.assertEqual(result["route_worker_models"], {})
         self.assertEqual(result["repos"][0]["max_concurrency"], 3)
@@ -532,6 +533,16 @@ repos:
         self.assertFalse(result['ok'],result)
         self.assertIn('migrate dbos',result['safe_error'])
         self.assertNotIn(url, json.dumps(result))
+
+    def test_config_defaults_python_bin_to_running_interpreter(self):
+        from robert_agent import validate_config
+        config_path = self.write_config()
+
+        with patch("sys.executable", "/opt/robert/runtime/bin/python"):
+            result = validate_config.validate_config(config_path, skip_external=True)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["python_bin"], "/opt/robert/runtime/bin/python")
 
     def test_config_accepts_python_bin(self):
         from robert_agent import validate_config

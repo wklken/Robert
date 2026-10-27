@@ -777,7 +777,7 @@ class OperationalCommandTests(unittest.TestCase):
 
         def command_exists(command):
             return {
-                "python3": "/usr/bin/python3",
+                sys.executable: sys.executable,
                 "gh": "/usr/bin/gh",
                 "cbc": None,
             }.get(command)
@@ -840,7 +840,7 @@ class OperationalCommandTests(unittest.TestCase):
         def command_exists(command):
             probed.append(command)
             return {
-                "python3": "/usr/bin/python3",
+                sys.executable: sys.executable,
                 "gh": "/usr/bin/gh",
                 "custom-cbc": "/opt/bin/custom-cbc",
             }.get(command)
@@ -857,7 +857,7 @@ class OperationalCommandTests(unittest.TestCase):
 
         gates = {gate["id"]: gate for gate in result["gates"]}
         self.assertTrue(result["ok"], result)
-        self.assertIn("python3", probed)
+        self.assertIn(sys.executable, probed)
         self.assertIn("custom-cbc", probed)
         self.assertEqual(gates["python_bin"]["status"], "passed")
         self.assertEqual(gates["worker_command"]["status"], "passed")
@@ -878,7 +878,7 @@ class OperationalCommandTests(unittest.TestCase):
         def command_exists(command):
             probed.append(command)
             return {
-                "python3": "/usr/bin/python3",
+                sys.executable: sys.executable,
                 "gh": "/usr/bin/gh",
                 "/opt/homebrew/bin/codex": "/opt/homebrew/bin/codex",
             }.get(command)
@@ -926,7 +926,7 @@ class OperationalCommandTests(unittest.TestCase):
         def command_exists(command):
             probed.append(command)
             return {
-                "python3": "/usr/bin/python3",
+                sys.executable: sys.executable,
                 "gh": "/usr/bin/gh",
                 "/opt/bin/cbc": "/opt/bin/cbc",
                 "/opt/bin/review-codex": "/opt/bin/review-codex",

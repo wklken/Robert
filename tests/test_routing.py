@@ -1,3 +1,4 @@
+import sys
 import unittest
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
@@ -245,10 +246,11 @@ class RoutingTests(unittest.TestCase):
         self.assertNotIn("allowed_skills", prompt)
         self.assertIn("/worker/snapshot.py", prompt)
         self.assertIn("/worker/heartbeat.py", prompt)
-        self.assertIn("python3 /worker/snapshot.py", prompt)
-        self.assertIn("python3 /worker/heartbeat.py", prompt)
-        self.assertIn("python3 /agent/status.py --db /tmp/dd.sqlite3 status", prompt)
-        self.assertIn("python3 /agent/status.py --db /tmp/dd.sqlite3 source <source_key-or-number-or-url>", prompt)
+        self.assertIn(f"{sys.executable} /worker/snapshot.py", prompt)
+        self.assertIn(f"{sys.executable} /worker/heartbeat.py", prompt)
+        self.assertIn(f"{sys.executable} /agent/result.py", prompt)
+        self.assertIn(f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 status", prompt)
+        self.assertIn(f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 source <source_key-or-number-or-url>", prompt)
         self.assertIn("ad hoc SQLite queries", prompt)
         self.assertIn('non-empty "type"', prompt)
         self.assertIn('"planned_github_actions"', prompt)

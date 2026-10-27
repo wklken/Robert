@@ -32,7 +32,8 @@ block to keep automation disabled.
 version: 1
 data_dir: ~/.local/share/robert
 database: robert.sqlite3
-python_bin: python3
+# Omit python_bin to use the interpreter running Robert.
+# Set an override only when that interpreter can also import robert_agent.
 max_concurrency: 3
 stale_after_minutes: 20
 hard_timeout_minutes: 45
@@ -185,7 +186,7 @@ robert config validate --config ~/.config/robert/config.yml --output json
 | `hard_timeout_minutes` | 45 | Supervision wall-time limit, independent of worker adapter timeout. |
 | `worker_startup_grace_seconds` | 300 | Grace period for a starting worker. |
 | `lease_ttl_minutes` | 9 | Task lease duration. |
-| `python_bin` | `python3` | Python executable used for child commands. |
+| `python_bin` | Interpreter running Robert (`sys.executable`) | Python executable used for worker helper commands; an explicit override must be able to import `robert_agent`. |
 | `daemon.local_poll_seconds` | 5 | Local state/supervision polling. |
 | `daemon.github_poll_seconds` | 300 | Daemon GitHub polling interval; configured independently of `github.poll_seconds`. |
 | `daemon.github_poll_when_full_seconds` | 600 | GitHub polling while worker capacity is full. |
