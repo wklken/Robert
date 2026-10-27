@@ -66,6 +66,20 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
             time.sleep(.01)
         self.fail('both real voters did not overlap')
 
+    def wait_registered(self):
+        # A voter writes its marker before dispatch returns (startup probe +
+        # identity capture, slow on macOS's ps path), so cancel only after
+        # both runs persisted the identity the canceller has to verify.
+        self.wait_started()
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            with vote_store.connect(self.fixture.db) as conn:
+                runs = [r for r in vote_store.runs(conn, self.driver.round_id) if r['stage'] == 'vote']
+            if len(runs) == 2 and all(r['status'] == 'running' and r['dispatch'].get('pid') for r in runs):
+                return
+            time.sleep(.01)
+        self.fail('both real voters were not registered')
+
     def test_two_adapters_run_concurrently_with_identical_input_and_private_output(self):
         with ThreadPoolExecutor(1) as executor:
             future = executor.submit(self.driver.vote)
@@ -88,7 +102,7 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
         with ThreadPoolExecutor(1) as executor:
             future = executor.submit(self.driver.vote)
             try:
-                self.wait_started()
+                self.wait_registered()
                 self.driver.stopping.set()
                 with vote_store.connect(self.fixture.db) as conn:
                     self.assertNotEqual(native_rounds.terminate_children(conn, self.driver.task_id), 'attention')
