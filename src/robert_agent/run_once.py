@@ -31,6 +31,7 @@ from robert_agent import supervise
 from robert_agent import validate_config
 from robert_agent import workstream
 from robert_agent import worktree
+from robert_agent import work_item_control
 from robert_agent import retry_policy, execution_operations
 from robert_agent import execution_store
 from robert_agent import worker_identity
@@ -1974,6 +1975,32 @@ def _record_remote_terminal_state(
         ),
     )
     item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+    if item and source_type == "issue" and item["origin_source_id"] == source_id:
+        facts = work_item_control.lifecycle_facts(conn, item)
+        unfinished = conn.execute(
+            """SELECT 1 FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
+            WHERE (w.workstream_id=? OR w.origin_workstream_id=?)
+              AND t.lifecycle NOT IN ('completed','failed','canceled','ignored') LIMIT 1""",
+            (item["workstream_id"], item["workstream_id"]),
+        ).fetchone()
+        if not unfinished and not facts["running"] and not facts["actions"] and not facts["cleanup_pending"] and not facts["workflow_attention"]:
+            terminal_column = "completed_at" if workstream_lifecycle == "completed" else "canceled_at"
+            decision = work_items._unresolved_event(conn, item["work_item_id"], work_items.DECISION_EVENTS)
+            work_items.record_system_event(
+                conn,
+                item["work_item_id"],
+                event_type="completed" if workstream_lifecycle == "completed" else "canceled",
+                idempotency_key=f"issue-closed:{source_key}:{remote_state.get('closed_at') or run_now}",
+                body="GitHub issue closed: " + (remote_state.get("state_reason") or "closed"),
+                resolves_event_id=(decision["event_id"] if hasattr(decision, "keys") else decision[0]) if decision else None,
+                metadata={"source_key": source_key, "number": number},
+                now=run_now,
+            )
+            conn.execute(
+                f"""UPDATE work_items SET {terminal_column}=?, updated_at=?, version=version+1
+                WHERE work_item_id=? AND completed_at IS NULL AND canceled_at IS NULL""",
+                (remote_state.get("closed_at") or run_now, run_now, item["work_item_id"]),
+            )
     if item and source_type == "pull_request":
         if audit_type == "remote_pr_merged":
             work_items.record_system_event(
@@ -2169,6 +2196,14 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
             OR (
               gs.source_type = 'pull_request'
               AND gs.state = 'open'
+            )
+            OR (
+              gs.source_type = 'issue'
+              AND EXISTS (
+                SELECT 1 FROM work_items wi
+                WHERE wi.origin_source_id = gs.source_id
+                  AND wi.completed_at IS NULL AND wi.canceled_at IS NULL
+              )
             )
           )
         ORDER BY w.updated_at, w.workstream_id
@@ -3025,7 +3060,7 @@ def _insert_source_and_event(conn, repo_id, event, run_now):
         ON CONFLICT(source_key) DO UPDATE SET
           html_url = COALESCE(excluded.html_url, github_sources.html_url),
           title = excluded.title,
-          state = excluded.state,
+          state = CASE WHEN ? IS NULL THEN github_sources.state ELSE excluded.state END,
           author_login = excluded.author_login,
           source_updated_at = COALESCE(excluded.source_updated_at, github_sources.source_updated_at)
         """,
@@ -3037,9 +3072,10 @@ def _insert_source_and_event(conn, repo_id, event, run_now):
             event["number"],
             event.get("url"),
             event.get("title", ""),
-            event.get("state", "open"),
+            event.get("state") or "open",
             event.get("source_author_login", event.get("actor_login")),
             event.get("source_updated_at"),
+            event.get("state"),
         ),
     )
     event_id = _event_id(event["event_fingerprint"])

@@ -3878,6 +3878,8 @@ repos:
         self.assertTrue(finalized["ok"], finalized)
 
         def fake_pr_runner(args, **_kwargs):
+            if args[:3] == ["gh", "api", "repos/example/backend/issues/123"]:
+                return _Completed(args, '{"number":123,"state":"open"}')
             if args[:3] == ["gh", "search", "issues"] and "--assignee" in args:
                 return _Completed(args, "[]")
             if args[:3] == ["gh", "search", "issues"] and "--mentions" in args:
@@ -4024,6 +4026,104 @@ repos:
                 ),
             ],
         )
+
+    def test_event_without_state_preserves_a_closed_source(self):
+        from robert_agent import run_once
+
+        self.assertTrue(run_once.run_once(
+            self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True,
+        )["ok"])
+        db = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("UPDATE github_sources SET state='closed' WHERE source_key='github:example/backend#123'")
+            event = {
+                "source_key": "github:example/backend#123", "source_type": "issue",
+                "number": 123, "event_fingerprint": "comment:missing-state",
+                "event_type": "comment", "actor_login": "wklken",
+                "event_at": "2026-07-31T10:00:00Z",
+            }
+            run_once._insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
+            event.update(state="open", event_fingerprint="comment:explicit-reopen")
+            run_once._insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "open")
+
+    def test_remote_close_reconciles_an_unfinished_historical_issue_item(self):
+        from robert_agent import board, run_once, work_items
+
+        for state_reason in ("completed", "not_planned"):
+            with self.subTest(state_reason=state_reason):
+                fixture = RunOnceDryRunTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                self.assertTrue(run_once.run_once(
+                    fixture.config_path, fixture_path=fixture.fixture_path, dry_run=True, skip_external=True,
+                )["ok"])
+                db = fixture.data_dir / "dd.sqlite3"
+                with closing(sqlite3.connect(db)) as conn, conn:
+                    item = work_items._item_from_row(conn.execute("SELECT * FROM work_items").fetchone())
+                    conn.execute("UPDATE work_items SET completed_at=NULL, canceled_at=NULL")
+                    conn.execute("UPDATE tasks SET lifecycle='completed'")
+                    conn.execute("UPDATE attempts SET status='completed'")
+                    conn.execute("UPDATE workstreams SET lifecycle='completed', active_task_id=NULL")
+                    work_items.record_system_event(
+                        conn, item["work_item_id"], event_type="operator_decision_required",
+                        idempotency_key="historical-approval:" + state_reason,
+                    )
+                    remote = {
+                        "state": "closed", "state_reason": state_reason,
+                        "closed_at": "2026-07-31T09:45:22Z",
+                        "updated_at": "2026-07-31T09:45:22Z",
+                        "title": "Completed issue",
+                    }
+                    calls = []
+
+                    def runner(args, **_kwargs):
+                        calls.append(args)
+                        self.assertEqual(args, ["gh", "api", "repos/example/backend/issues/123"])
+                        return _Completed(args, json.dumps(remote))
+
+                    reconciled = run_once._reconcile_remote_source_states(
+                        conn, "repo:example/backend", {"full_name": "example/backend"},
+                        runner, "2026-10-27T00:00:00+00:00",
+                    )
+                    self.assertEqual(reconciled, 1)
+                    self.assertEqual(len(calls), 1)
+                detail = board.get_work_item_detail(db, item["work_item_id"])
+                self.assertEqual(detail["column"], "done" if state_reason == "completed" else "history")
+                self.assertEqual(detail["attention_signals"], [])
+                self.assertNotIn("approve", detail["valid_commands"])
+                self.assertEqual(detail["completed_at"] if state_reason == "completed" else detail["canceled_at"], remote["closed_at"])
+                version = detail["version"]
+                with closing(sqlite3.connect(db)) as conn, conn:
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+                    self.assertEqual(run_once._reconcile_remote_source_states(
+                        conn, "repo:example/backend", {"full_name": "example/backend"},
+                        runner, "2026-10-27T00:05:00+00:00",
+                    ), 0)
+                self.assertEqual(board.get_work_item_detail(db, item["work_item_id"])["version"], version)
+
+    def test_remote_completed_issue_marks_its_item_done(self):
+        from robert_agent import board, run_once
+
+        self.assertTrue(run_once.run_once(
+            self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True,
+        )["ok"])
+        db = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            item = dict(conn.execute("SELECT * FROM work_items").fetchone())
+            task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
+            remote = {"state": "closed", "state_reason": "completed", "closed_at": "2026-07-31T09:45:22Z"}
+            self.assertTrue(run_once._record_remote_terminal_state(
+                conn, item["repo_id"], item["workstream_id"], item["origin_source_id"],
+                "github:example/backend#123", "issue", 123, task_id, remote,
+                "completed", "remote_source_closed", "2026-10-27T00:00:00+00:00",
+            ))
+        detail = board.get_work_item_detail(db, item["work_item_id"])
+        self.assertEqual(detail["column"], "done")
+        self.assertEqual(detail["completed_at"], remote["closed_at"])
+        self.assertEqual(detail["valid_commands"], [])
 
     def test_active_issue_task_is_canceled_when_remote_issue_closes(self):
         from robert_agent import run_once
@@ -4323,6 +4423,8 @@ repos:
         )
 
         def fake_merged_pr_runner(args, **_kwargs):
+            if args[:3] == ["gh", "api", "repos/example/backend/issues/123"]:
+                return _Completed(args, '{"number":123,"state":"open"}')
             if args[:3] == ["gh", "search", "issues"]:
                 return _Completed(args, "[]")
             if args[:3] == ["gh", "api", "notifications"]:

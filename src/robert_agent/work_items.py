@@ -1080,6 +1080,8 @@ def execute_command(
                     else {}
                 )
                 if command == "approve" and unresolved["event_type"] in DECISION_EVENTS:
+                    if not facts["approval_task_id"]:
+                        raise WorkItemConflictError("The route decision has no active task. Refresh and reconcile or cancel this item.")
                     conn.execute(
                         """
                         UPDATE work_items

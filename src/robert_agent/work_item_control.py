@@ -16,13 +16,15 @@ def related_workstreams(conn, workstream_id):
 def lifecycle_facts(conn, item):
     streams = related_workstreams(conn, item["workstream_id"])
     placeholders = ','.join('?' for _ in streams) or 'NULL'
-    attempts = [dict(row) for row in conn.execute(
+    cursor = conn.execute(
         f"""SELECT a.attempt_id, a.task_id, a.status, a.metadata_json, gs.state AS source_state FROM attempts a
         JOIN tasks t ON t.task_id=a.task_id
         JOIN workstreams w ON w.workstream_id=t.workstream_id
         LEFT JOIN github_sources gs ON gs.source_id=w.primary_source_id WHERE t.workstream_id IN ({placeholders})
         AND {supervise.occupied_attempt_sql()}""", streams,
-    )]
+    )
+    names = [column[0] for column in cursor.description]
+    attempts = [dict(zip(names, row)) for row in cursor]
     cleanup = []
     for attempt in attempts:
         try:
@@ -35,12 +37,14 @@ def lifecycle_facts(conn, item):
             termination = {}
         if isinstance(termination, dict) and termination.get('status') not in {None, 'terminated', 'not_found', 'already_dead'}:
             cleanup.append(safe_text(termination.get('reason') or termination.get('status')))
-    actions = [dict(row) for row in conn.execute(
+    cursor = conn.execute(
         f"""SELECT ga.*, pi.status AS intent_status FROM github_actions ga JOIN tasks t ON t.task_id=ga.task_id
         LEFT JOIN publication_intents pi ON pi.action_id=ga.action_id
         WHERE t.workstream_id IN ({placeholders}) AND ga.publish_status='not_published'
         AND ga.audit_status IN ('pending','accepted') ORDER BY ga.created_at, ga.action_id""", streams,
-    )]
+    )
+    names = [column[0] for column in cursor.description]
+    actions = [dict(zip(names, row)) for row in cursor]
     failed = []
     retry_blocked = False
     for action in actions:
@@ -73,7 +77,14 @@ def lifecycle_facts(conn, item):
         """SELECT 1 FROM wakeups WHERE work_item_id=? AND status='pending'
         AND json_extract(metadata_json, '$.kind')='publication_retry' LIMIT 1""", (item['work_item_id'],),
     ).fetchone()
+    approval_task = conn.execute(
+        """SELECT t.task_id FROM workstreams w JOIN tasks t ON t.task_id=w.active_task_id
+        AND t.workstream_id=w.workstream_id WHERE w.workstream_id=? AND w.lifecycle='active'
+        AND t.lifecycle IN ('detected','authorized','classified','queued','running')""",
+        (item['workstream_id'],),
+    ).fetchone()
     return {'streams': streams, 'running': attempts, 'actions': actions, 'publish_failures': failed,
+            'approval_task_id': approval_task[0] if approval_task else None,
             'workflow_attention': attention, 'publication_retry_pending': bool(pending), 'publication_retry_blocked': retry_blocked, 'cleanup_pending': cleanup,
             'source_closed': bool(source and (source[0] or '').lower() == 'closed') or any((a['source_state'] or '').lower() == 'closed' for a in attempts)}
 

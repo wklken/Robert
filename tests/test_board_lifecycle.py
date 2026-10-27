@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from tests import test_board as board_fixtures
-from robert_agent import board, publish, web, work_items
+from robert_agent import board, publish, run_once, web, work_items
 
 
 class BoardLifecycleTests(unittest.TestCase):
@@ -37,6 +37,77 @@ class BoardLifecycleTests(unittest.TestCase):
     def test_home_is_board_and_legacy_list_remains_accessible(self):
         self.assertIn(b'id="board-app"', web.build_http_response("/", self.db)[2])
         self.assertIn(b'id="workbench-app"', web.build_http_response("/work", self.db)[2])
+
+    def test_expired_route_approval_does_not_activate_a_completed_workstream(self):
+        item = self.create(start=True)
+        decision = self.event(item, "operator_decision_required")
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?", (item["workstream_id"],))
+            conn.execute("UPDATE workstreams SET lifecycle='completed', active_task_id=NULL WHERE workstream_id=?", (item["workstream_id"],))
+            conn.execute("UPDATE work_items SET activated_at=NULL WHERE work_item_id=?", (item["work_item_id"],))
+        with self.assertRaisesRegex(work_items.WorkItemConflictError, "active task"):
+            self.command(item, "approve", expected_event_id=decision["event_id"])
+        detail = board.get_work_item_detail(self.db, item["work_item_id"])
+        self.assertIsNone(detail["activated_at"])
+        self.assertEqual(detail["version"], item["version"])
+        self.assertEqual(detail["attention_signals"][0]["event_id"], decision["event_id"])
+        self.assertNotIn("approve", detail["valid_commands"])
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type='approved'").fetchone()[0], 0)
+
+    def test_activated_item_without_runnable_work_requires_attention(self):
+        item = self.create(start=True)
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?", (item["workstream_id"],))
+            conn.execute("UPDATE workstreams SET lifecycle='completed', active_task_id=NULL WHERE workstream_id=?", (item["workstream_id"],))
+        detail = board.get_work_item_detail(self.db, item["work_item_id"])
+        self.assertEqual(detail["column"], "waiting")
+        self.assertEqual(detail["reason_code"], "no_runnable_task")
+        self.assertEqual(detail["valid_commands"], ["cancel"])
+
+    def test_expired_route_decision_is_not_advertised_as_approvable(self):
+        item = self.create(start=True)
+        self.event(item, "operator_decision_required")
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?", (item["workstream_id"],))
+            conn.execute("UPDATE workstreams SET lifecycle='completed', active_task_id=NULL WHERE workstream_id=?", (item["workstream_id"],))
+        detail = board.get_work_item_detail(self.db, item["work_item_id"])
+        self.assertEqual(detail["column"], "waiting")
+        self.assertEqual(detail["reason_code"], "no_runnable_task")
+        self.assertNotIn("approve", detail["valid_commands"])
+
+    def test_issue_close_keeps_unfinished_execution_visible(self):
+        for pending in ("child_worker", "child_queued", "publication"):
+            with self.subTest(pending=pending):
+                item = self.create("Closed issue " + pending, start=True)
+                now = "2026-10-27T00:00:00+00:00"
+                source_id = "source-" + pending
+                with closing(sqlite3.connect(self.db)) as conn, conn:
+                    task_id = conn.execute("SELECT active_task_id FROM workstreams WHERE workstream_id=?", (item["workstream_id"],)).fetchone()[0]
+                    conn.execute("INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,title,state) VALUES (?,'repo-1',?,'issue',16,'Closed issue','open')", (source_id, source_id))
+                    conn.execute("UPDATE workstreams SET primary_source_id=?,lifecycle='completed',active_task_id=NULL WHERE workstream_id=?", (source_id, item["workstream_id"]))
+                    conn.execute("UPDATE work_items SET origin_type='github',origin_source_id=? WHERE work_item_id=?", (source_id, item["work_item_id"]))
+                    conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task_id,))
+                    if pending.startswith("child_"):
+                        child_stream = "stream-" + pending
+                        child_task = "task-" + pending
+                        conn.execute("INSERT INTO workstreams(workstream_id,repo_id,origin_workstream_id,lifecycle,active_task_id,created_at,updated_at) VALUES (?,'repo-1',?,'active',?,?,?)", (child_stream, item["workstream_id"], child_task, now, now))
+                        conn.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES (?,?,?,?,?)", (child_task, child_stream, "running" if pending == "child_worker" else "queued", now, now))
+                        if pending == "child_worker":
+                            conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at) VALUES ('child-attempt',?,1,'running',?)", (child_task, now))
+                    else:
+                        conn.execute("INSERT INTO github_actions(action_id,task_id,action_type,audit_status,created_at) VALUES ('pending-publication',?,'comment','accepted',?)", (task_id, now))
+                    self.assertTrue(run_once._record_remote_terminal_state(
+                        conn, "repo-1", item["workstream_id"], source_id, source_id,
+                        "issue", 16, task_id,
+                        {"state": "closed", "state_reason": "completed", "closed_at": now},
+                        "completed", "remote_source_closed", now,
+                    ))
+                detail = board.get_work_item_detail(self.db, item["work_item_id"])
+                self.assertIsNone(detail["completed_at"])
+                self.assertNotEqual(detail["column"], "done")
+                self.assertEqual(detail["valid_commands"], ["cancel"])
 
     def test_execution_history_identifies_missing_logs_per_attempt(self):
         item = self.fixture._seed_six_columns()["doing"]
