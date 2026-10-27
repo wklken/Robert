@@ -110,7 +110,9 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
     head_ref = f'refs/robert/review-rounds/{round_id}/head'
     base_local_ref = f'refs/robert/review-rounds/{round_id}/base'
     _git(repo_root, 'fetch', 'upstream', f'+pull/{number}/head:{head_ref}')
-    _git(repo_root, 'fetch', 'upstream', f'+refs/heads/{base_ref}:{base_local_ref}')
+    # The PR API's captured base commit can lag the target branch tip. Fetch
+    # that exact revision so snapshot and publication checks use the same base.
+    _git(repo_root, 'fetch', 'upstream', f'+{base_sha}:{base_local_ref}')
     if _git(repo_root, 'rev-parse', head_ref).strip() != head_sha or _git(repo_root, 'rev-parse', base_local_ref).strip() != base_sha:
         raise ValueError('PR snapshot changed while fetching; recapture PR metadata')
     merge_base = _git(repo_root, 'merge-base', base_sha, head_sha).strip()

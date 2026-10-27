@@ -151,6 +151,22 @@ class ReviewCoordinatorTests(unittest.TestCase):
         prompts = [call[2] for call in self.calls if call[0] == 'review']
         self.assertEqual(len(set(prompts)), 1)
 
+    def test_advanced_target_branch_completes_review_at_captured_pr_base(self):
+        self.cycle([self.event()])
+        self.git_fixture.git(self.git_fixture.upstream, 'checkout', 'main')
+        (self.git_fixture.upstream / 'other.py').write_text('unrelated = True\n')
+        self.git_fixture.git(self.git_fixture.upstream, 'add', '.')
+        self.git_fixture.git(self.git_fixture.upstream, 'commit', '-m', 'advance target branch')
+
+        driver = self.coordinator()
+        report = driver.run()
+
+        self.assertTrue(report.is_file())
+        self.assertEqual(driver.manifest['base_sha'], self.git_fixture.base)
+        self.assertTrue(review_coordinator.same_revision(driver.manifest, self.pr('', 42)))
+        with review_store.connect(self.db) as conn:
+            self.assertEqual(review_store.session(conn, round_id=driver.round_id)['status'], 'ready')
+
     def test_timeout_fallback_is_per_reviewer_and_survives_file_recovery(self):
         config = yaml.safe_load(self.config_path.read_text())
         config['workers']['claude']['model'] = 'primary-model'
@@ -392,6 +408,63 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         self.cycle([self.event(), self.event('second')])
         with review_store.connect(self.db) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM review_sessions').fetchone()[0], 2)
+
+    def test_enabling_native_review_does_not_replay_consumed_legacy_triggers(self):
+        for event_type in ('comment', 'review_request'):
+            with self.subTest(event_type=event_type):
+                fixture = ReviewCoordinatorTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                config = yaml.safe_load(fixture.config_path.read_text())
+                config['routes']['review-pr']['multi_agent_review']['enabled'] = False
+                fixture.config_path.write_text(yaml.safe_dump(config))
+                event = fixture.event('legacy-' + event_type)
+                if event_type == 'review_request':
+                    event.update(event_type='review_request', body='',
+                                 requested_reviewer='robert-bot', requester_login='maintainer')
+                fixture.cycle([event])
+                task, _ = fixture.current()
+                fixture.finish_task(task)
+                with review_store.connect(fixture.db) as conn:
+                    conn.execute("UPDATE task_events SET relationship='consumed' WHERE task_id=?", (task,))
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM task_events WHERE task_id=?', (task,)).fetchone()[0], 1)
+                    before = conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
+                config['routes']['review-pr']['multi_agent_review']['enabled'] = True
+                fixture.config_path.write_text(yaml.safe_dump(config))
+
+                fixture.cycle([event, event])
+
+                with review_store.connect(fixture.db) as conn:
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM review_sessions').fetchone()[0], 0)
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], before)
+
+    def test_queued_legacy_replay_is_canceled_without_creating_a_task(self):
+        config = yaml.safe_load(self.config_path.read_text())
+        config['routes']['review-pr']['multi_agent_review']['enabled'] = False
+        self.config_path.write_text(yaml.safe_dump(config))
+        self.cycle([self.event()])
+        task, _ = self.current()
+        self.finish_task(task)
+        config['routes']['review-pr']['multi_agent_review']['enabled'] = True
+        self.config_path.write_text(yaml.safe_dump(config))
+        runtime = validate_config.validate_config(self.config_path, skip_external=True)
+        repo = runtime['repos'][0]
+        with review_store.connect(self.db) as conn:
+            event = json.loads(conn.execute('SELECT payload_json FROM github_events LIMIT 1').fetchone()[0])
+            route = run_once._effective_route(runtime, repo, event)
+            queued = review_store.enqueue(conn, repo, event, route, route['native_review_workers'])
+
+        self.cycle([])
+
+        with review_store.connect(self.db) as conn:
+            entry = review_store.session(conn, round_id=queued['round_id'])
+            self.assertEqual(entry['status'], 'canceled')
+            self.assertEqual(entry['error'], 'trigger_already_processed')
+            self.assertIsNone(entry['task_id'])
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 1)
+        self.cycle([self.event('fresh')])
+        with review_store.connect(self.db) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 2)
 
     def test_known_pr_review_request_uses_requester_trust_and_native_author_gate(self):
         self.cycle([self.event()])
