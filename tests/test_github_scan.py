@@ -337,5 +337,8 @@ class ObservationTests(unittest.TestCase):
         session.collect_events.side_effect = subprocess.CalledProcessError(1, ['gh', 'search'])
         with self.assertRaises(subprocess.CalledProcessError):
             github_scan._scan_repo(config, config['repos'][0], session, [])
-        batch = github_scan.next_batch(db, repo_id)
+        # Failed refresh now backs off, but its newer safety observation is
+        # available when that retry becomes due.
+        import time
+        batch = github_scan.next_batch(db, repo_id, now=time.time() + 31)
         self.assertEqual(json.loads(batch['responses'][key])['state'], 'closed')

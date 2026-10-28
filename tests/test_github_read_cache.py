@@ -234,3 +234,42 @@ class GitHubReadCacheTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             session.collect_notifications([REPO])
         self.assertEqual(session.poll_interval_seconds, 180)
+
+    def test_search_quota_fallback_survives_unrelated_writes_with_bounded_age(self):
+        from robert_agent.github_read import GitHubReadSession
+        clock = [1000]
+        calls = []
+        args = ['gh', 'search', 'issues', '--repo', 'example/backend', '--json', 'number']
+        def runner(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, '[{"number":7}]', '')
+        def session():
+            return GitHubReadSession(self.db, account='robert-bot', runner=runner, now=lambda: clock[0])
+        self.assertEqual(session().search(args), [{'number': 7}])
+        clock[0] += 301  # Expired for normal search but within stale fallback horizon.
+        writer = session()
+        writer._put('notifications', '', {'hints': [], 'last_modified': 'stamp'}, 1800)
+        fallback = session()
+        fallback.search_allowed = False
+        self.assertEqual(fallback.search(args), [{'number': 7}])
+        self.assertEqual(len(calls), 1)
+        clock[0] = 2800  # The original read is now1800 seconds old.
+        self.assertEqual(fallback.search(args), [])
+        self.assertEqual(len(calls), 1)
+
+    def test_search_normal_freshness_remains_five_minutes(self):
+        from robert_agent.github_read import GitHubReadSession
+        clock = [1000]
+        calls = []
+        args = ['gh', 'search', 'issues', '--repo', 'example/backend', '--json', 'number']
+        def runner(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, '[{"number":%d}]' % len(calls), '')
+        def session():
+            return GitHubReadSession(self.db, account='robert-bot', runner=runner, now=lambda: clock[0])
+        self.assertEqual(session().search(args), [{'number': 1}])
+        clock[0] = 1299
+        self.assertEqual(session().search(args), [{'number': 1}])
+        clock[0] = 1300
+        self.assertEqual(session().search(args), [{'number': 2}])
+        self.assertEqual(len(calls), 2)

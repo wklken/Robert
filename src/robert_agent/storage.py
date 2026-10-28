@@ -560,6 +560,8 @@ def init_database(db_path, schema_path=None):
 
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.executescript(schema)
+        _ensure_column(conn, 'github_scan_batches', 'retry_count', 'retry_count INTEGER NOT NULL DEFAULT 0')
+        _ensure_column(conn, 'github_scan_batches', 'attention_reason', 'attention_reason TEXT')
         pending = []
         pr_pending = _data_migration_pending(conn, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM)
         skills_pending = _data_migration_pending(conn, RECOMMENDED_SKILLS_MIGRATION_NAME, RECOMMENDED_SKILLS_MIGRATION_CHECKSUM)

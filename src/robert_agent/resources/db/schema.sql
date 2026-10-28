@@ -655,6 +655,8 @@ CREATE TABLE IF NOT EXISTS github_scan_batches (
   context_digest TEXT NOT NULL,
   raw_events_json TEXT NOT NULL,
   complete_sources_json TEXT NOT NULL DEFAULT '[]',
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  attention_reason TEXT,
   created_at REAL NOT NULL,
   retry_at REAL NOT NULL,
   completed_at REAL

@@ -180,13 +180,24 @@ def _published_result_needs_finalization(conn, repo_ids):
     return any(run_once_module._result_actions_all_published(conn, row[0]) for row in rows)
 
 
-def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=None, now=None):
+def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=None, now=None, consume_observations=False, include_publication=True):
     if repo_id is not None and repo_ids is not None:
         raise ValueError("repo_id and repo_ids are mutually exclusive")
     repo_ids = [repo_id] if repo_id else list(repo_ids or [])
-    from robert_agent import github_scan
-    if github_scan.has_pending(conn, repo_ids):
-        return True
+    if consume_observations:
+        from robert_agent import github_scan
+        contexts = None
+        if config_result and config_result.get('repos'):
+            contexts = {}
+            for repo in config_result['repos']:
+                row = conn.execute('SELECT repo_id FROM repos WHERE full_name=?', (repo['full_name'],)).fetchone()
+                if row and (not repo_ids or row[0] in repo_ids):
+                    known = run_once_module._load_known_workstreams(conn, row[0])
+                    contexts[row[0]] = github_scan.context_digest(repo, known, config=config_result)
+        scoped = repo_ids or [row[0] for row in conn.execute('SELECT repo_id FROM repos')]
+        when = run_once_module._parse_time(now).timestamp() if now is not None else None
+        if github_scan.has_pending(conn, scoped, now=when, contexts=contexts):
+            return True
     now = now or wakeup.utc_now()
     if not isinstance(now, str):
         now = now.isoformat()
@@ -196,9 +207,10 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
         SELECT 1
         FROM wakeups
         WHERE status = 'pending'
-          AND COALESCE(json_extract(metadata_json,'$.kind'),'')!='dbos_handoff'
+          AND COALESCE(json_extract(metadata_json,'$.kind'),'') NOT IN ('dbos_handoff','github_observation_ready','github_context_refresh')
           AND not_before_at <= ?
           AND (expires_at IS NULL OR expires_at > ?)
+          AND (? OR reason!='publish_retry_ready')
           {wakeup_repo_clause}
           AND (reason!='worker_result_ready' OR EXISTS (
             SELECT 1 FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
@@ -208,7 +220,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
               AND t.lifecycle IN ('queued','running') AND {execution_store.runnable_sql()}))
         LIMIT 1
         """,
-        [now, now] + wakeup_repo_params,
+        [now, now, include_publication] + wakeup_repo_params,
     ).fetchone()
     if pending_wakeup or _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
         return True
@@ -264,6 +276,8 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
     ).fetchone()
     if prepared:
         return True
+    if not include_publication:
+        return False
     publishable = conn.execute(
         f"""
         SELECT 1
@@ -308,7 +322,8 @@ def run_loop(
     stop_reason = "max_cycles"
     publish_actions_used = 0
     with closing(_connect(db_path)) as conn, conn:
-        if not has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config):
+        if not has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config,
+                consume_observations=consume_observations, include_publication=not skip_publish):
             summary = {
                 "ok": True,
                 "status": "completed",
@@ -363,7 +378,8 @@ def run_loop(
         with closing(_connect(db_path)) as conn, conn:
             after = snapshot_progress(conn)
             diff = diff_progress(before, after)
-            runnable = has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config)
+            runnable = has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config,
+                consume_observations=consume_observations, include_publication=not skip_publish)
         cycle_results[-1] = {**result, "progress": diff}
         if not diff["changed"]:
             stop_reason = "no_progress"
