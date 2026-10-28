@@ -1786,12 +1786,19 @@ def _remote_source_state(repo_full_name, source_type, number, runner):
         "merged": False,
         "merged_at": None,
     }
-    if source_type != "pull_request":
+    if source_type != "pull_request" or remote["state"].lower() != "closed":
+        return remote
+    pull_request = issue_payload.get("pull_request")
+    if isinstance(pull_request, dict) and "merged_at" in pull_request:
+        remote["merged_at"] = pull_request["merged_at"]
+        remote["merged"] = bool(pull_request["merged_at"])
         return remote
     pr_payload = discover._try_run_json(
         ["gh", "api", f"repos/{repo_full_name}/pulls/{number}"],
         runner=runner,
     )
+    if not isinstance(pr_payload, dict):
+        return None
     if isinstance(pr_payload, dict):
         remote["html_url"] = pr_payload.get("html_url") or remote["html_url"]
         remote["merged"] = bool(pr_payload.get("merged") or pr_payload.get("merged_at"))
@@ -6500,6 +6507,8 @@ def _run_repo_pipeline(
     dispatch_budget,
     publish_budget,
     prompt_paths,
+    observation=None,
+    finalize_external=False,
 ):
     summary = {
         "repo_id": repo_id,
@@ -6803,13 +6812,18 @@ def _run_repo_pipeline(
                     run_now,
                     output=publish_result,
                 )
+        if skip_publish and finalize_external:
+            publish_result["finalized_task_count"] = _finalize_published_results(
+                conn, repo_id, data_dir, db_path, repo, run_id, run_now, dry_run,
+                dispatch_queue, dispatch_budget, config_result=config_result,
+            )
         summary["publish_pending_count"] = publish_result.get("pending_count", 0)
         summary["published_count"] = publish_result.get("published_count", 0)
         summary["publish_skipped_count"] = publish_result.get("skipped_count", 0)
         summary["publish_failed_count"] = publish_result.get("failed_count", 0)
         summary["finalized_task_count"] = publish_result.get("finalized_task_count", 0)
 
-        if fixture_path or skip_external:
+        if (fixture_path or skip_external) and observation is None:
             _mark_repo_run_step(
                 conn,
                 run_id,
@@ -6852,7 +6866,15 @@ def _run_repo_pipeline(
         active_workstreams = _load_active_workstreams(conn, repo_id)
         _mark_repo_run_step(conn, run_id, repo_id, "discover", "running", run_now)
         conn.commit()  # Discovery can wait on remote I/O; never pin the domain writer.
-        if fixture_path:
+        if observation is not None:
+            raw_events = []
+            for raw in observation["raw_events"]:
+                latest_state = _remote_source_state(repo['full_name'], raw.get('source_type', 'issue'), raw['number'], discovery_runner)
+                if latest_state is None:
+                    summary.update(status='failed', failure_status='observation_unavailable', safe_error='Remote source state could not be verified')
+                    return summary
+                raw_events.append({**raw, **latest_state} if latest_state else raw)
+        elif fixture_path:
             raw_events = discover.load_fixture(fixture_path)
         elif skip_external:
             raw_events = []
@@ -6954,11 +6976,11 @@ def _run_repo_pipeline(
                         decisions[index] = authorize.authorize_event(requested, repo, known_workstreams=set())
         decisions.extend(
             system_decisions
-            if not fixture_path and not skip_external
+            if not fixture_path and (not skip_external or observation is not None)
             else []
         )
         from robert_agent import execution_replay
-        decisions.extend(execution_replay.decisions(conn,repo_id,run_now,system_decisions if not fixture_path and not skip_external else [],repo=repo))
+        decisions.extend(execution_replay.decisions(conn,repo_id,run_now,system_decisions if not fixture_path and (not skip_external or observation is not None) else [],repo=repo))
         unique_decisions={}
         for event in decisions:
             unique_decisions.setdefault(event['event_fingerprint'],event)
@@ -7403,6 +7425,7 @@ def run_once(
     discovery_runner=None,
     max_dispatches=None,
     max_publish_actions=None,
+    consume_observations=False,
 ):
     config_result = validate_config.validate_config(config_path, skip_external=skip_external)
     if not config_result["ok"]:
@@ -7433,6 +7456,8 @@ def run_once(
     run_now = _now()
     prompt_paths = []
     dispatch_queue = []
+    dispatch_results = []
+    dispatch_error = None
 
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -7538,6 +7563,19 @@ def run_once(
             notification_hints = None
             if notification_buckets is not None:
                 notification_hints = notification_buckets.get(repo["full_name"], [])
+            observation = None
+            repo_discovery_runner = discovery_runner
+            if consume_observations:
+                from robert_agent import github_scan
+                known = _load_known_workstreams(conn, repo_id)
+                context = github_scan.context_digest(repo, known, config=config_result)
+                observation = github_scan.next_batch(db_path, repo_id, context=context)
+                if observation is None and github_scan.has_pending(conn, [repo_id]):
+                    from robert_agent import wakeup as scan_wakeup
+                    scan_wakeup.request_wakeup(conn, repo_id=repo_id, reason='manual_operator_request', dedupe_key=context, metadata={'kind': 'github_context_refresh'})
+                    conn.commit()
+                if observation is not None:
+                    repo_discovery_runner = github_scan.ReplayRunner(observation['responses'])
             summary = _run_repo_pipeline(
                 conn,
                 data_dir=data_dir,
@@ -7552,14 +7590,31 @@ def run_once(
                 skip_external=skip_external,
                 skip_publish=skip_publish,
                 fixture_path=fixture_path,
-                discovery_runner=discovery_runner,
+                discovery_runner=repo_discovery_runner,
                 notification_hints=notification_hints,
                 dispatch_queue=dispatch_queue,
                 dispatch_budget=dispatch_budget,
                 publish_budget=publish_budget,
                 prompt_paths=prompt_paths,
+                observation=observation,
+                finalize_external=consume_observations,
             )
+            conn.commit()
+            if consume_observations and observation is not None:
+                github_scan.finish_batch(db_path, observation['batch_id'], success=summary['status'] == 'completed')
             repo_summaries.append(summary)
+            if consume_observations and dispatch_queue and dispatch_error is None:
+                # The repo transaction and lease are finished. Do not make its
+                # prepared tasks wait for another repository's local pipeline.
+                try:
+                    dispatch_results.extend(_dispatch_queued(
+                        db_path, repo_ids, dispatch_queue, dry_run, max_concurrency,
+                        config_result.get('workers'), config_result.get('default_worker'),
+                        config_result.get('route_worker_models'), config_result,
+                    ))
+                except Exception as exc:
+                    dispatch_error = _safe_dispatch_error(exc)
+                dispatch_queue.clear()
 
         aggregate_counts = {
             "supervised_count": sum(item["supervised_count"] for item in repo_summaries),
@@ -7744,10 +7799,8 @@ def run_once(
                 "repo_summaries": repo_summaries,
             }
 
-    dispatch_results = []
-    dispatch_error = None
     try:
-        dispatch_results = _dispatch_queued(
+        dispatch_results.extend(_dispatch_queued(
             db_path,
             repo_ids,
             dispatch_queue,
@@ -7757,7 +7810,7 @@ def run_once(
             config_result.get("default_worker"),
             config_result.get("route_worker_models"),
             config_result,
-        )
+        ))
     except Exception as exc:
         dispatch_error = _safe_dispatch_error(exc)
     finally:
@@ -7969,6 +8022,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-publish", action="store_true")
+    parser.add_argument("--consume-observations", action="store_true")
     parser.add_argument("--max-dispatches", type=int)
     parser.add_argument("--max-publish-actions", type=int)
     args = parser.parse_args(argv)
@@ -7981,6 +8035,7 @@ def main(argv=None):
         skip_publish=args.skip_publish,
         max_dispatches=args.max_dispatches,
         max_publish_actions=args.max_publish_actions,
+        consume_observations=args.consume_observations,
     )
     return emit(result, 0 if result.get("ok") else 3)
 

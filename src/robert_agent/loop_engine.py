@@ -164,10 +164,29 @@ def _queued_native_round(conn, repo_ids):
     return False
 
 
+def _published_result_needs_finalization(conn, repo_ids):
+    # Publisher completion can precede (or outlive) its wakeup. Inspect durable
+    # result/action state so a restarted local owner still closes the task.
+    clause, params = _repo_filter('w', repo_ids)
+    rows = conn.execute(f"""SELECT wr.result_id FROM worker_results wr
+        JOIN tasks t ON t.task_id=wr.task_id
+        JOIN attempts a ON a.attempt_id=wr.attempt_id
+        JOIN workstreams w ON w.workstream_id=t.workstream_id
+        WHERE t.lifecycle IN ('queued','running') AND a.status='completed'
+          AND (json_type(a.metadata_json,'$.dispatch.pid') IS NOT 'integer'
+               OR json_extract(a.metadata_json,'$.process_stopped_at') IS NOT NULL)
+          AND json_extract(wr.metadata_json,'$.audit.status')='accepted'
+          AND {execution_store.runnable_sql()} {clause}""", params).fetchall()
+    return any(run_once_module._result_actions_all_published(conn, row[0]) for row in rows)
+
+
 def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=None, now=None):
     if repo_id is not None and repo_ids is not None:
         raise ValueError("repo_id and repo_ids are mutually exclusive")
     repo_ids = [repo_id] if repo_id else list(repo_ids or [])
+    from robert_agent import github_scan
+    if github_scan.has_pending(conn, repo_ids):
+        return True
     now = now or wakeup.utc_now()
     if not isinstance(now, str):
         now = now.isoformat()
@@ -191,7 +210,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
         """,
         [now, now] + wakeup_repo_params,
     ).fetchone()
-    if pending_wakeup or _queued_native_round(conn, repo_ids):
+    if pending_wakeup or _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
         return True
     fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
     fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
@@ -278,6 +297,7 @@ def run_loop(
     max_dispatches=2,
     max_publish_actions=5,
     runner=run_once_module.run_once,
+    consume_observations=False,
 ):
     started = time.monotonic()
     if max_publish_actions < 0:
@@ -318,6 +338,7 @@ def run_loop(
             break
         with closing(_connect(db_path)) as conn, conn:
             before = snapshot_progress(conn)
+        observation_kwargs = {'consume_observations': True} if consume_observations else {}
         result = runner(
             config_path,
             workflow_path=workflow_path,
@@ -326,6 +347,7 @@ def run_loop(
             skip_publish=skip_publish,
             max_dispatches=max_dispatches,
             max_publish_actions=remaining_publish_actions,
+            **observation_kwargs,
         )
         cycle_results.append(result)
         if not result.get("ok"):
@@ -381,6 +403,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-publish", action="store_true")
+    parser.add_argument("--consume-observations", action="store_true")
     parser.add_argument("--max-cycles", type=int, default=3)
     parser.add_argument("--max-seconds", type=int, default=120)
     parser.add_argument("--max-dispatches", type=int, default=2)
@@ -393,6 +416,7 @@ def main(argv=None):
             dry_run=args.dry_run,
             skip_external=args.skip_external,
             skip_publish=args.skip_publish,
+            consume_observations=args.consume_observations,
             max_cycles=args.max_cycles,
             max_seconds=args.max_seconds,
             max_dispatches=args.max_dispatches,

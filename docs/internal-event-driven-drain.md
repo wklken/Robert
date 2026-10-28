@@ -1,5 +1,11 @@
 # Robert 内部事件驱动 Drain 设计
 
+## 实现状态
+
+常驻 daemon 已将远端扫描、本地 drain 与发布拆成独立受管执行通道。缓存、重试、
+轮询间隔及兼容路径见 [GitHub polling and local progress](github-polling.md)。
+下文保留原始设计背景；“背景与现状”描述的是解耦前的实现。
+
 ## 摘要
 
 Robert 当前通过定期拉取 GitHub 通知发现外部事件，并将任务、Attempt、Worker

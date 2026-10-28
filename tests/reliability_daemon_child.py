@@ -1,7 +1,8 @@
 """Real resident SQLite daemon, local Git remote, isolated subprocess crash.
 
-The daemon's local-drain subprocess seam runs the real loop inline so the test
-can inject its local Git runner and fixed GitHub quota response. All domain,
+The local-drain and publisher subprocess seams run inline so the test can
+inject its local Git runner and crash the owning daemon immediately after a push.
+Background process isolation is covered separately by test_github_scan. All domain,
 scheduling, audit, publication and notification code is the production implementation.
 """
 from contextlib import redirect_stdout
@@ -13,13 +14,15 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from robert_agent import daemon, loop_engine, publish
+from robert_agent import daemon, loop_engine, publish, github_scan, control_lane
 
 root = Path(sys.argv[1])
 crash_after_push = sys.argv[2] == 'crash'
 load_context = daemon._load_context
 local_drain = daemon._run_local_drain
 publisher = publish.publish_ready_actions
+lane_start = control_lane.ControlLane.start
+lane_poll = control_lane.ControlLane.poll
 
 
 def context(*args, **kwargs):
@@ -56,12 +59,30 @@ def drain(value, **kwargs):
     return local_drain(value, **{**kwargs,'child_runner':inline_child})
 
 
+def inline_publisher_start(self, command, **kwargs):
+    if '--publish' not in command:
+        return lane_start(self, command, **kwargs)
+    with patch.object(github_scan, '_budget', return_value=True):
+        self.test_result = github_scan.publish(root / 'daemon.yml')
+    return True
+
+
+def inline_publisher_poll(self):
+    if hasattr(self, 'test_result'):
+        result = self.test_result
+        del self.test_result
+        return result
+    return lane_poll(self)
+
+
 with patch.object(daemon, '_load_context', side_effect=context), \
      patch.object(daemon, 'fetch_rate_limit', return_value={
          'ok': True,
          'rate_limit': {'core': {'remaining': 5000}, 'search': {'remaining': 30}},
      }), \
      patch.object(daemon, '_run_local_drain', side_effect=drain), \
+     patch.object(control_lane.ControlLane, 'start', inline_publisher_start), \
+     patch.object(control_lane.ControlLane, 'poll', inline_publisher_poll), \
      patch.object(publish, 'publish_ready_actions', side_effect=local_publish):
     result = daemon.run_daemon(root / 'daemon.yml')
     print(json.dumps(result), flush=True)

@@ -44,6 +44,7 @@ def _select_batch(conn, success_cutoff, failure_cutoff, event_cutoff, batch_size
             OR (l.status = 'expired' AND julianday(l.expires_at) < julianday(?)))
           AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.run_id = l.owner_id AND r.status = 'running')
           AND NOT EXISTS (SELECT 1 FROM daemon_runs d WHERE d.daemon_run_id = l.owner_id AND d.status = 'running')
+          AND NOT EXISTS (SELECT 1 FROM github_control_children c WHERE c.owner_id=l.owner_id AND c.status IN ('starting','running'))
         ORDER BY l.acquired_at,l.lease_id LIMIT ?""",
         (success_cutoff, failure_cutoff, batch_size),
     )]

@@ -637,3 +637,43 @@ ON notifications(channel, status, created_at, notification_id)
 WHERE COALESCE(json_extract(metadata_json, '$.delivery.status'), '') NOT IN ('sent', 'exhausted');
 CREATE INDEX IF NOT EXISTS idx_notifications_delivery_state
 ON notifications(json_extract(metadata_json, '$.delivery.status'));
+
+-- Rebuildable remote observations. Local task progress never consumes these.
+CREATE TABLE IF NOT EXISTS github_read_cache (
+  scope TEXT NOT NULL,
+  cache_key TEXT NOT NULL,
+  version TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  PRIMARY KEY(scope, cache_key)
+);
+CREATE INDEX IF NOT EXISTS idx_github_read_cache_expiry ON github_read_cache(expires_at);
+
+CREATE TABLE IF NOT EXISTS github_scan_batches (
+  batch_id TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL,
+  context_digest TEXT NOT NULL,
+  raw_events_json TEXT NOT NULL,
+  complete_sources_json TEXT NOT NULL DEFAULT '[]',
+  created_at REAL NOT NULL,
+  retry_at REAL NOT NULL,
+  completed_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_github_scan_batches_pending
+ON github_scan_batches(repo_id,completed_at,retry_at);
+
+CREATE TABLE IF NOT EXISTS github_control_children (
+  child_id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  lane TEXT NOT NULL,
+  identity_json TEXT NOT NULL,
+  status TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS github_scan_reads (
+  repo_id TEXT NOT NULL,
+  command_key TEXT NOT NULL,
+  response_json TEXT,
+  observed_at REAL NOT NULL,
+  PRIMARY KEY(repo_id,command_key)
+);
