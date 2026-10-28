@@ -1799,10 +1799,9 @@ def _remote_source_state(repo_full_name, source_type, number, runner):
     )
     if not isinstance(pr_payload, dict):
         return None
-    if isinstance(pr_payload, dict):
-        remote["html_url"] = pr_payload.get("html_url") or remote["html_url"]
-        remote["merged"] = bool(pr_payload.get("merged") or pr_payload.get("merged_at"))
-        remote["merged_at"] = pr_payload.get("merged_at")
+    remote["html_url"] = pr_payload.get("html_url") or remote["html_url"]
+    remote["merged"] = bool(pr_payload.get("merged") or pr_payload.get("merged_at"))
+    remote["merged_at"] = pr_payload.get("merged_at")
     return remote
 
 
@@ -2206,8 +2205,8 @@ def _record_current_state_closed_source_if_needed(conn, repo_id, source_id, even
     )
 
 
-def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
-    rows = conn.execute(
+def _remote_source_rows(conn, repo_id):
+    return conn.execute(
         """
         SELECT
           w.workstream_id,
@@ -2241,6 +2240,10 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
         """,
         (repo_id,),
     ).fetchall()
+
+
+def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
+    rows = _remote_source_rows(conn, repo_id)
     reconciled = 0
     for workstream_id, task_id, source_id, source_key, source_type, number in rows:
         task_id = task_id or _latest_task_id(conn, workstream_id)
@@ -6872,8 +6875,14 @@ def _run_repo_pipeline(
                 latest_state = _remote_source_state(repo['full_name'], raw.get('source_type', 'issue'), raw['number'], discovery_runner)
                 if latest_state is None:
                     summary.update(status='failed', failure_status='observation_unavailable', safe_error='Remote source state could not be verified')
-                    return summary
+                    continue
                 raw_events.append({**raw, **latest_state} if latest_state else raw)
+            if summary['failure_status'] == 'observation_unavailable' and not raw_events:
+                error = {'status': summary['failure_status'], 'safe_error': summary['safe_error']}
+                _mark_repo_run_step(conn, run_id, repo_id, 'discover', 'failed', run_now, error=error)
+                for step in ('authorize', 'route'):
+                    _mark_repo_run_step(conn, run_id, repo_id, step, 'skipped', run_now, output={'reason': summary['failure_status']})
+                return summary
         elif fixture_path:
             raw_events = discover.load_fixture(fixture_path)
         elif skip_external:
@@ -6925,9 +6934,10 @@ def _run_repo_pipeline(
             run_id,
             repo_id,
             "discover",
-            "succeeded",
+            "failed" if summary["failure_status"] == "observation_unavailable" else "succeeded",
             run_now,
             output={"raw_event_count": len(raw_events)},
+            error={"status": summary["failure_status"], "safe_error": summary["safe_error"]} if summary["failure_status"] == "observation_unavailable" else None,
         )
 
         _mark_repo_run_step(conn, run_id, repo_id, "authorize", "running", run_now)
@@ -7601,7 +7611,8 @@ def run_once(
             )
             conn.commit()
             if consume_observations and observation is not None:
-                github_scan.finish_batch(db_path, observation['batch_id'], success=summary['status'] == 'completed')
+                github_scan.finish_batch(db_path, observation['batch_id'], success=summary['status'] == 'completed',
+                                         failure_reason=summary['failure_status'] or 'local_processing_failed')
             repo_summaries.append(summary)
             if consume_observations and dispatch_queue and dispatch_error is None:
                 # The repo transaction and lease are finished. Do not make its

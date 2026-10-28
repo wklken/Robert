@@ -307,6 +307,8 @@ def _schedule_next_live_poll(context, *, now, capacity_full):
 def _idle_sleep_seconds(context, *, now=None):
     now = now or daemon_state.utc_now()
     local_poll_seconds = context.daemon_config["local_poll_seconds"]
+    if context.background_lanes is not None and context.background_lanes['scan'].process is not None:
+        return local_poll_seconds
     if context.next_live_poll_at is None:
         return local_poll_seconds
     remaining_seconds = max(
@@ -739,7 +741,7 @@ def _background_decision(context, *, now, child_runner=run_child_json):
     with closing(daemon_state.connect(context.db_path)) as conn:
         repo_ids = context.repo_ids or [context.repo_id]
         local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids,
-            config_result=context.runtime_config, now=now)
+            config_result=context.runtime_config, now=now, consume_observations=True, include_publication=False)
         conn.row_factory = sqlite3.Row
         pending_publish = any(publisher._ready_actions(conn, 1, repo_id=repo_id) for repo_id in repo_ids)
         placeholders = ','.join('?' for _ in repo_ids)

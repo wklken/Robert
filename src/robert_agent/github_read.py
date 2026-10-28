@@ -32,6 +32,7 @@ class GitHubReadSession:
         self.refresh_seconds = refresh_seconds
         self.poll_interval_seconds = None
         self.search_allowed = True
+        self.failed_sources = set()
         self._memo = {}
         self._stats = {'calls': 0, 'cache_hits': 0, 'errors': 0, 'duration_seconds': 0.0,
                        'endpoints': {}}
@@ -41,11 +42,11 @@ class GitHubReadSession:
         conn.execute('PRAGMA busy_timeout=5000')
         return conn
 
-    def _get(self, key, version=None, *, allow_expired=False):
+    def _get(self, key, version=None):
         with closing(self._connect()) as conn:
             row = conn.execute('''SELECT version,payload_json,expires_at FROM github_read_cache
                 WHERE scope=? AND cache_key=?''', (self.scope, key)).fetchone()
-        if row and (allow_expired or row[2] > self.now()) and (version is None or row[0] == version):
+        if row and row[2] > self.now() and (version is None or row[0] == version):
             return json.loads(row[1])
         return None
 
@@ -112,17 +113,23 @@ class GitHubReadSession:
     def search(self, args, *, notification_hints=()):
         from robert_agent import discover
         key = 'search:' + _digest(args)
-        if not self.search_allowed:
-            return self._get(key, allow_expired=True) or []
         version = _digest(notification_hints)
-        cached = self._get(key, version)
+        cached = self._get(key, version if self.search_allowed else None)
         if cached is not None:
-            self._stats['cache_hits'] += 1
-            return cached
+            # Legacy rows store a list and already expire at the freshness
+            # deadline. New rows retain a separately bounded stale snapshot.
+            legacy = isinstance(cached, list)
+            if legacy or not self.search_allowed or cached['fresh_until'] > self.now():
+                self._stats['cache_hits'] += 1
+                return cached if legacy else cached['items']
+        if not self.search_allowed:
+            return []
         payload = discover._run_json(args, runner=self)
         if not isinstance(payload, list):
             raise ValueError('GitHub search did not return a list')
-        self._put(key, version, payload, self.search_ttl_seconds)
+        self._put(key, version, {'items': payload,
+                  'fresh_until': self.now() + self.search_ttl_seconds},
+                  max(self.search_ttl_seconds, self.refresh_seconds))
         return copy.deepcopy(payload)
 
     def source_events(self, repo, raw, load, *, known_workstreams=None,
@@ -142,6 +149,8 @@ class GitHubReadSession:
         if (self._stats['errors'] == before
                 and all(event.get('authorization_lookup_complete') is not False for event in events)):
             self._put(key, version, events, self.refresh_seconds)
+        else:
+            self.failed_sources.add(source)
         return copy.deepcopy(events)
 
     def collect_events(self, repo_config, **kwargs):
@@ -184,7 +193,7 @@ class GitHubReadSession:
 
     def cached_notifications(self, repo_configs):
         """Reuse hints for context refresh without advancing the notification poll."""
-        cached = self._get('notifications', allow_expired=True) or {}
+        cached = self._get('notifications') or {}
         configured = {repo['full_name'] for repo in repo_configs}
         buckets = {}
         for hint in cached.get('hints', []):
