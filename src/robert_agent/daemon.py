@@ -559,7 +559,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
             context.daemon_run_id,
             "local_drain_completed" if result.get("ok") else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
-            _event_result(result),
+            {**_event_result(result), "control_lane": "local"},
             now=now,
         )
     return result
@@ -591,7 +591,7 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
             context.daemon_run_id,
             "live_poll_completed" if result.get("ok") else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
-            _event_result(result),
+            {**_event_result(result), "control_lane": "scan"},
             now=now,
         )
     return result

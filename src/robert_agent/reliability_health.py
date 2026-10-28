@@ -7,11 +7,69 @@ from contextlib import closing
 import sqlite3
 
 
+def _control_failure_health(conn, now, limit):
+    """Track separate control lanes so a healthy drain cannot hide a dead scan."""
+    streaks, recovered = {}, set()
+    for lane in ('scan', 'local', 'publish', 'context_refresh'):
+        events = conn.execute(
+            """SELECT daemon_event_id,status FROM daemon_events
+            WHERE event_type IN ('child_failed','executor_interrupted','live_poll_completed',
+                                 'local_drain_completed','scan_completed','publish_completed')
+              AND COALESCE(json_extract(metadata_json,'$.control_lane'),
+                  CASE WHEN json_extract(metadata_json,'$.context_refresh')=1 THEN 'context_refresh'
+                       WHEN event_type='local_drain_completed' THEN 'local'
+                       WHEN event_type='publish_completed' THEN 'publish' ELSE 'scan' END)=?
+            ORDER BY created_at DESC,daemon_event_id DESC LIMIT ?""", (lane, limit),
+        ).fetchall()
+        for identifier, status in events:
+            if status != 'failed':
+                if not streaks.get(lane):
+                    recovered.add(lane)
+                break
+            streaks.setdefault(lane, []).append(identifier)
+    # Abandoned executors are reconciled in agent_runs, not necessarily in a
+    # daemon event. Their successful successor ends that failure streak.
+    runs = conn.execute(
+        """SELECT run_id,status,error_json FROM agent_runs
+        WHERE status IN ('completed','failed')
+        ORDER BY COALESCE(finished_at,started_at) DESC,run_id DESC LIMIT ?""", (limit,),
+    ).fetchall()
+    for identifier, status, encoded in runs:
+        if status != 'failed' or json.loads(encoded or '{}').get('status') != 'executor_interrupted':
+            if not streaks.get('executor'):
+                recovered.add('executor')
+            break
+        streaks.setdefault('executor', []).append(identifier)
+    for lane in {'scan', 'local', 'publish', 'context_refresh', 'executor'}:
+        failures = streaks.get(lane, [])
+        existing = conn.execute(
+            """SELECT notification_id FROM notifications
+            WHERE notification_type='control_plane_failed' AND status!='resolved'
+              AND json_extract(metadata_json,'$.control_lane')=?""", (lane,),
+        ).fetchall()
+        if not failures and lane in recovered:
+            for (identifier,) in existing:
+                conn.execute("UPDATE notifications SET status='resolved' WHERE notification_id=?", (identifier,))
+        elif len(failures) >= 3 and not existing:
+            conn.execute(
+                """INSERT OR IGNORE INTO notifications(notification_id,notification_type,
+                    channel,status,created_at,metadata_json)
+                VALUES (?,'control_plane_failed','local','recorded',?,?)""",
+                ('notification-control-' + lane + '-' + failures[-1], now, json.dumps({
+                    'control_lane': lane, 'failure_count': len(failures),
+                    'reason_code': 'control_plane_failed',
+                    'required_action': 'Inspect repeated control failures and restore GitHub event processing.',
+                })),
+            )
+    return max((len(failures) for failures in streaks.values()), default=0)
+
+
 def collect(db_path, *, now, repo_ids, limit=100):
     if not repo_ids:
         return {}
     placeholders = ",".join("?" for _ in repo_ids)
     with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
+        control_failure_streak = _control_failure_health(conn, now, limit)
         pages = conn.execute("PRAGMA page_count").fetchone()[0]
         free = conn.execute("PRAGMA freelist_count").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
@@ -58,6 +116,7 @@ def collect(db_path, *, now, repo_ids, limit=100):
         outbox_attention = conn.execute("SELECT count(*) FROM workflow_outbox WHERE status='attention'").fetchone()[0]
     wal = Path(str(db_path) + "-wal")
     return {
+        "control_failure_streak": control_failure_streak,
         "database_bytes": pages * page_size,
         "reusable_bytes": free * page_size,
         "wal_bytes": wal.stat().st_size if wal.exists() else 0,
