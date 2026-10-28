@@ -46,7 +46,8 @@ class ReconcileIsolationTests(unittest.TestCase):
                 conn.execute("UPDATE github_sources SET state='open'")
                 conn.execute('UPDATE execution_subjects SET binding_status=?', (binding_status,))
                 self.assertEqual(run_once._reconcile_remote_source_states(conn, 'repo:example/backend',
-                    {'full_name': 'example/backend'}, self.remote, '2026-10-28T07:15:00Z'), 1)
+                    {'full_name': 'example/backend'}, self.remote, '2026-10-28T07:15:00Z'),
+                    1 if binding_status == 'terminal' else 0)
                 self.assertEqual(conn.execute('SELECT state FROM github_sources').fetchone()[0], 'closed')
                 self.assertEqual(conn.execute('SELECT lifecycle FROM tasks WHERE task_id=?', (task,)).fetchone()[0], 'completed')
                 self.assertEqual(conn.execute('SELECT binding_status FROM execution_subjects').fetchone()[0], binding_status)

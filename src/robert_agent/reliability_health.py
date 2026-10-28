@@ -7,14 +7,17 @@ from contextlib import closing
 import sqlite3
 
 
-def _control_failure_health(conn, now, limit):
+def _control_failure_snapshot(conn, limit):
     """Track separate control lanes so a healthy drain cannot hide a dead scan."""
     streaks, recovered = {}, set()
     for lane in ('scan', 'local', 'publish', 'context_refresh'):
         events = conn.execute(
             """SELECT daemon_event_id,status FROM daemon_events
-            WHERE event_type IN ('child_failed','executor_interrupted','live_poll_completed',
-                                 'local_drain_completed','scan_completed','publish_completed')
+            WHERE ((status='failed' AND (json_type(metadata_json,'$.control_lane')='text'
+                    OR event_type IN ('child_failed','child_timeout','executor_interrupted',
+                                      'partial_failure','repository_pipeline_failed')))
+                OR event_type IN ('live_poll_completed','local_drain_completed',
+                                  'scan_completed','publish_completed'))
               AND COALESCE(json_extract(metadata_json,'$.control_lane'),
                   CASE WHEN json_extract(metadata_json,'$.context_refresh')=1 THEN 'context_refresh'
                        WHEN event_type='local_drain_completed' THEN 'local'
@@ -40,6 +43,10 @@ def _control_failure_health(conn, now, limit):
                 recovered.add('executor')
             break
         streaks.setdefault('executor', []).append(identifier)
+    return streaks, recovered
+
+
+def _persist_control_failure_alerts(conn, now, streaks, recovered):
     for lane in {'scan', 'local', 'publish', 'context_refresh', 'executor'}:
         failures = streaks.get(lane, [])
         existing = conn.execute(
@@ -61,15 +68,15 @@ def _control_failure_health(conn, now, limit):
                     'required_action': 'Inspect repeated control failures and restore GitHub event processing.',
                 })),
             )
-    return max((len(failures) for failures in streaks.values()), default=0)
 
 
 def collect(db_path, *, now, repo_ids, limit=100):
     if not repo_ids:
         return {}
     placeholders = ",".join("?" for _ in repo_ids)
-    with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
-        control_failure_streak = _control_failure_health(conn, now, limit)
+    with closing(sqlite3.connect(db_path, timeout=0.1)) as conn:
+        streaks, recovered = _control_failure_snapshot(conn, limit)
+        control_failure_streak = max((len(failures) for failures in streaks.values()), default=0)
         pages = conn.execute("PRAGMA page_count").fetchone()[0]
         free = conn.execute("PRAGMA freelist_count").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
@@ -84,22 +91,6 @@ def collect(db_path, *, now, repo_ids, limit=100):
             ORDER BY t.created_at LIMIT ?""",
             [*repo_ids, now, now, limit],
         ).fetchall()
-        for task_id, reason in delayed:
-            conn.execute(
-                """INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json)
-                VALUES (?,?,'execution_delayed','local','recorded',?,?)""",
-                (
-                    "notification-delay-" + task_id + "-" + reason,
-                    task_id,
-                    now,
-                    json.dumps(
-                        {
-                            "reason_code": reason,
-                            "required_action": "Inspect queue capacity, worker state and publication failure details.",
-                        }
-                    ),
-                ),
-            )
         orphaned = conn.execute(
             """SELECT count(*) FROM (SELECT run_id FROM agent_runs ar
             WHERE status='running' AND julianday(started_at)<julianday(?)-1.0/24
@@ -114,9 +105,34 @@ def collect(db_path, *, now, repo_ids, limit=100):
         oldest_notification = conn.execute("SELECT MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM notifications WHERE channel='local' AND status NOT IN ('sent','resolved') AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted')", (now,)).fetchone()[0]
         outbox = conn.execute("SELECT count(*), MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM workflow_outbox WHERE status='pending'", (now,)).fetchone()
         outbox_attention = conn.execute("SELECT count(*) FROM workflow_outbox WHERE status='attention'").fetchone()[0]
+    alerts_persisted = True
+    try:
+        with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
+            _persist_control_failure_alerts(conn, now, streaks, recovered)
+            for task_id, reason in delayed:
+                conn.execute(
+                    """INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json)
+                    VALUES (?,?,'execution_delayed','local','recorded',?,?)""",
+                    (
+                        "notification-delay-" + task_id + "-" + reason,
+                        task_id,
+                        now,
+                        json.dumps(
+                            {
+                                "reason_code": reason,
+                                "required_action": "Inspect queue capacity, worker state and publication failure details.",
+                            }
+                        ),
+                    ),
+                )
+    except sqlite3.OperationalError as exc:
+        if str(exc) not in {'database is locked', 'database table is locked', 'database schema is locked'}:
+            raise
+        alerts_persisted = False
     wal = Path(str(db_path) + "-wal")
     return {
         "control_failure_streak": control_failure_streak,
+        "alerts_persisted": alerts_persisted,
         "database_bytes": pages * page_size,
         "reusable_bytes": free * page_size,
         "wal_bytes": wal.stat().st_size if wal.exists() else 0,

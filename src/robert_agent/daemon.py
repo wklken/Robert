@@ -515,11 +515,15 @@ def _maybe_prune(context, *, now):
         try:
             from robert_agent import reliability_health
             health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+            if not health.get('alerts_persisted', True):
+                context.next_health_at = current + config['local_poll_seconds']
+                context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
                 conn.execute("PRAGMA busy_timeout=100")
                 daemon_state.record_event(conn, context.daemon_run_id, "reliability_health", "ok", health, now=now)
         except sqlite3.OperationalError:
-            pass
+            context.next_health_at = current + config['local_poll_seconds']
+            context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
     if any(result["counts"].values()) or (not result["ok"] and result["status"] != "busy"):
         try:
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
