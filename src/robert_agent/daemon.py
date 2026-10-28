@@ -728,7 +728,7 @@ def _background_decision(context, *, now, child_runner=run_child_json):
                 context.publisher_retry_at = time.monotonic() + (5 if result.get('ok') else 30)
             if name == 'scan' and context.scan_context_refresh:
                 context.context_refresh_retry_at = time.monotonic() + max(
-                    5 if result.get('ok') else 30, int(result.get('poll_interval_seconds') or 0))
+                    5 if result.get('ok') else 30, int(result.get('retry_after_seconds') or 0))
                 context.scan_context_refresh = False
             elif name == 'scan':
                 interval = max(1, int(result.get('poll_interval_seconds') or context.daemon_config['github_poll_seconds']))

@@ -251,8 +251,17 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
         return config
     db_path = config['db_path']
     storage.init_database(db_path)
+    repos = config['repos']
+    if refresh_context:
+        with closing(sqlite3.connect(db_path, timeout=5)) as conn:
+            pending = {row[0] for row in conn.execute(
+                """SELECT DISTINCT r.full_name FROM wakeups w JOIN repos r ON r.repo_id=w.repo_id
+                WHERE w.status='pending' AND json_extract(w.metadata_json,'$.kind')='github_context_refresh'
+                  AND julianday(w.not_before_at)<=julianday('now')
+                  AND (w.expires_at IS NULL OR julianday(w.expires_at)>julianday('now'))""")}
+        repos = [repo for repo in repos if repo['full_name'] in pending]
     sessions, buckets, failures, batches = {}, {}, [], []
-    for repo in config['repos']:
+    for repo in repos:
         account = repo['github_account']
         if account in sessions:
             continue
@@ -262,7 +271,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             if not _budget(session, config):
                 failures.append({'account': account, 'reason': 'core_rate_limit_floor'})
                 continue
-            account_repos = [item for item in config['repos'] if item['github_account'] == account]
+            account_repos = [item for item in repos if item['github_account'] == account]
             try:
                 buckets[account] = (session.cached_notifications(account_repos) if refresh_context
                                     else session.collect_notifications(account_repos))
@@ -276,7 +285,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             raise
         except (subprocess.SubprocessError, OSError, ValueError):
             failures.append({'account': account, 'reason': 'rate_limit_check_failed'})
-    for repo in config['repos']:
+    for repo in repos:
         if repo['github_account'] not in buckets:
             continue
         try:
@@ -289,6 +298,8 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {'ok': not failures, 'status': 'scanned', 'context_refresh': refresh_context, 'batch_count': len(batches), 'failures': failures,
             'poll_interval_seconds': max(intervals, default=60),
+            'retry_after_seconds': max(intervals, default=0) if any(
+                item['reason'] == 'core_rate_limit_floor' for item in failures) else 0,
             'github_reads': {account: session.metrics() for account, session in sessions.items()}}
 
 
