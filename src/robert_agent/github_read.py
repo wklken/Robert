@@ -182,6 +182,16 @@ class GitHubReadSession:
             raise ValueError('GitHub notification page did not return a list')
         return status, headers, payload
 
+    def cached_notifications(self, repo_configs):
+        """Reuse hints for context refresh without advancing the notification poll."""
+        cached = self._get('notifications', allow_expired=True) or {}
+        configured = {repo['full_name'] for repo in repo_configs}
+        buckets = {}
+        for hint in cached.get('hints', []):
+            if hint['repo_full_name'] in configured:
+                buckets.setdefault(hint['repo_full_name'], []).append(hint)
+        return copy.deepcopy(buckets)
+
     def collect_notifications(self, repo_configs):
         from robert_agent import discover
         key = 'notifications'

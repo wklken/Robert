@@ -51,6 +51,8 @@ class DaemonContext:
     next_health_at: float = 0.0
     publisher_retry_at: float = 0.0
     background_lanes: dict | None = None
+    scan_context_refresh: bool = False
+    context_refresh_retry_at: float = 0.0
 
 
 def _script_path(name):
@@ -724,7 +726,11 @@ def _background_decision(context, *, now, child_runner=run_child_json):
         if result is not None:
             if name == 'publish':
                 context.publisher_retry_at = time.monotonic() + (5 if result.get('ok') else 30)
-            if name == 'scan':
+            if name == 'scan' and context.scan_context_refresh:
+                context.context_refresh_retry_at = time.monotonic() + max(
+                    5 if result.get('ok') else 30, int(result.get('poll_interval_seconds') or 0))
+                context.scan_context_refresh = False
+            elif name == 'scan':
                 interval = max(1, int(result.get('poll_interval_seconds') or context.daemon_config['github_poll_seconds']))
                 context.next_live_poll_at = _iso_after(now, interval)
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
@@ -747,13 +753,26 @@ def _background_decision(context, *, now, child_runner=run_child_json):
                     SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
                     WHERE w.repo_id IN ({placeholders}))) LIMIT 1""", [now, *repo_ids]).fetchone())
 
+        refresh_pending = bool(conn.execute(
+            f"""SELECT 1 FROM wakeups WHERE repo_id IN ({placeholders}) AND status='pending'
+                AND json_extract(metadata_json,'$.kind')='github_context_refresh'
+                AND julianday(not_before_at)<=julianday(?)
+                AND (expires_at IS NULL OR julianday(expires_at)>julianday(?)) LIMIT 1""",
+            [*repo_ids, now, now],
+        ).fetchone())
     due = context.startup_live_poll_pending or (context.next_live_poll_at is not None and _parse_time(now) >= _parse_time(context.next_live_poll_at))
     if context.next_live_poll_at is None and not due:
         context.next_live_poll_at = _iso_after(now, context.daemon_config['github_poll_seconds'])
     command = [sys.executable, '-B', _script_path('github_scan.py'), '--config', context.config_path]
-    if due and lanes['scan'].process is None:
-        context.startup_live_poll_pending = False
-        lanes['scan'].start(command, timeout_seconds=context.daemon_config['live_run_timeout_seconds'])
+    refresh_due = refresh_pending and time.monotonic() >= context.context_refresh_retry_at
+    if (due or refresh_due) and lanes['scan'].process is None:
+        context.scan_context_refresh = not due
+        if context.scan_context_refresh:
+            scan_command = command + ['--refresh-context']
+        else:
+            scan_command = command
+            context.startup_live_poll_pending = False
+        lanes['scan'].start(scan_command, timeout_seconds=context.daemon_config['live_run_timeout_seconds'])
     if (pending_publish or pending_delivery) and lanes['publish'].process is None and time.monotonic() >= context.publisher_retry_at:
         publish_command = command + ['--publish']
         if context.dry_run:

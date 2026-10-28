@@ -11,7 +11,7 @@ import time
 from uuid import uuid4
 
 from robert_agent import discover, pr_health, storage, validate_config, wakeup, wakeup_notifier
-from robert_agent.common import emit
+from robert_agent.common import ControlDeadlineExceeded, emit
 from robert_agent.github_read import GitHubReadSession
 
 
@@ -245,7 +245,7 @@ def _scan_repo(config, repo, session, hints):
     return identifier
 
 
-def scan(config_path, *, runner=subprocess.run):
+def scan(config_path, *, runner=subprocess.run, refresh_context=False):
     config = validate_config.validate_config(config_path, skip_external=True)
     if not config['ok']:
         return config
@@ -264,11 +264,16 @@ def scan(config_path, *, runner=subprocess.run):
                 continue
             account_repos = [item for item in config['repos'] if item['github_account'] == account]
             try:
-                buckets[account] = session.collect_notifications(account_repos)
+                buckets[account] = (session.cached_notifications(account_repos) if refresh_context
+                                    else session.collect_notifications(account_repos))
+            except ControlDeadlineExceeded:
+                raise
             except (subprocess.SubprocessError, OSError, ValueError):
                 # Search remains a fallback when notification lookup fails.
                 buckets[account] = {}
                 failures.append({'account': account, 'reason': 'notification_read_failed'})
+        except ControlDeadlineExceeded:
+            raise
         except (subprocess.SubprocessError, OSError, ValueError):
             failures.append({'account': account, 'reason': 'rate_limit_check_failed'})
     for repo in config['repos']:
@@ -277,10 +282,12 @@ def scan(config_path, *, runner=subprocess.run):
         try:
             batches.append(_scan_repo(config, repo, sessions[repo['github_account']],
                                       buckets[repo['github_account']].get(repo['full_name'], [])))
+        except ControlDeadlineExceeded:
+            raise
         except (subprocess.SubprocessError, OSError, ValueError, sqlite3.Error):
             failures.append({'repo': repo['full_name'], 'reason': 'repo_scan_failed'})
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
-    return {'ok': not failures, 'status': 'scanned', 'batch_count': len(batches), 'failures': failures,
+    return {'ok': not failures, 'status': 'scanned', 'context_refresh': refresh_context, 'batch_count': len(batches), 'failures': failures,
             'poll_interval_seconds': max(intervals, default=60),
             'github_reads': {account: session.metrics() for account, session in sessions.items()}}
 
@@ -302,6 +309,8 @@ def publish(config_path, *, dry_run=False):
         try:
             if not _budget(session, config):
                 return {'ok': False, 'status': 'core_rate_limit_floor'}
+        except ControlDeadlineExceeded:
+            raise
         except (subprocess.SubprocessError, OSError, ValueError):
             return {'ok': False, 'status': 'rate_limit_check_failed'}
     for repo_id in repo_ids:
@@ -315,8 +324,9 @@ def main(argv=None):
     parser.add_argument('--config', required=True)
     parser.add_argument('--publish', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--refresh-context', action='store_true')
     args = parser.parse_args(argv)
-    result = publish(args.config, dry_run=args.dry_run) if args.publish else scan(args.config)
+    result = publish(args.config, dry_run=args.dry_run) if args.publish else scan(args.config, refresh_context=args.refresh_context)
     return emit(result, 0 if result.get('ok') else 3)
 
 

@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from robert_agent import discover, storage
 
@@ -234,3 +235,16 @@ class GitHubReadCacheTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             session.collect_notifications([REPO])
         self.assertEqual(session.poll_interval_seconds, 180)
+
+    def test_cached_notification_hints_are_scoped_copied_and_make_no_remote_call(self):
+        runner = mock.Mock(side_effect=AssertionError('network'))
+        session = self.session(runner)
+        session._put('notifications', '', {'hints': [
+            {'id': 'one', 'repo_full_name': REPO['full_name']},
+            {'id': 'two', 'repo_full_name': 'other/repo'},
+        ]}, 1800)
+        result = session.cached_notifications([REPO])
+        self.assertEqual(list(result), [REPO['full_name']])
+        result[REPO['full_name']][0]['id'] = 'mutated'
+        self.assertEqual(session.cached_notifications([REPO])[REPO['full_name']][0]['id'], 'one')
+        runner.assert_not_called()
