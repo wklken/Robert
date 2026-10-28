@@ -348,6 +348,7 @@ def build_reviewer_prompt(manifest):
             'Read full source, direct callers, types and tests as needed yourself; a summary alone is insufficient. '
             'Use batches for large diffs and report every unreviewed scope. '
             'Check correctness, security, concurrency/lifecycle, performance, boundaries, maintainability and useful test coverage. '
+            'Apply adversarial review: challenge assumptions with counterexamples, boundary inputs, failure paths and conflicting evidence. '
             'Look for unnecessary abstractions, speculative extension points, duplicated logic, hidden assumptions and error-handling gaps. '
             'Report concrete introduced defects with trigger, impact, exact source location and evidence; distinguish pre-existing behavior. '
             'Validate dependency/contract/scope claims against actual added/deleted diff lines. '
@@ -369,6 +370,7 @@ def build_synthesis_prompt(manifest, inputs_path):
                'merge_recommendation': 'merge after fixes', 'merge_reason': '中文合并理由'}
     return (_common_prompt(manifest) + f'Read the frozen selected artifact list {inputs_path}. Read each listed result.json and report.md. '
             'Verify findings against shared source and actual diff; do not conduct an additional independent review or fill in failed models. '
+            'Apply adversarial review to the supplied findings: seek counterexamples and counterevidence before confirming or dismissing each claim. '
             'Merge by root cause/location/trigger while retaining every source. A finding reported by one model must not be dismissed by majority vote; '
             'unreported and explicitly refuted are different states. Use added/deleted diff lines to verify dependency/contract/scope claims. '
             'Use only the resolved project interpreter for Python syntax claims. Insufficient evidence is needs_confirmation; '

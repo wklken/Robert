@@ -114,6 +114,19 @@ class ReviewFilesTests(unittest.TestCase):
         self.assertIn('多 reviewer review', same_model_report)
         self.assertNotIn('多模型 review', same_model_report)
 
+    def test_reviewer_and_synthesis_prompts_require_adversarial_review(self):
+        prompts = {
+            'reviewer': review_files.build_reviewer_prompt(self.manifest),
+            'synthesis': review_files.build_synthesis_prompt(self.manifest, self.root / 'inputs.json'),
+        }
+        for phase, prompt in prompts.items():
+            with self.subTest(phase=phase):
+                self.assertIn('adversarial review', prompt)
+                self.assertIn('counterexamples', prompt)
+                self.assertIn('evidence', prompt)
+        self.assertIn('never add an unsourced finding', prompts['synthesis'])
+        self.assertNotIn('adversarial review', review_files.build_prepare_prompt(self.manifest))
+
     def test_duplicate_or_invented_sources_and_unsafe_locations_are_rejected(self):
         record = self.record()
         path = self.root / 'synthesis' / 'attempt-1' / 'evaluation.json'

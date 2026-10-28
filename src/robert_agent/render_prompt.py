@@ -254,6 +254,7 @@ def _pr_review_guidance(route_result):
 - This task is a source review of the requested PR, not a code-change task.
 - Start in worktree_path and verify the checked-out branch before reviewing.
 - Use fast-review-github-pr review discipline: inspect the PR source, compare the merge base against HEAD, and prioritize correctness, regressions, security, and missing tests.
+- Apply adversarial review: challenge the change's assumptions with counterexamples, boundary inputs, failure paths, and conflicting evidence; report only findings supported by source or test evidence.
 - Do not push branches, open PRs, submit GitHub PR reviews, or publish comments directly.
 - Record exactly one planned comment action with pr_author_login set to the reviewed PR author's login.
 - The public review comment body must mention `@<pr_author_login>` near the start so GitHub notifies the PR author."""
@@ -268,6 +269,7 @@ def _review_point_evaluation_guidance(route_result, task_kind="human_request"):
     if expected_output == "review_comment":
         return """Review-point evaluation:
 - Before replying, use fast-verify-review-point to assess each review point from the triggering PR comment, review comment, or review report.
+- Apply adversarial review to each claim: seek counterexamples and counterevidence in the actual code and tests before accepting or rejecting it; keep unsupported claims unverified.
 - Record a "review_point_evaluation" list in the result. Each entry needs summary, verdict, reasoning, and action.
 - verdict must be one of correct, partially_correct, incorrect, or unverified. action must be one of skip, comment, or clarify.
 - This route is comment-only. Do not push branches, open PRs, or publish comments directly.
@@ -275,6 +277,7 @@ def _review_point_evaluation_guidance(route_result, task_kind="human_request"):
 - If the report has no blocking items and says the PR can merge, still include a comment acknowledging that no code change is needed."""
     return """Review-point evaluation:
 - Before replying or pushing, use fast-verify-review-point to assess each review point from the triggering PR comment, review comment, or review report.
+- Apply adversarial review to each claim: seek counterexamples and counterevidence in the actual code and tests before accepting or rejecting it; keep unsupported claims unverified.
 - Record a "review_point_evaluation" list in the result. Each entry needs summary, verdict, reasoning, and action.
 - verdict must be one of correct, partially_correct, incorrect, or unverified. action must be one of implement, skip, comment, or clarify.
 - Use action="implement" only when the verdict is correct or partially_correct and code changes are needed.
@@ -355,6 +358,16 @@ def _verification_policy(route_result):
         "verification_policy",
         {"mode": "optional", "required_statuses": ["passed"], "allow_skipped": True},
     )
+
+
+def _unit_test_guidance(route_result):
+    if route_result["expected_output"] not in {"new_pr", "update_existing_pr"}:
+        return ""
+    return """Unit-test writing guidance:
+- When writing or updating unit tests, assert observable behavior, boundary cases, and meaningful failure paths.
+- When feasible, use scoped mutation testing to check that tests detect plausible defects, such as flipped comparisons, removed guards, or incorrect return values.
+- Use repository-supported mutation tools when available; otherwise use controlled temporary local mutations. Inspect surviving mutants and strengthen assertions for real coverage gaps.
+- Keep mutations within the changed behavior, restore production code after each experiment, and rerun the relevant tests. Record results or explain why mutation testing was not feasible."""
 
 
 def _verification_example(route_result):
@@ -484,6 +497,7 @@ required_skills are mandatory: use each required skill and include it in used_sk
 {_pr_review_guidance(route_result)}
 {_review_point_evaluation_guidance(route_result, task_kind)}
 {_remediation_guidance(task, runtime_context, events)}
+{_unit_test_guidance(route_result)}
 {_recovery_context(runtime_context)}
 
 Before publishing any GitHub-facing PR body, comment, review, or summary,
