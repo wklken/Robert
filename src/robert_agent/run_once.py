@@ -99,6 +99,21 @@ def _update_failure_notification(conn, kind, key, run_now, metadata=None):
         _insert_notification(conn, kind, "recorded", run_now, {**metadata, "failure_key": key})
 
 
+def _finish_isolation(conn, name, *, rollback=False):
+    """Undo only uncommitted work; external-I/O checkpoints stay durable."""
+    try:
+        if rollback:
+            conn.execute(f"ROLLBACK TO {name}")
+        conn.execute(f"RELEASE {name}")
+    except sqlite3.OperationalError as exc:
+        if str(exc) != f"no such savepoint: {name}":
+            raise
+        # A helper committed its checkpoint and released the savepoint. This
+        # transaction contains only the current source/repository's suffix.
+        if rollback:
+            conn.rollback()
+
+
 def _repo_id(full_name):
     return f"repo:{full_name}"
 
@@ -2217,23 +2232,8 @@ def _record_current_state_closed_source_if_needed(conn, repo_id, source_id, even
     )
 
 
-def _finish_isolation(conn, name, *, rollback=False):
-    """Undo only uncommitted work; external-I/O checkpoints stay durable."""
-    try:
-        if rollback:
-            conn.execute(f"ROLLBACK TO {name}")
-        conn.execute(f"RELEASE {name}")
-    except sqlite3.OperationalError as exc:
-        if str(exc) != f"no such savepoint: {name}":
-            raise
-        # A helper committed its checkpoint and released the savepoint. This
-        # transaction contains only the current source/repository's suffix.
-        if rollback:
-            conn.rollback()
-
-
-def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
-    rows = conn.execute(
+def _remote_source_rows(conn, repo_id):
+    return conn.execute(
         """
         SELECT
           w.workstream_id,
@@ -2267,6 +2267,10 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
         """,
         (repo_id,),
     ).fetchall()
+
+
+def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
+    rows = _remote_source_rows(conn, repo_id)
     reconciled = 0
     for workstream_id, task_id, source_id, source_key, source_type, number in rows:
         task_id = task_id or _latest_task_id(conn, workstream_id)
