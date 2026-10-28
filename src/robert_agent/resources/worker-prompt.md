@@ -89,6 +89,23 @@ require at least one command-backed verification entry with `required: true` and
 Skipped checks must include `skipped_reason`, and required checks cannot be
 skipped when the route policy sets `allow_skipped: false`.
 
+Code-change prompts for `new_pr` and `update_existing_pr` must include unit-test
+writing guidance. When writing or updating unit tests, workers should use scoped
+mutation testing when feasible to check that assertions detect plausible
+defects, such as flipped comparisons, removed guards, and incorrect return
+values. Use repository-supported tooling when available or controlled temporary
+local mutations, inspect surviving mutants for real coverage gaps, restore
+production code after each experiment, and rerun the relevant tests. Record
+results or explain why mutation testing was not feasible. This guidance must
+not direct read-only review or classification workers to mutate source.
+
+Review prompts must mention adversarial review: challenge assumptions and
+review claims with counterexamples, boundary inputs, failure paths, and
+counterevidence from actual source and tests. Report only evidence-supported
+findings and keep unsupported claims unverified. Native review synthesis applies
+this discipline to supplied findings without adding unsourced findings or
+starting another independent review.
+
 For `update_existing_pr` and `review_comment`, review-report handling is
 response-required. The worker must use `fast-verify-review-point`, record
 `review_point_evaluation`, and include a planned `comment` action that replies

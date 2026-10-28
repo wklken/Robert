@@ -264,6 +264,47 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('"used_skills": []', prompt)
         self.assertNotIn('"used_skills": ["fast-small-pr"]', prompt)
 
+    def test_review_prompts_require_adversarial_review(self):
+        from robert_agent import render_prompt, route
+
+        for route_id in ("review-pr", "review-comment", "update-existing-pr"):
+            with self.subTest(route_id=route_id):
+                prompt = render_prompt.render_prompt(
+                    task={
+                        "task_id": "task-1",
+                        "attempt_id": "attempt-1",
+                        "workstream_id": "github:example/repo!77",
+                    },
+                    route_result=route.ROUTES[route_id],
+                    events=[],
+                )
+                self.assertIn("adversarial review", prompt)
+                self.assertIn("counterexamples", prompt)
+                self.assertIn("evidence", prompt)
+
+    def test_unit_test_guidance_is_scoped_to_code_change_prompts(self):
+        from robert_agent import render_prompt, route
+
+        for route_id, route_result in route.ROUTES.items():
+            with self.subTest(route_id=route_id):
+                prompt = render_prompt.render_prompt(
+                    task={
+                        "task_id": "task-1",
+                        "attempt_id": "attempt-1",
+                        "workstream_id": "github:example/repo#77",
+                    },
+                    route_result=route_result,
+                    events=[],
+                )
+                if route_id in {"new-pr", "update-existing-pr"}:
+                    self.assertIn("Unit-test writing guidance:", prompt)
+                    self.assertIn("mutation testing", prompt)
+                    self.assertIn("surviving mutants", prompt)
+                    self.assertIn("restore production code", prompt)
+                else:
+                    self.assertNotIn("Unit-test writing guidance:", prompt)
+                    self.assertNotIn("mutation testing", prompt)
+
     def test_update_existing_pr_prompt_requires_review_point_evaluation(self):
         from robert_agent import render_prompt
         from robert_agent import route
