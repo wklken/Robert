@@ -15,18 +15,21 @@ ACTION_FIELDS = {"comment": {"type", "body", "target_url"}, "push_existing_pr": 
                  "open_pr": {"type", "title", "body", "issue_resolution", "remaining_scope", "target_url"},
                  "submit_pr_review": {"type", "body", "target_url"}}
 CONTROL_MARKER = re.compile(r"<!--\s*(?:robert|dd)-(?:comment|workstream)\b", re.I)
-ISSUE_REFERENCE = re.compile(r"(?i)\b(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?|refs?)\s*:?[ \t]+(?:[\w.-]+/[\w.-]+)?(?:#\d+\b|https?://github\.com/[^\s]+)")
+ISSUE_REFERENCE = re.compile(r"(?i)\b(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?|refs?)\s*:?[ \t]+(?:[\w.-]+/[\w.-]+)?(?:#\d+\b|https?://github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+\b)")
 
 
 class InvalidSubmission(ValueError):
-    def __init__(self, field, message, code="invalid_submission"):
+    def __init__(self, field, message, code="invalid_submission", *, allowed_target_urls=None):
         super().__init__(message)
         self.field, self.code = field, code
+        self.allowed_target_urls = allowed_target_urls
 
     def response(self):
         return {"ok": False, "status": "failed_validation", "reason_code": self.code,
                 "field_path": self.field, "safe_error": str(self),
-                "required_action": "Correct the indicated field and submit again in this attempt."}
+                "required_action": "Correct the indicated field and submit again in this attempt.",
+                **({"allowed_target_urls": self.allowed_target_urls}
+                   if self.allowed_target_urls is not None else {})}
 
 
 def _require(condition, field, message, code="invalid_submission"):
@@ -134,14 +137,24 @@ def comment_marker(task_id, attempt_id, index):
     return f"<!-- robert-comment task_id={task_id} attempt_id={attempt_id} action_index={index} -->"
 
 
+def target_urls(scope):
+    """Canonical candidates shared by prompt rendering and submission errors."""
+    return sorted({f"https://github.com/{scope['repo']}/{'issues' if item['source_type'] == 'issue' else 'pull'}/{item['number']}"
+                   for item in scope.get("sources", []) if item.get("source_type") in {"issue", "pull_request"}})
+
+
 def _target(action, scope, index):
-    candidates = {f"https://github.com/{scope['repo']}/{'issues' if item['source_type'] == 'issue' else 'pull'}/{item['number']}"
-                  for item in scope.get("sources", []) if item.get("source_type") in {"issue", "pull_request"}}
+    candidates = target_urls(scope)
     target = action.get("target_url")
+    field = f"planned_github_actions[{index}].target_url"
     if target is None:
-        _require(len(candidates) == 1, f"planned_github_actions[{index}].target_url", "Select target_url explicitly when the task has multiple or no publication targets.", "ambiguous_target")
-        return next(iter(candidates))
-    _require(target in candidates, f"planned_github_actions[{index}].target_url", "Target is outside the task's allowed sources.", "action_scope")
+        if len(candidates) != 1:
+            raise InvalidSubmission(field, "Select target_url from allowed_target_urls; an empty list permits no publication target.",
+                                    "ambiguous_target", allowed_target_urls=candidates)
+        return candidates[0]
+    if target not in candidates:
+        raise InvalidSubmission(field, "Copy a target_url exactly from allowed_target_urls, without comment fragments.",
+                                "action_scope", allowed_target_urls=candidates)
     return target
 
 
@@ -196,7 +209,7 @@ def normalize(envelope, settings):
                     _require("/issues/" in selected, field + ".target_url", "Select the source issue for this PR.")
                     issue = int(selected.rsplit("/", 1)[1])
                 _require(action.get("issue_resolution") in {"complete", "partial"}, field + ".issue_resolution", "Select complete or partial issue resolution.")
-                _require(not ISSUE_REFERENCE.search(action["body"]), field + ".body", "Robert generates the issue reference; remove supplied closing/reference statements.")
+                _require(not ISSUE_REFERENCE.search(action["body"]), field + ".body", "Robert generates the issue reference; remove supplied issue/PR closing or reference statements.")
                 if action["issue_resolution"] == "partial":
                     _require(bool(action.get("remaining_scope", "").strip()), field + ".remaining_scope", "Partial delivery requires remaining_scope.")
                 action["body"] += f"\n\n{'Fixes' if action['issue_resolution'] == 'complete' else 'Refs'} #{issue}"

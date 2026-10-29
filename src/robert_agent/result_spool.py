@@ -77,12 +77,14 @@ def _validate_record(record):
         raise ValueError("unsupported or invalid result spool contract")
 
 
-def _ingest(db_path, path, record, writer, notifier):
+def _ingest(db_path, path, record, writer, notifier, *, defer_database_errors=False):
     from robert_agent import wakeup_notifier
     try:
         response = writer(db_path, record["payload"], notifier=notifier)
-    except sqlite3.OperationalError as exc:
-        if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+    except sqlite3.Error as exc:
+        # Submission already owns a durable final slot. Replay handles permanent
+        # ingestion failures with its existing bounded retry/quarantine policy.
+        if not defer_database_errors and "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
             raise
         wakeup_notifier.notify(db_path, sender=notifier)
         return {"ok": True, "status": "deferred", "safe_error": "Result durably saved; waiting for ingestion."}
@@ -105,7 +107,7 @@ def submit(db_path, envelope, writer, notifier=None, *, prepare, lookup):
                 return {"ok": False, "status": "unsupported_contract", "safe_error": "Existing spool requires manual reconciliation before submission."}
             if record["fingerprint"] != digest:
                 return {"ok": False, "status": "result_conflict", "safe_error": "A different final result is pending for this attempt."}
-            return _ingest(db_path, path, record, writer, notifier)
+            return _ingest(db_path, path, record, writer, notifier, defer_database_errors=True)
         existing = lookup(db_path, envelope, digest)
         if existing:
             return existing
@@ -118,7 +120,7 @@ def submit(db_path, envelope, writer, notifier=None, *, prepare, lookup):
                   "normalizer_version": result_contract.NORMALIZER_VERSION, "fingerprint": digest,
                   "payload": payload, "saved_at": datetime.now(timezone.utc).isoformat()}
         atomic_write(path, record)
-        return _ingest(db_path, path, record, writer, notifier)
+        return _ingest(db_path, path, record, writer, notifier, defer_database_errors=True)
 
 
 def _notify_rejection(db_path, path, reason):

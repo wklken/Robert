@@ -10,24 +10,8 @@ def _object(value):
     return json.loads(value or "{}")
 
 
-def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, command_runner=None):
-    command_runner = command_runner or subprocess.run
-    row = conn.execute(
-        """
-        SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name,
-               a.metadata_json, t.task_kind, t.metadata_json
-        FROM tasks t
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        JOIN repos r ON r.repo_id = w.repo_id
-        JOIN attempts a ON a.attempt_id = ? AND a.task_id = t.task_id
-        WHERE t.task_id = ?
-          AND t.workstream_id = ?
-        """,
-        (attempt_id, task_id, workstream_id),
-    ).fetchone()
-    if not row:
-        return None
-    sources = [
+def sources_for_workstream(conn, workstream_id):
+    return [
         {
             "source_type": source_type,
             "number": number,
@@ -50,6 +34,26 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
             (workstream_id, workstream_id),
         )
     ]
+
+
+def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, command_runner=None):
+    command_runner = command_runner or subprocess.run
+    row = conn.execute(
+        """
+        SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name,
+               a.metadata_json, t.task_kind, t.metadata_json
+        FROM tasks t
+        JOIN workstreams w ON w.workstream_id = t.workstream_id
+        JOIN repos r ON r.repo_id = w.repo_id
+        JOIN attempts a ON a.attempt_id = ? AND a.task_id = t.task_id
+        WHERE t.task_id = ?
+          AND t.workstream_id = ?
+        """,
+        (attempt_id, task_id, workstream_id),
+    ).fetchone()
+    if not row:
+        return None
+    sources = sources_for_workstream(conn, workstream_id)
     action_scope = {
         "workstream_id": workstream_id,
         "repo": row[0],

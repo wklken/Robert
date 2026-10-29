@@ -29,15 +29,17 @@ def inspect(conn, db_path):
             continue
         if status in {'running', 'stale'} or (status == 'prepared' and lifecycle in {'queued', 'running'}):
             blockers.append({'kind': 'legacy_' + status, 'task_id': task, 'attempt_id': attempt})
+    # Build unresolved ID sets once. Correlated EXISTS would rescan all historical
+    # workstreams/actions for every legacy result on databases without matching indexes.
     for result, task in conn.execute("""
         SELECT wr.result_id,wr.task_id FROM worker_results wr
         JOIN tasks t ON t.task_id=wr.task_id
         WHERE COALESCE(json_extract(wr.metadata_json,'$.result_contract'),'') != ?
-          AND (t.lifecycle IN ('queued','running') OR EXISTS (
-            SELECT 1 FROM workstreams w
-            WHERE w.active_task_id=t.task_id AND w.lifecycle='active') OR EXISTS (
-            SELECT 1 FROM github_actions ga WHERE ga.result_id=wr.result_id
-              AND ga.publish_status='not_published' AND ga.audit_status IN ('pending','accepted')))
+          AND (t.lifecycle IN ('queued','running') OR t.task_id IN (
+            SELECT w.active_task_id FROM workstreams w
+            WHERE w.lifecycle='active') OR wr.result_id IN (
+            SELECT ga.result_id FROM github_actions ga
+            WHERE ga.publish_status='not_published' AND ga.audit_status IN ('pending','accepted')))
         LIMIT 50""", (result_contract.CONTRACT_ID,)):
         blockers.append({'kind': 'legacy_unresolved_result', 'task_id': task, 'result_id': result})
     root = result_spool.directory(db_path)

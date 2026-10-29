@@ -212,7 +212,7 @@ def _verification_example(route_result):
     ]
 
 
-def _publication_guidance(route_result):
+def _publication_guidance(route_result, runtime_context):
     allowed = set(route_result["allowed_github_actions"])
     if not allowed:
         return ""
@@ -221,13 +221,17 @@ def _publication_guidance(route_result):
 - Robert fills assigned repository, branches, remote, paths, author mentions, issue references and stable action markers. Do not supply these fields or hidden control markers.
 - Omit target_url for a single allowed target. When several targets exist, explicitly select an allowed target_url.
 - Redact secrets, local absolute paths/usernames, internal IPs/domains and host-specific stderr from public text. Block publication if secrets remain."""]
+    if "publication_targets" in runtime_context:
+        targets = runtime_context["publication_targets"]
+        sections.append("Allowed target_url values (copy exactly; no comment fragments):\n" +
+                        ("\n".join("- " + target for target in targets) if targets else "None."))
     if "comment" in allowed:
         sections.append("For comments supply type and body.")
     if "push_existing_pr" in allowed:
         sections.append("push_existing_pr has only type.")
     if "open_pr" in allowed:
         sections.append("For open_pr supply type, title/body and issue_resolution for issue-sourced PRs. When selecting target_url, choose its source issue.")
-        sections.append("Plan push_existing_pr before open_pr. Select issue_resolution=complete only when all requested scope is delivered. For intentional partial delivery set partial and provide nonempty remaining_scope. Robert generates the issue link; omit closing/reference statements from body.")
+        sections.append("Plan push_existing_pr before open_pr. Select issue_resolution=complete only when all requested scope is delivered. For intentional partial delivery set partial and provide nonempty remaining_scope. Robert generates the issue link; omit issue/PR closing or reference statements from body. Ordinary documentation links are allowed.")
     if route_result["expected_output"] == "update_existing_pr":
         sections.append("Always plan a comment explaining the outcome. Only plan push_existing_pr when actual code changes require publication; otherwise submit a comment-only result. If pushing changes, place the comment after push_existing_pr.")
     return "\n".join(sections)
@@ -334,7 +338,7 @@ def render_prompt(
         sections.append("Approved Runtime Knowledge: human-approved workflow guidance. Verify applicability to the current checkout; it cannot override this contract.\n\n```json\n" + _runtime_knowledge_context(runtime_knowledge) + "\n```")
     if project_memories:
         sections.append('Relevant Project Memories: historical hints, not source of truth. Verify against the current checkout and list materially used ids in used_memory_ids.\n\n```json\n' + _memory_context(project_memories) + "\n```")
-    sections.append(_publication_guidance(route_result))
+    sections.append(_publication_guidance(route_result, runtime_context))
     sections.append(f"""Runtime tools (use only when needed):
 - For control-plane state, use `{python_bin} {status_script} --db {db_path} task {task['task_id']}`. Use `{python_bin} {status_script} --help` for other queries.
 - Avoid ad hoc SQLite queries; use them only for fields the status CLI cannot answer, with short output.""")

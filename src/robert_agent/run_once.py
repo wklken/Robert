@@ -3123,6 +3123,9 @@ def _refresh_prepared_task_locked(
     github_context["current_event_fingerprint"] = event["event_fingerprint"]
     runtime_context = _runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
+    runtime_context["publication_targets"] = result_contract.target_urls({
+        "repo": repo["full_name"], "sources": result_scope.sources_for_workstream(conn, event["workstream_id"]),
+    })
     prompt_text = render_prompt.render_prompt(
         {
             "task_id": state["task_id"],
@@ -4048,17 +4051,6 @@ def _create_task_attempt_and_prompt(
     github_context = _write_github_context_artifacts(prompt_dir, attempt_id, related_events)
     runtime_context = _runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
-    prompt_path.write_text(
-        render_prompt.render_prompt(
-            task,
-            route_result,
-            related_events,
-            runtime_context=runtime_context,
-            runtime_knowledge=runtime_knowledge_items,
-            project_memories=project_memories,
-        ),
-        encoding="utf-8",
-    )
 
     conn.execute(
         """
@@ -4113,6 +4105,20 @@ def _create_task_attempt_and_prompt(
                 run_now,
             ),
         )
+    runtime_context["publication_targets"] = result_contract.target_urls({
+        "repo": repo["full_name"], "sources": result_scope.sources_for_workstream(conn, workstream_id),
+    })
+    prompt_path.write_text(
+        render_prompt.render_prompt(
+            task,
+            route_result,
+            related_events,
+            runtime_context=runtime_context,
+            runtime_knowledge=runtime_knowledge_items,
+            project_memories=project_memories,
+        ),
+        encoding="utf-8",
+    )
     conn.execute(
         """
         INSERT INTO tasks(
@@ -4402,6 +4408,10 @@ def _create_resume_attempt_and_prompt(
     prompt_path = prompt_dir / f"{attempt_id}.prompt.md"
     github_context = _write_github_context_artifacts(prompt_dir, attempt_id, events)
     runtime_context["github_context"] = github_context
+    repo_full_name = conn.execute("SELECT full_name FROM repos WHERE repo_id=?", (repo_id,)).fetchone()[0]
+    runtime_context["publication_targets"] = result_contract.target_urls({
+        "repo": repo_full_name, "sources": result_scope.sources_for_workstream(conn, workstream_id),
+    })
     prompt_path.write_text(
         render_prompt.render_prompt(
             task,
