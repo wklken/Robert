@@ -154,10 +154,7 @@ def dispatch_worker(
             "worker_agent": launch.agent,
             "worker_launch": launch.metadata(),
         }
-    if startup_probe_seconds > 0:
-        time.sleep(startup_probe_seconds)
-    returncode = proc.poll()
-    if returncode is not None:
+    def exited_result(returncode):
         if returncode == 0:
             return {
                 "ok": True,
@@ -192,9 +189,20 @@ def dispatch_worker(
             "worker_agent": launch.agent,
             "worker_launch": launch.metadata(),
         }
+
+    if startup_probe_seconds > 0:
+        time.sleep(startup_probe_seconds)
+    returncode = proc.poll()
+    if returncode is not None:
+        return exited_result(returncode)
     try:
         identity = worker_identity.capture_process_identity(proc.pid)
     except Exception as exc:
+        # Identity capture can lose a fast child after the startup probe.
+        # Only our Popen handle can confirm its exit and return code.
+        returncode = proc.poll()
+        if returncode is not None:
+            return exited_result(returncode)
         # The child is in hand, so it can be cleaned up without trusting a
         # possibly reused PID.  Never record an untracked running Worker.
         cleaned_up = worker_identity.cleanup_new_process(proc)
@@ -228,6 +236,9 @@ def dispatch_worker(
         or identity.get("process_state") in {"Z", "X", "x"}
         or not worker_identity.validate_identity(identity)
     ):
+        returncode = proc.poll()
+        if returncode is not None:
+            return exited_result(returncode)
         cleaned_up = worker_identity.cleanup_new_process(proc)
         return {
             "ok": False,
