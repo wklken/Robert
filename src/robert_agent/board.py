@@ -198,7 +198,7 @@ def _valid_commands(column, attention, *, running=False, publishing=False):
     return ["cancel"]
 
 
-def _project_item(conn, row):
+def _project_item(conn, row, *, controls=None, facts=None):
     work_item_id = row["work_item_id"]
     workstream_id = row["workstream_id"]
     attention = _unresolved_attention(conn, work_item_id)
@@ -206,7 +206,8 @@ def _project_item(conn, row):
         "SELECT source_type, number, html_url FROM github_sources WHERE source_id = ?",
         (row["origin_source_id"],),
     ).fetchone()
-    facts = work_item_control.lifecycle_facts(conn, row)
+    if facts is None:
+        facts = work_item_control.lifecycle_facts(conn, row, controls=controls)
     task = work_item_control.current_task(conn, facts["streams"])
     attempt = _latest_attempt(conn, task["task_id"]) if task else None
     execution = execution_summary(conn, task["task_id"]) if task else None
@@ -320,28 +321,53 @@ def _project_item(conn, row):
     return card
 
 
-def _all_projections(conn):
+def _all_projections(conn, *, repo=None, include_history=True):
+    clauses, params = [], []
+    if repo:
+        clauses.append('(wi.repo_id = ? OR r.full_name = ?)')
+        params.extend((repo, repo))
+    if not include_history:
+        clauses.append("(wi.canceled_at IS NULL OR wi.canceled_at = '')")
+    where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
     rows = conn.execute(
-        """
+        f"""
         SELECT wi.*, r.full_name AS repo_full_name
         FROM work_items wi
         JOIN repos r ON r.repo_id = wi.repo_id
+        {where}
         ORDER BY wi.updated_at DESC, wi.work_item_id DESC
-        """
+        """, params,
     ).fetchall()
-    return [_project_item(conn, row) for row in rows]
+    controls = execution_store.read_controls(conn) if rows else {}
+    return [_project_item(conn, row, controls=controls) for row in rows]
 
 
-def workstream_projections(conn):
+def workstream_projections(conn, *, workstream_ids=None, controls=None):
     """Share board lifecycle facts with the workbench without changing its buckets."""
+    clause, params = '', []
+    if workstream_ids is not None:
+        if not workstream_ids:
+            return {}
+        params = list(workstream_ids)
+        clause = ' AND wi.workstream_id IN (' + ','.join('?' for _ in params) + ')'
     rows = conn.execute(
-        """
+        f"""
         SELECT wi.*, r.full_name AS repo_full_name
         FROM work_items wi JOIN repos r ON r.repo_id = wi.repo_id
         WHERE wi.workstream_id IS NOT NULL
-        """
+        {clause}
+        """, params,
     )
-    return {row["workstream_id"]: _project_item(conn, row) for row in rows}
+    projections = {}
+    for row in rows:
+        facts = work_item_control.lifecycle_facts(conn, row, controls=controls)
+        card = _project_item(conn, row, facts=facts)
+        # This shared read model stays internal to the workbench. A canceled
+        # owner must not hide unfinished execution in a derived workstream.
+        card['operator_cancellation_settled'] = bool(row['canceled_at']) and not any(
+            facts[key] for key in ('running', 'actions', 'workflow_attention', 'cleanup_pending'))
+        projections[row['workstream_id']] = card
+    return projections
 
 
 def _matches(item, *, repo, agent, priority, attention, query):
@@ -392,7 +418,7 @@ def list_board(
     with closing(_connect(db_path)) as conn:
         projections = [
             item
-            for item in _all_projections(conn)
+            for item in _all_projections(conn, repo=repo, include_history=include_history)
             if _matches(
                 item,
                 repo=repo,

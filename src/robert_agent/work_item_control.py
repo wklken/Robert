@@ -13,7 +13,7 @@ def related_workstreams(conn, workstream_id):
     )]
 
 
-def lifecycle_facts(conn, item):
+def lifecycle_facts(conn, item, *, controls=None):
     streams = related_workstreams(conn, item["workstream_id"])
     placeholders = ','.join('?' for _ in streams) or 'NULL'
     cursor = conn.execute(
@@ -68,8 +68,11 @@ def lifecycle_facts(conn, item):
         subjects.add(('task',task_id))
         if episode_id:
             subjects.add(('remediation_episode',episode_id))
-    for key,binding in execution_store.read_controls(conn).items():
-        if key in subjects and (binding['binding_status']=='attention' or (binding.get('owner_engine')=='dbos' and binding['binding_status']!='terminal')):
+    if controls is None:
+        controls = execution_store.read_controls(conn, subjects)
+    for key in sorted(subjects):
+        binding = controls.get(key)
+        if binding and (binding['binding_status']=='attention' or (binding.get('owner_engine')=='dbos' and binding['binding_status']!='terminal')):
             metadata=json.loads(binding['metadata_json'] or '{}')
             attention.append(safe_text(metadata.get('reason_code') or 'Execution requires operator attention or offline migration.'))
     source = conn.execute("SELECT state FROM github_sources WHERE source_id=?", (item['origin_source_id'],)).fetchone()

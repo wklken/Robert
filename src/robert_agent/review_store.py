@@ -150,9 +150,11 @@ def new_run(conn, round_id, stage, worker_id, owner_attempt_id, root, prompt_sha
     if stage == 'review':
         # Worker names are arbitrary config keys, never path components.
         output_dir /= hashlib.sha256(worker_id.encode()).hexdigest()[:16]
-    output_dir /= f'attempt-{attempt_no}'
-    output_dir.mkdir(parents=True, exist_ok=False)
+    # A rolled-back INSERT can leave its directory behind. Never reuse those
+    # unregistered outputs, even when the next database attempt number is equal.
     run_id, timestamp = 'review-run-' + uuid4().hex, now()
+    output_dir /= f'attempt-{attempt_no}-{run_id}'
+    output_dir.mkdir(parents=True, exist_ok=False)
     conn.execute('''INSERT INTO review_runs(run_id,round_id,stage,worker_id,model,attempt_no,
         owner_attempt_id,status,output_dir,prompt_sha256,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,'prepared',?,?,?,?)''',

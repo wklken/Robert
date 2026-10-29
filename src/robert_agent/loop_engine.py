@@ -260,22 +260,32 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
         return True
     prepared = conn.execute(
         f"""
-        SELECT 1
+        SELECT DISTINCT w.repo_id, r.full_name
         FROM attempts a
         JOIN tasks t ON t.task_id = a.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
+        JOIN repos r ON r.repo_id = w.repo_id
         WHERE a.status = 'prepared'
           AND (json_extract(a.metadata_json,'$.resume.not_before_at') IS NULL
                OR julianday(json_extract(a.metadata_json,'$.resume.not_before_at'))<=julianday(?))
           AND t.lifecycle IN ('queued', 'running')
           AND {execution_store.runnable_sql()}
           {workstream_repo_clause}
-        LIMIT 1
         """,
         [now, *workstream_repo_params],
-    ).fetchone()
+    ).fetchall()
     if prepared:
-        return True
+        # Only dispatch-only work waits for capacity. Earlier result, wakeup,
+        # observation and supervision checks must still run when the pool is full.
+        if config_result is None:
+            return True
+        global_limit = config_result.get('max_concurrency', 1)
+        if run_once_module._running_attempt_count_for_repos(conn, scoped_repos) < global_limit:
+            limits = {repo['full_name']: repo.get('max_concurrency', global_limit)
+                      for repo in config_result.get('repos', [])}
+            if any(run_once_module._running_attempt_count(conn, candidate_id)
+                   < limits.get(full_name, global_limit) for candidate_id, full_name in prepared):
+                return True
     if not include_publication:
         return False
     publishable = conn.execute(

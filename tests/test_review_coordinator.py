@@ -792,7 +792,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         self.check_lingering_child('success')
 
     @unittest.skipUnless(hasattr(os, 'killpg'), 'requires process groups')
-    def test_failed_startup_with_live_child_blocks_other_models(self):
+    def test_failed_startup_cleans_descendants_before_releasing_capacity(self):
         self.check_lingering_child('failure')
 
     @unittest.skipUnless(hasattr(os, 'killpg'), 'requires process groups')
@@ -816,12 +816,20 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
         if mode == 'timeout':
             driver.request['workers'][0]['timeout_seconds'] = 1
         try:
-            with self.assertRaisesRegex(review_coordinator.ReviewStopped, 'process group'):
+            expected_error = RuntimeError if mode == 'failure' else review_coordinator.ReviewStopped
+            expected_message = 'worker exited immediately' if mode == 'failure' else 'process group'
+            with self.assertRaisesRegex(expected_error, expected_message):
                 driver.run()
             with review_store.connect(self.db) as conn:
                 runs = review_store.runs(conn, driver.round_id)
                 self.assertFalse(any(run['stage'] == 'review' and run['status'] == 'succeeded' for run in runs))
-                self.assertEqual(review_store.session(conn, task_id=driver.task_id)['status'], 'attention')
+                self.assertEqual(review_store.session(conn, task_id=driver.task_id)['status'],
+                                 'failed' if mode == 'failure' else 'attention')
+                if mode == 'failure':
+                    for run in runs:
+                        if run['stage'] == 'review':
+                            self.assertFalse(run_once._live_process_group(run['dispatch']['pid']))
+                            self.assertFalse(run['slot_reserved'])
                 self.assertEqual(conn.execute('SELECT COUNT(*) FROM github_actions').fetchone()[0], 0)
         finally:
             # These groups were created exclusively by this fixture's launcher.

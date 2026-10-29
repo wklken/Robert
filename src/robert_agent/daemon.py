@@ -370,7 +370,7 @@ def _idle_sleep_seconds(context, *, now=None):
         return local_poll_seconds
     remaining_seconds = max(
         0,
-        int((_parse_time(context.next_live_poll_at) - _parse_time(now)).total_seconds()),
+        (_parse_time(context.next_live_poll_at) - _parse_time(now)).total_seconds(),
     )
     return min(local_poll_seconds, remaining_seconds)
 

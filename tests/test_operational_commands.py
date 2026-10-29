@@ -612,6 +612,8 @@ class OperationalCommandTests(unittest.TestCase):
         calls = []
         original_popen = dispatch.subprocess.Popen
         original_environment = dispatch._worker_environment
+        original_cleanup = dispatch.worker_identity.cleanup_new_process
+        cleaned = []
 
         class ExitedProcess:
             pid = 23456
@@ -629,6 +631,7 @@ class OperationalCommandTests(unittest.TestCase):
         try:
             dispatch.subprocess.Popen = fake_popen
             dispatch._worker_environment = fake_worker_environment
+            dispatch.worker_identity.cleanup_new_process = lambda proc: cleaned.append(proc.pid) or True
             result = dispatch.dispatch_worker(
                 task_id="task-1",
                 attempt_id="attempt-1",
@@ -640,10 +643,13 @@ class OperationalCommandTests(unittest.TestCase):
         finally:
             dispatch.subprocess.Popen = original_popen
             dispatch._worker_environment = original_environment
+            dispatch.worker_identity.cleanup_new_process = original_cleanup
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_dispatch")
         self.assertEqual(result["returncode"], 7)
+        self.assertEqual(cleaned, [23456])
+        self.assertFalse(result['cleanup_pending'])
         self.assertIn("stdout_path", result)
         self.assertIn("stderr_path", result)
         self.assertTrue(Path(result["stdout_path"]).exists())
