@@ -249,8 +249,8 @@ class RoutingTests(unittest.TestCase):
         self.assertIn(f"{sys.executable} /worker/snapshot.py", prompt)
         self.assertIn(f"{sys.executable} /worker/heartbeat.py", prompt)
         self.assertIn(f"{sys.executable} /agent/result.py", prompt)
-        self.assertIn(f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 status", prompt)
-        self.assertIn(f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 source <source_key-or-number-or-url>", prompt)
+        self.assertIn(f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 task task-1", prompt)
+        self.assertIn(f"{sys.executable} /agent/status.py --help", prompt)
         self.assertIn("ad hoc SQLite queries", prompt)
         self.assertIn('non-empty "type"', prompt)
         self.assertIn('"planned_github_actions"', prompt)
@@ -299,7 +299,7 @@ class RoutingTests(unittest.TestCase):
                 if route_id in {"new-pr", "update-existing-pr"}:
                     self.assertIn("Unit-test writing guidance:", prompt)
                     self.assertIn("mutation testing", prompt)
-                    self.assertIn("surviving mutants", prompt)
+                    self.assertIn("Only run mutation testing when explicitly requested by the task or required by applicable repository instructions", prompt)
                     self.assertIn("restore production code", prompt)
                 else:
                     self.assertNotIn("Unit-test writing guidance:", prompt)
@@ -328,7 +328,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("required_skills: []", prompt)
         self.assertIn("Review-point evaluation", prompt)
         self.assertIn("Every review report requires a public comment response", prompt)
-        self.assertIn("<review report response>", prompt)
+        self.assertIn("<request outcome or review response>", prompt)
         self.assertIn('"type": "comment"', prompt)
         self.assertIn('"target_url": "<target GitHub URL>"', prompt)
         self.assertIn('"review_point_evaluation": []', prompt)

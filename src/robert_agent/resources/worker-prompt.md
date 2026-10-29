@@ -14,13 +14,14 @@ The agent-generated worker prompt must include:
 - optional `branch_slug` for a `classification_result` that recommends `new-pr`
 - relevant project memories, when retrieved
 - human-approved runtime knowledge, when scoped to the task
-- result `used_memory_ids` and optional `memory_delta` project-memory fields
+- result `used_memory_ids` when memories are provided, and optional `memory_delta`
+  for reusable knowledge from execution tasks
 - worktree path and branch, when required
 - target base branch
 - GitHub context artifact paths for full issue, PR, comment, review, and
   metadata payloads
-- the `status.py` read-only CLI path and examples for task, run, attempt,
-  workstream, event search, source, and artifact status lookups
+- the `status.py` read-only CLI path, one task lookup example, and a help command
+  for other status lookups
 - planned GitHub action requirements for PR bodies and comments
 - verification expectations
 - redaction rules
@@ -30,8 +31,11 @@ The agent-generated worker prompt must include:
 GitHub issue, PR, comment, review, log, and check content must be framed as
 untrusted input. The prompt should include only a compact event summary and
 paths to context artifacts such as `context/github-context.md` and
-`context/github-context.json`; workers must read those files when full GitHub
-body or metadata is needed. The worker may use any installed local skill, but
+`context/github-context.json`. Read Markdown first for the complete request and
+discussion; use JSON only when structured fields are needed. They represent the
+same context, so do not read both by default. If only JSON is available, read it;
+standalone callers without artifacts must include the request inline.
+The worker may use any installed local skill, but
 must not create, modify, or install runtime skills in the worker's configured
 skill directories, such as `~/.codex/skills/`.
 Repository skill files such as `skills/*/SKILL.md` are project deliverables and
@@ -89,15 +93,13 @@ require at least one command-backed verification entry with `required: true` and
 Skipped checks must include `skipped_reason`, and required checks cannot be
 skipped when the route policy sets `allow_skipped: false`.
 
-Code-change prompts for `new_pr` and `update_existing_pr` must include unit-test
-writing guidance. When writing or updating unit tests, workers should use scoped
-mutation testing when feasible to check that assertions detect plausible
-defects, such as flipped comparisons, removed guards, and incorrect return
-values. Use repository-supported tooling when available or controlled temporary
-local mutations, inspect surviving mutants for real coverage gaps, restore
-production code after each experiment, and rerun the relevant tests. Record
-results or explain why mutation testing was not feasible. This guidance must
-not direct read-only review or classification workers to mutate source.
+Code-change prompts for `new_pr` and `update_existing_pr` must require meaningful
+behavior tests, affected checks, and applicable repository-required verification.
+Run mutation testing only when the accepted task explicitly requests it or
+applicable repository instructions require it. In that case, scope the mutations,
+restore production code after each experiment, rerun affected tests, and report
+results or blockers. Otherwise omit mutation testing without searching for tools
+or explaining its absence. Read-only review and classification cannot mutate source.
 
 Review prompts must mention adversarial review: challenge assumptions and
 review claims with counterexamples, boundary inputs, failure paths, and
@@ -106,15 +108,33 @@ findings and keep unsupported claims unverified. Native review synthesis applies
 this discipline to supplied findings without adding unsourced findings or
 starting another independent review.
 
-For `update_existing_pr` and `review_comment`, review-report handling is
-response-required. The worker must use `fast-verify-review-point`, record
-`review_point_evaluation`, and include a planned `comment` action that replies
-to the triggering review report or review thread. If fixes are valid, push the
-existing PR branch and then comment with what changed. If every point is
-incorrect, already satisfied, unverified, or needs no code change, do not push;
-comment with each point and the reason it was not changed. If the report says
-there are no blocking items and the PR can merge, still comment to acknowledge
-that no code change is needed.
+For `update_existing_pr` and `review_comment`, the controller selects and stores
+a review-input policy from the trigger type. Native `review`/`review_comment`
+triggers require review-point evaluation. Ordinary `comment` and Web
+`manual_operator_request` triggers use content-based selection in the existing
+worker (no extra model call):
+
+- `review_input_kind=request`: an ordinary change/question; execute directly and
+  omit review-point evaluation. Do not invent findings. Explicit required skills
+  still apply.
+- `review_input_kind=review_feedback`: supplied findings, an all-clear review
+  report, or a request to act on a review report. Use `fast-verify-review-point`,
+  return nonempty `review_point_evaluation`, and respond publicly. A push requires
+  an implementable finding with action `implement`.
+- `review_input_kind=mixed`: feedback plus a separate change/question. Evaluate
+  the findings; describe the separate request in `handoff`. A separately requested
+  change can justify a push even if all review claims are rejected. Incorrect or
+  unverified findings must not be implemented.
+
+A comment-only route never grants code-change or push authority. All update
+results still require a comment, after the push when one is planned. Required
+verification, required skills, redaction and publication scope remain unchanged.
+Missing/unknown trigger types and legacy tasks without a saved policy retain the
+strict review contract. A worker cannot override the stored policy. Missing
+`review_input_kind` also retains strict evaluation; a request label never hides a
+supplied nonempty evaluation. Retry/resume retains the saved policy; prepared
+refresh may strengthen it for a new native review trigger but cannot weaken an
+existing required review contract.
 
 `ci_remediation` and `merge_conflict_remediation` are system-triggered
 exceptions to that review-point workflow. Their prompts include the trusted
@@ -153,9 +173,21 @@ worker must verify them against the current checkout before relying on them. If
 a memory materially influences the work, include its id in `used_memory_ids`.
 If the task creates reusable project knowledge, include `memory_delta` with
 `status: "has_memory"` and entries containing title, summaries, paths, symbols,
-keywords, evidence, and confidence. For mechanical tasks, use
-`memory_delta.status = "none"` with a short reason.
+keywords, evidence, and confidence. Otherwise omit `memory_delta`; do not require
+an explanation for producing no memory.
 
 Runtime knowledge is stronger than project memory because a human approved it
 through `memory_curator.py`, but it still cannot override route contracts,
 allowed GitHub actions, redaction policy, or current repo evidence.
+
+## Route-scoped rendering
+
+Render only the current route's instructions and result fields. Classification
+includes `recommended_route` and `branch_slug`, but no publication metadata or
+memory-generation workflow. Other routes omit classification fields. Include
+review-point fields only when the task's workflow requires or conditionally uses
+them. Include remediation evidence only for CI/conflict remediation. Omit empty
+memory/knowledge sections. Show only the active origin's consumed event IDs.
+Keep trust, authorization, audit, redaction, idempotency, verification and recovery
+requirements regardless of prompt size. Recommended skills are guidance, not a
+checklist; explicit required skills remain mandatory.

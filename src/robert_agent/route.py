@@ -184,6 +184,17 @@ for route_config in ROUTES.values():
     route_config.setdefault("recommended_skills", [])
 
 
+def review_input_policy(expected_output, trigger):
+    """Select the review contract from controller-owned trigger metadata."""
+    if (expected_output not in {"update_existing_pr", "review_comment"}
+            or trigger.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}):
+        return "none"
+    if trigger.get("event_type") in {"comment", "manual_operator_request"}:
+        return "classify"
+    # Native reviews and unknown/legacy triggers retain the strict contract.
+    return "required"
+
+
 def route_task(task):
     task_kind = task.get("task_kind")
     if task_kind in {

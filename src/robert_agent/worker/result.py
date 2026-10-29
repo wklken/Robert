@@ -136,6 +136,7 @@ def build_result(
     consumed_work_item_event_ids=None,
     operator_question=None,
     remediation_evidence=None,
+    review_input_kind=None,
 ):
     payload = {
         "task_id": task_id,
@@ -160,6 +161,10 @@ def build_result(
         if not isinstance(review_point_evaluation, list):
             raise ValueError("review_point_evaluation must be a list")
         payload["review_point_evaluation"] = list(review_point_evaluation)
+    if review_input_kind is not None:
+        if review_input_kind not in ("request", "review_feedback", "mixed"):
+            raise ValueError("review_input_kind must be request, review_feedback or mixed")
+        payload["review_input_kind"] = review_input_kind
     if operator_question is not None:
         payload["operator_question"] = operator_question
     if remediation_evidence is not None:
@@ -222,6 +227,7 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
         ),
         "used_memory_ids": _optional_string_list(payload.get("used_memory_ids")),
         "review_point_evaluation": payload.get("review_point_evaluation", []),
+        "review_input_kind": payload.get("review_input_kind"),
         "consumed_work_item_event_ids": local_event_ids,
     }
     if isinstance(payload.get("remediation_evidence"), dict):
@@ -379,6 +385,7 @@ def main(argv=None):
         consumed_work_item_event_ids=payload.get("consumed_work_item_event_ids", []),
         operator_question=payload.get("operator_question"),
         remediation_evidence=payload.get("remediation_evidence"),
+        review_input_kind=payload.get("review_input_kind"),
     )
     if args.db:
         output = record_result(args.db, result)

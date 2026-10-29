@@ -1,0 +1,996 @@
+[
+  {
+    "name": "classification-result",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "classification-result",
+      "expected_output": "classification_result",
+      "allowed_github_actions": [],
+      "recommended_skills": [],
+      "needs_worktree": false,
+      "workspace_mode": "none",
+      "verification_policy": {
+        "mode": "none",
+        "required_statuses": [],
+        "allow_skipped": false
+      },
+      "confidence": "low",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "unclear",
+        "title": "Input handling",
+        "body": "Please look into input handling.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "new-pr",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend#123",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "new-pr",
+      "expected_output": "new_pr",
+      "allowed_github_actions": [
+        "push_existing_pr",
+        "open_pr",
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "required",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": false
+      },
+      "recommended_skills": [
+        "fast-small-pr",
+        "fast-code-path",
+        "fast-add-tests",
+        "fast-test-fix",
+        "fast-preflight"
+      ],
+      "needs_worktree": true,
+      "workspace_mode": "new_branch",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "issue",
+        "source_key": "example/backend#123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Fix the empty input error.",
+        "url": "https://github.com/example/backend/issues/123"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "update-existing-pr",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "classify"
+    },
+    "route_result": {
+      "route_id": "update-existing-pr",
+      "expected_output": "update_existing_pr",
+      "allowed_github_actions": [
+        "push_existing_pr",
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "required_for_push",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": false
+      },
+      "recommended_skills": [
+        "fast-small-pr",
+        "fast-verify-review-point",
+        "fast-code-path",
+        "fast-add-tests",
+        "fast-test-fix",
+        "fast-code-simplify",
+        "fast-preflight"
+      ],
+      "needs_worktree": true,
+      "workspace_mode": "existing_pr",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Fix the empty input error.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "review-comment",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "classify"
+    },
+    "route_result": {
+      "route_id": "review-comment",
+      "expected_output": "review_comment",
+      "allowed_github_actions": [
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "optional",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": true
+      },
+      "recommended_skills": [
+        "fast-review-github-pr",
+        "fast-verify-review-point",
+        "fast-code-path"
+      ],
+      "needs_worktree": false,
+      "workspace_mode": "analysis",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "analysis",
+        "title": "Fix empty input",
+        "body": "Explain the current null check; do not change code.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "review-pr",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "review-pr",
+      "expected_output": "pr_review_comment",
+      "allowed_github_actions": [
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "optional",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": true
+      },
+      "recommended_skills": [
+        "fast-review-github-pr",
+        "fast-code-path"
+      ],
+      "needs_worktree": true,
+      "worktree_mode": "review_pr",
+      "workspace_mode": "review_pr",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "review_request",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "review_request",
+        "title": "Fix empty input",
+        "body": "Review this PR.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "comment-analysis",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "comment-analysis",
+      "expected_output": "comment_analysis",
+      "allowed_github_actions": [
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "optional",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": true
+      },
+      "recommended_skills": [
+        "fast-code-path",
+        "fast-zoom-out",
+        "fast-verify-review-point"
+      ],
+      "needs_worktree": false,
+      "workspace_mode": "analysis",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "analysis",
+        "title": "Fix empty input",
+        "body": "Explain the current empty-input behavior.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "waiting-for-user",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "waiting-for-user",
+      "expected_output": "waiting_for_user",
+      "allowed_github_actions": [
+        "comment"
+      ],
+      "recommended_skills": [],
+      "needs_worktree": false,
+      "workspace_mode": "none",
+      "verification_policy": {
+        "mode": "none",
+        "required_statuses": [],
+        "allow_skipped": false
+      },
+      "confidence": "high",
+      "required_skills": [],
+      "routing_block_reason": "The requested target version is missing."
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Fix the empty input error.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "local-result",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "local-result",
+      "expected_output": "local_result",
+      "allowed_github_actions": [],
+      "verification_policy": {
+        "mode": "optional",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": true
+      },
+      "recommended_skills": [
+        "fast-code-path",
+        "fast-zoom-out"
+      ],
+      "needs_worktree": false,
+      "workspace_mode": "none",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      },
+      "origin_type": "web",
+      "work_item_id": "wi-123",
+      "work_item_event_ids": [
+        "event-456"
+      ],
+      "requirement": {
+        "title": "Explain input validation",
+        "description": "Explain the current behavior."
+      }
+    }
+  },
+  {
+    "name": "ci_remediation",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "task_kind": "ci_remediation",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "update-existing-pr",
+      "expected_output": "update_existing_pr",
+      "allowed_github_actions": [
+        "push_existing_pr",
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "required_for_push",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": false
+      },
+      "recommended_skills": [
+        "fast-small-pr",
+        "fast-verify-review-point",
+        "fast-code-path",
+        "fast-add-tests",
+        "fast-test-fix",
+        "fast-code-simplify",
+        "fast-preflight"
+      ],
+      "needs_worktree": true,
+      "workspace_mode": "existing_pr",
+      "confidence": "high",
+      "required_skills": [
+        "fast-test-fix",
+        "fast-preflight"
+      ]
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Fix the empty input error.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456",
+        "metadata": {
+          "remediation": {
+            "episode_id": "episode-123",
+            "episode_kind": "ci",
+            "observed_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "observed_base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "failure_signature": "unit-empty-input",
+            "failure_summary": "unit test: empty input raises unexpectedly"
+          }
+        }
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      },
+      "base_ref": "refs/robert/base/main"
+    }
+  },
+  {
+    "name": "merge_conflict_remediation",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "task_kind": "merge_conflict_remediation",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "update-existing-pr",
+      "expected_output": "update_existing_pr",
+      "allowed_github_actions": [
+        "push_existing_pr",
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "required_for_push",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": false
+      },
+      "recommended_skills": [
+        "fast-small-pr",
+        "fast-verify-review-point",
+        "fast-code-path",
+        "fast-add-tests",
+        "fast-test-fix",
+        "fast-code-simplify",
+        "fast-preflight"
+      ],
+      "needs_worktree": true,
+      "workspace_mode": "existing_pr",
+      "confidence": "high",
+      "required_skills": [
+        "fast-conflict-fix",
+        "fast-preflight"
+      ]
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Fix the empty input error.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456",
+        "metadata": {
+          "remediation": {
+            "episode_id": "episode-123",
+            "episode_kind": "conflict",
+            "observed_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "observed_base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "failure_signature": "unit-empty-input",
+            "failure_summary": "unit test: empty input raises unexpectedly"
+          }
+        }
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      },
+      "base_ref": "refs/robert/base/main"
+    }
+  },
+  {
+    "name": "resume-update",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "classify"
+    },
+    "route_result": {
+      "route_id": "update-existing-pr",
+      "expected_output": "update_existing_pr",
+      "allowed_github_actions": [
+        "push_existing_pr",
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "required_for_push",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": false
+      },
+      "recommended_skills": [
+        "fast-small-pr",
+        "fast-verify-review-point",
+        "fast-code-path",
+        "fast-add-tests",
+        "fast-test-fix",
+        "fast-code-simplify",
+        "fast-preflight"
+      ],
+      "needs_worktree": true,
+      "workspace_mode": "existing_pr",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Fix the empty input error.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      },
+      "recovery_context": {
+        "previous_attempt_id": "attempt-0",
+        "worktree_path": "/worktrees/task-123",
+        "handoff": "Fix applied; rerun focused validation after interruption."
+      }
+    }
+  },
+  {
+    "name": "new-pr-with-memory",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend#123",
+      "review_input_policy": "none"
+    },
+    "route_result": {
+      "route_id": "new-pr",
+      "expected_output": "new_pr",
+      "allowed_github_actions": [
+        "push_existing_pr",
+        "open_pr",
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "required",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": false
+      },
+      "recommended_skills": [
+        "fast-small-pr",
+        "fast-code-path",
+        "fast-add-tests",
+        "fast-test-fix",
+        "fast-preflight"
+      ],
+      "needs_worktree": true,
+      "workspace_mode": "new_branch",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "comment",
+        "source_type": "issue",
+        "source_key": "example/backend#123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Fix the empty input error.",
+        "url": "https://github.com/example/backend/issues/123"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    },
+    "project_memories": [
+      {
+        "memory_id": "memory-1",
+        "title": "Validation entrypoint",
+        "short_summary": "Run tests/test_validation.py",
+        "long_summary": "Use the repository Python environment.",
+        "confidence": "high",
+        "paths": [
+          "tests/test_validation.py"
+        ]
+      }
+    ],
+    "runtime_knowledge": [
+      {
+        "knowledge_id": "knowledge-1",
+        "scope_type": "repo",
+        "scope_value": "example/backend",
+        "title": "Verification",
+        "prompt_text": "Use the project virtual environment.",
+        "approved_by": "maintainer",
+        "approved_at": "2026-10-29T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "name": "native-review-feedback-update",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "required"
+    },
+    "route_result": {
+      "route_id": "update-existing-pr",
+      "expected_output": "update_existing_pr",
+      "allowed_github_actions": [
+        "push_existing_pr",
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "required_for_push",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": false
+      },
+      "recommended_skills": [
+        "fast-small-pr",
+        "fast-verify-review-point",
+        "fast-code-path",
+        "fast-add-tests",
+        "fast-test-fix",
+        "fast-code-simplify",
+        "fast-preflight"
+      ],
+      "needs_worktree": true,
+      "workspace_mode": "existing_pr",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "review_comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Review finding: empty input reaches values[0] and raises IndexError. Please verify.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  },
+  {
+    "name": "native-review-feedback-comment",
+    "task": {
+      "task_id": "task-123",
+      "attempt_id": "attempt-1",
+      "workstream_id": "github:example/backend!123",
+      "review_input_policy": "required"
+    },
+    "route_result": {
+      "route_id": "review-comment",
+      "expected_output": "review_comment",
+      "allowed_github_actions": [
+        "comment"
+      ],
+      "verification_policy": {
+        "mode": "optional",
+        "required_statuses": [
+          "passed"
+        ],
+        "allow_skipped": true
+      },
+      "recommended_skills": [
+        "fast-review-github-pr",
+        "fast-verify-review-point",
+        "fast-code-path"
+      ],
+      "needs_worktree": false,
+      "workspace_mode": "analysis",
+      "confidence": "high",
+      "required_skills": []
+    },
+    "events": [
+      {
+        "event_fingerprint": "comment:456",
+        "event_type": "review_comment",
+        "source_type": "pull_request",
+        "source_key": "example/backend!123",
+        "number": 123,
+        "actor_login": "maintainer",
+        "pr_author_login": "author",
+        "intent": "bug_fix",
+        "title": "Fix empty input",
+        "body": "Review finding: empty input reaches values[0] and raises IndexError. Please verify.",
+        "url": "https://github.com/example/backend/pull/123#issuecomment-456"
+      }
+    ],
+    "runtime_context": {
+      "python_bin": "/runtime/bin/python3",
+      "db_path": "/runtime/robert.sqlite3",
+      "result_script": "/runtime/worker/result.py",
+      "snapshot_script": "/runtime/worker/snapshot.py",
+      "heartbeat_script": "/runtime/worker/heartbeat.py",
+      "status_script": "/runtime/status.py",
+      "worktree_path": "/worktrees/task-123",
+      "branch_name": "codex/fix-empty-input",
+      "target_base_branch": "main",
+      "github_context": {
+        "md_path": "/artifacts/task-123/context/github-context.md",
+        "json_path": "/artifacts/task-123/context/github-context.json",
+        "event_count": 1,
+        "event_fingerprints": [
+          "comment:456"
+        ]
+      }
+    }
+  }
+]

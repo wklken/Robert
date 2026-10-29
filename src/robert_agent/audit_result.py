@@ -342,11 +342,23 @@ def _audit_pr_review_author_mention(result):
     return None
 
 
-def _audit_review_point_evaluation(result, actual_types):
+def _audit_review_point_evaluation(result, actual_types, input_policy="required"):
     output_type = result.get("output_type")
     if output_type not in REVIEW_EVALUATION_OUTPUTS:
         return None
     evaluation = result.get("review_point_evaluation")
+    if input_policy not in ("required", "classify"):
+        return ["invalid_review_input_policy"]
+    if input_policy == "classify":
+        kind = result.get("review_input_kind")
+        if kind is not None and kind not in ("request", "review_feedback", "mixed"):
+            return ["invalid_review_input_kind"]
+        if kind == "mixed" and (not isinstance(result.get("handoff"), str) or not result["handoff"].strip()):
+            return ["missing_mixed_request_handoff"]
+        # A missing classification retains the legacy review contract. Supplied
+        # findings must still pass it even if the worker labels this a request.
+        if kind == "request" and (evaluation is None or evaluation == []):
+            return None
     if not isinstance(evaluation, list) or not evaluation:
         return ["missing_review_point_evaluation"]
     for entry in evaluation:
@@ -361,7 +373,8 @@ def _audit_review_point_evaluation(result, actual_types):
             return ["invalid_review_point_evaluation"]
         if entry["action"] == "implement" and entry["verdict"] not in IMPLEMENTABLE_VERDICTS:
             return ["invalid_review_point_evaluation"]
-    if output_type == "update_existing_pr" and "push_existing_pr" in actual_types:
+    if (output_type == "update_existing_pr" and "push_existing_pr" in actual_types
+            and not (input_policy == "classify" and result.get("review_input_kind") == "mixed")):
         if not any(entry.get("action") == "implement" for entry in evaluation):
             return ["no_implemented_review_points"]
     return None
@@ -571,6 +584,7 @@ def audit_result(
     task_kind="human_request",
     remediation_context=None,
     remediation_attestation=None,
+    review_input_policy="required",
 ):
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):
@@ -739,7 +753,7 @@ def audit_result(
     review_violation = (
         None
         if task_kind in REMEDIATION_TASK_KINDS
-        else _audit_review_point_evaluation(result, actual_types)
+        else _audit_review_point_evaluation(result, actual_types, review_input_policy)
     )
     if review_violation:
         return {

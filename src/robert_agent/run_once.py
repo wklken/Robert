@@ -3001,6 +3001,11 @@ def _upsert_route_decision(conn, task_id, route_result, run_now):
     )
 
 
+def _task_review_input_policy(conn, task_id):
+    row = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    return _json_object(row[0] if row else None).get("review_input_policy", "required")
+
+
 def _refresh_prepared_task(
     conn,
     data_dir,
@@ -3026,11 +3031,16 @@ def _refresh_prepared_task(
     route_result = _effective_route(config_result, repo, event)
     if route_result["route_id"] != "update-existing-pr":
         return None
+    input_policy = route.review_input_policy(route_result["expected_output"], event)
+    if (state["expected_output"] in {"update_existing_pr", "review_comment"}
+            and _task_review_input_policy(conn, state["task_id"]) == "required"):
+        input_policy = "required"
     event_known = _task_has_event(conn, state["task_id"], event["event_fingerprint"])
     if (
         event_known
         and state["route_id"] == route_result["route_id"]
         and state["expected_output"] == route_result["expected_output"]
+        and _task_review_input_policy(conn, state["task_id"]) == input_policy
     ):
         return None
 
@@ -3056,6 +3066,7 @@ def _refresh_prepared_task(
                 "task_id": state["task_id"],
                 "attempt_id": state["attempt_id"],
                 "workstream_id": event["workstream_id"],
+                "review_input_policy": input_policy,
             },
             route_result,
             related_events,
@@ -3090,6 +3101,8 @@ def _refresh_prepared_task(
             state["task_id"],
         ),
     )
+    conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.review_input_policy',?) WHERE task_id=?",
+                 (input_policy, state["task_id"]))
     _upsert_route_decision(conn, state["task_id"], route_result, run_now)
     attempt_metadata_row = conn.execute(
         "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
@@ -3625,6 +3638,7 @@ def _prepare_detected_local_tasks(
                     "task_id": task_id,
                     "attempt_id": attempt_id,
                     "workstream_id": workstream_id,
+                    "review_input_policy": route.review_input_policy(route_result["expected_output"], normalized),
                 },
                 route_result,
                 local_events,
@@ -3635,6 +3649,7 @@ def _prepare_detected_local_tasks(
         _upsert_route_decision(conn, task_id, route_result, run_now)
         task_metadata = _json_object(task_metadata_json)
         task_metadata["local_source_reference"] = source_reference
+        task_metadata["review_input_policy"] = route.review_input_policy(route_result["expected_output"], normalized)
         conn.execute(
             """
             UPDATE tasks
@@ -3946,6 +3961,7 @@ def _create_task_attempt_and_prompt(
         "attempt_id": attempt_id,
         "workstream_id": workstream_id,
         "task_kind": event.get("task_kind", "human_request"),
+        "review_input_policy": route.review_input_policy(route_result["expected_output"], event),
     }
     runtime_knowledge_items = _load_runtime_knowledge(
         conn,
@@ -4056,17 +4072,11 @@ def _create_task_attempt_and_prompt(
             run_now,
             json.dumps(
                 {
-                    "remediation_episode_id": (
-                        ((event.get("metadata") or {}).get("remediation") or {}).get(
-                            "episode_id"
-                        )
-                    )
-                }
-                if event.get("task_kind") in {
-                    "ci_remediation",
-                    "merge_conflict_remediation",
-                }
-                else {},
+                    "review_input_policy": task["review_input_policy"],
+                    **({"remediation_episode_id": remediation_context.get("episode_id")}
+                       if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
+                       else {}),
+                },
                 ensure_ascii=False,
                 sort_keys=True,
             ),
@@ -4298,6 +4308,7 @@ def _create_resume_attempt_and_prompt(
         "task_id": task_id,
         "attempt_id": attempt_id,
         "workstream_id": workstream_id,
+        "review_input_policy": _task_review_input_policy(conn, task_id),
     }
     worktree_result = {
         "worktree_path": worktree_path or "",
@@ -5260,6 +5271,7 @@ def _load_result_payload(conn, result_row):
         "memory_delta": metadata.get("memory_delta"),
         "used_memory_ids": metadata.get("used_memory_ids", []),
         "review_point_evaluation": metadata.get("review_point_evaluation", []),
+        "review_input_kind": metadata.get("review_input_kind"),
         "recommended_route": recommended_route,
         "branch_slug": metadata.get("branch_slug", ""),
         "consumed_work_item_event_ids": metadata.get(
@@ -6306,6 +6318,7 @@ def _audit_completed_results(
             task_kind=task_kind,
             remediation_context=remediation_context,
             remediation_attestation=remediation_attestation,
+            review_input_policy=task_metadata.get("review_input_policy", "required"),
         )
         _record_result_audit(conn, payload["result_id"], audit)
         wakeup.consume_wakeups_for_results(

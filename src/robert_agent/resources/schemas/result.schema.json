@@ -81,6 +81,10 @@
       "type": "string",
       "enum": ["", "local-result", "comment-analysis", "new-pr", "update-existing-pr", "review-comment", "review-pr", "waiting-for-user", "vote"]
     },
+    "review_input_kind": {
+      "type": "string",
+      "enum": ["request", "review_feedback", "mixed"]
+    },
     "branch_slug": {
       "type": "string",
       "maxLength": 60,

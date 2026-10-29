@@ -75,3 +75,14 @@ durable episode and independently attests the assigned branch, original head
 ancestry, unresolved-conflict set, and—for conflict work—the observed base
 ancestry. Publication then fetches the PR again and pushes only if its head and
 base still match the audited snapshot.
+
+## PR comment workflow selection
+
+When the controller enables content-based selection, set `review_input_kind` to
+`request`, `review_feedback`, or `mixed`. A direct request may omit
+`review_point_evaluation`; feedback requires a nonempty evaluation, including
+all-clear reports. Mixed input requires evaluation plus a nonempty `handoff`
+identifying the separate request. A request label does not suppress validation of
+any supplied evaluation. Native review and legacy tasks retain required review
+validation regardless of this field. The policy comes from task metadata, never
+from worker output. See [worker-prompt.md](worker-prompt.md) for the workflow rules.
