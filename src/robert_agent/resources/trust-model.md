@@ -1,16 +1,20 @@
 # Trust Model
 
-Only configured trusted actors can start new tasks. The first repo configuration enables `wklken` as the trusted actor for `example/backend`.
+Only configured `trusted_actors` can start, resume, or redirect workers through
+GitHub events, including follow-up requests on known workstreams. Repository
+roles, collaborator permissions, PR authorship, and previous review participation
+do not grant execution authority. Assignment and review requests must be traced
+to a trusted requester.
 
-Once a workstream is known, including an inactive completed workstream, follow-up input can come from:
+Messages from other actors remain recorded GitHub context and may be associated
+with an active task as discussion data. They do not refresh worker instructions,
+resume a waiting task, or independently reopen a completed workstream. Saved
+pending events are checked against the current trust policy before child creation. Waiting tasks resume only on a trusted actor's explicit reply.
 
-- trusted actors
-- `OWNER`
-- `MEMBER`
-- `COLLABORATOR`
+Mentions must address the configured account exactly, outside quotes and code.
+A mention or CSRF token is not authentication.
 
-If `author_association` is absent or unknown, the agent may query repository collaborator permission. If permission cannot be confirmed, record `pending_actor_permission` and do not let that event drive execution.
-
-Accepted context on a known inactive workstream is recorded for evidence. It can reopen that workstream only when a trusted actor replies, except that a DD-derived PR follow-up with origin metadata can create an update task for that PR. Active workstreams continue to receive follow-up as pending context for the active task.
-
-Waiting tasks resume only when a trusted actor replies. Collaborator replies can add context but cannot approve scope changes, implementation, cancellation, or route selection.
+Model-worker environment allowlists cannot include GitHub credentials. Native
+review coordinators are trusted controller code and retain credentials for PR
+metadata reads and snapshot preparation; their model children use filtered
+worker environments. This boundary is not an operating-system sandbox.

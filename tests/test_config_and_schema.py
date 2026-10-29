@@ -218,6 +218,55 @@ repos:
         )
         return path
 
+    def test_trusted_actors_requires_a_list_of_nonempty_strings(self):
+        import yaml
+        from robert_agent import validate_config
+
+        for actors in ("alice", {"alice": True}, [1], [None], [""], ["  "], [["alice"]]):
+            with self.subTest(actors=actors):
+                path = self.write_config()
+                config = yaml.safe_load(path.read_text())
+                config["repos"][0]["trusted_actors"] = actors
+                path.write_text(yaml.safe_dump(config))
+                result = validate_config.validate_config(path, skip_external=True)
+                self.assertFalse(result["ok"], result)
+                self.assertEqual(result["status"], "failed_config")
+                self.assertIn("trusted_actors", result["safe_error"])
+
+    def test_public_repo_legacy_fields_return_failed_config(self):
+        import yaml
+        from robert_agent import validate_config
+
+        for field in ("repo_root", "worktree_root", "default_base_branch"):
+            with self.subTest(field=field):
+                path = self.write_config()
+                config = yaml.safe_load(path.read_text())
+                config.update(version=1, github={"account": "robert-bot"})
+                repo = config["repos"][0]
+                for old, new in (("repo_root", "checkout"), ("worktree_root", "worktrees"),
+                                 ("default_base_branch", "default_branch")):
+                    repo[new] = repo.pop(old)
+                repo[field] = "legacy-value"
+                path.write_text(yaml.safe_dump(config))
+                result = validate_config.validate_config(path, skip_external=True)
+                self.assertFalse(result["ok"], result)
+                self.assertEqual(result["status"], "failed_config")
+                self.assertIn(field, result["safe_error"])
+
+    def test_worker_allowlist_rejects_github_credentials(self):
+        import yaml
+        from robert_agent import validate_config
+
+        for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+            with self.subTest(name=name):
+                path = self.write_config()
+                config = yaml.safe_load(path.read_text())
+                config["environment_allowlist"] = [name]
+                path.write_text(yaml.safe_dump(config))
+                result = validate_config.validate_config(path, skip_external=True)
+                self.assertFalse(result["ok"], result)
+                self.assertIn("environment_allowlist", result["safe_error"])
+
     def test_config_with_one_repo_validates(self):
         from robert_agent import validate_config
         config_path = self.write_config()

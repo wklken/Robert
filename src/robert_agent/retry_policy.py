@@ -122,7 +122,10 @@ def publication_ready_sql(alias="github_actions"):
           ON result.attempt_id=process.attempt_id WHERE result.result_id={alias}.result_id
           AND json_type(process.metadata_json,'$.dispatch.pid')='integer'
           AND json_extract(process.metadata_json,'$.process_stopped_at') IS NULL)
-      AND COALESCE(json_extract({alias}.metadata_json, '$.publish.retryable'), 1) != 0
+      AND (COALESCE(json_extract({alias}.metadata_json, '$.publish.retryable'), 1) != 0
+           OR (json_extract({alias}.metadata_json, '$.publish.reconcile_required') = 1
+               AND EXISTS (SELECT 1 FROM publication_intents pending
+                   WHERE pending.action_id={alias}.action_id AND pending.status='executing')))
       AND (json_extract({alias}.metadata_json, '$.publish.next_retry_at') IS NULL
            OR julianday(json_extract({alias}.metadata_json, '$.publish.next_retry_at')) <= julianday(?))
       AND NOT EXISTS (SELECT 1 FROM publication_intents pi WHERE pi.action_id={alias}.action_id AND pi.status='attention')

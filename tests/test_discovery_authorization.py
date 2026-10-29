@@ -26,6 +26,36 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
             known_workstreams=existing_workstreams or set(),
         )
 
+    def test_quoted_partial_and_code_mentions_do_not_authorize(self):
+        from robert_agent import discover
+
+        for body in ("@robert-bot-helper fix", "a@robert-bot.com", "> @robert-bot fix",
+                     "```\n@robert-bot fix\n```", "`@robert-bot` fix",
+                     "~~~python\n@robert-bot fix\n~~~", "```\n@robert-bot fix",
+                     "    @robert-bot fix", "```python\n    ```\n@robert-bot fix this\n```", "```python\ncode\n```python\n@robert-bot fix\n```"):
+            with self.subTest(body=body):
+                self.assertFalse(discover._mentions_dd(body, "robert-bot"))
+                decision = self.normalize_and_authorize([{
+                    "id": "unsafe-mention", "number": 123, "event_type": "comment",
+                    "actor_login": "wklken", "body": body, "mentions_dd": True,
+                }])[0]
+                self.assertFalse(decision["drives_execution"])
+
+    def test_only_trusted_actor_drives_known_workstream(self):
+        for association in ("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", None):
+            for permission in ("admin", "maintain", "write", "triage", None):
+                with self.subTest(association=association, permission=permission):
+                    decision = self.normalize_and_authorize([{
+                        "id": "untrusted-followup", "number": 123, "source_type": "pull_request",
+                        "event_type": "comment", "actor_login": "external-author",
+                        "author_association": association, "actor_permission": permission,
+                        "review_participants": ["external-author"],
+                        "body": "@robert-bot fix this", "workstream_id": "known",
+                    }], existing_workstreams={"known"})[0]
+                    self.assertFalse(decision["drives_execution"])
+                    self.assertFalse(decision["creates_task"])
+                    self.assertEqual(decision["authorization_status"], "context_only")
+
     def test_trusted_actor_mention_creates_authorized_trigger(self):
         decisions = self.normalize_and_authorize(
             [
@@ -139,9 +169,9 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
             existing_workstreams={"github:example/backend#123"},
         )
 
-        self.assertEqual(decisions[0]["authorization_status"], "accepted_context")
+        self.assertEqual(decisions[0]["authorization_status"], "context_only")
         self.assertFalse(decisions[0]["creates_task"])
-        self.assertTrue(decisions[0]["drives_execution"])
+        self.assertFalse(decisions[0]["drives_execution"])
 
     def test_dd_self_comment_is_context_only(self):
         decisions = self.normalize_and_authorize(
@@ -427,9 +457,9 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
             existing_workstreams={"github:example/backend#100"},
         )
 
-        self.assertEqual(accepted["authorization_status"], "accepted_context")
+        self.assertEqual(accepted["authorization_status"], "context_only")
         self.assertFalse(accepted["creates_task"])
-        self.assertTrue(accepted["drives_execution"])
+        self.assertFalse(accepted["drives_execution"])
         self.assertEqual(ignored["authorization_status"], "ignored_context")
         self.assertFalse(ignored["drives_execution"])
 
@@ -451,8 +481,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
             existing_workstreams={"github:example/backend#102"},
         )
 
-        self.assertEqual(decisions[0]["authorization_status"], "accepted_context")
-        self.assertTrue(decisions[0]["drives_execution"])
+        self.assertEqual(decisions[0]["authorization_status"], "context_only")
+        self.assertFalse(decisions[0]["drives_execution"])
 
     def test_live_unknown_association_is_enriched_with_repo_permission(self):
         from robert_agent import authorize
@@ -497,7 +527,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         )
 
         self.assertEqual(events[0]["actor_permission"], "write")
-        self.assertEqual(decisions[0]["authorization_status"], "accepted_context")
+        self.assertEqual(decisions[0]["authorization_status"], "context_only")
 
     def test_contributor_followup_is_recorded_but_does_not_drive_execution(self):
         decisions = self.normalize_and_authorize(
@@ -519,7 +549,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertFalse(decisions[0]["creates_task"])
         self.assertFalse(decisions[0]["drives_execution"])
 
-    def test_pr_review_participant_followup_drives_only_scoped_context(self):
+    def test_pr_review_participant_followup_is_context_only(self):
         allowed, ignored = self.normalize_and_authorize(
             [
                 {
@@ -548,9 +578,9 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
             existing_workstreams={"github:example/backend!202"},
         )
 
-        self.assertEqual(allowed["authorization_status"], "accepted_review_participant")
-        self.assertTrue(allowed["drives_execution"])
-        self.assertEqual(ignored["authorization_status"], "ignored_context")
+        self.assertEqual(allowed["authorization_status"], "context_only")
+        self.assertFalse(allowed["drives_execution"])
+        self.assertEqual(ignored["authorization_status"], "context_only")
         self.assertFalse(ignored["drives_execution"])
 
     def test_live_discovery_uses_gh_search_and_notification_hints(self):
@@ -1091,8 +1121,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         )
 
         self.assertEqual(events[0]["event_fingerprint"], "comment:comment-member")
-        self.assertEqual(decisions[0]["authorization_status"], "accepted_context")
-        self.assertTrue(decisions[0]["drives_execution"])
+        self.assertEqual(decisions[0]["authorization_status"], "context_only")
+        self.assertFalse(decisions[0]["drives_execution"])
 
     def test_notification_for_known_pr_workstream_uses_latest_non_bot_comment(self):
         from robert_agent import discover
@@ -1323,8 +1353,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
             existing_workstreams={"github:example/backend!456"},
         )
 
-        self.assertEqual(decisions[0]["authorization_status"], "accepted_context")
-        self.assertTrue(decisions[0]["drives_execution"])
+        self.assertEqual(decisions[0]["authorization_status"], "context_only")
+        self.assertFalse(decisions[0]["drives_execution"])
 
     def test_discover_cli_config_accepts_trusted_actors(self):
         from robert_agent import discover

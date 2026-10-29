@@ -85,11 +85,9 @@ def render_supervisord_config(
             "--config",
             config_path,
             "--host",
-            "0.0.0.0",
+            "127.0.0.1",
             "--port",
             "8765",
-            "--writable",
-            "--allow-remote",
         ]
     )
     return (

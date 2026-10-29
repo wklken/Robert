@@ -865,27 +865,23 @@ def _acquire_agent_lease(conn, repo_id, run_id, run_now, ttl_minutes):
     resource_key = repo_id
     now_dt = _parse_time(run_now)
     expires_at = (now_dt + timedelta(minutes=ttl_minutes)).isoformat()
+    # Acquire SQLite's writer lock before inspecting/inserting the unique lease.
+    # Expiry is a scheduling hint, not proof that its process has stopped.
     conn.execute(
-        """
-        UPDATE leases
-        SET status = 'expired'
-        WHERE resource_type = 'agent_run'
-          AND resource_key = ?
-          AND status = 'active'
-          AND expires_at <= ?
-        """,
-        (resource_key, run_now),
+        "UPDATE leases SET heartbeat_at=heartbeat_at WHERE resource_type='agent_run' AND resource_key=?",
+        (resource_key,),
     )
     active = conn.execute(
-        """
-        SELECT lease_id, owner_id, expires_at
-        FROM leases
-        WHERE resource_type = 'agent_run'
-          AND resource_key = ?
-          AND status = 'active'
-        """,
+        """SELECT lease_id, owner_id, expires_at FROM leases
+        WHERE resource_type='agent_run' AND resource_key=? AND status='active'""",
         (resource_key,),
     ).fetchone()
+    if active and _parse_time(active[2]) <= now_dt:
+        owner = conn.execute("SELECT summary_json FROM agent_runs WHERE run_id=?", (active[1],)).fetchone()
+        identity = _json_object(owner[0]).get("executor_identity") if owner else None
+        if identity and worker_identity.inspect_recorded_identity(identity) == "dead":
+            conn.execute("UPDATE leases SET status='expired' WHERE lease_id=?", (active[0],))
+            active = None
     if active:
         return {
             "ok": False,
@@ -5651,14 +5647,22 @@ def _create_child_task_for_pending_events(
         )
         return None
 
-    child_event = next(
-        (
-            pending_event
-            for pending_event in pending_events
-            if pending_event.get("actor_kind") != "github_system"
-        ),
-        None,
-    )
+    # Recheck saved context under today's policy, including the distinct
+    # requester checks for assignment and explicit review requests.
+    child_event = None
+    for pending_event in pending_events:
+        candidate = {
+            **pending_event,
+            "mentions_dd": bool(discover.bot_requests(pending_event.get("body"), repo["github_account"])),
+        }
+        explicit_request = candidate.get("event_type") in {"assigned", "review_request"}
+        decision = authorize.authorize_event(
+            candidate, repo,
+            known_workstreams=set() if explicit_request else {workstream_id},
+        )
+        if decision.get("drives_execution"):
+            child_event = decision
+            break
     if child_event is None:
         conn.execute(
             """
@@ -5692,7 +5696,7 @@ def _create_child_task_for_pending_events(
         + [
             pending_event
             for pending_event in pending_events
-            if pending_event is not child_event
+            if pending_event.get("event_fingerprint") != child_event.get("event_fingerprint")
         ],
     )
     if task_info is None:
@@ -7129,6 +7133,13 @@ def _run_repo_pipeline(
 
         for event in decisions:
             source_id, event_id = _insert_source_and_event(conn, repo_id, event, run_now)
+            if (event.get("authorization_status") == "context_only"
+                    and event.get("actor_login") != repo["github_account"]
+                    and event.get("mentions_dd")):
+                # Retain discussion as data without routing, resuming, or
+                # refreshing the active worker's instructions.
+                _append_event_to_active_task(conn, event, "context", run_now)
+                continue
             if (event.get('authorization_status') in {'authorized_trigger', 'accepted_context'}
                     and event.get('actor_login') in repo.get('trusted_actors', [])
                     and event.get('intent') == 'vote'):

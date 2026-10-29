@@ -538,6 +538,10 @@ def validate_config(config_path, skip_external=False):
             else str(python_bin_value).strip()
         )
         workers = _normalize_workers(config)
+        github_credentials = {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+        for worker in workers:
+            if github_credentials.intersection(worker["environment_allowlist"]):
+                raise ValueError("worker environment_allowlist must not include GitHub credentials")
         default_worker = workers[0]
         route_worker_models = _normalize_route_worker_models(config, workers)
         daemon_config = _normalize_daemon_config(config)
@@ -666,10 +670,14 @@ def validate_config(config_path, skip_external=False):
                 }
             )
             if unsupported_repo_fields:
-                raise ValueError(
-                    f"repos[{index}] contains unsupported public fields: "
-                    f"{', '.join(unsupported_repo_fields)}"
-                )
+                return {
+                    "ok": False,
+                    "status": "failed_config",
+                    "safe_error": (
+                        f"repos[{index}] contains unsupported public fields: "
+                        f"{', '.join(unsupported_repo_fields)}"
+                    ),
+                }
             repo = {
                 **repo,
                 "full_name": repo_full_name,
@@ -694,6 +702,15 @@ def validate_config(config_path, skip_external=False):
                 ),
             }
         trusted_actors = repo.get("trusted_actors")
+        if not isinstance(trusted_actors, list) or any(
+            not isinstance(actor, str) or not actor.strip()
+            for actor in trusted_actors
+        ):
+            return {
+                "ok": False,
+                "status": "failed_config",
+                "safe_error": f"repos[{index}].trusted_actors must be a list of nonempty strings",
+            }
         if not trusted_actors:
             return {
                 "ok": False,

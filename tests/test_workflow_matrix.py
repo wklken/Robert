@@ -387,7 +387,7 @@ repos:
                     "number": 909,
                     "source_type": "pull_request",
                     "event_type": "review",
-                    "actor_login": "reviewer",
+                    "actor_login": "wklken",
                     "author_association": "MEMBER",
                     "body": "@robert-bot please address this review",
                     "intent": "bug_fix",
@@ -505,7 +505,7 @@ repos:
         self.assertEqual(metadata["review_authorized_by"], "wklken")
         self.assertEqual(metadata["review_authorized_event"], "review_request:review-request-707")
 
-    def test_pr_author_contributor_followup_creates_comment_only_review_discussion(self):
+    def test_pr_author_contributor_followup_is_context_without_worker(self):
         self.create_review_pr_workstream()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
@@ -550,9 +550,8 @@ repos:
             ORDER BY created_at, task_id
             """
         )
-        self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[1][1], rows[0][0])
-        self.assertEqual(rows[1][2:], ("review-comment", "review_comment"))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(followup["prompt_paths"], [])
         event_row = self.fetchone(
             """
             SELECT authorization_status, actor_login
@@ -560,13 +559,9 @@ repos:
             WHERE event_fingerprint = 'comment:pr-author-followup-707'
             """
         )
-        self.assertEqual(event_row, ("accepted_review_participant", "feature-author"))
-        prompt = Path(followup["prompt_paths"][0]).read_text(encoding="utf-8")
-        self.assertIn('allowed_github_actions: ["comment"]', prompt)
-        self.assertNotIn("push_existing_pr", prompt)
-        self.assertNotIn("open_pr", prompt)
+        self.assertEqual(event_row, ("context_only", "feature-author"))
 
-    def test_pr_author_fix_request_stays_comment_only(self):
+    def test_pr_author_fix_request_does_not_start_worker(self):
         self.create_review_pr_workstream()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
@@ -615,11 +610,8 @@ repos:
             )
             """
         )
-        self.assertEqual(row, ("review-comment", "review_comment"))
-        prompt = Path(followup["prompt_paths"][0]).read_text(encoding="utf-8")
-        self.assertIn('allowed_github_actions: ["comment"]', prompt)
-        self.assertNotIn("push_existing_pr", prompt)
-        self.assertNotIn("open_pr", prompt)
+        self.assertIsNone(row)
+        self.assertEqual(followup["prompt_paths"], [])
 
     def test_pr_author_followup_does_not_resume_waiting_review_task(self):
         self.create_review_pr_workstream()

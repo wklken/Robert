@@ -1409,6 +1409,9 @@ repos:
             }
         self.assertEqual(task_count, 1)
         self.assertEqual(relationships, {"context", "trigger"})
+        with closing(sqlite3.connect(db_path)) as conn:
+            event = conn.execute("SELECT authorization_status FROM github_events WHERE event_fingerprint='comment:comment-2'").fetchone()
+        self.assertEqual(event, ("context_only",))
 
     def test_existing_workstream_followup_without_mention_is_ignored(self):
         from robert_agent import run_once
@@ -1638,7 +1641,7 @@ repos:
                 """
             ).fetchone()
         self.assertEqual(pr_task_count, 0)
-        self.assertEqual(event_row, ("accepted_context", "reviewer", "comment:pr-member-followup"))
+        self.assertEqual(event_row, ("context_only", "reviewer", "comment:pr-member-followup"))
 
     def test_trusted_context_on_known_inactive_pr_workstream_creates_new_task(self):
         from robert_agent import run_once
@@ -3964,7 +3967,7 @@ repos:
                         "body": "@robert-bot The compatibility path is still wrong; please update this branch.",
                         "created_at": "2026-06-22T13:00:01Z",
                         "author_association": "MEMBER",
-                        "user": {"login": "reviewer"}
+                        "user": {"login": "wklken"}
                       }
                     ]""",
                 )
@@ -4835,7 +4838,7 @@ repos:
             ).fetchone()
         self.assertEqual(row, ("github:example/backend!456",))
 
-    def test_unconsumed_pending_event_creates_child_task_after_parent_result(self):
+    def test_unconsumed_pending_event_creates_child_task_after_parent_result(self, legacy_untrusted=False, pending_assignment=False):
         from robert_agent.worker import result
         from robert_agent import run_once
         first = run_once.run_once(
@@ -4860,7 +4863,7 @@ repos:
                             "number": 123,
                             "source_type": "issue",
                             "event_type": "comment",
-                            "actor_login": "reviewer",
+                            "actor_login": "wklken",
                             "author_association": "MEMBER",
                             "body": "@robert-bot another point",
                         },
@@ -4869,7 +4872,7 @@ repos:
                             "number": 123,
                             "source_type": "issue",
                             "event_type": "comment",
-                            "actor_login": "reviewer",
+                            "actor_login": "wklken",
                             "author_association": "COLLABORATOR",
                             "body": "@robert-bot one more point",
                         }
@@ -4886,6 +4889,20 @@ repos:
             skip_external=True,
         )
         self.assertTrue(followup["ok"], followup)
+        if pending_assignment:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute("""UPDATE github_events SET payload_json=json_set(payload_json,
+                    '$.actor_login','robert-bot','$.event_type','assigned',
+                    '$.assigned_to','robert-bot','$.assignment_actor_login','wklken',
+                    '$.body','issue body','$.mentions_dd',json('false'))
+                    WHERE event_fingerprint IN ('comment:comment-2','comment:comment-3')""")
+        if legacy_untrusted:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute("""UPDATE github_events SET actor_login='external-author',
+                    authorization_status='accepted_review_participant',
+                    payload_json=json_set(payload_json,'$.actor_login','external-author',
+                        '$.authorization_status','accepted_review_participant')
+                    WHERE event_fingerprint IN ('comment:comment-2','comment:comment-3')""")
         record = result.record_result(
             db_path,
             {
@@ -4924,6 +4941,12 @@ repos:
             active_task_id = conn.execute(
                 "SELECT active_task_id FROM workstreams"
             ).fetchone()[0]
+            if legacy_untrusted:
+                self.assertEqual(len(tasks), 1)
+                self.assertEqual(tasks[0][2], "completed")
+                self.assertIsNone(active_task_id)
+                self.assertEqual(conn.execute("SELECT count(*) FROM github_events WHERE actor_login='external-author'").fetchone()[0], 2)
+                return
             child_events = conn.execute(
                 """
                 SELECT te.relationship, ge.event_fingerprint
@@ -4952,6 +4975,12 @@ repos:
         child_prompt = prompt_path.read_text(encoding="utf-8")
         self.assertIn("comment:comment-2", child_prompt)
         self.assertIn("comment:comment-3", child_prompt)
+
+    def test_saved_trusted_assignment_can_spawn_child_without_mention(self):
+        self.test_unconsumed_pending_event_creates_child_task_after_parent_result(pending_assignment=True)
+
+    def test_legacy_participant_pending_events_cannot_spawn_child(self):
+        self.test_unconsumed_pending_event_creates_child_task_after_parent_result(legacy_untrusted=True)
 
     def test_project_memory_is_recorded_and_recalled_in_followup_prompt(self):
         from robert_agent.worker import result
@@ -8692,7 +8721,7 @@ raise SystemExit(0 if record["ok"] else 1)
                             "number": 123,
                             "source_type": "issue",
                             "event_type": "comment",
-                            "actor_login": "reviewer",
+                            "actor_login": "wklken",
                             "author_association": "MEMBER",
                             "body": "@robert-bot another point",
                         }

@@ -14,7 +14,7 @@ from robert_agent.common import emit
 from robert_agent import web, execution_metrics
 
 
-DEFAULT_DB = "~/.local/share/robert/dd.sqlite3"
+DEFAULT_DB = "~/.local/share/robert/robert.sqlite3"
 
 REPO_STEP_ORDER = [
     "acquire_lease",

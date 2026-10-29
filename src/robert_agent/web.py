@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from importlib.resources import files
 import ipaddress
 import json
+import os
+import stat
 import secrets
 import sqlite3
 from pathlib import Path
@@ -1326,8 +1328,32 @@ def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, a
     if not row:
         return None
     registered_path = str(row["path"])
-    path = Path(registered_path).expanduser().resolve()
-    if not path.is_file():
+    try:
+        root = Path(db_path).expanduser().resolve().parent
+        path = Path(registered_path).expanduser().resolve(strict=True)
+        relative = path.relative_to(root)
+        # Open every component relative to an already-open directory. A worker
+        # replacing a checked directory or file with a symlink cannot redirect I/O.
+        directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for component in relative.parts[:-1]:
+                child_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                   dir_fd=directory_fd)
+                os.close(directory_fd)
+                directory_fd = child_fd
+            file_fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                              dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+        with os.fdopen(file_fd, "rb") as fh:
+            info = os.fstat(fh.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            truncated = info.st_size > max_bytes
+            if truncated:
+                fh.seek(-max_bytes, 2)
+            content = fh.read(max_bytes).decode("utf-8", errors="replace")
+    except (OSError, ValueError, RuntimeError):
         return {
             "task_id": task_id,
             "artifact_type": artifact_type,
@@ -1336,12 +1362,6 @@ def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, a
             "truncated": False,
             "missing": True,
         }
-    size = path.stat().st_size
-    truncated = size > max_bytes
-    with path.open("rb") as fh:
-        if truncated:
-            fh.seek(-max_bytes, 2)
-        content = fh.read(max_bytes).decode("utf-8", errors="replace")
     return {
         "task_id": task_id,
         "artifact_type": artifact_type,

@@ -6,10 +6,6 @@ from pathlib import Path
 from robert_agent.common import emit
 
 
-ACCEPTED_CONTEXT_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
-ACCEPTED_CONTEXT_PERMISSIONS = {"admin", "maintain", "write", "triage"}
-
-
 def _decision(event, status, creates_task=False, drives_execution=False):
     return {
         **event,
@@ -53,17 +49,9 @@ def authorize_event(event, repo_config, existing_workstreams=None, known_workstr
             return _decision(event, "ignored_context")
         if actor in trusted_actors:
             return _decision(event, "accepted_context", drives_execution=True)
-        if event.get("source_type") == "pull_request" and actor in set(event.get("review_participants") or []):
-            return _decision(event, "accepted_review_participant", drives_execution=True)
-        association = event.get("author_association")
-        if association in ACCEPTED_CONTEXT_ASSOCIATIONS:
-            return _decision(event, "accepted_context", drives_execution=True)
-        permission = (event.get("actor_permission") or "").lower()
-        if permission in ACCEPTED_CONTEXT_PERMISSIONS:
-            return _decision(event, "accepted_context", drives_execution=True)
-        if association in {None, "", "UNKNOWN"}:
-            return _decision(event, "pending_actor_permission")
-        return _decision(event, "ignored_context")
+        # Repository roles and prior participation are context, never authority
+        # to launch, resume, or redirect an unsandboxed worker.
+        return _decision(event, "context_only")
 
     if event_type == "notification":
         if event.get("trusted_trigger_found"):

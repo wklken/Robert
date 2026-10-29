@@ -334,8 +334,8 @@ class GitHubEventMatrixTests(unittest.TestCase):
         self.assertEqual(decisions[0]["event_type"], "review_comment")
         self.assertEqual(decisions[0]["event_fingerprint"], "review_comment:review-comment-latest")
         self.assertEqual(decisions[0]["body"], "@robert-bot latest diff feedback")
-        self.assertEqual(decisions[0]["authorization_status"], "accepted_context")
-        self.assertTrue(decisions[0]["drives_execution"])
+        self.assertEqual(decisions[0]["authorization_status"], "context_only")
+        self.assertFalse(decisions[0]["drives_execution"])
 
     def test_closed_notification_source_is_ignored_before_discussion_lookup(self):
         calls = []

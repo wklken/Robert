@@ -56,6 +56,69 @@ class PublicationReconcileTests(unittest.TestCase):
             )
         self.body = body
 
+    def test_last_ambiguous_write_reconciles_before_terminal_attention(self):
+        from robert_agent import retry_policy
+
+        now = "2026-10-29T00:00:00+00:00"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            metadata = json.loads(conn.execute(
+                "SELECT metadata_json FROM github_actions WHERE action_id='action-1'"
+            ).fetchone()[0])
+            metadata["publish"] = {"attempt_count": retry_policy.MAX_ATTEMPTS - 1,
+                                   "first_failed_at": now}
+            conn.execute("UPDATE github_actions SET metadata_json=? WHERE action_id='action-1'",
+                         (json.dumps(metadata),))
+        writes = []
+
+        def ambiguous(command, **kwargs):
+            if command[2].endswith("comments?per_page=100"):
+                return Completed("[]")
+            writes.append(command)
+            return Completed("", 1, "connection reset after response")
+
+        with mock.patch.object(publish, "_now", return_value=now):
+            first = publish.publish_ready_actions(self.db_path, run_command=ambiguous)
+            self.assertFalse(first["ok"])
+            with closing(sqlite3.connect(self.db_path)) as conn:
+                self.assertEqual(conn.execute("SELECT status FROM publication_intents").fetchone()[0],
+                                 "executing")
+            def reconcile(command, **kwargs):
+                self.assertNotIn("-f", command)
+                return Completed(json.dumps([{"id": 7, "body": self.body,
+                    "html_url": "https://github.com/x/y/issues/1#issuecomment-7"}]))
+            second = publish.publish_ready_actions(self.db_path, run_command=reconcile)
+        self.assertEqual(second["published_count"], 1, second)
+        self.assertEqual(second["deduplicated_count"], 1)
+        self.assertEqual(len(writes), 1)
+
+    def test_exhausted_crashed_write_checks_absence_without_another_write(self):
+        from robert_agent import retry_policy
+
+        def crash(command, **kwargs):
+            if command[2].endswith("comments?per_page=100"):
+                return Completed("[]")
+            raise RuntimeError("crash during remote write")
+
+        with self.assertRaises(RuntimeError):
+            publish.publish_ready_actions(self.db_path, run_command=crash)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM github_actions").fetchone()[0])
+            metadata["publish"]["attempt_count"] = retry_policy.MAX_ATTEMPTS
+            conn.execute("UPDATE github_actions SET metadata_json=?", (json.dumps(metadata),))
+        reads = []
+
+        def absent(command, **kwargs):
+            self.assertNotIn("-f", command)
+            reads.append(command)
+            return Completed("[]")
+
+        result = publish.publish_ready_actions(self.db_path, run_command=absent)
+        self.assertFalse(result["ok"])
+        self.assertTrue(reads)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT status FROM publication_intents").fetchone()[0], "attention")
+        self.assertEqual(publish.publish_ready_actions(self.db_path, run_command=absent)["pending_count"], 0)
+
     def test_comment_crash_backfills_without_duplicate_write(self):
         calls = []
         crashed = {"value": False}
