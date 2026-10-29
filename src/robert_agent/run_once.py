@@ -35,6 +35,7 @@ from robert_agent import work_item_control
 from robert_agent import retry_policy, execution_operations
 from robert_agent import execution_store
 from robert_agent import worker_identity
+from robert_agent.worker_identity import live_process_group as _live_process_group
 from robert_agent import workflow_events
 from robert_agent.publication_lock import task_publication_lock
 from robert_agent.common import ControlDeadlineExceeded, emit, run_command
@@ -1591,21 +1592,18 @@ def _supervision_failure_notification_type(status):
     return "worker_timeout"
 
 
-def _live_process_group(pgid):
-    completed = subprocess.run(
-        ["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, timeout=5,
-    )
-    if completed.returncode != 0:
-        raise OSError("cannot inspect worker process group")
-    return any(
-        fields[1] == str(pgid) and fields[2][0] not in {"Z", "X", "x"}
-        for line in completed.stdout.splitlines()
-        if len(fields := line.split()) >= 3
-    )
-
-
 def _terminate_attempt_process(metadata):
     dispatch_metadata = (metadata or {}).get("dispatch") or {}
+    if dispatch_metadata.get('cleanup_pending'):
+        pid = dispatch_metadata.get('pid')
+        if type(pid) is int and pid > 1:
+            try:
+                if not _live_process_group(pid):
+                    return {'status': 'already_dead', 'pid': pid}
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        # Without a captured identity, later recovery must never signal this PID.
+        return {'status': 'attention', 'reason': 'startup_cleanup_unconfirmed'}
     outcome = worker_identity.terminate_recorded_identity(dispatch_metadata)
     if outcome.get("status") in {"terminated", "already_dead"}:
         try:
@@ -4411,6 +4409,18 @@ def _create_resume_attempt_and_prompt(
 
 
 def _record_dispatch_result(conn, attempt_id, dispatch_result):
+    if dispatch_result.get('cleanup_pending'):
+        row = conn.execute('SELECT task_id,metadata_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
+        if row:
+            metadata = _json_object(row[1])
+            metadata['dispatch'] = dispatch_result
+            metadata['supervise'] = {'status': 'worker_identity_attention', 'reason': 'startup_cleanup_unconfirmed'}
+            now = _now()
+            conn.execute("""UPDATE attempts SET status='stale',finished_at=NULL,
+                started_at=COALESCE(started_at,?),heartbeat_at=?,metadata_json=?,failure_json=?
+                WHERE attempt_id=?""", (now, now, json.dumps(metadata), json.dumps(dispatch_result), attempt_id))
+            _mark_task_binding_attention(conn, row[0], now)
+        return
     status = dispatch_result.get("status", "prepared")
     if status not in {"prepared", "running", "completed", "failed", "stale", "canceled"}:
         status = "failed" if not dispatch_result.get("ok", True) else "prepared"
@@ -5152,6 +5162,15 @@ def _dispatch_queued_locked(
                 metadata.pop('dispatch_inflight',None)
                 conn.execute('UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?',(json.dumps(metadata),subject_type,subject_id))
             _record_dispatch_artifacts(conn, task_info, dispatch_result, _now())
+            if dispatch_result.get('cleanup_pending'):
+                _insert_notification(conn, 'worker_identity_attention', 'recorded', _now(), {
+                    'task_id': task_info['task_id'], 'attempt_id': task_info['attempt_id'],
+                    'workstream_id': task_info['workstream_id'],
+                    'reason_code': 'startup_cleanup_unconfirmed',
+                    'required_action': 'Verify the launch process group has stopped, then cancel this execution.',
+                })
+                results.append(dispatch_result)
+                continue
             if (
                 (not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed")
                 and _completed_by_worker_result(conn, task_info["attempt_id"])

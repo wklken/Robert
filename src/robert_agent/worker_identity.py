@@ -423,39 +423,49 @@ def terminate_recorded_identity(
         sleep(max(0.0, min(float(poll_interval), kill_deadline - current)))
 
 
-def cleanup_new_process(proc, *, signal_group=None, wait_timeout=2.0):
-    """Best-effort cleanup for a newly-created child whose identity was unreadable."""
+def live_process_group(pgid):
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, timeout=5,
+    )
+    if completed.returncode != 0:
+        raise OSError("cannot inspect worker process group")
+    return any(
+        fields[1] == str(pgid) and fields[2][0] not in {"Z", "X", "x"}
+        for line in completed.stdout.splitlines()
+        if len(fields := line.split()) >= 3
+    )
 
+
+def cleanup_new_process(proc, *, signal_group=None, wait_timeout=2.0):
+    """Stop a just-created isolated group; report whether cleanup was proven.
+
+    This authority comes from the in-hand launch, not a persisted PID. Waiting
+    for the leader alone is insufficient: a child can outlive it and ignore TERM.
+    """
     if proc is None:
-        return
+        return True
     signal_group = signal_group or os.killpg
     pid = getattr(proc, "pid", None)
-    if pid:
+    if type(pid) is not int or pid <= 1 or pid == os.getpgrp():
+        return False
+    for sent_signal in (signal.SIGTERM, signal.SIGKILL):
         try:
-            signal_group(int(pid), signal.SIGTERM)
-        except (OSError, ValueError):
+            signal_group(pid, sent_signal)
+        except ProcessLookupError:
             pass
-    try:
-        proc.wait(timeout=wait_timeout)
-        return
-    except (AttributeError, subprocess.TimeoutExpired, OSError):
-        pass
-    if pid:
-        try:
-            signal_group(int(pid), signal.SIGKILL)
-        except (OSError, ValueError):
-            pass
-    try:
-        proc.wait(timeout=wait_timeout)
-    except (AttributeError, subprocess.TimeoutExpired, OSError):
-        # The in-hand Popen is still given a final direct kill/reap attempt; it
-        # cannot be confused with a reused PID because it is the just-created
-        # child object.
-        try:
-            proc.kill()
-        except (AttributeError, OSError):
-            pass
-        try:
-            proc.wait(timeout=wait_timeout)
-        except (AttributeError, subprocess.TimeoutExpired, OSError):
-            pass
+        except OSError:
+            return False
+        deadline = time.monotonic() + wait_timeout
+        while True:
+            # poll also reaps our leader; zombies cannot continue changing files.
+            exited = proc.poll() is not None
+            try:
+                if exited and not live_process_group(pid):
+                    return True
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(.05, remaining))
+    return False

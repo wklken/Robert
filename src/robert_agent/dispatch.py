@@ -174,6 +174,7 @@ def dispatch_worker(
                 "worker_agent": launch.agent,
                 "worker_launch": launch.metadata(),
             }
+        cleaned_up = worker_identity.cleanup_new_process(proc)
         return {
             "ok": False,
             "status": "failed_dispatch",
@@ -181,6 +182,8 @@ def dispatch_worker(
             "attempt_id": attempt_id,
             "pid": proc.pid,
             "returncode": returncode,
+            "process_exited": True,
+            "cleanup_pending": not cleaned_up,
             "safe_error": f"worker exited immediately with code {returncode}",
             "command": command,
             "prompt_path": str(prompt_path),
@@ -194,7 +197,7 @@ def dispatch_worker(
     except Exception as exc:
         # The child is in hand, so it can be cleaned up without trusting a
         # possibly reused PID.  Never record an untracked running Worker.
-        worker_identity.cleanup_new_process(proc)
+        cleaned_up = worker_identity.cleanup_new_process(proc)
         return {
             "ok": False,
             "status": "failed_dispatch",
@@ -204,6 +207,7 @@ def dispatch_worker(
             "safe_error": "worker process identity could not be captured",
             "error_type": type(exc).__name__,
             "identity_capture_failed": True,
+            "cleanup_pending": not cleaned_up,
             "command": command,
             "prompt_path": str(prompt_path),
             "stdout_path": str(stdout_path),
@@ -224,7 +228,7 @@ def dispatch_worker(
         or identity.get("process_state") in {"Z", "X", "x"}
         or not worker_identity.validate_identity(identity)
     ):
-        worker_identity.cleanup_new_process(proc)
+        cleaned_up = worker_identity.cleanup_new_process(proc)
         return {
             "ok": False,
             "status": "failed_dispatch",
@@ -234,6 +238,7 @@ def dispatch_worker(
             "safe_error": "worker process identity was incomplete",
             "error_type": "IdentityReadError",
             "identity_capture_failed": True,
+            "cleanup_pending": not cleaned_up,
             "command": command,
             "prompt_path": str(prompt_path),
             "stdout_path": str(stdout_path),

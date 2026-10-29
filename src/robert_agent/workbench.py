@@ -9,7 +9,7 @@ from pathlib import Path
 import shlex
 import sqlite3
 
-from robert_agent import board, execution_metrics
+from robert_agent import board, execution_metrics, supervise
 from robert_agent.board_execution import safe_text
 
 
@@ -85,19 +85,36 @@ def _decode_cursor(value):
     return updated_at, workstream_id
 
 
-def _group_rows(conn, sql, key):
+def _group_rows(conn, sql, key, ids=None):
     grouped = defaultdict(list)
-    for row in conn.execute(sql):
-        item = dict(row)
-        grouped[item[key]].append(item)
+    if ids is not None and not ids:
+        return grouped
+    ids = None if ids is None else list(dict.fromkeys(ids))
+    batches = [None] if ids is None else [ids[i:i + 200] for i in range(0, len(ids), 200)]
+    for batch in batches:
+        query = sql if batch is None else f"SELECT * FROM ({sql}) WHERE {key} IN (" + ','.join('?' for _ in batch) + ')'
+        for row in conn.execute(query, batch or []):
+            item = dict(row)
+            grouped[item[key]].append(item)
     return grouped
 
 
-def _load_state(conn):
+def _load_state(conn, workstream_id=None):
+    workstream_ids = None
+    if workstream_id is not None:
+        # Ancestors provide the owning board item for a derived PR workstream.
+        workstream_ids = [row[0] for row in conn.execute(
+            """WITH RECURSIVE ancestors(workstream_id,origin_workstream_id) AS (
+                SELECT workstream_id,origin_workstream_id FROM workstreams WHERE workstream_id=?
+                UNION
+                SELECT w.workstream_id,w.origin_workstream_id FROM workstreams w
+                JOIN ancestors a ON w.workstream_id=a.origin_workstream_id
+            ) SELECT workstream_id FROM ancestors""", (workstream_id,))]
+    clause = '' if workstream_ids is None else ' WHERE w.workstream_id IN (' + ','.join('?' for _ in workstream_ids) + ')'
     workstreams = [
         dict(row)
         for row in conn.execute(
-            """
+            f"""
             SELECT
               w.workstream_id,
               w.repo_id,
@@ -119,7 +136,8 @@ def _load_state(conn):
             FROM workstreams w
             JOIN repos r ON r.repo_id = w.repo_id
             LEFT JOIN github_sources gs ON gs.source_id = w.primary_source_id
-            """
+            {clause}
+            """, workstream_ids or [],
         )
     ]
     tasks = _group_rows(
@@ -127,12 +145,13 @@ def _load_state(conn):
         """
         SELECT
           task_id, workstream_id, lifecycle, parent_task_id, priority,
-          route_id, expected_output, created_at, updated_at
+          route_id, expected_output, created_at, updated_at, metadata_json
         FROM tasks
         ORDER BY updated_at DESC, task_id DESC
         """,
-        "workstream_id",
+        "workstream_id", workstream_ids,
     )
+    task_ids = None if workstream_ids is None else [task["task_id"] for rows in tasks.values() for task in rows]
     attempts = _group_rows(
         conn,
         """
@@ -142,8 +161,9 @@ def _load_state(conn):
         FROM attempts
         ORDER BY attempt_no DESC, started_at DESC, attempt_id DESC
         """,
-        "task_id",
+        "task_id", task_ids,
     )
+    attempt_ids = None if task_ids is None else [attempt["attempt_id"] for rows in attempts.values() for attempt in rows]
     phases = _group_rows(
         conn,
         """
@@ -151,7 +171,7 @@ def _load_state(conn):
         FROM worker_phases
         ORDER BY created_at, phase_id
         """,
-        "attempt_id",
+        "attempt_id", attempt_ids,
     )
     results = _group_rows(
         conn,
@@ -162,7 +182,7 @@ def _load_state(conn):
         FROM worker_results
         ORDER BY created_at DESC, result_id DESC
         """,
-        "task_id",
+        "task_id", task_ids,
     )
     actions = _group_rows(
         conn,
@@ -173,7 +193,7 @@ def _load_state(conn):
         FROM github_actions
         ORDER BY created_at DESC, action_id DESC
         """,
-        "task_id",
+        "task_id", task_ids,
     )
     artifacts = _group_rows(
         conn,
@@ -182,7 +202,7 @@ def _load_state(conn):
         FROM artifacts
         ORDER BY created_at DESC, artifact_id DESC
         """,
-        "task_id",
+        "task_id", task_ids,
     )
     notifications = _group_rows(
         conn,
@@ -191,7 +211,7 @@ def _load_state(conn):
         FROM notifications
         ORDER BY created_at DESC, notification_id DESC
         """,
-        "task_id",
+        "task_id", task_ids,
     )
     remediation_episodes = _group_rows(
         conn,
@@ -203,24 +223,35 @@ def _load_state(conn):
         FROM pr_remediation_episodes
         ORDER BY updated_at DESC, episode_id DESC
         """,
-        "workstream_id",
+        "workstream_id", workstream_ids,
     )
     attention = {}
     from robert_agent import execution_store
-    controls=execution_store.read_controls(conn)
-    episode_by_task=dict(conn.execute("SELECT task_id,json_extract(metadata_json,'$.remediation_episode_id') FROM tasks"))
+    subjects = set()
     for stream_tasks in tasks.values():
         for task in stream_tasks:
-            metadata=_decode_json(task.get('metadata_json'),{}) or {}
-            binding=controls.get(('task',task['task_id'])) or controls.get(('remediation_episode',episode_by_task.get(task['task_id'])))
-            if binding and binding['binding_status']=='attention':
-                metadata=_decode_json(binding['metadata_json'],{}) or {}
-                attention[task['workstream_id']]=safe_text(metadata.get('reason_code') or 'execution_attention_required')
+            subjects.add(('task', task['task_id']))
+            metadata = _decode_json(task.get('metadata_json'), {}) or {}
+            if metadata.get('remediation_episode_id'):
+                subjects.add(('remediation_episode', metadata['remediation_episode_id']))
+    controls = execution_store.read_controls(conn, subjects if workstream_ids is not None else None)
+    for stream_tasks in tasks.values():
+        for task in stream_tasks:
+            metadata = _decode_json(task.get('metadata_json'), {}) or {}
+            binding = controls.get(('task', task['task_id'])) or controls.get(('remediation_episode', metadata.get('remediation_episode_id')))
+            if binding and binding['binding_status'] == 'attention':
+                metadata = _decode_json(binding['metadata_json'], {}) or {}
+                attention[task['workstream_id']] = safe_text(metadata.get('reason_code') or 'execution_attention_required')
+    occupied_clause = '' if workstream_ids is None else ' AND t.workstream_id IN (' + ','.join('?' for _ in workstream_ids) + ')'
+    occupied_tasks = {row[0] for row in conn.execute(
+        f"SELECT a.task_id FROM attempts a JOIN tasks t ON t.task_id=a.task_id WHERE {supervise.occupied_attempt_sql()} {occupied_clause}", workstream_ids or [])}
     return {
         "workflow_attention": attention,
+        "occupied_tasks": occupied_tasks,
         "workstreams": workstreams,
         "workstreams_by_id": {row["workstream_id"]: row for row in workstreams},
-        "board_items": board.workstream_projections(conn) if conn.execute(
+        "board_items": board.workstream_projections(conn, workstream_ids=workstream_ids,
+            controls=controls if workstream_ids is None else None) if conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'"
         ).fetchone() else {},
         "tasks": tasks,
@@ -441,28 +472,6 @@ def _item_from_workstream(state, workstream):
     )
     if workstream['workstream_id'] in state.get('workflow_attention', {}):
         bucket, reason_code, reason_summary = ('needs_attention', state['workflow_attention'][workstream['workstream_id']], 'Automatic execution stopped. Inspect the failure, resolve its cause, then explicitly retry or cancel.')
-    if (
-        workstream["workstream_lifecycle"] in {"completed", "canceled"}
-        and str(workstream.get("source_state") or "").lower() in {"closed", "merged"}
-        and not any(t["lifecycle"] in ACTIVE_TASK_LIFECYCLES | {"waiting_for_user"} for t in tasks)
-        and not any(
-            a["status"] in {"running", "stale"}
-            for t in tasks for a in state["attempts"].get(t["task_id"], [])
-        )
-        and not any(
-            a["audit_status"] == "accepted" and a["publish_status"] == "not_published"
-            for t in tasks for a in state["actions"].get(t["task_id"], [])
-        )
-        and not any(e["status"] in {"open", "queued", "remediating", "waiting_for_signal"} for e in remediation_episodes)
-    ):
-        bucket, reason_code, reason_summary = (
-            "history", "inactive", "The source is closed and its workstream has ended; previous failures remain in execution history."
-        )
-    failed_publish_actions = sum(
-        1
-        for action in actions
-        if action["publish_status"] != "published" and _publish_error(action)
-    )
     board_item = state["board_items"].get(workstream["workstream_id"])
     ancestor = workstream
     seen = set()
@@ -477,6 +486,32 @@ def _item_from_workstream(state, workstream):
     lifecycle = {key: board_item[key] for key in (
         "work_item_id", "column", "reason_code", "reason_summary", "pr"
     )} if board_item else None
+    if (
+        workstream["workstream_lifecycle"] in {"completed", "canceled"}
+        and (str(workstream.get("source_state") or "").lower() in {"closed", "merged"}
+             or (board_item and board_item['operator_cancellation_settled']))
+        and (not board_item or board_item['reason_code'] != 'canceled'
+             or board_item['operator_cancellation_settled'])
+        and workstream['workstream_id'] not in state.get('workflow_attention', {})
+        and not any(t["lifecycle"] in ACTIVE_TASK_LIFECYCLES | {"waiting_for_user"} for t in tasks)
+        and not any(t['task_id'] in state['occupied_tasks'] for t in tasks)
+        and not any(
+            a["audit_status"] in {"pending", "accepted"} and a["publish_status"] == "not_published"
+            for t in tasks for a in state["actions"].get(t["task_id"], [])
+        )
+        and not any(e["status"] in {"open", "queued", "remediating", "waiting_for_signal"} for e in remediation_episodes)
+    ):
+        if board_item and board_item['reason_code'] == 'canceled':
+            bucket, reason_code, reason_summary = 'history', 'canceled', 'Canceled by the operator'
+        else:
+            bucket, reason_code, reason_summary = (
+                "history", "inactive", "The source is closed and its workstream has ended; previous failures remain in execution history."
+            )
+    failed_publish_actions = sum(
+        1
+        for action in actions
+        if action["publish_status"] != "published" and _publish_error(action)
+    )
     item = {
         "id": workstream["workstream_id"],
         "workstream_lifecycle": workstream["workstream_lifecycle"],
@@ -739,7 +774,7 @@ def get_work_item(db_path, workstream_id):
     """Return the structured detail for one workstream."""
 
     with closing(_connect(db_path)) as conn:
-        state = _load_state(conn)
+        state = _load_state(conn, workstream_id)
         workstream = next(
             (
                 candidate

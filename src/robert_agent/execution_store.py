@@ -95,18 +95,27 @@ def read_binding(conn, subject_type, subject_id):
     return None
 
 
-def read_controls(conn):
+def read_controls(conn, subjects=None):
     controls = {}
+    if subjects is not None:
+        subjects = sorted(set(subjects))
+        if not subjects:
+            return controls
     tables = {
         r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     for table in ("workflow_bindings", "execution_subjects"):
         if table in tables:
-            cursor = conn.execute(f"SELECT * FROM {table}")
-            names = [column[0] for column in cursor.description]
-            for values in cursor.fetchall():
-                row = dict(zip(names, values))
-                controls[(row["subject_type"], row["subject_id"])] = row
+            # Keep bounded parameter counts for older supported SQLite builds.
+            batches = [None] if subjects is None else [subjects[i:i + 200] for i in range(0, len(subjects), 200)]
+            for batch in batches:
+                clause = '' if batch is None else ' WHERE (subject_type,subject_id) IN (' + ','.join('(?,?)' for _ in batch) + ')'
+                params = [] if batch is None else [value for subject in batch for value in subject]
+                cursor = conn.execute(f"SELECT * FROM {table}" + clause, params)
+                names = [column[0] for column in cursor.description]
+                for values in cursor.fetchall():
+                    row = dict(zip(names, values))
+                    controls[(row["subject_type"], row["subject_id"])] = row
     return controls
 
 
