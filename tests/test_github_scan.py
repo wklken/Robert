@@ -277,7 +277,7 @@ class ObservationTests(unittest.TestCase):
         scan.start.assert_not_called()
         publish.start.assert_not_called()
 
-    def test_scanner_interval_ignores_capacity_and_refresh_does_not_bypass_it(self):
+    def test_context_refresh_does_not_advance_the_notification_poll_interval(self):
         from types import SimpleNamespace
         from tests.test_retention import RetentionTests, NOW
         from robert_agent import daemon, wakeup
@@ -297,7 +297,7 @@ class ObservationTests(unittest.TestCase):
              mock.patch.object(daemon.loop_engine, 'has_runnable_local_work', return_value=False):
             daemon.run_once_decision(context, now=NOW)
         self.assertEqual(context.next_live_poll_at, '2026-10-23T00:01:30+00:00')
-        scan.start.assert_not_called()
+        self.assertIn('--refresh-context', scan.start.call_args.args[0])
 
     def test_retention_keeps_lease_until_owned_control_children_stop(self):
         from tests.test_retention import RetentionTests, NOW, OLD
@@ -342,3 +342,110 @@ class ObservationTests(unittest.TestCase):
         import time
         batch = github_scan.next_batch(db, repo_id, now=time.time() + 31)
         self.assertEqual(json.loads(batch['responses'][key])['state'], 'closed')
+
+    def test_context_refresh_uses_cached_hints_without_repolling_notifications(self):
+        from tests import test_run_once as fixtures
+        from robert_agent import github_scan, run_once, validate_config, wakeup
+        fixture = fixtures.RunOnceDryRunTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
+        storage.init_database(config['db_path'])
+        import sqlite3
+        with closing(sqlite3.connect(config['db_path'])) as conn, conn:
+            repo_id = run_once._upsert_repo(conn, config['repos'][0])
+            wakeup.request_wakeup(conn, repo_id=repo_id, reason='manual_operator_request',
+                dedupe_key='refresh', metadata={'kind': 'github_context_refresh'})
+        session = mock.Mock()
+        session.poll_interval_seconds = None
+        session.metrics.return_value = {}
+        session.cached_notifications.return_value = {'example/backend': [{'id': 'hint'}]}
+        with mock.patch.object(github_scan, 'GitHubReadSession', return_value=session), \
+             mock.patch.object(github_scan, '_budget', return_value=True), \
+             mock.patch.object(github_scan, '_scan_repo', return_value='batch') as scan:
+            result = github_scan.scan(fixture.config_path, refresh_context=True)
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['context_refresh'])
+        self.assertEqual(scan.call_args.args[-1], [{'id': 'hint'}])
+        session.collect_notifications.assert_not_called()
+
+    def test_deadlines_escape_budget_notifications_repository_and_publisher(self):
+        from tests import test_run_once as fixtures
+        from robert_agent import github_scan
+        from robert_agent.common import ControlDeadlineExceeded
+        fixture = fixtures.RunOnceDryRunTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        failure = ControlDeadlineExceeded('read', 0)
+        for phase in ('budget', 'notifications', 'repo', 'publish'):
+            with self.subTest(phase=phase):
+                session = mock.Mock()
+                session.metrics.return_value = {}
+                session.collect_notifications.return_value = {}
+                if phase == 'notifications':
+                    session.collect_notifications.side_effect = failure
+                with mock.patch.object(github_scan, 'GitHubReadSession', return_value=session), \
+                     mock.patch.object(github_scan, '_budget', side_effect=failure if phase in ('budget', 'publish') else None, return_value=True), \
+                     mock.patch.object(github_scan, '_scan_repo', side_effect=failure if phase == 'repo' else None), \
+                     self.assertRaises(ControlDeadlineExceeded):
+                    if phase == 'publish':
+                        github_scan.publish(fixture.config_path)
+                    else:
+                        github_scan.scan(fixture.config_path)
+
+    def test_refresh_completion_preserves_poll_schedule_and_applies_its_retry_gate(self):
+        from types import SimpleNamespace
+        from tests import test_retention as fixtures
+        from robert_agent import daemon, wakeup
+        for ok, delay in ((True, 5), (False, 30)):
+            with self.subTest(ok=ok):
+                fixture = fixtures.RetentionTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                context = fixture.context
+                context.startup_live_poll_pending = False
+                context.next_live_poll_at = '2099-01-01T00:00:00+00:00'
+                context.scan_context_refresh = True
+                scan = SimpleNamespace(process=None, start=mock.Mock(), poll=mock.Mock(return_value={
+                    'ok': ok, 'context_refresh': True, 'poll_interval_seconds': 60}))
+                context.background_lanes = {'scan': scan, 'publish': SimpleNamespace(
+                    process=None, start=mock.Mock(), poll=mock.Mock(return_value=None))}
+                with fixture.connect() as conn:
+                    wakeup.request_wakeup(conn, repo_id='repo', reason='manual_operator_request',
+                        dedupe_key='refresh', metadata={'kind': 'github_context_refresh'}, now=fixtures.NOW)
+                with mock.patch.object(daemon, '_maybe_prune'), \
+                     mock.patch.object(daemon.time, 'monotonic', return_value=100), \
+                     mock.patch.object(daemon.loop_engine, 'has_runnable_local_work', return_value=False):
+                    daemon.run_once_decision(context, now=fixtures.NOW)
+                self.assertEqual(context.next_live_poll_at, '2099-01-01T00:00:00+00:00')
+                self.assertFalse(context.scan_context_refresh)
+                self.assertEqual(context.context_refresh_retry_at, 100 + delay)
+                scan.start.assert_not_called()
+
+    def test_refresh_scans_only_repositories_with_due_context_wakeups(self):
+        import sqlite3
+        import yaml
+        from tests import test_run_once as fixtures
+        from robert_agent import github_scan, run_once, validate_config, wakeup
+        fixture = fixtures.RunOnceDryRunTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        raw = yaml.safe_load(fixture.config_path.read_text())
+        raw['repos'].append({**raw['repos'][0], 'full_name': 'example/other'})
+        fixture.config_path.write_text(yaml.safe_dump(raw))
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
+        storage.init_database(config['db_path'])
+        with closing(sqlite3.connect(config['db_path'])) as conn, conn:
+            for repo in config['repos']:
+                run_once._upsert_repo(conn, repo)
+            wakeup.request_wakeup(conn, repo_id='repo:example/backend', reason='manual_operator_request',
+                dedupe_key='refresh', metadata={'kind': 'github_context_refresh'})
+        session = mock.Mock()
+        session.metrics.return_value = {}
+        session.poll_interval_seconds = None
+        session.cached_notifications.return_value = {}
+        with mock.patch.object(github_scan, 'GitHubReadSession', return_value=session), \
+             mock.patch.object(github_scan, '_budget', return_value=True), \
+             mock.patch.object(github_scan, '_scan_repo', return_value='batch') as scan:
+            self.assertTrue(github_scan.scan(fixture.config_path, refresh_context=True)['ok'])
+        self.assertEqual([call.args[1]['full_name'] for call in scan.call_args_list], ['example/backend'])
