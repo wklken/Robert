@@ -320,6 +320,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
             "event_type": "comment",
             "actor_kind": "github_user",
             "actor_login": "wklken",
+            "body": "@robert-bot please analyze this",
             "authorization_status": "authorized_trigger",
             "intent": "analysis",
             "url": "https://github.com/example/backend/pull/13",

@@ -365,9 +365,9 @@ robert service install --config ~/.config/robert/config.yml --dry-run --output j
 Paths are `~/.config/systemd/user/robert.service`,
 `~/.config/robert/supervisord.conf`, and
 `~/Library/LaunchAgents/dev.robert.agent.plist`, respectively.
-**The generated Supervisor template currently uses writable Web on
-`0.0.0.0:8765` with `--allow-remote`.** Edit it to the local binding above before
-starting unless remote access is intended and protected by authentication.
+The generated Supervisor template starts read-only Web on `127.0.0.1:8765`.
+Existing service definitions are not changed automatically. Inspect older
+installations and remove remote/writable flags unless deliberately configured.
 Installing it again overwrites the service definition.
 
 ```bash

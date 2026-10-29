@@ -1223,18 +1223,22 @@ def _skip_pending_result_actions(
     return len(rows)
 
 
-def _record_failure(conn, action, result, now):
+def _record_failure(conn, action, result, now, *, reconcile_required=False):
     fresh = conn.execute('SELECT metadata_json FROM github_actions WHERE action_id=?',(action['action_id'],)).fetchone()
     metadata = _decode_json(fresh[0] if fresh else action["metadata_json"])
     prior = dict(metadata.get("publish") or {})
     if prior.get('attempt_charged'):
         prior['attempt_count'] = max(0, int(prior.get('attempt_count', 0)) - 1)
     state = retry_policy.failure_state(prior, result.get("safe_error"), now, retryable=result.get("retryable", True))
+    # Authentication, permission, and branch rejections establish failure.
+    # Only an ambiguous transport outcome needs a final reconciliation pass.
+    reconcile_required = reconcile_required and state["error_class"] == "transient_failure"
     from robert_agent import redaction
     safe = redaction.redact_and_truncate(str(result.get("safe_error", "")), 2000)
     result = {**result, "safe_error": safe.get("text", "Sensitive diagnostic omitted; inspect the local log."), "command": []}
     metadata["publish"] = {
         **state,
+        "reconcile_required": bool(reconcile_required),
         "status": "publish_failed",
         "failed_at": now,
         "safe_error": result.get("safe_error", ""),
@@ -1249,7 +1253,7 @@ def _record_failure(conn, action, result, now):
         (_encode_json(metadata), action["action_id"]),
     )
     _insert_notification(conn, action, "github_publish_failed", {**result, **state}, now)
-    if not state["retryable"]:
+    if not state["retryable"] and not reconcile_required:
         intent = _load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
             execution_store.transition_publication_intent(conn, intent["publication_id"], "attention", now,
@@ -1360,6 +1364,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                     AND json_extract(metadata_json, '$.kind')='publication_retry'""",
                     (_now(), action["task_id"]),
                 )
+            remote_effect_started = False
             try:
                 result_id = action["result_id"]
                 now = _now()
@@ -1610,6 +1615,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                 # intent for the next publisher pass to reconcile.
                 with closing(sqlite3.connect(db_path)) as conn:
                     conn.row_factory = sqlite3.Row
+                    remote_effect_started = True
                     result = _publish_action(
                         action,
                         bounded_command,
@@ -1654,7 +1660,8 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
                     _record_remediation_publish_outcome(conn, action, result, now)
-                    _record_failure(conn, action, result, now)
+                    _record_failure(conn, action, result, now,
+                                    reconcile_required=result.get("retryable") is not False)
                 if result_id:
                     failed_result_ids.add(result_id)
                     action_scope = scope
@@ -1678,7 +1685,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                           "safe_error": "Publication command timed out after 60 seconds. Check connectivity and retry publication."}
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
-                    _record_failure(conn, action, result, _now())
+                    _record_failure(conn, action, result, _now(), reconcile_required=remote_effect_started)
                 failed_count += 1
                 failures.append({"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []})
                 if action["result_id"]:
@@ -1687,7 +1694,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                 result = {'status':'publish_failed','safe_error':type(exc).__name__, 'retryable': not isinstance(exc, FileNotFoundError)}
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
-                    _record_failure(conn, action, result, _now())
+                    _record_failure(conn, action, result, _now(), reconcile_required=remote_effect_started)
                 failed_count += 1
                 failures.append({'action_id':action['action_id'],'safe_error':result['safe_error'],'command':[]})
                 if action['result_id']:

@@ -8,6 +8,35 @@ AGENT = PACKAGE_ROOT
 
 
 class RedactionTests(unittest.TestCase):
+    def test_token_configuration_and_comparisons_are_not_credentials(self):
+        from robert_agent import redaction
+
+        for text in ("max_tokens = 10", "if token == x:", "use Authorization: none",
+                     "api_key=...", "password = None", "TOKEN = os.environ['TOKEN']"):
+            with self.subTest(text=text):
+                self.assertTrue(redaction.redact_text(text)["ok"])
+
+    def test_literal_password_api_key_and_jwt_are_blocked(self):
+        import base64
+        from robert_agent import redaction
+
+        header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip('=')
+        payload = base64.urlsafe_b64encode(b'{"sub":"test-user"}').decode().rstrip('=')
+        for text in ("password = " + "hunter2", 'api_key="' + "private-example-value" + '"',
+                     "ACCESS_TOKEN=" + "private-example-value", header + '.' + payload + '.' + 'a' * 43):
+            with self.subTest(kind=text.split('=')[0]):
+                self.assertFalse(redaction.redact_text(text)["ok"])
+
+    def test_custom_authorization_schemes_and_quoted_literals_are_blocked(self):
+        from robert_agent import redaction
+
+        for text in ("Authorization: Negotiate " + "abcdefghijklmnop",
+                     "Authorization: ApiKey " + "private-value",
+                     'TOKEN="' + 'os.environ-is-a-literal-secret' + '"',
+                     'PASSWORD="' + '$literal-private-value' + '"'):
+            with self.subTest(text=text):
+                self.assertFalse(redaction.redact_text(text)["ok"])
+
     def test_secret_blocks_publication(self):
         from robert_agent import redaction
 

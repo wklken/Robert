@@ -57,7 +57,7 @@ def normalize_events(raw_events, repo_config):
                 "origin_workstream_id": origin_workstream_id,
                 "event_fingerprint": normalized_event_fingerprint
                 or event_fingerprint(event_type, event_id),
-                "mentions_dd": bool(raw.get("mentions_dd") or f"@{github_account}" in body),
+                "mentions_dd": (_mentions_dd(body, github_account) if "body" in raw else bool(raw.get("mentions_dd"))),
                 "body": body,
                 "metadata": metadata,
                 "has_open_dd_pr": bool(has_open_dd_pr),
@@ -114,7 +114,7 @@ def _login(payload, key):
 
 
 def _mentions_dd(body, github_account):
-    return f"@{github_account}" in (body or "")
+    return bool(bot_requests(body, github_account))
 
 
 ROBERT_WORKSTREAM_BLOCK = re.compile(r"<!--\s*robert-workstream(?P<body>.*?)-->", re.I | re.S)
@@ -157,8 +157,25 @@ def bot_requests(body, github_account):
     """Extract unquoted instruction segments addressed to this exact configured account."""
     if not github_account:
         return []
-    text = re.sub(r"```[\s\S]*?```", "", body or "")
-    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith('>'))
+    lines = []
+    fence = None
+    for line in (body or "").splitlines():
+        stripped = line.lstrip()
+        marker = (re.match(r"(`{3,}|~{3,})", stripped)
+                  if len(line) - len(stripped) <= 3 and not line.startswith("\t") else None)
+        if fence:
+            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence)
+                    and not stripped[marker.end():].strip()):
+                fence = None
+            continue
+        if marker:
+            fence = marker[1]
+            continue
+        if stripped.startswith(">") or line.startswith(("    ", "\t")):
+            continue
+        lines.append(line)
+    text = "\n".join(lines)
+    text = re.sub(r"(`+)[\s\S]*?\1", "", text)
     mention = rf"(?<![\w@])@{re.escape(github_account)}(?=$|[\s,:：，])"
     return [re.split(r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]*", text[match.end():], maxsplit=1)[0].strip(' \t\n,:：，')
             for match in re.finditer(mention, text, re.I)]

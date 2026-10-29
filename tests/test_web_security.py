@@ -1,3 +1,4 @@
+from contextlib import closing
 from pathlib import Path
 import json
 import sqlite3
@@ -126,6 +127,31 @@ class WebSecurityTests(unittest.TestCase):
             self.assertNotIn(b'output from attempt 2', body)
             self.assertEqual(build_http_response(url.replace('task-1', 'unrelated-task'), db)[0], 404)
             self.assertEqual(build_http_response(url.replace('log-1', 'unknown'), db)[0], 404)
+
+    def test_artifact_preview_rejects_paths_outside_database_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "data"
+            data.mkdir()
+            db = data / "robert.sqlite3"
+            storage.init_database(db)
+            secret = root / "private.txt"
+            secret.write_text("private host data")
+            link = data / "worker.log"
+            link.symlink_to(secret)
+            directory_link = data / "linked"
+            directory_link.symlink_to(root, target_is_directory=True)
+            for path in (secret, link, directory_link / "private.txt"):
+                with self.subTest(path=path), closing(sqlite3.connect(db)) as conn, conn:
+                    conn.execute("DELETE FROM artifacts")
+                    conn.execute(
+                        "INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES (?,?,?,?,?)",
+                        ("unsafe", "task-1", "worker_stdout", str(path), "now"))
+                    conn.commit()
+                    status, _, body = build_http_response(
+                        "/artifact.txt?task_id=task-1&artifact_type=worker_stdout", db)
+                    self.assertEqual(status, 404)
+                    self.assertNotIn(b"private host data", body)
 
     def test_default_loopback_read_only_is_allowed(self):
         result = validate_server_options(

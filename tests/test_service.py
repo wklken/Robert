@@ -65,7 +65,7 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertNotIn("TOKEN", text)
 
-    def test_supervisord_config_runs_remote_web_ui(self):
+    def test_supervisord_config_runs_local_read_only_web_ui(self):
         text = render_supervisord_config(
             Path("/opt/robert/bin/robert"),
             Path("/home/test/.config/robert/config.yml"),
@@ -75,7 +75,7 @@ class ServiceTests(unittest.TestCase):
         self.assertIn(
             "command=/opt/robert/bin/robert web run "
             "--config /home/test/.config/robert/config.yml "
-            "--host 0.0.0.0 --port 8765 --writable --allow-remote",
+            "--host 127.0.0.1 --port 8765",
             text,
         )
         self.assertIn(
@@ -87,6 +87,8 @@ class ServiceTests(unittest.TestCase):
             text,
         )
         self.assertEqual(text.count("autorestart=true"), 2)
+        self.assertNotIn("--writable", text)
+        self.assertNotIn("--allow-remote", text)
 
     def test_linux_install_uses_supervisor_when_systemd_user_bus_unavailable(self):
         with mock.patch(

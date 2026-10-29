@@ -159,7 +159,8 @@ A repository's `github_account` overrides the global listening account without
 changing `gh` authentication. Its `max_concurrency` must be between 1 and the
 global `max_concurrency` (default 3). The checkout must already exist as a Git
 repository, `default_branch` must name its actual base branch, and
-`trusted_actors` must be non-empty.
+`trusted_actors` must be a non-empty list of non-empty strings. Only these actors
+may drive workers, including follow-ups on existing PRs and workstreams.
 
 The default hard worker timeout is 45 minutes. When a worker defines
 `fallback_model`, Robert uses it on the third run after the two immediately
@@ -303,6 +304,9 @@ robert task show TASK_ID --config ~/.config/robert/config.yml
 robert artifact show TASK_ID ARTIFACT_TYPE --config ~/.config/robert/config.yml
 ```
 
+Artifact previews read registered regular files inside the database directory.
+Paths or symlinks escaping that directory are unavailable.
+
 Operations:
 
 ```bash
@@ -441,7 +445,10 @@ stop its writers and run VACUUM during a maintenance window.
 
 Worker subprocesses receive `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`,
 `SHELL`, and `USER`. Additional names must be listed in
-`environment_allowlist`; values stay in the host environment.
+`environment_allowlist`; values stay in the host environment. GitHub credential
+names (`GH_TOKEN`, `GITHUB_TOKEN`, and their enterprise variants) are rejected
+in model-worker allowlists. Native coordinators retain their controller credentials
+for metadata reads and snapshot preparation.
 
 Workers do not accept an `env` or `environment` mapping. For non-secret values,
 an explicit command prefix such as

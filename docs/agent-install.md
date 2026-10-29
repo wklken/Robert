@@ -213,8 +213,8 @@ Do **not** start `supervisord` during preparation: the example uses
 `robert service install` does not universally install Supervisor. It selects
 systemd on Linux with a usable user bus, Supervisor on other Linux hosts, and
 launchd on macOS. Only the Supervisor backend includes Web; its generated Web
-command currently enables writable remote access on `0.0.0.0:8765`. Prefer the
-local Supervisor example above. If the user chooses the automatic service path,
+command defaults to read-only access on `127.0.0.1:8765`. Existing generated
+configurations must be inspected separately; upgrades do not rewrite them. If the user chooses the automatic service path,
 preview with `robert service install --dry-run --output json`, inspect the
 backend and content, then follow the backend-specific guide before starting.
 
