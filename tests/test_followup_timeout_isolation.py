@@ -110,11 +110,12 @@ class TimeoutIsolationTests(unittest.TestCase):
 
     def test_shared_deadline_stops_routing_instead_of_becoming_an_event_failure(self):
         fixture = self.fixture()
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=common.ControlDeadlineExceeded(['git', 'fetch'], 1)):
-            outcome = run_once.run_once(fixture.config_path, fixture_path=fixture.fixture_path,
-                                       dry_run=True, skip_external=True)
-        self.assertEqual(outcome['repo_summaries'][0]['failure_status'], 'execution_deadline')
-        self.assertEqual(outcome['prompt_paths'], [])
+        with mock.patch.object(run_once, '_prepare_worktree',
+                side_effect=common.ControlDeadlineExceeded(['git', 'fetch'], 1)) as prepare:
+            with self.assertRaises(common.ControlDeadlineExceeded):
+                run_once.run_once(fixture.config_path, fixture_path=fixture.fixture_path,
+                                  dry_run=True, skip_external=True)
+        self.assertEqual(prepare.call_count, 1)
 
     def test_budget_can_expire_while_a_shorter_command_cap_is_in_effect(self):
         runner = mock.Mock(side_effect=subprocess.TimeoutExpired(['git', 'status'], 5, output='partial', stderr='diagnostic'))

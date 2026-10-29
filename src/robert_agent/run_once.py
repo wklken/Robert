@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import os
@@ -85,6 +85,33 @@ def _insert_notification(conn, notification_type, status, run_now, metadata=None
             json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         ),
     )
+
+
+def _update_failure_notification(conn, kind, key, run_now, metadata=None):
+    """Keep one notice per unresolved source/repository failure episode."""
+    predicate = """notification_type=? AND status!='resolved'
+        AND COALESCE(json_extract(metadata_json,'$.failure_key'),
+                     json_extract(metadata_json,'$.source_key'),
+                     json_extract(metadata_json,'$.repo_id'))=?"""
+    if metadata is None:
+        conn.execute(f"UPDATE notifications SET status='resolved' WHERE {predicate}", (kind, key))
+    elif not conn.execute(f"SELECT 1 FROM notifications WHERE {predicate} LIMIT 1", (kind, key)).fetchone():
+        _insert_notification(conn, kind, "recorded", run_now, {**metadata, "failure_key": key})
+
+
+def _finish_isolation(conn, name, *, rollback=False):
+    """Undo only uncommitted work; external-I/O checkpoints stay durable."""
+    try:
+        if rollback:
+            conn.execute(f"ROLLBACK TO {name}")
+        conn.execute(f"RELEASE {name}")
+    except sqlite3.OperationalError as exc:
+        if str(exc) != f"no such savepoint: {name}":
+            raise
+        # A helper committed its checkpoint and released the savepoint. This
+        # transaction contains only the current source/repository's suffix.
+        if rollback:
+            conn.rollback()
 
 
 def _repo_id(full_name):
@@ -1850,7 +1877,7 @@ def _record_remote_terminal_state(
         else None
     )
     workflow_fact = None
-    if binding:
+    if binding and binding["binding_status"] == "active":
         marker = (
             remote_state.get("merged_at")
             or remote_state.get("closed_at")
@@ -1884,6 +1911,37 @@ def _record_remote_terminal_state(
         and not _execution_reconcile_task_allowed(conn, task_id, run_now)
     ):
         return False
+    source_metadata_row = conn.execute(
+        "SELECT metadata_json,state FROM github_sources WHERE source_id = ?",
+        (source_id,),
+    ).fetchone()
+    source_metadata = _json_object(source_metadata_row[0] if source_metadata_row else None)
+    attention = binding and binding["binding_status"] == "attention"
+    if (attention and source_metadata_row and source_metadata_row[1] == remote_state.get("state")
+            and source_metadata.get("remote_state") == remote_state):
+        return False
+    source_metadata["remote_state"] = remote_state
+    conn.execute(
+        """
+        UPDATE github_sources
+        SET state = ?,
+            html_url = COALESCE(?, html_url),
+            title = COALESCE(NULLIF(?, ''), title),
+            source_updated_at = COALESCE(?, source_updated_at),
+            metadata_json = ?
+        WHERE source_id = ?
+        """,
+        (
+            remote_state.get("state") or "closed",
+            remote_state.get("html_url"),
+            remote_state.get("title") or "",
+            remote_state.get("updated_at"),
+            json.dumps(source_metadata, ensure_ascii=False, sort_keys=True),
+            source_id,
+        ),
+    )
+    if attention:
+        return False
     attempts = conn.execute(
         f"""SELECT attempt_id, status, metadata_json FROM attempts
         WHERE task_id = ? AND (status='prepared' OR {supervise.occupied_attempt_sql('attempts')})""",
@@ -1909,31 +1967,6 @@ def _record_remote_terminal_state(
         attempt_metadata[attempt_id] = metadata
     if cleanup_pending:
         return False
-    source_metadata_row = conn.execute(
-        "SELECT metadata_json FROM github_sources WHERE source_id = ?",
-        (source_id,),
-    ).fetchone()
-    source_metadata = _json_object(source_metadata_row[0] if source_metadata_row else None)
-    source_metadata["remote_state"] = remote_state
-    conn.execute(
-        """
-        UPDATE github_sources
-        SET state = ?,
-            html_url = COALESCE(?, html_url),
-            title = COALESCE(NULLIF(?, ''), title),
-            source_updated_at = COALESCE(?, source_updated_at),
-            metadata_json = ?
-        WHERE source_id = ?
-        """,
-        (
-            remote_state.get("state") or "closed",
-            remote_state.get("html_url"),
-            remote_state.get("title") or "",
-            remote_state.get("updated_at"),
-            json.dumps(source_metadata, ensure_ascii=False, sort_keys=True),
-            source_id,
-        ),
-    )
     remote_payload = {
         "status": audit_type,
         "source_key": source_key,
@@ -2248,36 +2281,55 @@ def _reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
     for workstream_id, task_id, source_id, source_key, source_type, number in rows:
         task_id = task_id or _latest_task_id(conn, workstream_id)
         conn.commit()
-        remote_state = _remote_source_state(repo["full_name"], source_type, number, runner)
-        if not remote_state:
-            continue
-        terminal = _remote_terminal_state(source_type, remote_state)
-        if not terminal:
-            continue
-        workstream_lifecycle, audit_type = terminal
-        recorded = _record_remote_terminal_state(
-            conn,
-            repo_id,
-            workstream_id,
-            source_id,
-            source_key,
-            source_type,
-            number,
-            task_id,
-            remote_state,
-            workstream_lifecycle,
-            audit_type,
-            run_now,
-        )
-        if not recorded:
-            continue
-        remediation.cancel_workstream_episodes(
-            conn,
-            workstream_id=workstream_id,
-            reason="remote_pr_terminal",
-            now=run_now,
-        )
-        reconciled += 1
+        conn.execute("SAVEPOINT reconcile_source")
+        source_succeeded = False
+        try:
+            remote_state = _remote_source_state(repo["full_name"], source_type, number, runner)
+            if not remote_state:
+                continue
+            terminal = _remote_terminal_state(source_type, remote_state)
+            if not terminal:
+                source_succeeded = True
+                continue
+            workstream_lifecycle, audit_type = terminal
+            recorded = _record_remote_terminal_state(
+                conn,
+                repo_id,
+                workstream_id,
+                source_id,
+                source_key,
+                source_type,
+                number,
+                task_id,
+                remote_state,
+                workstream_lifecycle,
+                audit_type,
+                run_now,
+            )
+            if not recorded:
+                source_succeeded = True
+                continue
+            remediation.cancel_workstream_episodes(
+                conn,
+                workstream_id=workstream_id,
+                reason="remote_pr_terminal",
+                now=run_now,
+            )
+            reconciled += 1
+            source_succeeded = True
+        except ControlDeadlineExceeded:
+            _finish_isolation(conn, "reconcile_source", rollback=True)
+            raise
+        except Exception as exc:
+            _finish_isolation(conn, "reconcile_source", rollback=True)
+            _update_failure_notification(conn, "source_reconcile_failed", source_key, run_now,
+                {"source_key": source_key, "task_id": task_id,
+                 "reason_code": "source_reconcile_failed", "error_type": type(exc).__name__,
+                 "required_action": "Inspect this source; other sources continue and this source will be retried."})
+        finally:
+            if source_succeeded:
+                _update_failure_notification(conn, "source_reconcile_failed", source_key, run_now)
+            _finish_isolation(conn, "reconcile_source")
     return reconciled
 
 
@@ -6536,6 +6588,7 @@ def _run_repo_pipeline(
         "current_state_closed_skip_count": 0,
     }
     lease_result = None
+    pipeline_succeeded = False
     publish_result = {
         "ok": True,
         "status": "skipped",
@@ -6548,6 +6601,8 @@ def _run_repo_pipeline(
     repo_prompt_start = len(prompt_paths)
     repo_dispatch_start = len(dispatch_queue)
     invalidation_attempt_ids = []
+    conn.commit()
+    conn.execute("SAVEPOINT repo_pipeline")
     try:
         _mark_repo_run_step(conn, run_id, repo_id, "acquire_lease", "running", run_now)
         lease_result = _acquire_agent_lease(
@@ -7413,16 +7468,72 @@ def _run_repo_pipeline(
                 "current_state_closed_skip_count": summary["current_state_closed_skip_count"],
             },
         )
+        pipeline_succeeded = True
         return summary
     except ControlDeadlineExceeded:
-        summary.update(status='failed', failure_status='execution_deadline',
-                       safe_error='Control command exceeded its execution deadline.')
+        _finish_isolation(conn, "repo_pipeline", rollback=True)
+        raise
+    except Exception as exc:
+        failed_step = conn.execute(
+            "SELECT step_key FROM run_repo_steps WHERE run_id=? AND repo_id=? AND status='running'",
+            (run_id, repo_id),
+        ).fetchone()
+        _finish_isolation(conn, "repo_pipeline", rollback=True)
+        removed_dispatches = len(dispatch_queue) - repo_dispatch_start
+        del dispatch_queue[repo_dispatch_start:]
+        dispatch_budget["remaining"] += removed_dispatches
+        del prompt_paths[repo_prompt_start:]
+        summary.update(status="failed", failure_status="repository_pipeline_failed",
+                       safe_error=f"Repository pipeline failed ({type(exc).__name__}).")
+        error = {"status": summary["failure_status"], "safe_error": summary["safe_error"],
+                 "error_type": type(exc).__name__}
+        for step in REPO_STEP_ORDER:
+            row = conn.execute(
+                "SELECT status FROM run_repo_steps WHERE run_id=? AND repo_id=? AND step_key=?",
+                (run_id, repo_id, step),
+            ).fetchone()
+            if row and (row[0] in {"pending", "running"} or (failed_step and step == failed_step[0])):
+                _mark_repo_run_step(conn, run_id, repo_id, step,
+                    "failed" if failed_step and step == failed_step[0] else "skipped",
+                    run_now, error=error)
+        _update_failure_notification(conn, "repository_pipeline_failed", repo_id, run_now,
+            {"repo_id": repo_id, **error,
+             "reason_code": "repository_pipeline_failed",
+             "required_action": "Inspect the failed repository; other repositories continue."})
         return summary
     finally:
         if lease_result and lease_result.get("ok"):
             _release_agent_lease(conn, lease_result["lease_id"], _now())
+        if pipeline_succeeded:
+            _update_failure_notification(conn, "repository_pipeline_failed", repo_id, run_now)
+        _finish_isolation(conn, "repo_pipeline")
         summary["prompt_count"] = len(prompt_paths) - repo_prompt_start
         summary["dispatch_queue_count"] = len(dispatch_queue) - repo_dispatch_start
+
+
+@contextmanager
+def _run_transaction(db_path, run_id):
+    """Persist invocation cleanup even when its domain transaction rolls back."""
+    with closing(sqlite3.connect(db_path)) as conn:
+        try:
+            with conn:
+                yield conn
+        except ControlDeadlineExceeded:
+            now = _now()
+            error = json.dumps({"status": "execution_deadline",
+                "safe_error": "Control command exceeded its execution deadline."})
+            with conn:
+                conn.execute("""UPDATE leases SET status='released',released_at=?,heartbeat_at=?
+                    WHERE resource_type='agent_run' AND owner_id=? AND status='active'""",
+                    (now, now, run_id))
+                for table in ('run_steps', 'run_repo_steps'):
+                    conn.execute(f"""UPDATE {table}
+                        SET status=CASE WHEN status='running' THEN 'failed' ELSE 'skipped' END,
+                            finished_at=?,error_json=?
+                        WHERE run_id=? AND status IN ('running','pending')""", (now, error, run_id))
+                conn.execute("""UPDATE agent_runs SET status='failed',finished_at=?,error_json=?
+                    WHERE run_id=? AND status='running'""", (now, error, run_id))
+            raise
 
 
 def run_once(
@@ -7469,7 +7580,7 @@ def run_once(
     dispatch_results = []
     dispatch_error = None
 
-    with closing(sqlite3.connect(db_path)) as conn, conn:
+    with _run_transaction(db_path, run_id) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute(
@@ -7530,6 +7641,8 @@ def run_once(
                     run_now,
                     output={"notification_repo_count": len(notification_buckets)},
                 )
+            except ControlDeadlineExceeded:
+                raise
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as exc:
                 error = _safe_discovery_error(exc)
                 _mark_run_step(

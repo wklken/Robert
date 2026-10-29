@@ -581,11 +581,15 @@ def _maybe_prune(context, *, now):
         try:
             from robert_agent import reliability_health
             health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+            if not health.get('alerts_persisted', True):
+                context.next_health_at = current + config['local_poll_seconds']
+                context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
                 conn.execute("PRAGMA busy_timeout=100")
                 daemon_state.record_event(conn, context.daemon_run_id, "reliability_health", "ok", health, now=now)
         except sqlite3.OperationalError:
-            pass
+            context.next_health_at = current + config['local_poll_seconds']
+            context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
     if any(result["counts"].values()) or (not result["ok"] and result["status"] != "busy"):
         try:
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
@@ -626,7 +630,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
             context.daemon_run_id,
             "local_drain_completed" if result.get("ok") else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
-            _event_result(result),
+            {**_event_result(result), "control_lane": "local"},
             now=now,
         )
     return result
@@ -658,7 +662,7 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
             context.daemon_run_id,
             "live_poll_completed" if result.get("ok") else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
-            _event_result(result),
+            {**_event_result(result), "control_lane": "scan"},
             now=now,
         )
     return result
