@@ -24,6 +24,7 @@ class ServiceTests(unittest.TestCase):
             text,
         )
         self.assertIn("Restart=on-failure", text)
+        self.assertIn("--wait-for-lease", text)
         self.assertNotIn("TOKEN", text)
 
     def test_launch_agent_runs_foreground_daemon(self):
@@ -35,6 +36,7 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("<string>daemon</string>", text)
         self.assertIn("<string>run</string>", text)
         self.assertIn("<key>KeepAlive</key>", text)
+        self.assertIn("<string>--wait-for-lease</string>", text)
 
     def test_supervisord_config_runs_foreground_daemon(self):
         text = render_supervisord_config(
@@ -49,6 +51,10 @@ class ServiceTests(unittest.TestCase):
             text,
         )
         self.assertIn("autorestart=true", text)
+        daemon_section = text.split("[program:robert-daemon]", 1)[1].split("[program:", 1)[0]
+        self.assertIn("--wait-for-lease", daemon_section)
+        # Room for TERM grace, KILL reap, and process-group proof of the active child.
+        self.assertIn("stopwaitsecs=30", daemon_section)
         self.assertIn(
             "file=/home/test/.local/share/robert/run/supervisor.sock",
             text,

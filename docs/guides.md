@@ -269,11 +269,12 @@ supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
 serverurl=unix:///home/alice/.local/share/robert/run/supervisor.sock
 
 [program:robert-daemon]
-command=/home/alice/.local/bin/robert daemon run --config /home/alice/.config/robert/config.yml
+command=/home/alice/.local/bin/robert daemon run --config /home/alice/.config/robert/config.yml --wait-for-lease
 autostart=true
 autorestart=true
 startsecs=5
 stopsignal=TERM
+stopwaitsecs=30
 stdout_logfile=/home/alice/.local/share/robert/logs/daemon.out.log
 stderr_logfile=/home/alice/.local/share/robert/logs/daemon.err.log
 
@@ -286,6 +287,11 @@ stopsignal=TERM
 stdout_logfile=/home/alice/.local/share/robert/logs/web.out.log
 stderr_logfile=/home/alice/.local/share/robert/logs/web.err.log
 ```
+
+`--wait-for-lease` keeps a restarted daemon waiting in-process when a killed
+predecessor left its lease behind, instead of exiting and putting the program
+into `FATAL`. On SIGTERM the daemon terminates its active child process group
+and releases its lease; `stopwaitsecs=30` leaves room for that cleanup.
 
 This example keeps Web local and read-only. For local task controls, append
 `--writable --operator YOUR_OPERATOR_NAME` to the web command. Remote binding

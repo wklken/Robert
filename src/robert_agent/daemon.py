@@ -23,11 +23,14 @@ from robert_agent import notify
 SCRIPT_ROOT = Path(__file__).resolve().parent
 AGENTS_ROOT = SCRIPT_ROOT.parents[1]
 _STOP_REQUESTED = False
+_ACTIVE_CHILD_PGID = None
 RATE_LIMIT_TIMEOUT_SECONDS = 30
 CONTROL_TERM_GRACE_SECONDS = 2
 CONTROL_KILL_REAP_SECONDS = 2
 # run_once._live_process_group bounds its ps inspection at five seconds.
 CONTROL_GROUP_PROOF_SECONDS = 5
+STOP_SLEEP_SLICE_SECONDS = 1
+LEASE_WAIT_MAX_SLICE_SECONDS = 5
 
 
 @dataclass
@@ -116,11 +119,35 @@ def _process_group_stopped(pgid):
         return False
 
 
+def _signal_child_group(pgid, signum):
+    try:
+        os.killpg(pgid, signum)
+    except (ProcessLookupError, PermissionError):
+        pass  # The owned group already exited.
+
+
+def _child_stopped_result(command, timeout_seconds, executor_id, group_stopped):
+    return {
+        "ok": False,
+        "status": "child_stopped",
+        "safe_error": "daemon stop requested; child was terminated",
+        "child": {
+            "command": command,
+            "timeout_seconds": timeout_seconds,
+            "executor_id": executor_id,
+            "process_group_stopped": group_stopped,
+        },
+    }
+
+
 def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
+    global _ACTIVE_CHILD_PGID
     executor_id = None
     group_stopped = False
     try:
         if runner is subprocess.run:
+            if _STOP_REQUESTED:
+                return _child_stopped_result(command, timeout_seconds, None, True)
             executor_id = uuid4().hex
             margin = min(30, max(.05, timeout_seconds * .1))
             environment = {**os.environ, '_ROBERT_EXECUTOR_ID': executor_id,
@@ -128,23 +155,31 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
             process = subprocess.Popen(command, cwd=str(AGENTS_ROOT), env=environment,
                                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        start_new_session=True)
+            # The stop handler terminates this group so communicate() returns
+            # promptly; Python would otherwise resume the wait after the handler.
+            _ACTIVE_CHILD_PGID = process.pid
+            if _STOP_REQUESTED:
+                _signal_child_group(process.pid, signal.SIGTERM)
             try:
-                stdout, stderr = process.communicate(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
                 try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass  # The owned group exited between timeout and signal.
-                try:
-                    process.communicate(timeout=min(CONTROL_TERM_GRACE_SECONDS, max(.1, margin)))
+                    stdout, stderr = process.communicate(timeout=timeout_seconds)
                 except subprocess.TimeoutExpired:
+                    _signal_child_group(process.pid, signal.SIGTERM)
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.communicate(timeout=CONTROL_KILL_REAP_SECONDS)
-                group_stopped = _process_group_stopped(process.pid)
-                raise
+                        process.communicate(timeout=min(CONTROL_TERM_GRACE_SECONDS, max(.1, margin)))
+                    except subprocess.TimeoutExpired:
+                        _signal_child_group(process.pid, signal.SIGKILL)
+                        process.communicate(timeout=CONTROL_KILL_REAP_SECONDS)
+                    group_stopped = _process_group_stopped(process.pid)
+                    raise
+            finally:
+                _ACTIVE_CHILD_PGID = None
+            if _STOP_REQUESTED:
+                # Members that outlived the leader's TERM must not survive the daemon.
+                _signal_child_group(process.pid, signal.SIGKILL)
+                if process.returncode is not None and process.returncode < 0:
+                    group_stopped = _process_group_stopped(process.pid)
+                    return _child_stopped_result(command, timeout_seconds, executor_id, group_stopped)
             completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
             group_stopped = _process_group_stopped(process.pid)
         else:
@@ -247,6 +282,30 @@ def fetch_rate_limit(runner=subprocess.run):
 def _request_stop(_signum, _frame):
     global _STOP_REQUESTED
     _STOP_REQUESTED = True
+    if _ACTIVE_CHILD_PGID is not None:
+        _signal_child_group(_ACTIVE_CHILD_PGID, signal.SIGTERM)
+
+
+def _install_stop_handlers(db_path):
+    """Make SIGTERM/SIGINT interrupt the idle wait, not only set a flag."""
+
+    def handler(signum, frame):
+        _request_stop(signum, frame)
+        # Python retries select() after a handler returns, so wake the
+        # listener explicitly; notify() never raises.
+        wakeup_notifier.notify(db_path)
+
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
+
+
+def _stop_aware_sleep(seconds):
+    deadline = time.monotonic() + max(0, seconds)
+    while not _STOP_REQUESTED:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(STOP_SLEEP_SLICE_SECONDS, remaining))
 
 
 def _daemon_run_id():
@@ -728,12 +787,11 @@ def _resident_loop(
     context,
     *,
     listener_factory=wakeup_notifier.WakeupListener,
-    sleeper=time.sleep,
+    sleeper=_stop_aware_sleep,
 ):
     global _STOP_REQUESTED
     _STOP_REQUESTED = False
-    signal.signal(signal.SIGINT, _request_stop)
-    signal.signal(signal.SIGTERM, _request_stop)
+    _install_stop_handlers(context.db_path)
     listener = None
     try:
         try:
@@ -786,16 +844,33 @@ def run_daemon(
     *,
     dry_run=False,
     once=False,
+    wait_for_lease=False,
     child_runner=run_child_json,
     rate_limit_runner=subprocess.run,
     now=None,
 ):
-    context, error = _load_context(
-        config_path,
-        workflow_path=workflow_path,
-        dry_run=dry_run,
-        now=now,
-    )
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = False
+    wait_for_lease = wait_for_lease and not once
+    if wait_for_lease:
+        _install_stop_handlers(validate_config.validate_config(config_path, skip_external=True).get("db_path") or "")
+    while True:
+        context, error = _load_context(
+            config_path,
+            workflow_path=workflow_path,
+            dry_run=dry_run,
+            now=now,
+        )
+        if not (wait_for_lease and error and error.get("status") == "skipped_active_daemon"):
+            break
+        # A killed daemon cannot release its lease. Exiting 0 here makes
+        # supervisord give up (FATAL) and systemd never restart, so a service
+        # instance waits in-process until the holder heartbeats or it expires.
+        expires_at = (error.get("lease") or {}).get("expires_at")
+        remaining = (_parse_time(expires_at) - _parse_time(daemon_state.utc_now())).total_seconds() if expires_at else 0
+        _stop_aware_sleep(min(LEASE_WAIT_MAX_SLICE_SECONDS, max(STOP_SLEEP_SLICE_SECONDS, remaining)))
+        if _STOP_REQUESTED:
+            return {"ok": True, "status": "stopped_waiting_for_lease", "lease": error.get("lease")}
     if error:
         return error
     try:
@@ -825,12 +900,15 @@ def main(argv=None):
     parser.add_argument("--workflow")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--wait-for-lease", action="store_true",
+                        help="wait for another daemon's lease instead of exiting (service managers)")
     args = parser.parse_args(argv)
     result = run_daemon(
         args.config,
         workflow_path=args.workflow,
         dry_run=args.dry_run,
         once=args.once,
+        wait_for_lease=args.wait_for_lease,
     )
     return emit(result, 0 if result.get("ok") else 3)
 

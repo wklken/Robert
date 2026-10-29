@@ -155,6 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_argument(daemon_run_parser)
     daemon_run_parser.add_argument("--dry-run", action="store_true")
     daemon_run_parser.add_argument("--once", action="store_true")
+    daemon_run_parser.add_argument(
+        "--wait-for-lease",
+        action="store_true",
+        help="Wait for another daemon's lease instead of exiting (used by service managers).",
+    )
 
     migrate_parser = subparsers.add_parser(
         "migrate",
@@ -324,6 +329,8 @@ def _daemon_argv(args):
         argv.append("--dry-run")
     if args.once:
         argv.append("--once")
+    if args.wait_for_lease:
+        argv.append("--wait-for-lease")
     return argv
 
 
