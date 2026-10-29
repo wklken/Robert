@@ -11,7 +11,7 @@ from robert_agent import audit_result, render_prompt, result_contract
 
 class CompactCallerTests(unittest.TestCase):
     def test_all_prompt_examples_are_compact_submissions(self):
-        samples = json.loads(Path('docs/reviews/2026-10-29-worker-prompts/inputs.json').read_text())
+        samples = json.loads((Path(__file__).parent / 'fixtures' / 'worker_prompt_inputs.json').read_text())
         for sample in samples:
             with self.subTest(route=sample['name']):
                 prompt = render_prompt.render_prompt(sample['task'], sample['route_result'], sample['events'],

@@ -2,7 +2,7 @@
 
 状态：阶段 0–4 已完成实现、本地验证和审查，进入 PR 交付。运行时仅接受新协议。2026-10-29。
 
-实施与最终验证见 [交付记录和逐阶段 prompt 对照](../../reviews/2026-10-29-worker-contract-prompts/README.md)。没有调用真实模型或部署。此前逐项判定与复现结果见 [review 验证记录](../../reviews/2026-10-29-worker-contract-review.md)；其中旧协议兼容建议已被用户本次指令替代。
+实现及本地审查已完成；本轮 review 记录和 prompt 对照按用户要求从 PR 中移除。没有调用真实模型或部署。
 
 ## 1. 目标、基线与职责
 
@@ -49,7 +49,7 @@ DB、JSON、Markdown 分别承载运行状态、机器交换/存档、阅读视�
 ### 阶段 0：稳定基线与失败原因数据
 
 - 已将三项优化及其方案/证据独立提交为 `ff42f36`，后续协议实现单独提交。用户已授权通过 subagent 创建 PR；未授权合并或部署。
-- 复用 [14 组 prompt 对照](../../reviews/2026-10-29-worker-prompts/README.md)，覆盖普通请求、review report、mixed、长讨论、等待用户、Web、CI/conflict 与 resume。
+- 已使用相同的 14 组输入对照，覆盖普通请求、review report、mixed、长讨论、等待用户、Web、CI/conflict 与 resume；对照文档不随本 PR 提交；必要测试输入保留在 `tests/fixtures/worker_prompt_inputs.json`。
 - 在可用运行环境中抽样验证已有分类策略。当前未定位到本机生产 DB/config，不宣称已取得生产统计或真实模型验证。
 - 只读统计按 route/task_kind/input-policy/worker/时间窗口分组：最终 audit reason/safe_error、helper failed_validation、result_conflict、spool 拒绝、人工 retry/operator recovery、失败前已用时间，并记录样本分母和缺失率。
 - helper 的部分错误只返回到 worker，DB 不一定保留。结合 DB、worker stdout/stderr、spool/rejected、通知与重试记录核对；没有日志不等于零发生。
@@ -207,4 +207,4 @@ git diff --check
 
 抽取共享 helper 时检查 imports、导出、CLI/动态入口、全部消费者和循环依赖；删除只为旧协议服务的解析、别名、转发及测试。保留行为合同测试，更新为新输入，另验证不支持格式被明确拒绝。真实模型效果与离线/mock 检查分别报告；缺生产频率时不承诺加速排名或百分比。
 
-实现与验证状态以 [交付记录](../../reviews/2026-10-29-worker-contract-prompts/README.md) 为准。性能收益需要真实任务测量；当前不承诺延迟改善比例。
+实现和本地审查已完成，性能收益需要真实任务测量；当前不承诺端到端延迟改善比例。
