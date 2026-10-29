@@ -29,6 +29,17 @@ def _decode_json(value, default):
     return parsed
 
 
+def _logical_reason(reason, metadata):
+    # The stored enum remains compatible with older databases. Expose machine
+    # wakeups by their actual purpose while preserving their ID and dedupe key.
+    kind = metadata.get('kind') if isinstance(metadata, dict) else None
+    if reason == 'manual_operator_request' and kind in {
+        'github_observation_ready', 'github_context_refresh',
+    }:
+        return kind
+    return reason
+
+
 def _wakeup_from_row(row):
     if row is None:
         return None
@@ -56,6 +67,7 @@ def _wakeup_from_row(row):
         ]
         payload = {column: row[index] for index, column in enumerate(columns)}
     payload["metadata"] = _decode_json(payload.pop("metadata_json"), {}) or {}
+    payload["reason"] = _logical_reason(payload["reason"], payload["metadata"])
     return payload
 
 
@@ -125,7 +137,7 @@ def request_wakeup(
     return {
         "wakeup_id": wakeup_id,
         "repo_id": repo_id,
-        "reason": reason,
+        "reason": _logical_reason(reason, metadata),
         "dedupe_key": dedupe_key,
         "work_item_id": work_item_id,
         "task_id": task_id,
@@ -199,7 +211,14 @@ def summarize_wakeups(conn, now=None):
     by_reason = {
         row[0]: row[1]
         for row in conn.execute(
-            "SELECT reason, COUNT(*) FROM wakeups GROUP BY reason"
+            """SELECT CASE
+                WHEN reason='manual_operator_request'
+                  AND CASE WHEN json_valid(metadata_json)
+                      THEN json_extract(metadata_json,'$.kind') END
+                      IN ('github_observation_ready','github_context_refresh')
+                THEN json_extract(metadata_json,'$.kind')
+                ELSE reason END AS logical_reason,
+                COUNT(*) FROM wakeups GROUP BY logical_reason"""
         )
     }
     due = conn.execute(

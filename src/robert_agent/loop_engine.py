@@ -164,10 +164,40 @@ def _queued_native_round(conn, repo_ids):
     return False
 
 
-def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=None, now=None):
+def _published_result_needs_finalization(conn, repo_ids):
+    # Publisher completion can precede (or outlive) its wakeup. Inspect durable
+    # result/action state so a restarted local owner still closes the task.
+    clause, params = _repo_filter('w', repo_ids)
+    rows = conn.execute(f"""SELECT wr.result_id FROM worker_results wr
+        JOIN tasks t ON t.task_id=wr.task_id
+        JOIN attempts a ON a.attempt_id=wr.attempt_id
+        JOIN workstreams w ON w.workstream_id=t.workstream_id
+        WHERE t.lifecycle IN ('queued','running') AND a.status='completed'
+          AND (json_type(a.metadata_json,'$.dispatch.pid') IS NOT 'integer'
+               OR json_extract(a.metadata_json,'$.process_stopped_at') IS NOT NULL)
+          AND json_extract(wr.metadata_json,'$.audit.status')='accepted'
+          AND {execution_store.runnable_sql()} {clause}""", params).fetchall()
+    return any(run_once_module._result_actions_all_published(conn, row[0]) for row in rows)
+
+
+def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=None, now=None, consume_observations=False, include_publication=True):
     if repo_id is not None and repo_ids is not None:
         raise ValueError("repo_id and repo_ids are mutually exclusive")
     repo_ids = [repo_id] if repo_id else list(repo_ids or [])
+    if consume_observations:
+        from robert_agent import github_scan
+        contexts = None
+        if config_result and config_result.get('repos'):
+            contexts = {}
+            for repo in config_result['repos']:
+                row = conn.execute('SELECT repo_id FROM repos WHERE full_name=?', (repo['full_name'],)).fetchone()
+                if row and (not repo_ids or row[0] in repo_ids):
+                    known = run_once_module._load_known_workstreams(conn, row[0])
+                    contexts[row[0]] = github_scan.context_digest(repo, known, config=config_result)
+        scoped = repo_ids or [row[0] for row in conn.execute('SELECT repo_id FROM repos')]
+        when = run_once_module._parse_time(now).timestamp() if now is not None else None
+        if github_scan.has_pending(conn, scoped, now=when, contexts=contexts):
+            return True
     now = now or wakeup.utc_now()
     if not isinstance(now, str):
         now = now.isoformat()
@@ -177,9 +207,10 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
         SELECT 1
         FROM wakeups
         WHERE status = 'pending'
-          AND COALESCE(json_extract(metadata_json,'$.kind'),'')!='dbos_handoff'
+          AND COALESCE(json_extract(metadata_json,'$.kind'),'') NOT IN ('dbos_handoff','github_observation_ready','github_context_refresh')
           AND not_before_at <= ?
           AND (expires_at IS NULL OR expires_at > ?)
+          AND (? OR reason!='publish_retry_ready')
           {wakeup_repo_clause}
           AND (reason!='worker_result_ready' OR EXISTS (
             SELECT 1 FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
@@ -189,9 +220,9 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
               AND t.lifecycle IN ('queued','running') AND {execution_store.runnable_sql()}))
         LIMIT 1
         """,
-        [now, now] + wakeup_repo_params,
+        [now, now, include_publication] + wakeup_repo_params,
     ).fetchone()
-    if pending_wakeup or _queued_native_round(conn, repo_ids):
+    if pending_wakeup or _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
         return True
     fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
     fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
@@ -245,6 +276,8 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
     ).fetchone()
     if prepared:
         return True
+    if not include_publication:
+        return False
     publishable = conn.execute(
         f"""
         SELECT 1
@@ -278,6 +311,7 @@ def run_loop(
     max_dispatches=2,
     max_publish_actions=5,
     runner=run_once_module.run_once,
+    consume_observations=False,
 ):
     started = time.monotonic()
     if max_publish_actions < 0:
@@ -288,7 +322,8 @@ def run_loop(
     stop_reason = "max_cycles"
     publish_actions_used = 0
     with closing(_connect(db_path)) as conn, conn:
-        if not has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config):
+        if not has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config,
+                consume_observations=consume_observations, include_publication=not skip_publish):
             summary = {
                 "ok": True,
                 "status": "completed",
@@ -318,6 +353,7 @@ def run_loop(
             break
         with closing(_connect(db_path)) as conn, conn:
             before = snapshot_progress(conn)
+        observation_kwargs = {'consume_observations': True} if consume_observations else {}
         result = runner(
             config_path,
             workflow_path=workflow_path,
@@ -326,6 +362,7 @@ def run_loop(
             skip_publish=skip_publish,
             max_dispatches=max_dispatches,
             max_publish_actions=remaining_publish_actions,
+            **observation_kwargs,
         )
         cycle_results.append(result)
         if not result.get("ok"):
@@ -341,7 +378,8 @@ def run_loop(
         with closing(_connect(db_path)) as conn, conn:
             after = snapshot_progress(conn)
             diff = diff_progress(before, after)
-            runnable = has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config)
+            runnable = has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config,
+                consume_observations=consume_observations, include_publication=not skip_publish)
         cycle_results[-1] = {**result, "progress": diff}
         if not diff["changed"]:
             stop_reason = "no_progress"
@@ -381,6 +419,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-publish", action="store_true")
+    parser.add_argument("--consume-observations", action="store_true")
     parser.add_argument("--max-cycles", type=int, default=3)
     parser.add_argument("--max-seconds", type=int, default=120)
     parser.add_argument("--max-dispatches", type=int, default=2)
@@ -393,6 +432,7 @@ def main(argv=None):
             dry_run=args.dry_run,
             skip_external=args.skip_external,
             skip_publish=args.skip_publish,
+            consume_observations=args.consume_observations,
             max_cycles=args.max_cycles,
             max_seconds=args.max_seconds,
             max_dispatches=args.max_dispatches,

@@ -340,7 +340,9 @@ def _notification_to_raw(notification):
     }
 
 
-def collect_account_notifications(repo_configs, runner=subprocess.run):
+def collect_account_notifications(repo_configs, runner=subprocess.run, read_session=None):
+    if read_session is not None:
+        return read_session.collect_notifications(repo_configs)
     configured = {repo["full_name"] for repo in repo_configs}
     buckets = {repo["full_name"]: [] for repo in repo_configs}
     pages = _run_json(
@@ -758,6 +760,7 @@ def collect_live_events(
     notification_hints=None,
     include_notifications=True,
     review_author_allowlist=None,
+    read_session=None,
 ):
     repo = repo_config["full_name"]
     github_account = repo_config["github_account"]
@@ -765,7 +768,32 @@ def collect_live_events(
     raw_events = []
     known_workstreams = set(known_workstreams or [])
 
-    assigned = _run_json(
+    if read_session is not None:
+        runner = read_session
+    notification_raws = [raw for raw in (notification_hints or [])
+                         if raw.get("repo_full_name") == repo]
+    if include_notifications and notification_hints is None:
+        notification_buckets = collect_account_notifications(
+            [repo_config], runner=runner, read_session=read_session,
+        )
+        notification_raws = notification_buckets.get(repo, [])
+
+    def search(args):
+        if read_session is not None:
+            return read_session.search(args, notification_hints=notification_raws)
+        return _run_json(args, runner=runner)
+
+    def source_events(raw, load):
+        if read_session is None:
+            return load()
+        hints = [hint for hint in notification_raws if hint['number'] == raw['number']
+                 and hint['source_type'] == raw['source_type']]
+        return read_session.source_events(
+            repo_config, raw, load, known_workstreams=known_workstreams,
+            review_author_allowlist=review_author_allowlist, notification_hints=hints,
+        )
+
+    assigned = search(
         [
             "gh",
             "search",
@@ -782,14 +810,15 @@ def collect_live_events(
             "--limit",
             str(limit),
         ],
-        runner=runner,
     )
     for item in assigned:
         raw = _issue_search_to_raw(item, "assigned", github_account)
-        raw = _enrich_pull_request_metadata(raw, repo_config, runner)
-        raw_events.append(_timeline_assignment(raw, repo_config, runner))
+        def load_assigned(raw=raw):
+            enriched = _enrich_pull_request_metadata(raw, repo_config, runner)
+            return [_timeline_assignment(enriched, repo_config, runner)]
+        raw_events.extend(source_events(raw, load_assigned))
 
-    mentions = _run_json(
+    mentions = search(
         [
             "gh",
             "search",
@@ -806,44 +835,31 @@ def collect_live_events(
             "--limit",
             str(limit),
         ],
-        runner=runner,
     )
     for item in mentions:
         raw = _issue_search_to_raw(item, "mention", github_account)
-        if raw.get("author_association") in {None, "", "UNKNOWN"}:
-            raw["actor_permission"] = _actor_permission(repo_config, raw.get("actor_login"), runner)
-        raw = _enrich_pull_request_metadata(raw, repo_config, runner)
-        if _raw_workstream_id(raw, repo) in known_workstreams:
-            raw_events.extend(
-                _enrich_known_workstream_contexts(
-                    raw,
-                    repo_config,
-                    runner,
-                )
-            )
-            continue
-        raw_events.extend(_enrich_mentions(raw, repo_config, runner))
-
-    notification_raws = list(notification_hints or [])
-    if include_notifications and notification_hints is None:
-        notification_buckets = collect_account_notifications([repo_config], runner=runner)
-        notification_raws = notification_buckets.get(repo, [])
+        def load_mentions(raw=raw):
+            enriched = dict(raw)
+            if enriched.get("author_association") in {None, "", "UNKNOWN"}:
+                enriched["actor_permission"] = _actor_permission(repo_config, enriched.get("actor_login"), runner)
+            enriched = _enrich_pull_request_metadata(enriched, repo_config, runner)
+            if _raw_workstream_id(enriched, repo) in known_workstreams:
+                return _enrich_known_workstream_contexts(enriched, repo_config, runner)
+            return _enrich_mentions(enriched, repo_config, runner)
+        raw_events.extend(source_events(raw, load_mentions))
 
     for raw in notification_raws:
         if raw.get("repo_full_name") != repo:
             continue
-        raw, source_state = _source_metadata(raw, repo_config, runner)
-        if source_state and source_state.lower() != "open":
-            continue
-        raw_events.append(
-            _trusted_trigger_from_source(
-                raw,
-                repo_config,
-                runner,
-                known_workstreams=known_workstreams,
+        def load_notification(raw=raw):
+            enriched, source_state = _source_metadata(raw, repo_config, runner)
+            if source_state and source_state.lower() != "open":
+                return []
+            return [_trusted_trigger_from_source(
+                enriched, repo_config, runner, known_workstreams=known_workstreams,
                 review_author_allowlist=review_author_allowlist,
-            )
-        )
+            )]
+        raw_events.extend(source_events(raw, load_notification))
 
     return raw_events
 

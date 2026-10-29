@@ -52,6 +52,8 @@ class DaemonContext:
     next_maintenance_at: float = 0.0
     runtime_config: dict | None = None
     next_health_at: float = 0.0
+    publisher_retry_at: float = 0.0
+    background_lanes: dict | None = None
 
 
 def _script_path(name):
@@ -83,6 +85,7 @@ def build_loop_command(
     dry_run=False,
     max_seconds=180,
     skip_publish=False,
+    consume_observations=False,
 ):
     command = [
         sys.executable,
@@ -99,6 +102,8 @@ def build_loop_command(
         command.append("--dry-run")
     if skip_publish:
         command.append("--skip-publish")
+    if consume_observations:
+        command.append("--consume-observations")
     return command
 
 
@@ -359,6 +364,8 @@ def _schedule_next_live_poll(context, *, now, capacity_full):
 def _idle_sleep_seconds(context, *, now=None):
     now = now or daemon_state.utc_now()
     local_poll_seconds = context.daemon_config["local_poll_seconds"]
+    if context.background_lanes is not None and context.background_lanes['scan'].process is not None:
+        return local_poll_seconds
     if context.next_live_poll_at is None:
         return local_poll_seconds
     remaining_seconds = max(
@@ -597,6 +604,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
         dry_run=context.dry_run,
         max_seconds=max(1, int(context.daemon_config["local_drain_timeout_seconds"] * .9)),
         skip_publish=skip_publish,
+        consume_observations=context.background_lanes is not None,
     )
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
@@ -694,6 +702,8 @@ def run_once_decision(
     rate_limit_runner=subprocess.run,
 ):
     now = now or daemon_state.utc_now()
+    if context.background_lanes is not None:
+        return _background_decision(context, now=now, child_runner=child_runner)
     _maybe_prune(context, now=now)
     if not context.dry_run:
         from robert_agent.worker.result import replay_pending_results
@@ -763,6 +773,59 @@ def run_once_decision(
     return {"ok": True, "decision": "idle"}
 
 
+def _background_decision(context, *, now, child_runner=run_child_json):
+    from robert_agent import publish as publisher
+    from robert_agent.worker.result import replay_pending_results
+    _maybe_prune(context, now=now)
+    if not context.dry_run:
+        replay_pending_results(context.db_path)
+    lanes = context.background_lanes
+    for name, lane in lanes.items():
+        result = lane.poll()
+        if result is not None:
+            if name == 'publish':
+                context.publisher_retry_at = time.monotonic() + (5 if result.get('ok') else 30)
+            if name == 'scan':
+                interval = max(1, int(result.get('poll_interval_seconds') or context.daemon_config['github_poll_seconds']))
+                context.next_live_poll_at = _iso_after(now, interval)
+            with closing(daemon_state.connect(context.db_path)) as conn, conn:
+                daemon_state.record_event(conn, context.daemon_run_id, name + '_completed',
+                    'ok' if result.get('ok') else 'failed', result, now=now)
+    with closing(daemon_state.connect(context.db_path)) as conn:
+        repo_ids = context.repo_ids or [context.repo_id]
+        local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids,
+            config_result=context.runtime_config, now=now, consume_observations=True, include_publication=False)
+        conn.row_factory = sqlite3.Row
+        pending_publish = any(publisher._ready_actions(conn, 1, repo_id=repo_id) for repo_id in repo_ids)
+        placeholders = ','.join('?' for _ in repo_ids)
+        pending_delivery = bool(os.environ.get('ROBERT_NOTIFICATION_COMMAND') and conn.execute(
+            f"""SELECT 1 FROM notifications
+                WHERE channel='local' AND status NOT IN ('resolved','sent')
+                  AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted')
+                  AND (json_extract(metadata_json,'$.delivery.next_retry_at') IS NULL
+                       OR julianday(json_extract(metadata_json,'$.delivery.next_retry_at'))<=julianday(?))
+                  AND (task_id IS NULL OR task_id IN (
+                    SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
+                    WHERE w.repo_id IN ({placeholders}))) LIMIT 1""", [now, *repo_ids]).fetchone())
+
+    due = context.startup_live_poll_pending or (context.next_live_poll_at is not None and _parse_time(now) >= _parse_time(context.next_live_poll_at))
+    if context.next_live_poll_at is None and not due:
+        context.next_live_poll_at = _iso_after(now, context.daemon_config['github_poll_seconds'])
+    command = [sys.executable, '-B', _script_path('github_scan.py'), '--config', context.config_path]
+    if due and lanes['scan'].process is None:
+        context.startup_live_poll_pending = False
+        lanes['scan'].start(command, timeout_seconds=context.daemon_config['live_run_timeout_seconds'])
+    if (pending_publish or pending_delivery) and lanes['publish'].process is None and time.monotonic() >= context.publisher_retry_at:
+        publish_command = command + ['--publish']
+        if context.dry_run:
+            publish_command.append('--dry-run')
+        lanes['publish'].start(publish_command, timeout_seconds=context.daemon_config['local_drain_timeout_seconds'])
+    if local_work:
+        result = _run_local_drain(context, skip_publish=True, child_runner=child_runner, now=now)
+        return {'ok': result.get('ok', False), 'decision': 'local_drain', 'result': result}
+    return {'ok': True, 'decision': 'idle'}
+
+
 def _finish_context(context, status, *, summary=None, error=None, now=None):
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.release_daemon_lease(conn, context.lease_id, now=now)
@@ -793,6 +856,12 @@ def _resident_loop(
     _STOP_REQUESTED = False
     _install_stop_handlers(context.db_path)
     listener = None
+    from robert_agent.control_lane import ControlLane, recover
+    if not recover(context.db_path, scope_key=_daemon_resource_key(context.runtime_config), current_owner=context.daemon_run_id):
+        _finish_context(context, 'failed', error={'reason_code': 'control_child_attention', 'safe_error': 'Previous control child ownership needs inspection'})
+        return {'ok': False, 'status': 'attention', 'safe_error': 'Previous control child ownership needs inspection'}
+    context.background_lanes = {name: ControlLane(context.db_path, name, context.daemon_run_id)
+                                for name in ('scan', 'publish')}
     try:
         try:
             listener = listener_factory(context.db_path)
@@ -824,6 +893,9 @@ def _resident_loop(
             )
             _heartbeat(context)
     finally:
+        stopped = [lane.stop() for lane in context.background_lanes.values()]
+        cleanup_proven = all(stopped)
+        context.background_lanes = None
         if listener is not None:
             listener.close()
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
@@ -834,8 +906,9 @@ def _resident_loop(
             "ok",
             {},
         )
-    _finish_context(context, "stopped", summary={"reason": "signal"})
-    return {"ok": True, "status": "stopped", "daemon_run_id": context.daemon_run_id}
+    status = 'stopped' if cleanup_proven else 'attention'
+    _finish_context(context, 'stopped' if cleanup_proven else 'failed', summary={'reason': 'signal' if cleanup_proven else 'control_child_attention', 'cleanup_proven': cleanup_proven})
+    return {'ok': cleanup_proven, 'status': status, 'daemon_run_id': context.daemon_run_id}
 
 
 def run_daemon(

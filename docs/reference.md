@@ -197,9 +197,9 @@ robert config validate --config ~/.config/robert/config.yml --output json
 | `lease_ttl_minutes` | 9 | Task lease duration. |
 | `python_bin` | Interpreter running Robert (`sys.executable`) | Python executable used for worker helper commands; an explicit override must be able to import `robert_agent`. |
 | `daemon.local_poll_seconds` | 5 | Local state/supervision polling. |
-| `daemon.github_poll_seconds` | 300 | Daemon GitHub polling interval; configured independently of `github.poll_seconds`. |
-| `daemon.github_poll_when_full_seconds` | 600 | GitHub polling while worker capacity is full. |
-| `daemon.rate_limit_cache_seconds` | 300 | Rate-limit cache duration. |
+| `daemon.github_poll_seconds` | 300 | Resident scanner startup/error fallback; `daemon --once` retains this polling interval. See [GitHub polling](github-polling.md). |
+| `daemon.github_poll_when_full_seconds` | 600 | Legacy synchronous polling while capacity is full; resident scanning ignores this slowdown. |
+| `daemon.rate_limit_cache_seconds` | 300 | Rate-limit cache duration for the synchronous diagnostic path; resident scans check their own budget. |
 | `daemon.min_search_remaining` / `min_core_remaining` | 10 / 500 | Minimum GitHub quota thresholds. |
 | `daemon.live_run_timeout_seconds` / `local_drain_timeout_seconds` | 300 / 180 | Bounded live-poll/local-drain child cycle timeouts. |
 | `daemon.enabled` / `run_on_start` | `true` / `false` | Daemon enablement and immediate startup poll. |
