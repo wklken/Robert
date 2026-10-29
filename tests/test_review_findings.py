@@ -179,4 +179,3 @@ class IdleSchedulingTests(unittest.TestCase):
             conn.execute("UPDATE workstreams SET repo_id='other' WHERE workstream_id='waiting'")
             self.assertTrue(loop_engine.has_runnable_local_work(conn,
                 repo_ids=['repo:example/repo', 'other'], config_result=config))
-
