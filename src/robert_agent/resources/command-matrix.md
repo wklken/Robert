@@ -1,6 +1,6 @@
 # Command Matrix
 
-All commands print one JSON object to stdout. Exit code `0` means success, `2` means retryable failure, `3` means config or input failure, `4` means security refusal, and other non-zero exits mean unclassified failure.
+Commands print one JSON object to stdout, except `worker_heartbeat.py --output-mode tee`, which forwards child streams and uses the child exit status (124 on timeout). Exit code `0` means success, `2` means retryable failure, `3` means config or input failure, `4` means security refusal, and other non-zero exits mean unclassified failure.
 
 | Command | Purpose |
 | --- | --- |
@@ -28,7 +28,7 @@ All commands print one JSON object to stdout. Exit code `0` means success, `2` m
 | `memory_curator.py` | Propose, list, show, approve, and reject human-reviewed runtime knowledge candidates from project memory. |
 | `dispatch.py` | Start or dry-run worker attempts with the configured worker command. |
 | `worker_snapshot.py` | Record a worker phase, status, summary, and next step through the internal worker runtime. |
-| `worker_heartbeat.py` | Run a long worker command while recording heartbeat snapshots. |
+| `worker_heartbeat.py` | Run a long worker command while recording heartbeat snapshots and an attempt command journal; default JSON summary, opt-in `--output-mode tee` for raw stdout/stderr. |
 | `worker_result.py` | Record a worker's structured final result and planned GitHub actions. |
 | `supervise.py` | Inspect active attempts, stale workers, timeouts, and cancel events. |
 | `audit_result.py` | Audit worker-planned GitHub actions against allowed actions before publication. |

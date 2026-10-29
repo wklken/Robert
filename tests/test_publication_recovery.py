@@ -72,10 +72,10 @@ class PublicationRecoveryTests(unittest.TestCase):
                 conn.execute("INSERT INTO workstreams(workstream_id,repo_id,lifecycle,created_at,updated_at) VALUES ('ws','repo','active','now','now')")
                 conn.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('t','ws','completed','now','now')")
                 conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','t',1,'completed')")
-                conn.execute("INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES ('r','t','a','update_pr','now',?)",
+                conn.execute("INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES ('r', 't', 'a', 'update_pr', 'now', json_set(?, '$.result_contract', 'compact-v1'))",
                              (json.dumps({'audit': {'status': 'accepted', 'action_scope': scope}}),))
                 for aid, kind, payload in [('1', 'push_existing_pr', {'worktree_path': tmp, 'branch': 'codex/fix'}),
-                        ('2', 'comment', {'body': 'Done <!-- robert-comment r -->'})]:
+                        ('2', 'comment', {'body': 'Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->'})]:
                     conn.execute('INSERT INTO github_actions VALUES (?,?,?,?,?,?,?,?,?,?)',
                         (aid, 'r', 't', kind, 'https://github.com/x/y/pull/1', '', 'accepted',
                          'not_published', aid, json.dumps(payload)))

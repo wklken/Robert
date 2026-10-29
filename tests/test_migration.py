@@ -80,20 +80,20 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("github_account", columns)
         self.assertNotIn("dd_account", columns)
 
-    def test_legacy_markers_remain_dedupe_compatible(self):
+    def test_legacy_markers_are_not_accepted_by_new_protocol(self):
         legacy_comment = "<!-- dd-comment task_id=1 -->"
         legacy_workstream = "<!-- dd-workstream task_id=1 -->"
 
-        self.assertIsNotNone(
+        self.assertIsNone(
             audit_result.COMMENT_MARKER_RE.search(legacy_comment)
         )
-        self.assertIsNotNone(
+        self.assertIsNone(
             audit_result.WORKSTREAM_MARKER_RE.search(legacy_workstream)
         )
-        self.assertIsNotNone(
+        self.assertIsNone(
             publish.COMMENT_MARKER_RE.search(legacy_comment)
         )
-        self.assertIsNotNone(
+        self.assertIsNone(
             publish.WORKSTREAM_MARKER_RE.search(legacy_workstream)
         )
 

@@ -50,35 +50,16 @@ for line in prompt.splitlines():
         key, value = line.split(": ", 1)
         fields[key] = value
 fingerprints = json.loads(fields["event_fingerprints"])
-workstream_id = fields["workstream_id"]
-issue_number = workstream_id.rsplit("#", 1)[-1]
-repo = workstream_id[len("github:"):].split("#", 1)[0]
-body = (
-    "<!-- robert-workstream\\n"
-    "origin_workstream_id: {{}}\\n"
-    "source_issue: {{}}\\n"
-    "task_id: {{}}\\n"
-    "created_by: robert\\n"
-    "-->\\nFixes #{{}}\\n\\nControlled acceptance PR"
-).format(workstream_id, issue_number, fields["task_id"], issue_number)
-payload = {{
-    "task_id": fields["task_id"],
-    "attempt_id": fields["attempt_id"],
-    "output_type": "new_pr",
+submission = {{
     "planned_github_actions": [
         {{
             "type": "push_existing_pr",
-            "worktree_path": fields["worktree_path"],
-            "branch": fields["branch_name"],
         }},
         {{
             "type": "open_pr",
-            "repo": repo,
-            "head": fields["branch_name"],
-            "base": fields["target_base_branch"],
             "title": "Controlled acceptance PR",
             "issue_resolution": "complete",
-            "body": body,
+            "body": "Controlled acceptance PR",
         }}
     ],
     "consumed_event_fingerprints": fingerprints,
@@ -88,12 +69,15 @@ payload = {{
             "status": "passed",
             "purpose": "record controlled e2e worker acceptance result",
             "required": True,
+            "source": "worker_reported",
             "exit_code": 0,
         }}
     ],
     "handoff": "controlled e2e ready",
     "used_skills": [],
 }}
+payload = {{"task_id": fields["task_id"], "attempt_id": fields["attempt_id"],
+           "output_type": "new_pr", "submission": submission}}
 record = result.record_result(fields["db_path"], payload)
 print(json.dumps(record, sort_keys=True))
 raise SystemExit(0 if record["ok"] else 1)

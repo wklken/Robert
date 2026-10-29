@@ -43,15 +43,12 @@ payload = {{
     "task_id": fields["task_id"],
     "attempt_id": fields["attempt_id"],
     "output_type": "comment_analysis",
+    "submission": {{
     "planned_github_actions": [
         {{
             "type": "comment",
             "target_url": "https://github.com/example/repo/issues/77",
-            "body": "<!-- robert-comment task_id={{}} attempt_id={{}} event_fingerprints={{}} -->\\nAcceptance analysis is ready".format(
-                fields["task_id"],
-                fields["attempt_id"],
-                ",".join(fingerprints),
-            ),
+            "body": "Acceptance analysis is ready",
         }}
     ],
     "consumed_event_fingerprints": fingerprints,
@@ -62,10 +59,12 @@ payload = {{
             "purpose": "record isolated live worker acceptance result",
             "required": True,
             "exit_code": 0,
+            "source": "worker_reported",
         }}
     ],
     "handoff": "acceptance ready",
     "used_skills": [],
+    }},
 }}
 record = result.record_result(fields["db_path"], payload)
 print(json.dumps(record, sort_keys=True))

@@ -11,69 +11,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENT = PACKAGE_ROOT
 
 
-def _dd_pr_body(text, task_id="task-1", issue_number="101"):
-    return (
-        "<!-- robert-workstream\n"
-        f"origin_workstream_id: github:example/backend#{issue_number}\n"
-        f"source_issue: {issue_number}\n"
-        f"task_id: {task_id}\n"
-        "created_by: robert\n"
-        f"-->\nFixes #{issue_number}\n\n"
-        + text
-    )
+def _new_pr_actions(**_assignment):
+    return [{"type": "push_existing_pr"},
+            {"type": "open_pr", "title": "Fix issue", "body": "Opened PR", "issue_resolution": "complete"}]
 
 
-def _open_pr_action(
-    task_id="task-1",
-    issue_number="101",
-    pr_number="909",
-    branch=None,
-):
-    branch = branch or f"codex/dd-{issue_number}-fix"
-    return {
-        "type": "open_pr",
-        "repo": "example/backend",
-        "head": branch,
-        "base": "master",
-        "title": f"Fix issue {issue_number}",
-        "issue_resolution": "complete",
-        "body": _dd_pr_body("Opened PR", task_id=task_id, issue_number=issue_number),
-        "url": f"https://github.com/example/backend/pull/{pr_number}",
-    }
-
-
-def _new_pr_actions(
-    task_id="task-1",
-    issue_number="101",
-    pr_number="909",
-    worktree_path=None,
-    branch=None,
-):
-    branch = branch or f"codex/dd-{issue_number}-fix"
-    worktree_path = worktree_path or f"/tmp/.worktrees/codex__dd-{issue_number}-fix"
-    return [
-        {
-            "type": "push_existing_pr",
-            "worktree_path": worktree_path,
-            "branch": branch,
-        },
-        _open_pr_action(
-            task_id=task_id,
-            issue_number=issue_number,
-            pr_number=pr_number,
-            branch=branch,
-        ),
-    ]
-
-
-def _dd_comment_body(text, task_id="task-1"):
-    return (
-        "<!-- robert-comment\n"
-        f"task_id: {task_id}\n"
-        "created_by: robert\n"
-        "-->\n"
-        + text
-    )
+def _dd_comment_body(text, **_identity):
+    return text
 
 
 def _passed_verification():
@@ -84,6 +28,7 @@ def _passed_verification():
             "purpose": "Verify the mocked issue-to-PR workflow result.",
             "required": True,
             "exit_code": 0,
+            "source": "worker_reported",
         }
     ]
 
@@ -162,6 +107,8 @@ repos:
             """,
             (task_id,),
         )
+        from tests.test_run_once import RunOnceDryRunTests
+        RunOnceDryRunTests._materialize_worktree(self, worktree_path, branch)
         return _new_pr_actions(
             task_id=task_id,
             issue_number=issue_number,
@@ -260,11 +207,13 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self.new_pr_actions_for_attempt(task_id),
-                "consumed_event_fingerprints": ["assigned:assign-issue-101"],
-                "verification": _passed_verification(),
-                "handoff": "opened PR",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self.new_pr_actions_for_attempt(task_id),
+                    "consumed_event_fingerprints": ["assigned:assign-issue-101"],
+                    "verification": _passed_verification(),
+                    "handoff": "opened PR",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -274,6 +223,7 @@ repos:
                 (record["result_id"],),
             )
 
+            conn.execute("UPDATE github_actions SET target_url='https://github.com/example/backend/pull/909', external_id='909' WHERE action_type='open_pr'")
         audited = self.run_fixture([], name="empty-after-pr.json")
 
         self.assertTrue(audited["ok"], audited)
@@ -364,11 +314,13 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self.new_pr_actions_for_attempt(task_id),
-                "consumed_event_fingerprints": ["assigned:assign-issue-101"],
-                "verification": _passed_verification(),
-                "handoff": "opened PR",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self.new_pr_actions_for_attempt(task_id),
+                    "consumed_event_fingerprints": ["assigned:assign-issue-101"],
+                    "verification": _passed_verification(),
+                    "handoff": "opened PR",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -377,6 +329,7 @@ repos:
                 "UPDATE github_actions SET publish_status = 'published' WHERE result_id = ?",
                 (record["result_id"],),
             )
+            conn.execute("UPDATE github_actions SET target_url='https://github.com/example/backend/pull/909', external_id='909' WHERE action_type='open_pr'")
         audited = self.run_fixture([], name="empty-after-open-pr.json")
         self.assertTrue(audited["ok"], audited)
 
@@ -484,7 +437,7 @@ repos:
         self.assertIn('allowed_github_actions: ["comment"]', prompt)
         self.assertIn("required_skills: []", prompt)
         self.assertIn('"pr_author_login": "feature-author"', prompt)
-        self.assertIn("@feature-author <public review summary>", prompt)
+        self.assertIn("Robert adds the trusted PR author mention", prompt)
         self.assertIn("Review PR source workflow:", prompt)
         self.assertNotIn("Review-point evaluation:", prompt)
         self.assertNotIn("push_existing_pr", prompt)
@@ -743,18 +696,20 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "waiting_for_user",
-                "planned_github_actions": [
-                    {
-                        "type": "comment",
-                        "target_url": "https://github.com/example/backend/issues/101",
-                        "body": _dd_comment_body("Please confirm the desired behavior.", task_id=task_id),
-                    }
-                ],
-                "consumed_event_fingerprints": ["assigned:assign-issue-101"],
-                "verification": [],
-                "handoff": "waiting for trusted user clarification",
-                "operator_question": {"kind":"clarification", "summary":"Please confirm the desired behavior.", "choices":[]},
-                "used_skills": [],
+                "submission": {
+                    "planned_github_actions": [
+                        {
+                            "type": "comment",
+                            "target_url": "https://github.com/example/backend/issues/101",
+                            "body": _dd_comment_body("Please confirm the desired behavior.", task_id=task_id),
+                        }
+                    ],
+                    "consumed_event_fingerprints": ["assigned:assign-issue-101"],
+                    "verification": [],
+                    "handoff": "waiting for trusted user clarification",
+                    "operator_question": {"kind":"clarification", "summary":"Please confirm the desired behavior.", "choices":[]},
+                    "used_skills": [],
+                },
             },
         )
         self.assertTrue(record["ok"], record)

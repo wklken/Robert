@@ -30,47 +30,47 @@
 
 ### MAIN-1：预审核与不可修正失败
 
-- [最终审核选择条件](../../src/robert_agent/run_once.py:6203)：`a.status='completed'`，有 worker PID 时需 `process_stopped_at`；无 PID 的受控路径有例外。非 accepted 会更新动作状态并 `_finalize_failed_task`。
-- [helper 入库与拒绝标志](../../src/robert_agent/worker/result.py:244)：owner/生命周期/重复结果也参与检查；已有 `result_validation` 会拒绝重提。waiting 缺可交付 comment 会设置该标志。
+- [最终审核选择条件](../../src/robert_agent/run_once.py)（核查时第 6203 行）：`a.status='completed'`，有 worker PID 时需 `process_stopped_at`；无 PID 的受控路径有例外。非 accepted 会更新动作状态并 `_finalize_failed_task`。
+- [helper 入库与拒绝标志](../../src/robert_agent/worker/result.py)（核查时第 244 行）：owner/生命周期/重复结果也参与检查；已有 `result_validation` 会拒绝重提。waiting 缺可交付 comment 会设置该标志。
 - 临时 DB probe：第一次缺 comment 返回 `failed_validation`；补齐 comment 后返回 `rejected_by_supervisor`；worker_results 仍为 0。
-- [remediation 审核](../../src/robert_agent/audit_result.py:383)要求独立 attestation。不能直接调用全部 audit 并假造证明；拆共同确定性规则，最终 controller 重验。
+- [remediation 审核](../../src/robert_agent/audit_result.py)（核查时第 383 行）要求独立 attestation。不能直接调用全部 audit 并假造证明；拆共同确定性规则，最终 controller 重验。
 - 读取 scope 失败与可修正格式失败分别返回；取消/owner 失效不能改成普通格式重试。预查不会替代进程停止和最终 HEAD 检查。
 
 ### MAIN-2：消费集合影响后续任务，但有过滤
 
-- [模板](../../src/robert_agent/render_prompt.py:436)预填 renderer 本次 events，结果例子复制该数组；[audit](../../src/robert_agent/audit_result.py:591)只要求非空，没有要求全选。
-- [pending 查询](../../src/robert_agent/run_once.py:5480)读取未消费的 context/pending；[child 创建](../../src/robert_agent/run_once.py:5667)重新 authorize，仅 `drives_execution` 生成后续任务。
+- [模板](../../src/robert_agent/render_prompt.py)（核查时第 436 行）预填 renderer 本次 events，结果例子复制该数组；[audit](../../src/robert_agent/audit_result.py)（核查时第 591 行）只要求非空，没有要求全选。
+- [pending 查询](../../src/robert_agent/run_once.py)（核查时第 5480 行）读取未消费的 context/pending；[child 创建](../../src/robert_agent/run_once.py)（核查时第 5667 行）重新 authorize，仅 `drives_execution` 生成后续任务。
 - 两个既有测试分别验证“未消费 pending 建 child”和“不可信历史参与者不能建 child”，本轮运行通过。
 - reviewer 的“默认全量+未处理排除”仍属于新的表达合同。此次保持原字段与行为，既不新增逐项选择，也不根据提交时的最新 DB 自动全选。
 
 ### MAIN-3、DETAIL-1、DETAIL-2：缩小基线与接口改造
 
 - `git diff --stat`：10 tracked files，296 insertions/316 deletions；status 另列 2 个新测试、对照文档和计划。
-- [action scope](../../src/robert_agent/run_once.py:5286)从 DB 推导 repo/base/worktree/branch/remote/sources，再观察 Git HEAD/remote 和特定 review/vote 信息；无 DB mutation，但包含可能耗时的 I/O。
-- [目标审核](../../src/robert_agent/audit_result.py:210)使用该 scope；[route](../../src/robert_agent/route.py:69)与[资源配置](../../src/robert_agent/resources/routes.yml)已定义 outputs/actions。复用现有词汇可以减少兼容转换。
+- [action scope](../../src/robert_agent/run_once.py)（核查时第 5286 行）从 DB 推导 repo/base/worktree/branch/remote/sources，再观察 Git HEAD/remote 和特定 review/vote 信息；无 DB mutation，但包含可能耗时的 I/O。
+- [目标审核](../../src/robert_agent/audit_result.py)（核查时第 210 行）使用该 scope；[route](../../src/robert_agent/route.py)（核查时第 69 行）与[资源配置](../../src/robert_agent/resources/routes.yml)已定义 outputs/actions。复用现有词汇可以减少兼容转换。
 - 前一轮 README 明确普通评论分类尚未真实验证；本记录没有把单元测试当作真实分类效果。
 
 ### DETAIL-3、DETAIL-4：marker 与摘要
 
-- [comment marker](../../src/robert_agent/render_prompt.py:44)没有 action 身份；[publisher](../../src/robert_agent/publish.py:180)按完整 marker 子串查远端 comment。
-- [reconcile 正则](../../src/robert_agent/publication_reconcile.py:17)允许附加字段，[reconcile 查重](../../src/robert_agent/publication_reconcile.py:197)同样按 marker 匹配。
+- [comment marker](../../src/robert_agent/render_prompt.py)（核查时第 44 行）没有 action 身份；[publisher](../../src/robert_agent/publish.py)（核查时第 180 行）按完整 marker 子串查远端 comment。
+- [reconcile 正则](../../src/robert_agent/publication_reconcile.py)（核查时第 17 行）允许附加字段，[reconcile 查重](../../src/robert_agent/publication_reconcile.py)（核查时第 197 行）同样按 marker 匹配。
 - 探针：远端仅有第一条 comment，第二动作相同 marker 返回 deduplicated；加 action_index 后，两处正则完整匹配，lookup 为 not_found。使用模拟 run_command，没有 GitHub 请求。
-- [spool fingerprint](../../src/robert_agent/result_spool.py:15)对整个 payload 计算摘要；pending 与 DB 已有结果分别比较摘要。改变规范化 marker 即改变摘要，支持 reviewer 的升级风险判断。
+- [spool fingerprint](../../src/robert_agent/result_spool.py)（核查时第 15 行）对整个 payload 计算摘要；pending 与 DB 已有结果分别比较摘要。改变规范化 marker 即改变摘要，支持 reviewer 的升级风险判断。
 - 新语义键必须含 attempt 身份；重放使用首个有效提交保存的规范化结果，不能按新 normalizer 重建，也不能重新算旧格式指纹。
 
 ### DETAIL-5：命令证据与 tree 的证明范围
 
-- [实际 journal](../../src/robert_agent/worker/heartbeat.py:163)无 argv/cwd/tree。文件顶部 `build_command_record` 虽有 active_command，不代表真实运行 journal 已保存它。
-- [wrapper 输出](../../src/robert_agent/worker/heartbeat.py:259)返回尾部与日志位置。临时执行 100 行输出，完整文件 100 行、返回 80 行且 truncated=true。
+- [实际 journal](../../src/robert_agent/worker/heartbeat.py)（核查时第 163 行）无 argv/cwd/tree。文件顶部 `build_command_record` 虽有 active_command，不代表真实运行 journal 已保存它。
+- [wrapper 输出](../../src/robert_agent/worker/heartbeat.py)（核查时第 259 行）返回尾部与日志位置。临时执行 100 行输出，完整文件 100 行、返回 80 行且 truncated=true。
 - 临时 Git 仓库实验：独立 GIT_INDEX_FILE + add -A/write-tree 能识别未跟踪且未忽略文件的变化，真实 index hash 不变；修改 `.gitignore` 排除的 local.env 后 tree 不变。故 tree 相等不是完整执行输入一致的证明。
 - 记录 argv/cwd 和明示来源成立；原样输出采用显式 tee 模式，保留大输出摘要选择。严格新鲜度准入须覆盖旧新证据路径，当前方案先移除该承诺。
 
 ### DETAIL-6、DETAIL-7、DETAIL-8：环境、数据与文件
 
-- [环境白名单](../../src/robert_agent/dispatch.py:33)剔除未允许变量；[普通 worker kwargs](../../src/robert_agent/run_once.py:5077)未传 trusted_environment。probe 中未列入白名单的 ROBERT_BINDING 被丢弃。
-- [metrics](../../src/robert_agent/execution_metrics.py:96)按任务/route/生命周期聚合时间，没有所需错误原因分布。[helper](../../src/robert_agent/worker/result.py:185)部分失败直接返回；仅查 DB 会漏报。
+- [环境白名单](../../src/robert_agent/dispatch.py)（核查时第 33 行）剔除未允许变量；[普通 worker kwargs](../../src/robert_agent/run_once.py)（核查时第 5077 行）未传 trusted_environment。probe 中未列入白名单的 ROBERT_BINDING 被丢弃。
+- [metrics](../../src/robert_agent/execution_metrics.py)（核查时第 96 行）按任务/route/生命周期聚合时间，没有所需错误原因分布。[helper](../../src/robert_agent/worker/result.py)（核查时第 185 行）部分失败直接返回；仅查 DB 会漏报。
 - 按 `paths.default_config_path/default_data_dir` 检查，默认 config 和 data_dir 均不存在。只证明这两个入口不可用，不能断言其他机器/自定义目录没有生产 DB。
-- [GitHub context writer](../../src/robert_agent/run_once.py:2910)重复使用 task 下同一路径；临时调用两次，旧路径内容被第二次覆盖。[prepared refresh](../../src/robert_agent/run_once.py:3026)限 queued/prepared；[resume](../../src/robert_agent/run_once.py:4335)也调用同一 writer。[Web](../../src/robert_agent/run_once.py:3592)已使用 attempt 文件名。
+- [GitHub context writer](../../src/robert_agent/run_once.py)（核查时第 2910 行）重复使用 task 下同一路径；临时调用两次，旧路径内容被第二次覆盖。[prepared refresh](../../src/robert_agent/run_once.py)（核查时第 3026 行）限 queued/prepared；[resume](../../src/robert_agent/run_once.py)（核查时第 4335 行）也调用同一 writer。[Web](../../src/robert_agent/run_once.py)（核查时第 3592 行）已使用 attempt 文件名。
 
 ## 本轮验证命令与结果
 

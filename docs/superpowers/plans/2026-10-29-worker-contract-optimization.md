@@ -1,16 +1,16 @@
 # Worker 协议优化方案（review 后修订）
 
-状态：方案已按“直接升级新协议，不兼容旧协议”修订，尚未实施。2026-10-29。
+状态：阶段 0–4 已完成实现、本地验证和审查，进入 PR 交付。运行时仅接受新协议。2026-10-29。
 
-本次仅更新方案；没有修改产品代码、提交基线、调用真实模型或部署。此前逐项判定与复现结果见 [review 验证记录](../../reviews/2026-10-29-worker-contract-review.md)；其中旧协议兼容建议已被用户本次指令替代。
+实施与最终验证见 [交付记录和逐阶段 prompt 对照](../../reviews/2026-10-29-worker-contract-prompts/README.md)。没有调用真实模型或部署。此前逐项判定与复现结果见 [review 验证记录](../../reviews/2026-10-29-worker-contract-review.md)；其中旧协议兼容建议已被用户本次指令替代。
 
 ## 1. 目标、基线与职责
 
 Robert 维护任务身份、权限和生命周期，负责确定性字段装配、持久化、审核与发布；worker 理解请求、完成代码工作、提供业务判断与证据。首先减少可纠正的提交错误造成整次任务失败，其次减少协议字段搬运和重复读取。
 
 - 仓库：`/Users/wklken/workspace/tx/wklken/Robert`，实际 `/Volumes/ExtSSD/workspace/Robert`。
-- 核查 HEAD：`b86f32754d450f67539f902de4c1eb914452b9ca`，加当前未提交的三项 prompt 优化。
-- tracked diff：10 个文件、296 行新增/316 行删除；另有 2 个新测试文件及 prompt 对照资料。验证记录保留关键文件 hash。
+- 原方案核查 HEAD：`b86f32754d450f67539f902de4c1eb914452b9ca`；实施从 `origin/main` 的 `853528897d6232d53956b089f1fa3f544bea3b30` 开始，三项 prompt 优化独立提交为 `ff42f36d1fbe310077c9590af3c17cc5aa4303e0`。
+- 原方案统计的未提交基线为 10 个 tracked 文件及 2 个新测试；该统计是历史快照，不代表当前 PR 范围。
 - 普通评论分类仍缺真实任务效果证据；上一轮 1,336 项测试不能代替后续验证。
 - 不迁移工作流框架，不改模型配置，不重写调度器，不以新表、完整 manifest/revision 系统为前提。
 - 运行时只接受新协议：不保留旧解析器、字段别名、缺版本回退、旧 spool 解码和专用兼容入口。prompt、helper、controller、publisher 及所有调用方同步升级。
@@ -48,7 +48,7 @@ DB、JSON、Markdown 分别承载运行状态、机器交换/存档、阅读视�
 
 ### 阶段 0：稳定基线与失败原因数据
 
-- 在后续明确的实施/本地提交授权范围内，将已有三项优化形成独立本地 commit，不混入新协议改动，不推送。本轮只记录 HEAD/diff/hash，没有执行 commit。
+- 已将三项优化及其方案/证据独立提交为 `ff42f36`，后续协议实现单独提交。用户已授权通过 subagent 创建 PR；未授权合并或部署。
 - 复用 [14 组 prompt 对照](../../reviews/2026-10-29-worker-prompts/README.md)，覆盖普通请求、review report、mixed、长讨论、等待用户、Web、CI/conflict 与 resume。
 - 在可用运行环境中抽样验证已有分类策略。当前未定位到本机生产 DB/config，不宣称已取得生产统计或真实模型验证。
 - 只读统计按 route/task_kind/input-policy/worker/时间窗口分组：最终 audit reason/safe_error、helper failed_validation、result_conflict、spool 拒绝、人工 retry/operator recovery、失败前已用时间，并记录样本分母和缺失率。
@@ -62,7 +62,7 @@ DB、JSON、Markdown 分别承载运行状态、机器交换/存档、阅读视�
 
 主要文件：`worker/result.py`、`audit_result.py`、`run_once.py`；必要时抽取共享 scope/审核上下文模块。以规范化后的完整结果为审核输入，不要求先引入 manifest。
 
-现状：helper 接受并入库后，controller 要等 attempt completed、真实进程停止才做最终审核；waiting 缺 comment 会写 `result_validation`，同 attempt 修正后也被拒绝。
+改造前：helper 接受并入库后，controller 要等 attempt completed、真实进程停止才做最终审核；waiting 缺 comment 会写 `result_validation`，同 attempt 修正后也被拒绝。
 
 实现合同：
 
@@ -207,4 +207,4 @@ git diff --check
 
 抽取共享 helper 时检查 imports、导出、CLI/动态入口、全部消费者和循环依赖；删除只为旧协议服务的解析、别名、转发及测试。保留行为合同测试，更新为新输入，另验证不支持格式被明确拒绝。真实模型效果与离线/mock 检查分别报告；缺生产频率时不承诺加速排名或百分比。
 
-本轮交付仅为修订方案与验证记录。产品实现、本地 commit、真实模型实验、推送与部署均未执行。
+实现与验证状态以 [交付记录](../../reviews/2026-10-29-worker-contract-prompts/README.md) 为准。性能收益需要真实任务测量；当前不承诺延迟改善比例。

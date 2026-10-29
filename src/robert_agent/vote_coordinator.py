@@ -55,7 +55,7 @@ class Coordinator(StageCoordinator):
                 continue
             if prepared['status'] == 'needs_clarification':
                 target = self.target_url()
-                body = prepared['question'] + f'\n\n<!-- robert-comment vote-clarification={self.round_id} attempt={self.attempt_id} -->'
+                body = prepared['question']
                 payload = worker_result.build_result(self.task_id, self.attempt_id, 'waiting_for_user',
                     [self.session['trigger_fingerprint']], [], prepared['question'],
                     [{'type': 'comment', 'target_url': target, 'body': body}], used_skills=[],
@@ -120,7 +120,8 @@ class Coordinator(StageCoordinator):
         result = self.run_phase('synthesis', self.request['workers'][0], prompt, validate, input_hash=inputs_hash)
         ballots = vote_files.selected_ballots(self.manifest, records)
         summary = vote_files.read_synthesis(result['synthesis_path'], self.manifest, records, inputs_hash)
-        body = vote_files.render(self.manifest, records, ballots, tally, summary)
+        body = vote_files.render(self.manifest, records, ballots, tally, summary,
+                                 task_id=self.task_id, attempt_id=self.attempt_id)
         report = root / 'vote-report.md'
         report.write_text(body)
         self.check_sources()
@@ -128,9 +129,7 @@ class Coordinator(StageCoordinator):
         vote_workspace.verify_snapshot(self.manifest)
         with vote_store.connect(self.db_path) as conn:
             vote_store.update(conn, self.round_id, status='ready', report_path=str(report), report_sha256=vote_files.digest(report))
-        action = {'type': 'comment', 'target_url': self.target_url(), 'body': body, 'vote_round_id': self.round_id,
-                  'vote_snapshot_id': self.manifest['snapshot_id'], 'vote_report_path': str(report),
-                  'vote_report_sha256': vote_files.digest(report)}
+        action = {'type': 'comment', 'target_url': self.target_url(), 'body': body}
         payload = worker_result.build_result(self.task_id, self.attempt_id, 'multi_agent_vote_report',
                     [self.session['trigger_fingerprint']], [], f'Vote report: {report}', [action], used_skills=[])
         self.record(payload)

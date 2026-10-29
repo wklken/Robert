@@ -1,3 +1,4 @@
+from tests.result_fixtures import internal_result
 from contextlib import closing
 import json
 from pathlib import Path
@@ -12,12 +13,12 @@ from tests import test_run_once as run_tests
 
 class ReviewInputWorkflowTests(unittest.TestCase):
     def payload(self, kind=None):
-        payload = result.build_result(
+        payload = internal_result(
             "task-1", "attempt-1", "update_existing_pr", ["comment:1"], [], "Handled request",
             planned_github_actions=[
                 {"type": "push_existing_pr", "worktree_path": "/worktree", "branch": "codex/fix"},
                 {"type": "comment", "target_url": "https://github.com/x/y/pull/1",
-                 "body": "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 event_fingerprints=comment:1 -->\nUpdated."},
+                 "body": "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\nUpdated."},
             ],
         )
         if kind is not None:
@@ -110,7 +111,7 @@ class ReviewInputIntegrationTests(unittest.TestCase):
         self.assertIn('review_input_kind="request"', prompt)
         payload = result.build_result(task_id, attempt_id, "update_existing_pr", ["comment:request-1"], [], "No change needed",
             planned_github_actions=[{"type": "comment", "target_url": "https://github.com/example/backend/pull/456",
-                                     "body": f"<!-- robert-comment task_id={task_id} attempt_id={attempt_id} event_fingerprints=comment:request-1 -->\nThe requested check already exists."}],
+                                     "body": "The requested check already exists."}],
             review_input_kind="request")
         record = result.record_result(db_path, payload)
         self.assertTrue(record["ok"], record)

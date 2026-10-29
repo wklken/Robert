@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from robert_agent import result_contract
+
 from robert_agent.review_files import atomic_json as atomic_json, safe_path, _read_json as _read_json_path
 
 
@@ -164,7 +166,7 @@ def synthesis_prompt(manifest, inputs, inputs_hash, records):
             'Write synthesis.json using this shape:\n' + json.dumps(example, ensure_ascii=False) + '\n')
 
 
-def render(manifest, records, ballots, tally, synthesis):
+def render(manifest, records, ballots, tally, synthesis, *, task_id, attempt_id):
     def cell(value):
         return str(value).replace('|', '\\|').replace('\n', '<br>')
     options = manifest['spec']['options']
@@ -195,7 +197,7 @@ def render(manifest, records, ballots, tally, synthesis):
     lines += ['', f"Round: {manifest['round_id']} / snapshot: {manifest['snapshot_id']}",
               f"代码 revision: {manifest.get('head_sha') or '纯讨论，无源码快照'}", '',
               '每个配置参与者等权一票；相同或默认模型不代表已验证的模型多样性。建议不授权自动实施或合并。', '',
-              f"<!-- robert-comment vote={manifest['round_id']} -->", f"<!-- robert-vote round={manifest['round_id']} -->", '']
+              result_contract.comment_marker(task_id, attempt_id, 0), f"<!-- robert-vote round={manifest['round_id']} -->", '']
     result = '\n'.join(lines)
     if len(result.encode('utf-8')) > 60000:
         raise ValueError('vote report exceeds bounded publication size')

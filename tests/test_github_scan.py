@@ -161,11 +161,7 @@ class ObservationTests(unittest.TestCase):
         self.assertIsNone(lane.poll())
         with closing(sqlite3.connect(db)) as conn, conn:
             task, attempt = conn.execute('SELECT task_id,attempt_id FROM attempts').fetchone()
-        payload = {'task_id': task, 'attempt_id': attempt, 'output_type': 'comment_analysis',
-                   'planned_github_actions': [{'type': 'comment', 'target_url': event['url'],
-                       'body': f'<!-- robert-comment task_id={task} attempt_id={attempt} event_fingerprints=comment:analysis-one -->\\nReady'}],
-                   'consumed_event_fingerprints': ['comment:analysis-one'], 'verification': [],
-                   'used_skills': [], 'handoff': 'ready'}
+        payload = {'task_id': task, 'attempt_id': attempt, 'output_type': 'comment_analysis', 'submission': {'planned_github_actions': [{'type': 'comment', 'target_url': event['url'], 'body': 'Ready'}], 'consumed_event_fingerprints': ['comment:analysis-one'], 'verification': [], 'used_skills': [], 'handoff': 'ready'}}
         self.assertTrue(worker_result.record_result(db, payload)['ok'])
         run_once.run_once(fixture.config_path, dry_run=False, skip_external=True,
                           skip_publish=True, consume_observations=True)

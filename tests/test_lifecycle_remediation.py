@@ -35,10 +35,7 @@ class LifecycleRemediationTests(unittest.TestCase):
         db = fixture.data_dir / 'dd.sqlite3'
         with closing(sqlite3.connect(db)) as conn:
             task, attempt = conn.execute('SELECT task_id,attempt_id FROM attempts').fetchone()
-        payload = {'task_id': task, 'attempt_id': attempt, 'output_type': 'classification_result',
-                   'planned_github_actions': [], 'consumed_event_fingerprints': ['assigned:assign-handoff'],
-                   'verification': [], 'handoff': 'Route to implementation', 'used_skills': [],
-                   'recommended_route': 'new-pr', 'branch_slug': 'ci-change'}
+        payload = {'task_id': task, 'attempt_id': attempt, 'output_type': 'classification_result', 'submission': {'planned_github_actions': [], 'consumed_event_fingerprints': ['assigned:assign-handoff'], 'verification': [], 'handoff': 'Route to implementation', 'used_skills': [], 'recommended_route': 'new-pr', 'branch_slug': 'ci-change'}}
         self.assertTrue(result.record_result(db, payload)['ok'])
         for failure in range(1, 4):
             with mock.patch.object(run_once, '_prepare_worktree', side_effect=subprocess.CalledProcessError(
@@ -87,7 +84,7 @@ class LifecycleRemediationTests(unittest.TestCase):
         old = (now - timedelta(minutes=age_minutes)).isoformat()
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.execute(
-                "UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,metadata_json=?",
+                "UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,metadata_json=json_set(?, '$.result_contract', 'compact-v1')",
                 (old, old, json.dumps({'dispatch': identity})),
             )
             task, repo = conn.execute('''SELECT t.task_id,w.repo_id FROM tasks t
@@ -225,7 +222,7 @@ class LifecycleRemediationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            conn.execute("UPDATE attempts SET status='prepared',started_at=NULL,heartbeat_at=NULL,metadata_json='{}'")
+            conn.execute("UPDATE attempts SET status='prepared',started_at=NULL,heartbeat_at=NULL,metadata_json=json_set('{}', '$.result_contract', 'compact-v1')")
             task, repo = conn.execute('''SELECT t.task_id,w.repo_id FROM tasks t
                 JOIN workstreams w ON w.workstream_id=t.workstream_id''').fetchone()
             execution_store.ensure_subject(conn, 'task', task, 'human_request', datetime.now(timezone.utc).isoformat())

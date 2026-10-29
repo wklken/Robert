@@ -30,7 +30,7 @@ class PublicationReconcileTests(unittest.TestCase):
         metadata = {
             "audit": {"status": "accepted", "action_scope": scope}
         }
-        body = "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 -->\nready"
+        body = "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\nready"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES ('repo-1', 'x/y', 'bot', 'main', '/repo', '/worktrees')"
@@ -47,7 +47,7 @@ class PublicationReconcileTests(unittest.TestCase):
                 "INSERT INTO attempts(attempt_id, task_id, attempt_no, status) VALUES ('attempt-1', 'task-1', 1, 'completed')"
             )
             conn.execute(
-                "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES ('result-1', 'task-1', 'attempt-1', 'comment_analysis', ?, ?)",
+                "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES ('result-1', 'task-1', 'attempt-1', 'comment_analysis', ?, json_set(?, '$.result_contract', 'compact-v1'))",
                 (now, json.dumps(metadata, sort_keys=True)),
             )
             conn.execute(
@@ -329,7 +329,7 @@ class PublicationReconcileTests(unittest.TestCase):
         body = "<!-- robert-workstream task_id=task-1 -->\nPR"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": {"repo": "x/y", "sources": []}}}),),
             )
             conn.execute(
@@ -397,7 +397,7 @@ class PublicationReconcileTests(unittest.TestCase):
         }
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),),
             )
             conn.execute(
@@ -446,7 +446,7 @@ class PublicationReconcileTests(unittest.TestCase):
         }
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),),
             )
             conn.execute(
@@ -504,7 +504,7 @@ class PublicationReconcileTests(unittest.TestCase):
         worktree.mkdir()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (
                     json.dumps(
                         {
@@ -563,7 +563,7 @@ class PublicationReconcileTests(unittest.TestCase):
         }
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),),
             )
             conn.execute(
@@ -638,7 +638,7 @@ class PublicationReconcileTests(unittest.TestCase):
         }
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),),
             )
             conn.execute(
@@ -688,7 +688,7 @@ class PublicationReconcileTests(unittest.TestCase):
         worktree.mkdir()
         scope = {"repo": "x/y", "sources": [], "worktree_path": str(worktree), "branch_name": "feature", "result_head_sha": source_sha}
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'", (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),))
+            conn.execute("UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'", (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),))
             conn.execute("UPDATE github_actions SET action_type = 'push_existing_pr', metadata_json = ? WHERE action_id = 'action-1'", (json.dumps({"worktree_path": str(worktree), "branch": "feature"}),))
             binding = execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', 'now')
             execution_store.close_binding(conn, "task", "task-1", "now")
@@ -706,7 +706,7 @@ class PublicationReconcileTests(unittest.TestCase):
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')
-            conn.execute("UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'", (json.dumps({"audit": {"status": "accepted", "action_scope": []}}),))
+            conn.execute("UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'", (json.dumps({"audit": {"status": "accepted", "action_scope": []}}),))
         calls = []
         result = publish.publish_ready_actions(self.db_path, run_command=lambda command, **kwargs: calls.append(command) or (_ for _ in ()).throw(AssertionError(command)))
         self.assertFalse(result["ok"])
@@ -725,7 +725,7 @@ class PublicationReconcileTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": {}}}),),
             )
         calls = []

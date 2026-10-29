@@ -1,3 +1,4 @@
+from tests.result_fixtures import internal_result
 from contextlib import closing
 import json
 import sys
@@ -50,9 +51,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_with_allowed_actions_audits_clean(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -84,9 +84,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_comment_target_must_match_action_scope_source(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -117,9 +116,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_open_pr_target_must_match_action_scope(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -160,9 +158,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_push_target_must_match_action_scope(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -203,9 +200,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_audit_accepts_missing_recommended_skills(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -233,11 +229,11 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_result_recording_allows_no_external_skills(self):
         from robert_agent.worker import result
 
-        db_path = self._init_attempt_db()
+        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
-            output_type="comment_analysis",
+            output_type="local_result",
             planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -251,9 +247,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_audit_accepts_extra_installed_skills(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -280,9 +275,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_result_accepts_push_existing_pr_action_with_response_comment(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -315,9 +309,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_push_without_response_comment_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -345,9 +338,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_response_comment_must_follow_push_action(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -376,9 +368,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_push_existing_pr_without_review_point_evaluation_creates_policy_violation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -406,9 +397,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_push_existing_pr_with_all_rejected_review_points_creates_policy_violation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -437,9 +427,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_push_existing_pr_with_invalid_review_point_entry_creates_policy_violation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -470,9 +459,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_push_existing_pr_cannot_implement_incorrect_review_point(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -501,9 +489,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_comment_only_requires_review_point_evaluation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -530,9 +517,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_mergeable_report_accepts_comment_only_response(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -566,9 +552,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_comment_only_without_review_point_evaluation_fails(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -595,9 +580,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_review_comment_result_requires_review_point_evaluation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="review_comment",
@@ -624,9 +608,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_pr_review_comment_result_does_not_require_review_point_evaluation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="pr_review_comment",
@@ -655,9 +638,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_pr_review_comment_requires_pr_author_login(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="pr_review_comment",
@@ -686,9 +668,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_pr_review_comment_requires_mentioning_pr_author(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="pr_review_comment",
@@ -718,9 +699,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_pr_review_comment_requires_fast_review_skill(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="pr_review_comment",
@@ -750,9 +730,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_required_skill_missing_from_used_skills_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -781,9 +760,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_result_without_type_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -805,9 +783,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_with_extra_action_creates_policy_violation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -824,9 +801,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_new_pr_result_requires_open_pr_action(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -846,9 +822,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_new_pr_result_accepts_push_then_open_pr_actions(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -954,7 +929,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
         self.assertEqual(audit["status"], "accepted")
 
-    def test_issue_sourced_closing_reference_infers_complete_for_compatibility(self):
+    def test_issue_sourced_closing_reference_requires_explicit_resolution(self):
         from robert_agent import audit_result
 
         payload = self._issue_new_pr_result(
@@ -969,13 +944,13 @@ class WorkerProtocolTests(unittest.TestCase):
             action_scope=self._issue_action_scope(),
         )
 
-        self.assertEqual(audit["status"], "accepted")
+        self.assertEqual(audit["status"], "failed")
+        self.assertIn("issue_resolution", audit["safe_error"])
 
     def test_new_pr_route_policy_rejects_empty_verification(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -1015,9 +990,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_new_pr_route_policy_accepts_required_passed_verification(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -1056,11 +1030,10 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_route_policy_rejects_skipped_required_verification(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
         skipped = self._verification_entry(status="skipped")
         skipped["skipped_reason"] = "not run"
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -1100,9 +1073,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_update_existing_pr_comment_only_policy_allows_empty_verification(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -1134,9 +1106,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_output_type_must_match_expected_output(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -1165,7 +1136,7 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_classification_result_records_recommended_route(self):
         from robert_agent.worker import result
 
-        db_path = self._init_attempt_db()
+        db_path = self._init_attempt_db(output_type="classification_result", route_id="classification-result")
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
@@ -1189,16 +1160,15 @@ class WorkerProtocolTests(unittest.TestCase):
                     (record["result_id"],),
                 ).fetchone()[0]
             )
-        self.assertEqual(payload["recommended_route"], "new-pr")
+        self.assertEqual(payload["submission"]["recommended_route"], "new-pr")
         self.assertEqual(metadata["recommended_route"], "new-pr")
-        self.assertEqual(payload["branch_slug"], "model-service-connectivity-test")
+        self.assertEqual(payload["submission"]["branch_slug"], "model-service-connectivity-test")
         self.assertEqual(metadata["branch_slug"], "model-service-connectivity-test")
 
     def test_classification_result_rejects_invalid_branch_slug(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="classification_result",
@@ -1222,9 +1192,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_blocked_execution_cannot_complete_with_waiting_route_recommendation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -1261,9 +1230,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_classification_can_recommend_waiting_route(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="classification_result",
@@ -1285,9 +1253,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_blocked_execution_accepts_waiting_output_and_scope_question(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="waiting_for_user",
@@ -1319,9 +1286,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_comment_action_without_idempotency_marker_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -1344,9 +1310,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_open_pr_action_missing_publisher_fields_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -1375,9 +1340,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_open_pr_action_without_workstream_marker_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -1406,9 +1370,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_push_existing_pr_action_missing_publisher_fields_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -1432,9 +1395,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_with_sensitive_public_action_text_creates_policy_violation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -1457,9 +1419,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_with_local_public_action_text_requires_redaction(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -1485,9 +1446,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_result_missing_consumed_events_fails_audit(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
@@ -1504,9 +1464,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_web_waiting_result_accepts_local_event_and_structured_question(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-local",
             attempt_id="attempt-local",
             output_type="waiting_for_user",
@@ -1537,9 +1496,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_waiting_result_without_question_fails(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-local",
             attempt_id="attempt-local",
             output_type="waiting_for_user",
@@ -1563,9 +1521,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_web_result_requires_local_event_and_rejects_github_action(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-local",
             attempt_id="attempt-local",
             output_type="local_result",
@@ -1619,9 +1576,9 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed"}],
+            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
             handoff="done",
             used_skills=["fast-code-path"],
         )
@@ -1645,7 +1602,7 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="done",
@@ -1675,13 +1632,13 @@ class WorkerProtocolTests(unittest.TestCase):
         from robert_agent import execution_store
         from robert_agent.worker import result
 
-        db_path = self._init_attempt_db()
+        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         with closing(sqlite3.connect(db_path)) as conn, conn:
             execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
-            output_type="comment_analysis",
+            output_type="local_result",
             planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -1703,11 +1660,11 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_result_notifies_only_after_transaction_commits(self):
         from robert_agent.worker import result
 
-        db_path = self._init_attempt_db()
+        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
-            output_type="comment_analysis",
+            output_type="local_result",
             planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -1740,11 +1697,11 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_result_stays_successful_when_post_commit_notification_fails(self):
         from robert_agent.worker import result
 
-        db_path = self._init_attempt_db()
+        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
-            output_type="comment_analysis",
+            output_type="local_result",
             planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -1770,7 +1727,7 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="done",
@@ -1798,7 +1755,7 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="done",
@@ -1842,9 +1799,9 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed"}],
+            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
             handoff="done",
             used_skills=["fast-code-path"],
             review_point_evaluation=[self._review_point("correct", "comment")],
@@ -1869,7 +1826,13 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_result_records_remediation_evidence_metadata(self):
         from robert_agent.worker import result
 
-        db_path = self._init_attempt_db()
+        db_path = self._init_attempt_db(output_type="update_existing_pr", route_id="update-existing-pr")
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET task_kind='ci_remediation', metadata_json=json_object('remediation_episode_id','episode-ci')")
+            conn.execute("UPDATE github_sources SET source_type='pull_request',source_key='x/y!1'")
+            conn.execute("""INSERT INTO pr_remediation_episodes(episode_id,workstream_id,episode_kind,subject_key,
+                observed_head_sha,observed_base_sha,status,failure_signature,first_seen_at,updated_at)
+                VALUES('episode-ci','ws-1','ci','ci-1','head-1','base-1','remediating','failure-1','now','now')""")
         evidence = {
             "kind": "ci",
             "episode_id": "episode-ci",
@@ -1882,12 +1845,12 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
-            planned_github_actions=[],
+            planned_github_actions=[{"type": "comment", "body": "CI correction completed."}],
             consumed_event_fingerprints=["github-system:workflow_run:101:1"],
             verification=[],
             handoff="fixed CI",
             used_skills=["fast-test-fix", "fast-preflight"],
-            remediation_evidence=evidence,
+            remediation_evidence={"resolution_summary": evidence["resolution_summary"]},
         )
 
         record = result.record_result(db_path, payload)
@@ -1903,7 +1866,6 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_remediation_audit_requires_matching_trusted_evidence_and_attestation(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
 
         evidence = {
             "kind": "ci",
@@ -1913,7 +1875,7 @@ class WorkerProtocolTests(unittest.TestCase):
             "failure_signature": "failure-1",
             "resolution_summary": "Fixed the failing unit test.",
         }
-        payload = result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
@@ -2018,9 +1980,9 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed"}],
+            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
             handoff="done",
             used_skills=["fast-code-path"],
             memory_delta=memory_delta,
@@ -2045,7 +2007,7 @@ class WorkerProtocolTests(unittest.TestCase):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="done",
@@ -2084,7 +2046,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 }
             ],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed"}],
+            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
             handoff="ready to comment",
             used_skills=["fast-code-path"],
         )
@@ -2100,7 +2062,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 """
             ).fetchone()
         self.assertEqual(action[:5], ("comment", "https://github.com/x/y/issues/1", None, "pending", "not_published"))
-        self.assertEqual(json.loads(action[5])["body"], "Looks good")
+        self.assertTrue(json.loads(action[5])["body"].startswith("Looks good\n\n<!-- robert-comment"))
 
     def test_result_rejects_missing_used_skills(self):
         from robert_agent.worker import result
@@ -2111,13 +2073,15 @@ class WorkerProtocolTests(unittest.TestCase):
             "attempt_id": "attempt-1",
             "output_type": "comment_analysis",
             "planned_github_actions": [
-                {"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}
+                {"type": "comment", "body": "Completed analysis."}
             ],
             "consumed_event_fingerprints": ["comment:1"],
             "verification": [],
             "handoff": "missing skill evidence",
         }
 
+        payload = {"task_id": payload.pop("task_id"), "attempt_id": payload.pop("attempt_id"),
+                   "output_type": payload.pop("output_type"), "submission": payload}
         record = result.record_result(db_path, payload)
 
         self.assertFalse(record["ok"], record)
@@ -2138,7 +2102,7 @@ class WorkerProtocolTests(unittest.TestCase):
             "attempt_id": "attempt-1",
             "output_type": "comment_analysis",
             "actual_github_actions": [
-                {"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}
+                {"type": "comment", "body": "Completed analysis."}
             ],
             "consumed_event_fingerprints": ["comment:1"],
             "used_skills": ["fast-code-path"],
@@ -2150,7 +2114,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
         self.assertFalse(record["ok"], record)
         self.assertEqual(record["status"], "failed_validation")
-        self.assertIn("planned_github_actions", record["safe_error"])
+        self.assertEqual(record["reason_code"], "invalid_envelope")
         with closing(sqlite3.connect(db_path)) as conn, conn:
             result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
             action_count = conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0]
@@ -2171,7 +2135,7 @@ class WorkerProtocolTests(unittest.TestCase):
             attempt_id="attempt-1",
             output_type="comment_analysis",
             planned_github_actions=[
-                {"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}
+                {"type": "comment", "body": "Completed analysis."}
             ],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -2211,7 +2175,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
         self.assertFalse(record["ok"], record)
         self.assertEqual(record["status"], "failed_validation")
-        self.assertIn("planned_github_actions[*].type", record["safe_error"])
+        self.assertEqual(record["field_path"], "planned_github_actions[0].type")
         with closing(sqlite3.connect(db_path)) as conn, conn:
             result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
             action_count = conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0]
@@ -2239,7 +2203,7 @@ class WorkerProtocolTests(unittest.TestCase):
             attempt_id="attempt-1",
             output_type="comment_analysis",
             planned_github_actions=[
-                {"type": "comment", "url": "https://github.com/x/y/issues/1#comment"}
+                {"type": "comment", "body": "Completed analysis."}
             ],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -2270,7 +2234,7 @@ class WorkerProtocolTests(unittest.TestCase):
         payload = result.build_result(
             task_id="missing-task",
             attempt_id="missing-attempt",
-            output_type="comment_analysis",
+            output_type="local_result",
             planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -2278,8 +2242,7 @@ class WorkerProtocolTests(unittest.TestCase):
             used_skills=["fast-code-path"],
         )
 
-        with self.assertRaises(sqlite3.IntegrityError):
-            result.record_result(db_path, payload)
+        self.assertEqual(result.record_result(db_path, payload)["status"], "rejected_by_supervisor")
 
     def test_heartbeat_executes_command_and_records_phase(self):
         from robert_agent.worker import heartbeat
@@ -2576,8 +2539,8 @@ class WorkerProtocolTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM worker_phases WHERE summary='Command exited 0'",
             ).fetchone()[0], 1)
 
-    def _init_attempt_db(self):
-        from robert_agent import storage
+    def _init_attempt_db(self, *, output_type="comment_analysis", route_id="comment-analysis"):
+        from robert_agent import storage, route
 
         db_path = self.root / "dd.sqlite3"
         storage.init_database(db_path)
@@ -2610,6 +2573,11 @@ class WorkerProtocolTests(unittest.TestCase):
                 """,
                 (now, now),
             )
+            conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.result_contract','compact-v1')")
+            conn.execute("UPDATE repos SET full_name='x/y'")
+            conn.execute("INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number) VALUES('source-1','repo-1','x/y#1','issue',1)")
+            conn.execute("UPDATE workstreams SET primary_source_id='source-1'")
+            conn.execute("INSERT INTO route_decisions(route_decision_id,task_id,route_id,expected_output,allowed_github_actions_json,confidence,created_at) VALUES('route-1','task-1',?,?,?,'high',?)", (route_id,output_type,json.dumps(route.ROUTES[route_id]["allowed_github_actions"]),now))
         return db_path
 
     def _dd_pr_body(self, text):
@@ -2626,6 +2594,7 @@ class WorkerProtocolTests(unittest.TestCase):
     def _issue_action_scope(self):
         return {
             "repo": "x/y",
+            "result_head_sha": "a" * 40,
             "base_branch": "master",
             "worktree_path": "/repo/.worktrees/dd-1",
             "branch_name": "codex/dd-1",
@@ -2639,7 +2608,6 @@ class WorkerProtocolTests(unittest.TestCase):
         issue_reference,
         remaining_scope="",
     ):
-        from robert_agent.worker import result
 
         open_pr = {
             "type": "open_pr",
@@ -2652,7 +2620,7 @@ class WorkerProtocolTests(unittest.TestCase):
         }
         if remaining_scope:
             open_pr["remaining_scope"] = remaining_scope
-        return result.build_result(
+        payload = internal_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="new_pr",
@@ -2670,8 +2638,11 @@ class WorkerProtocolTests(unittest.TestCase):
             used_skills=[],
         )
 
+        payload["submission_head_sha"] = "a" * 40
+        return payload
+
     def _dd_comment_body(self, text):
-        return "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 event_fingerprints=comment:1 -->\n" + text
+        return "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n" + text
 
     def _review_response_action(self, text="Responded to the review report."):
         return {

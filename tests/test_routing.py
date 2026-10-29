@@ -237,7 +237,7 @@ class RoutingTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("robert-workstream", prompt)
+        self.assertIn("stable action markers", prompt)
         self.assertIn("allowed_github_actions", prompt)
         self.assertIn("push_existing_pr", prompt)
         self.assertIn("open_pr", prompt)
@@ -252,12 +252,12 @@ class RoutingTests(unittest.TestCase):
         self.assertIn(f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 task task-1", prompt)
         self.assertIn(f"{sys.executable} /agent/status.py --help", prompt)
         self.assertIn("ad hoc SQLite queries", prompt)
-        self.assertIn('non-empty "type"', prompt)
+        self.assertIn("For comments supply type and body", prompt)
         self.assertIn('"planned_github_actions"', prompt)
         self.assertNotIn('"actual_github_actions"', prompt)
-        self.assertIn("open_pr requires repo, head, base, title, and body", prompt)
-        self.assertIn("push_existing_pr requires worktree_path and branch", prompt)
-        self.assertIn("idempotency markers", prompt)
+        self.assertIn("For open_pr supply type, title/body and issue_resolution", prompt)
+        self.assertIn("push_existing_pr has only type", prompt)
+        self.assertIn("stable action markers", prompt)
         self.assertIn('"used_skills"', prompt)
         self.assertIn("recommended_skills are guidance", prompt)
         self.assertIn("may use any installed local skill", prompt)
@@ -330,7 +330,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("Every review report requires a public comment response", prompt)
         self.assertIn("<request outcome or review response>", prompt)
         self.assertIn('"type": "comment"', prompt)
-        self.assertIn('"target_url": "<target GitHub URL>"', prompt)
+        self.assertIn("Omit target_url for a single allowed target", prompt)
         self.assertIn('"review_point_evaluation": []', prompt)
         self.assertIn('"used_skills": []', prompt)
 
@@ -498,8 +498,8 @@ class RoutingTests(unittest.TestCase):
 
         self.assertIn("--output-type comment_analysis", prompt)
         self.assertIn('"type": "comment"', prompt)
-        self.assertIn('"target_url": "https://github.com/example/repo/issues/77"', prompt)
-        self.assertIn("<!-- robert-comment task_id=task-1 attempt_id=attempt-1", prompt)
+        self.assertNotIn('"target_url":', prompt)
+        self.assertNotIn("<!-- robert-comment", prompt)
         self.assertNotIn('"planned_github_actions": []', prompt)
 
     def test_classification_prompt_limits_worker_scope(self):
@@ -535,7 +535,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('"branch_slug": ""', prompt)
         self.assertIn("meaningful lowercase English kebab-case", prompt)
 
-    def test_new_pr_prompt_includes_origin_workstream_metadata(self):
+    def test_new_pr_prompt_delegates_issue_metadata_to_robert(self):
         from robert_agent import render_prompt
         from robert_agent import route
         route_result = route.route_task({"intent": "bug_fix"})
@@ -555,12 +555,12 @@ class RoutingTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("origin_workstream_id: github:example/backend#123", prompt)
-        self.assertIn("source_issue: 123", prompt)
-        self.assertIn("Fixes #123", prompt)
+        self.assertIn("workstream_id: github:example/backend#123", prompt)
+        self.assertNotIn("source_issue:", prompt)
+        self.assertIn("Robert generates the issue link", prompt)
         self.assertIn('"issue_resolution": "complete"', prompt)
-        self.assertIn("must visibly reference #123 outside the hidden metadata", prompt)
-        self.assertIn("Set issue_resolution=partial only when", prompt)
+        self.assertIn("omit closing/reference statements from body", prompt)
+        self.assertIn("For intentional partial delivery set partial", prompt)
         self.assertIn("remaining_scope", prompt)
         self.assertIn('"type": "push_existing_pr"', prompt)
         self.assertNotIn("Classification scope:", prompt)

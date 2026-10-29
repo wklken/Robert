@@ -14,65 +14,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENT = PACKAGE_ROOT
 
 
-def _dd_comment_body(text, task_id="task-1", attempt_id="attempt-1", fingerprints="comment:1"):
-    return (
-        f"<!-- robert-comment task_id={task_id} attempt_id={attempt_id} "
-        f"event_fingerprints={fingerprints} -->\n{text}"
-    )
+def _dd_comment_body(text, **_identity):
+    return text
 
 
-def _dd_pr_body(text, task_id="task-1", issue_number="123"):
-    return (
-        "<!-- robert-workstream\n"
-        f"origin_workstream_id: github:example/backend#{issue_number}\n"
-        f"source_issue: {issue_number}\n"
-        f"task_id: {task_id}\n"
-        "created_by: robert\n"
-        f"-->\nFixes #{issue_number}\n\n"
-        + text
-    )
-
-
-def _open_pr_action(
-    task_id="task-1",
-    issue_number="123",
-    pr_number="9",
-    branch=None,
-):
-    branch = branch or f"codex/dd-{issue_number}-task"
-    return {
-        "type": "open_pr",
-        "repo": "example/backend",
-        "head": branch,
-        "base": "master",
-        "title": f"Fix issue {issue_number}",
-        "issue_resolution": "complete",
-        "body": _dd_pr_body("Opened PR", task_id=task_id, issue_number=issue_number),
-        "url": f"https://github.com/example/backend/pull/{pr_number}",
-    }
-
-
-def _new_pr_actions(
-    task_id="task-1",
-    issue_number="123",
-    pr_number="9",
-    worktree_path=None,
-    branch=None,
-):
-    branch = branch or f"codex/dd-{issue_number}-task"
-    worktree_path = worktree_path or f"/tmp/.worktrees/codex__dd-{issue_number}-task"
+def _new_pr_actions(**_assignment):
     return [
-        {
-            "type": "push_existing_pr",
-            "worktree_path": worktree_path,
-            "branch": branch,
-        },
-        _open_pr_action(
-            task_id=task_id,
-            issue_number=issue_number,
-            pr_number=pr_number,
-            branch=branch,
-        ),
+        {"type": "push_existing_pr"},
+        {"type": "open_pr", "title": "Fix issue", "body": "Opened PR", "issue_resolution": "complete"},
     ]
 
 
@@ -93,6 +42,7 @@ def _verification_evidence(command="python -m unittest", status="passed", requir
         "status": status,
         "purpose": "Verify the worker result before agent publication.",
         "required": required,
+        "source": "worker_reported",
     }
     if status != "skipped":
         entry["exit_code"] = 0 if status == "passed" else 1
@@ -215,10 +165,7 @@ repos:
                     )
                 conn.execute(
                     """
-                    INSERT INTO attempts(
-                      attempt_id, task_id, attempt_no, status, started_at,
-                      heartbeat_at, finished_at, failure_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at, finished_at, failure_json, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{"result_contract":"compact-v1"}')
                     """,
                     (
                         attempt_id,
@@ -249,11 +196,7 @@ repos:
                 )
             conn.execute(
                 """
-                INSERT INTO attempts(
-                  attempt_id, task_id, attempt_no, status, started_at, heartbeat_at
-                ) VALUES ('attempt-current', 'task-current', ?, 'prepared',
-                          '2026-10-19T00:03:00+00:00',
-                          '2026-10-19T00:03:00+00:00')
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at, metadata_json) VALUES ('attempt-current', 'task-current', ?, 'prepared', '2026-10-19T00:03:00+00:00', '2026-10-19T00:03:00+00:00', '{"result_contract":"compact-v1"}')
                 """,
                 (len(failures) + 1 if same_task else 1,),
             )
@@ -391,6 +334,14 @@ repos:
             "identity_source": source,
         }
 
+    def _materialize_worktree(self, path, branch):
+        path = Path(path)
+        self.assertTrue(path.is_relative_to(self.root), path)
+        path.mkdir(parents=True, exist_ok=True)
+        if not (path / ".git").exists():
+            for argv in (["init", "-b", branch], ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "fixture"]):
+                subprocess.run(["git", *argv], cwd=path, check=True, capture_output=True)
+
     def _new_pr_actions_for_attempt(
         self,
         db_path,
@@ -409,6 +360,7 @@ repos:
                 """,
                 (task_id,),
             ).fetchone()
+        self._materialize_worktree(worktree_path, branch)
         return _new_pr_actions(
             task_id=task_id,
             issue_number=issue_number,
@@ -470,8 +422,8 @@ repos:
             )
             conn.execute(
                 """
-                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at)
-                VALUES (?, ?, 1, 'prepared', ?, ?)
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at, metadata_json)
+                VALUES (?, ?, 1, 'prepared', ?, ?, '{"result_contract":"compact-v1"}')
                 """,
                 (attempt_id, task_id, now, now),
             )
@@ -555,7 +507,7 @@ repos:
         prompt_path = Path(result["prompt_paths"][0])
         self.assertTrue(prompt_path.exists())
         prompt = prompt_path.read_text(encoding="utf-8")
-        self.assertIn("robert-workstream", prompt)
+        self.assertIn("Robert generates the issue link", prompt)
         self.assertIn("allowed_github_actions", prompt)
         self.assertIn("worktree_path:", prompt)
         self.assertIn("target_base_branch: master", prompt)
@@ -563,7 +515,7 @@ repos:
         self.assertIn(str(db_path), prompt)
         self.assertIn("github-context.json", prompt)
         self.assertIn("github-context.md", prompt)
-        self.assertNotIn("@robert-bot please fix this bug", prompt)
+        self.assertIn("@robert-bot please fix this bug", prompt)
         context_json = Path(artifacts["github_context_json"])
         context_md = Path(artifacts["github_context_md"])
         self.assertTrue(context_json.exists())
@@ -703,7 +655,7 @@ repos:
                 (now, now),
             )
             conn.execute(
-                "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at) VALUES ('attempt-1', 'task-1', 1, 'prepared', ?)",
+                'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, metadata_json) VALUES (\'attempt-1\', \'task-1\', 1, \'prepared\', ?, \'{"result_contract":"compact-v1"}\')',
                 (now,),
             )
             conn.execute(
@@ -1749,14 +1701,16 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "opened PR",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "opened PR",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -1815,41 +1769,25 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [],
-                "handoff": "opened PR without verification",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [],
+                    "handoff": "opened PR without verification",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
-        self.assertTrue(record["ok"], record)
-
-        audited = run_once.run_once(
-            self.config_path,
-            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            dry_run=True,
-            skip_external=True,
-        )
-
-        self.assertTrue(audited["ok"], audited)
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_lifecycle = conn.execute(
-                "SELECT lifecycle FROM tasks WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()[0]
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
-            audit_metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )["audit"]
-        self.assertEqual(task_lifecycle, "failed")
-        self.assertEqual(action_status, ("failed", "not_published"))
-        self.assertEqual(audit_metadata["status"], "failed")
-        self.assertIn("verification policy failed", audit_metadata["safe_error"])
+        self.assertFalse(record["ok"], record)
+        self.assertEqual(record["status"], "failed_validation")
+        self.assertEqual(record["reason_code"], "invalid_verification")
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "prepared")
 
     def test_run_once_copies_worker_usage_from_stdout_log(self):
         from robert_agent.worker import result
@@ -1892,7 +1830,7 @@ repos:
         )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
-                "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (
                     json.dumps(
                         {"dispatch": {"stdout_path": str(stdout_path)}},
@@ -1907,14 +1845,16 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "opened PR",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "opened PR",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -2061,22 +2001,24 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "comment_analysis",
-                "planned_github_actions": [
-                    {
-                        "type": "comment",
-                        "target_url": "https://github.com/example/backend/issues/123",
-                        "body": _dd_comment_body(
-                            "Analysis is ready",
-                            task_id=task_id,
-                            attempt_id=attempt_id,
-                            fingerprints="comment:comment-analysis",
-                        ),
-                    }
-                ],
-                "consumed_event_fingerprints": ["comment:comment-analysis"],
-                "verification": [_verification_evidence()],
-                "handoff": "ready",
-                "used_skills": ["fast-code-path"],
+                "submission": {
+                    "planned_github_actions": [
+                        {
+                            "type": "comment",
+                            "target_url": "https://github.com/example/backend/issues/123",
+                            "body": _dd_comment_body(
+                                "Analysis is ready",
+                                task_id=task_id,
+                                attempt_id=attempt_id,
+                                fingerprints="comment:comment-analysis",
+                            ),
+                        }
+                    ],
+                    "consumed_event_fingerprints": ["comment:comment-analysis"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "ready",
+                    "used_skills": ["fast-code-path"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -2201,51 +2143,35 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "comment_analysis",
-                "planned_github_actions": [
-                    {
-                        "type": "comment",
-                        "target_url": "https://github.com/other/repo/issues/999",
-                        "body": _dd_comment_body(
-                            "Analysis is ready",
-                            task_id=task_id,
-                            attempt_id=attempt_id,
-                            fingerprints="comment:comment-analysis-scope",
-                        ),
-                    }
-                ],
-                "consumed_event_fingerprints": [
-                    "comment:comment-analysis-scope"
-                ],
-                "verification": [],
-                "handoff": "ready",
-                "used_skills": ["fast-code-path"],
+                "submission": {
+                    "planned_github_actions": [
+                        {
+                            "type": "comment",
+                            "target_url": "https://github.com/other/repo/issues/999",
+                            "body": _dd_comment_body(
+                                "Analysis is ready",
+                                task_id=task_id,
+                                attempt_id=attempt_id,
+                                fingerprints="comment:comment-analysis-scope",
+                            ),
+                        }
+                    ],
+                    "consumed_event_fingerprints": [
+                        "comment:comment-analysis-scope"
+                    ],
+                    "verification": [],
+                    "handoff": "ready",
+                    "used_skills": ["fast-code-path"],
+                },
             },
         )
-        self.assertTrue(record["ok"], record)
-
-        second = run_once.run_once(
-            self.config_path,
-            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            dry_run=True,
-            skip_external=True,
-            skip_publish=True,
-        )
-
-        self.assertTrue(second["ok"], second)
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_lifecycle = conn.execute(
-                "SELECT lifecycle FROM tasks WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()[0]
-            metadata = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM worker_results WHERE result_id = ?",
-                    (record["result_id"],),
-                ).fetchone()[0]
-            )
-        self.assertEqual(task_lifecycle, "failed")
-        self.assertEqual(metadata["audit"]["status"], "policy_violation")
-        self.assertEqual(metadata["audit"]["violations"], ["action_scope"])
+        self.assertFalse(record["ok"], record)
+        self.assertEqual(record["status"], "failed_validation")
+        self.assertEqual(record["reason_code"], "action_scope")
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "prepared")
 
     def test_completed_consumed_trigger_is_not_reprocessed(self):
         from robert_agent.worker import result
@@ -2287,11 +2213,13 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "classification_result",
-                "planned_github_actions": [],
-                "consumed_event_fingerprints": ["comment:unclear-1"],
-                "verification": [],
-                "handoff": "No action needed",
-                "used_skills": [],
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["comment:unclear-1"],
+                    "verification": [],
+                    "handoff": "No action needed",
+                    "used_skills": [],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -2424,10 +2352,9 @@ repos:
             ).fetchall()
             self.assertEqual(fingerprints, [("comment:waiting-reply",)])
 
-    def test_classification_result_legacy_recommend_route_handoff_creates_child_task(self):
+    def test_classification_handoff_text_does_not_create_child_task(self):
         from robert_agent.worker import result
         from robert_agent import run_once
-        from robert_agent import board
 
         self.fixture_path.write_text(
             json.dumps(
@@ -2469,11 +2396,13 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "classification_result",
-                "planned_github_actions": [],
-                "consumed_event_fingerprints": ["assigned:assign-2904"],
-                "verification": [],
-                "handoff": "Recommend route new-pr",
-                "used_skills": [],
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["assigned:assign-2904"],
+                    "verification": [],
+                    "handoff": "Recommend route new-pr",
+                    "used_skills": [],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -2486,42 +2415,10 @@ repos:
         )
 
         self.assertTrue(finalized["ok"], finalized)
-        self.assertEqual(finalized["dispatch_count"], 1)
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            tasks = conn.execute(
-                """
-                SELECT task_id, parent_task_id, lifecycle, route_id, expected_output
-                FROM tasks
-                ORDER BY created_at, task_id
-                """
-            ).fetchall()
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
-            child_relationship = conn.execute(
-                """
-                SELECT te.relationship
-                FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
-                WHERE te.task_id = ?
-                  AND ge.event_fingerprint = 'assigned:assign-2904'
-                """,
-                (tasks[1][0],),
-            ).fetchone()[0]
-            work_item_id = conn.execute(
-                "SELECT work_item_id FROM work_items"
-            ).fetchone()[0]
-        detail = board.get_work_item_detail(db_path, work_item_id)
-        self.assertEqual(len(tasks), 2)
-        self.assertEqual(tasks[0][2], "completed")
-        self.assertEqual(tasks[1][1], tasks[0][0])
-        self.assertEqual(tasks[1][2:], ("queued", "new-pr", "new_pr"))
-        self.assertEqual(workstream, ("active", tasks[1][0]))
-        self.assertEqual(child_relationship, "trigger")
-        self.assertEqual(detail["column"], "todo")
-        self.assertEqual(detail["reason_code"], "queued")
-        self.assertEqual(detail["attention_signals"], [])
-        self.assertIsNotNone(detail["activated_at"])
+        self.assertEqual(finalized["dispatch_count"], 0)
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed")
 
     def test_classification_result_child_keeps_canonical_trigger_payload(self):
         from robert_agent.worker import result
@@ -2584,11 +2481,15 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "classification_result",
-                "planned_github_actions": [],
-                "consumed_event_fingerprints": ["assigned:assign-2904"],
-                "verification": [],
-                "handoff": "Recommend route new-pr",
-                "used_skills": [],
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["assigned:assign-2904"],
+                    "verification": [],
+                    "handoff": "Recommend route new-pr",
+                    "recommended_route": "new-pr",
+                    "branch_slug": "canonical-trigger",
+                    "used_skills": [],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -2684,8 +2585,8 @@ repos:
             )
             conn.execute(
                 """
-                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at, finished_at)
-                VALUES ('attempt-pr-existing', 'task-pr-existing', 1, 'completed', ?, 'codex/issue-2884-fix-operator', ?, ?, ?)
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at, finished_at, metadata_json)
+                VALUES ('attempt-pr-existing', 'task-pr-existing', 1, 'completed', ?, 'codex/issue-2884-fix-operator', ?, ?, ?, '{"result_contract":"compact-v1"}')
                 """,
                 (
                     str(self.worktree_root / "codex__issue-2884-fix-operator"),
@@ -2700,12 +2601,14 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "classification_result",
-                "planned_github_actions": [],
-                "consumed_event_fingerprints": ["comment:pr-conflict-followup"],
-                "verification": [],
-                "handoff": "PR #2886 has conflicts; route to update-existing-pr and reuse the current PR branch.",
-                "used_skills": [],
-                "recommended_route": "update-existing-pr",
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["comment:pr-conflict-followup"],
+                    "verification": [],
+                    "handoff": "PR #2886 has conflicts; route to update-existing-pr and reuse the current PR branch.",
+                    "used_skills": [],
+                    "recommended_route": "update-existing-pr",
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -2781,13 +2684,15 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "classification_result",
-                "planned_github_actions": [],
-                "consumed_event_fingerprints": ["assigned:assign-16"],
-                "verification": [],
-                "handoff": "Route to an implementation PR",
-                "used_skills": [],
-                "recommended_route": "new-pr",
-                "branch_slug": "remove-dco-from-ci",
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["assigned:assign-16"],
+                    "verification": [],
+                    "handoff": "Route to an implementation PR",
+                    "used_skills": [],
+                    "recommended_route": "new-pr",
+                    "branch_slug": "remove-dco-from-ci",
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -2929,13 +2834,15 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "classification_result",
-                "planned_github_actions": [],
-                "consumed_event_fingerprints": ["assigned:assign-16"],
-                "verification": [],
-                "handoff": "Route to an implementation PR",
-                "used_skills": [],
-                "recommended_route": "new-pr",
-                "branch_slug": "remove-dco-from-ci",
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["assigned:assign-16"],
+                    "verification": [],
+                    "handoff": "Route to an implementation PR",
+                    "used_skills": [],
+                    "recommended_route": "new-pr",
+                    "branch_slug": "remove-dco-from-ci",
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -3041,13 +2948,15 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "classification_result",
-                "planned_github_actions": [],
-                "consumed_event_fingerprints": ["assigned:assign-3022"],
-                "verification": [],
-                "handoff": "Implement the requested connectivity test",
-                "used_skills": [],
-                "recommended_route": "new-pr",
-                "branch_slug": "model-service-connectivity-test",
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["assigned:assign-3022"],
+                    "verification": [],
+                    "handoff": "Implement the requested connectivity test",
+                    "used_skills": [],
+                    "recommended_route": "new-pr",
+                    "branch_slug": "model-service-connectivity-test",
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -3425,14 +3334,16 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "opened PR",
-                "used_skills": [],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "opened PR",
+                    "used_skills": [],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -3534,29 +3445,29 @@ repos:
         self.assertEqual(json.loads(required_skills), [])
         self.assertIn("fast-verify-review-point", json.loads(recommended_skills))
 
+        self._materialize_worktree(self.worktree_root / "codex__dd-123-task", "codex/dd-123-task")
         record = result.record_result(
             db_path,
             {
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "update_existing_pr",
-                "planned_github_actions": [
-                    {
-                        "type": "push_existing_pr",
-                        "worktree_path": str(self.worktree_root / "codex__dd-123-task"),
-                        "branch": "codex/dd-123-task",
-                    },
-                    {
-                        "type": "comment",
-                        "target_url": "https://github.com/example/backend/pull/456#discussion_r1",
-                        "body": _dd_comment_body("Implemented the valid review point and pushed the branch."),
-                    }
-                ],
-                "consumed_event_fingerprints": ["comment:pr-followup"],
-                "verification": [_verification_evidence()],
-                "handoff": "updated existing PR",
-                "used_skills": ["fast-verify-review-point"],
-                "review_point_evaluation": _review_point_evaluation(),
+                "submission": {
+                    "planned_github_actions": [
+                        {"type": "push_existing_pr"},
+                        {
+                            "type": "comment",
+                            "target_url": "https://github.com/example/backend/pull/456",
+                            "body": _dd_comment_body("Implemented the valid review point and pushed the branch."),
+                        }
+                    ],
+                    "consumed_event_fingerprints": ["comment:pr-followup"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "updated existing PR",
+                    "used_skills": ["fast-verify-review-point"],
+                    "review_input_kind": "review_feedback",
+                    "review_point_evaluation": _review_point_evaluation(),
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -3611,49 +3522,33 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "comment_analysis",
-                "planned_github_actions": [
-                    {
-                        "type": "comment",
-                        "target_url": "https://github.com/example/backend/issues/123",
-                        "body": _dd_comment_body(
-                            "Analysis only",
-                            task_id=task_id,
-                            attempt_id=attempt_id,
-                            fingerprints="comment:comment-1",
-                        ),
-                    }
-                ],
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [],
-                "handoff": "analysis only",
-                "used_skills": [],
+                "submission": {
+                    "planned_github_actions": [
+                        {
+                            "type": "comment",
+                            "target_url": "https://github.com/example/backend/issues/123",
+                            "body": _dd_comment_body(
+                                "Analysis only",
+                                task_id=task_id,
+                                attempt_id=attempt_id,
+                                fingerprints="comment:comment-1",
+                            ),
+                        }
+                    ],
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [],
+                    "handoff": "analysis only",
+                    "used_skills": [],
+                },
             },
         )
-        self.assertTrue(record["ok"], record)
-
-        second = run_once.run_once(
-            self.config_path,
-            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            dry_run=True,
-            skip_external=True,
-        )
-
-        self.assertTrue(second["ok"], second)
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_lifecycle = conn.execute(
-                "SELECT lifecycle FROM tasks WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()[0]
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
-            audit_metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )["audit"]
-        self.assertEqual(task_lifecycle, "failed")
-        self.assertEqual(action_status, ("failed", "not_published"))
-        self.assertEqual(audit_metadata["status"], "failed")
-        self.assertIn("expected_output new_pr", audit_metadata["safe_error"])
+        self.assertFalse(record["ok"], record)
+        self.assertEqual(record["status"], "failed_validation")
+        self.assertEqual(record["reason_code"], "unexpected_output_type")
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "prepared")
 
     def test_worker_result_is_not_reaudited_after_audit_metadata_recorded(self):
         from robert_agent.worker import result
@@ -3677,14 +3572,16 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "opened PR",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "opened PR",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -3751,14 +3648,16 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "opened PR",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "opened PR",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -3877,16 +3776,18 @@ repos:
                 "task_id": issue_task_id,
                 "attempt_id": issue_attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id=issue_task_id,
-                    issue_number="123",
-                    pr_number="456",
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "opened PR 456 for issue 123",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id=issue_task_id,
+                        issue_number="123",
+                        pr_number="456",
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "opened PR 456 for issue 123",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -3895,6 +3796,8 @@ repos:
                 "UPDATE github_actions SET publish_status = 'published' WHERE result_id = ?",
                 (record["result_id"],),
             )
+
+            conn.execute("UPDATE github_actions SET target_url='https://github.com/example/backend/pull/456', external_id='456' WHERE action_type='open_pr'")
 
         finalized = run_once.run_once(
             self.config_path,
@@ -4909,14 +4812,16 @@ repos:
                 "task_id": parent_task_id,
                 "attempt_id": parent_attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    parent_task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "done",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        parent_task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "done",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -5005,29 +4910,31 @@ repos:
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "opened PR",
-                "used_skills": ["fast-small-pr"],
-                "memory_delta": {
-                    "status": "has_memory",
-                    "entries": [
-                        {
-                            "operation": "upsert",
-                            "kind": "decision",
-                            "title": "DD PR follow-up uses update-existing-pr",
-                            "short_summary": "When dd-pr-followup review comments arrive, update the PR branch rather than reopening the origin issue task.",
-                            "long_summary": "The PR workstream is the active implementation thread for review comments on a DD-created PR.",
-                            "paths": ["src/robert_agent/run_once.py"],
-                            "symbols": ["_is_dd_pr_followup_event"],
-                            "keywords": ["dd-pr-followup", "update-existing-pr"],
-                            "confidence": "medium",
-                        }
-                    ],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "opened PR",
+                    "used_skills": ["fast-small-pr"],
+                    "memory_delta": {
+                        "status": "has_memory",
+                        "entries": [
+                            {
+                                "operation": "upsert",
+                                "kind": "decision",
+                                "title": "DD PR follow-up uses update-existing-pr",
+                                "short_summary": "When dd-pr-followup review comments arrive, update the PR branch rather than reopening the origin issue task.",
+                                "long_summary": "The PR workstream is the active implementation thread for review comments on a DD-created PR.",
+                                "paths": ["src/robert_agent/run_once.py"],
+                                "symbols": ["_is_dd_pr_followup_event"],
+                                "keywords": ["dd-pr-followup", "update-existing-pr"],
+                                "confidence": "medium",
+                            }
+                        ],
+                    },
                 },
             },
         )
@@ -5549,7 +5456,7 @@ repos:
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,))
             conn.execute(
-                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (now, now, json.dumps({"dispatch": dispatch_metadata}), attempt_id),
             )
             execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
@@ -5598,7 +5505,7 @@ repos:
                 (task_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
             conn.execute(
@@ -5666,7 +5573,7 @@ repos:
                 (task_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
 
@@ -5734,7 +5641,7 @@ repos:
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ?
+                SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -5807,7 +5714,7 @@ repos:
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ?
+                SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -5864,7 +5771,7 @@ repos:
             resume_metadata = json.loads(resume_metadata_json)
             resume_metadata["dispatch"] = self._recorded_identity(987655)
             conn.execute(
-                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (
                     second_now,
                     second_now,
@@ -5964,7 +5871,7 @@ repos:
                 (task_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (
                     now,
                     now,
@@ -6048,7 +5955,7 @@ repos:
                 ("github:example/backend!988",),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'failed', started_at = ?, heartbeat_at = ?, finished_at = ?, failure_json = ?, metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET status = 'failed', started_at = ?, heartbeat_at = ?, finished_at = ?, failure_json = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (
                     old,
                     old,
@@ -6138,7 +6045,7 @@ repos:
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'stale', started_at = ?, heartbeat_at = ?, metadata_json = ?
+                SET status = 'stale', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -6270,7 +6177,7 @@ repos:
                 """
                 UPDATE attempts
                 SET status = 'failed', started_at = ?, heartbeat_at = ?,
-                    finished_at = ?, failure_json = ?, metadata_json = ?
+                    finished_at = ?, failure_json = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -6405,7 +6312,7 @@ repos:
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = ?
+                SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -6475,7 +6382,7 @@ repos:
             task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute("UPDATE tasks SET lifecycle = 'running'")
             conn.execute(
-                "UPDATE attempts SET status='running', started_at=?, heartbeat_at=?, metadata_json=?",
+                "UPDATE attempts SET status='running', started_at=?, heartbeat_at=?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')",
                 (now, now, json.dumps({"dispatch": self._recorded_identity(987654)})),
             )
             if phase:
@@ -6588,7 +6495,7 @@ repos:
             metadata = json.loads(raw)
             metadata["dispatch"] = {**self._recorded_identity(987654), "worker_name": "default",
                                     "model": "model-fallback", "fallback_model": "model-fallback"}
-            conn.execute("UPDATE attempts SET status='running',metadata_json=? WHERE attempt_id=?", (json.dumps(metadata), current_id))
+            conn.execute("UPDATE attempts SET status='running',metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id=?", (json.dumps(metadata), current_id))
             log = self.data_dir / "artifacts" / task_id / f"{current_id}.stdout.log"
             log.write_text(json.dumps({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}}))
             conn.execute("INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at)"
@@ -6630,9 +6537,12 @@ repos:
         from robert_agent.worker import result as worker_result
 
         db_path, task_id, attempt_id = self._rate_limited_attempt()
-        payload = worker_result.build_result(task_id, attempt_id, "new_pr", planned_github_actions=[],
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET expected_output='local_result'")
+            conn.execute("UPDATE route_decisions SET expected_output='local_result', route_id='local-result'")
+        payload = worker_result.build_result(task_id, attempt_id, "local_result", planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"], verification=[], handoff="recorded", used_skills=[])
-        worker_result.record_result(db_path, payload)
+        self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
                 run_once._supervise_running_attempts(conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
@@ -6646,6 +6556,9 @@ repos:
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET expected_output='local_result'")
+            conn.execute("UPDATE route_decisions SET expected_output='local_result', route_id='local-result'")
         binary = self.root / "limited-worker.py"
         binary.write_text('''import json,sys,time
 from pathlib import Path
@@ -6659,7 +6572,7 @@ if model=='model-primary':
     print(json.dumps({'type':'turn.failed','error':{'message':'429 Too Many Requests'}}),flush=True)
     sys.exit(1)
 attempt=next(path.glob('*.recovery.json')).name.removesuffix('.recovery.json')
-payload=build_result(task,attempt,'new_pr',planned_github_actions=[],
+payload=build_result(task,attempt,'local_result',planned_github_actions=[],
     consumed_event_fingerprints=['comment:1'],verification=[],handoff='fallback completed',used_skills=[])
 assert record_result(db,payload)['ok']
 print(json.dumps({'type':'turn.completed'}),flush=True)
@@ -6669,7 +6582,7 @@ time.sleep(.3)
                   "agent": "tcodex", "default_model": "model-primary", "fallback_model": "model-fallback",
                   "default_effort": "high", "environment_allowlist": ["PYTHONPATH"]}
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE attempts SET status='prepared',metadata_json='{}'")
+            conn.execute("UPDATE attempts SET status='prepared',metadata_json = json_set('{}', '$.result_contract', 'compact-v1')")
         for _ in range(2):
             with closing(sqlite3.connect(db_path)) as conn:
                 current = conn.execute("SELECT attempt_id FROM attempts WHERE status='prepared' ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
@@ -6765,7 +6678,7 @@ time.sleep(.3)
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE attempts SET metadata_json=?", (json.dumps({
+            conn.execute("UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1')", (json.dumps({
                 "dispatch": self._recorded_identity(987654), "resume": {"transport_failure_count": 5},
             }),))
         with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
@@ -6818,7 +6731,7 @@ time.sleep(.3)
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
-            conn.execute("UPDATE attempts SET metadata_json='{}' WHERE attempt_id=?", (resume_id,))
+            conn.execute("UPDATE attempts SET metadata_json = json_set('{}', '$.result_contract', 'compact-v1') WHERE attempt_id=?", (resume_id,))
             conn.execute("UPDATE artifacts SET created_at='2099-01-01T00:00:00+00:00'"
                          " WHERE artifact_type='prompt' AND attempt_id=?", (attempt_id,))
             target, _ = run_once._current_dispatch_target(conn, resume_id)
@@ -6863,12 +6776,15 @@ time.sleep(.3)
         from robert_agent.worker import result as worker_result
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET expected_output='local_result'")
+            conn.execute("UPDATE route_decisions SET expected_output='local_result', route_id='local-result'")
         payload = worker_result.build_result(
-            task_id, attempt_id, "new_pr", planned_github_actions=[],
+            task_id, attempt_id, "local_result", planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"], verification=[], handoff="recorded",
             used_skills=[],
         )
-        worker_result.record_result(db_path, payload)
+        self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
                 run_once._supervise_running_attempts(
@@ -6937,7 +6853,7 @@ time.sleep(.3)
                 )
                 updated_metadata = json.loads(metadata)
                 updated_metadata["dispatch"] = self._recorded_identity(987654)
-                conn.execute("UPDATE attempts SET status='running',metadata_json=? WHERE attempt_id=?",
+                conn.execute("UPDATE attempts SET status='running',metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id=?",
                              (json.dumps(updated_metadata), current_id))
 
         with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
@@ -7018,7 +6934,7 @@ time.sleep(.3)
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         old = (datetime.now(timezone.utc) - timedelta(minutes=95)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE attempts SET started_at=?,heartbeat_at=?,metadata_json=?", (old, old, json.dumps({
+            conn.execute("UPDATE attempts SET started_at=?,heartbeat_at=?,metadata_json = json_set(?, '$.result_contract', 'compact-v1')", (old, old, json.dumps({
                 "dispatch": self._recorded_identity(987654), "resume": {"transport_failure_count": 5},
             })))
         with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
@@ -7069,7 +6985,7 @@ time.sleep(.3)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
             task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute("UPDATE tasks SET lifecycle = 'running'")
-            conn.execute("UPDATE attempts SET status = 'running', metadata_json = ?",
+            conn.execute("UPDATE attempts SET status = 'running', metadata_json = json_set(?, '$.result_contract', 'compact-v1')",
                          (json.dumps({"dispatch": {"pid": 12345}}),))
             repo_id, ws, source_id, source_key, source_type, number = conn.execute(
                 "SELECT w.repo_id,w.workstream_id,gs.source_id,gs.source_key,gs.source_type,gs.number "
@@ -7077,10 +6993,10 @@ time.sleep(.3)
             ).fetchone()
             args = (conn, repo_id, ws, source_id, source_key, source_type, number,
                     task_id, {"state": "closed"}, "canceled", "remote_issue_closed", datetime.now(timezone.utc).isoformat())
-            conn.execute("UPDATE attempts SET metadata_json='{}'")
+            conn.execute("UPDATE attempts SET metadata_json = json_set('{}', '$.result_contract', 'compact-v1')")
             self.assertFalse(run_once._record_remote_terminal_state(*args))
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
-            conn.execute("UPDATE attempts SET metadata_json=?", (json.dumps({"dispatch": {"pid": 12345}}),))
+            conn.execute("UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1')", (json.dumps({"dispatch": {"pid": 12345}}),))
             with patch.object(run_once, "_terminate_attempt_process", return_value={"status": "permission_denied"}):
                 run_once._record_remote_terminal_state(*args)
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
@@ -7149,7 +7065,7 @@ time.sleep(.3)
                 (task_id,),
             )
             conn.execute(
-                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ? WHERE attempt_id = ?",
+                "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
             conn.execute(
@@ -7208,7 +7124,7 @@ time.sleep(.3)
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = ?
+                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -7274,7 +7190,7 @@ time.sleep(.3)
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = ?
+                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -7353,7 +7269,7 @@ time.sleep(.3)
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = ?
+                SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -7433,7 +7349,7 @@ time.sleep(.3)
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = ?
+                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -7522,7 +7438,7 @@ time.sleep(.3)
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = ?
+                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -7621,7 +7537,7 @@ time.sleep(.3)
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = ?
+                SET status = 'stale', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')
                 WHERE attempt_id = ?
                 """,
                 (
@@ -8037,22 +7953,24 @@ time.sleep(.3)
                     "task_id": kwargs["task_id"],
                     "attempt_id": kwargs["attempt_id"],
                     "output_type": "comment_analysis",
-                    "planned_github_actions": [
-                        {
-                            "type": "comment",
-                            "target_url": "https://github.com/example/backend/issues/123",
-                            "body": _dd_comment_body(
-                                "Analysis is ready",
-                                task_id=kwargs["task_id"],
-                                attempt_id=kwargs["attempt_id"],
-                                fingerprints="comment:comment-analysis",
-                            ),
-                        }
-                    ],
-                    "consumed_event_fingerprints": ["comment:comment-analysis"],
-                    "verification": [_verification_evidence("python -B -m unittest")],
-                    "handoff": "ready",
-                    "used_skills": ["fast-code-path"],
+                    "submission": {
+                        "planned_github_actions": [
+                            {
+                                "type": "comment",
+                                "target_url": "https://github.com/example/backend/issues/123",
+                                "body": _dd_comment_body(
+                                    "Analysis is ready",
+                                    task_id=kwargs["task_id"],
+                                    attempt_id=kwargs["attempt_id"],
+                                    fingerprints="comment:comment-analysis",
+                                ),
+                            }
+                        ],
+                        "consumed_event_fingerprints": ["comment:comment-analysis"],
+                        "verification": [_verification_evidence("python -B -m unittest")],
+                        "handoff": "ready",
+                        "used_skills": ["fast-code-path"],
+                    },
                 },
             )
             self.assertTrue(record["ok"], record)
@@ -8186,21 +8104,19 @@ payload = {{
     "task_id": fields["task_id"],
     "attempt_id": fields["attempt_id"],
     "output_type": "comment_analysis",
+    "submission": {{
     "planned_github_actions": [
         {{
             "type": "comment",
             "target_url": "https://github.com/example/backend/issues/123",
-            "body": "<!-- robert-comment task_id={{}} attempt_id={{}} event_fingerprints={{}} -->\\nAnalysis is ready".format(
-                fields["task_id"],
-                fields["attempt_id"],
-                ",".join(fingerprints),
-            ),
+            "body": "Analysis is ready",
         }}
     ],
     "consumed_event_fingerprints": fingerprints,
     "verification": [{_verification_evidence("mock-worker")}],
     "handoff": "ready",
     "used_skills": [],
+    }},
 }}
 record = result.record_result(fields["db_path"], payload)
 print(json.dumps(record, sort_keys=True))
@@ -8535,8 +8451,8 @@ raise SystemExit(0 if record["ok"] else 1)
             )
             conn.execute(
                 """
-                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at)
-                VALUES ('attempt-older', 'task-older', 1, 'prepared', ?, ?)
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at, metadata_json)
+                VALUES ('attempt-older', 'task-older', 1, 'prepared', ?, ?, '{"result_contract":"compact-v1"}')
                 """,
                 (old, old),
             )
@@ -8573,8 +8489,8 @@ raise SystemExit(0 if record["ok"] else 1)
             )
             conn.execute(
                 """
-                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at)
-                VALUES ('attempt-pr', 'task-pr', 1, 'prepared', ?, 'codex/issue-2884-fix-operator', ?, ?)
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at, metadata_json)
+                VALUES ('attempt-pr', 'task-pr', 1, 'prepared', ?, 'codex/issue-2884-fix-operator', ?, ?, '{"result_contract":"compact-v1"}')
                 """,
                 (str(self.worktree_root / "issue-2884-fix-operator"), now, now),
             )
@@ -8744,14 +8660,16 @@ raise SystemExit(0 if record["ok"] else 1)
                 "task_id": parent_task_id,
                 "attempt_id": parent_attempt_id,
                 "output_type": "new_pr",
-                "planned_github_actions": self._new_pr_actions_for_attempt(
-                    db_path,
-                    parent_task_id,
-                ),
-                "consumed_event_fingerprints": ["comment:comment-1"],
-                "verification": [_verification_evidence()],
-                "handoff": "done",
-                "used_skills": ["fast-small-pr"],
+                "submission": {
+                    "planned_github_actions": self._new_pr_actions_for_attempt(
+                        db_path,
+                        parent_task_id,
+                    ),
+                    "consumed_event_fingerprints": ["comment:comment-1"],
+                    "verification": [_verification_evidence()],
+                    "handoff": "done",
+                    "used_skills": ["fast-small-pr"],
+                },
             },
         )
         self.assertTrue(record["ok"], record)
@@ -8779,8 +8697,8 @@ raise SystemExit(0 if record["ok"] else 1)
             )
             conn.execute(
                 """
-                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at)
-                VALUES ('attempt-busy', 'task-busy', 1, 'running', ?, ?)
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at, metadata_json)
+                VALUES ('attempt-busy', 'task-busy', 1, 'running', ?, ?, '{"result_contract":"compact-v1"}')
                 """,
                 (now, now),
             )
@@ -9043,8 +8961,8 @@ raise SystemExit(0 if record["ok"] else 1)
             )
             conn.execute(
                 """
-                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at)
-                VALUES (?, ?, 1, 'prepared', ?, 'codex/issue-2884-fix-operator', ?, ?)
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at, metadata_json)
+                VALUES (?, ?, 1, 'prepared', ?, 'codex/issue-2884-fix-operator', ?, ?, '{"result_contract":"compact-v1"}')
                 """,
                 (
                     attempt_id,
@@ -9213,8 +9131,8 @@ raise SystemExit(0 if record["ok"] else 1)
             )
             conn.execute(
                 """
-                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at)
-                VALUES (?, ?, 1, 'prepared', ?, 'codex/dd-2884-task', ?, ?)
+                INSERT INTO attempts(attempt_id, task_id, attempt_no, status, worktree_path, branch_name, started_at, heartbeat_at, metadata_json)
+                VALUES (?, ?, 1, 'prepared', ?, 'codex/dd-2884-task', ?, ?, '{"result_contract":"compact-v1"}')
                 """,
                 (
                     attempt_id,
@@ -9340,11 +9258,11 @@ raise SystemExit(0 if record["ok"] else 1)
                     (task_id, workstream_id, now, now),
                 )
                 conn.execute(
-                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at) VALUES (?, ?, 1, 'completed', ?, ?)",
+                    'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at, metadata_json) VALUES (?, ?, 1, \'completed\', ?, ?, \'{"result_contract":"compact-v1"}\')',
                     (f"attempt:{repo_id}", task_id, now, now),
                 )
                 conn.execute(
-                    "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at) VALUES (?, ?, ?, 'comment', ?)",
+                    "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES (?, ?, ?, 'comment_analysis', ?, json_object('result_contract','compact-v1'))",
                     (result_id, task_id, f"attempt:{repo_id}", now),
                 )
                 conn.execute(
@@ -9398,11 +9316,11 @@ raise SystemExit(0 if record["ok"] else 1)
                     (task_id, workstream_id, now, now),
                 )
                 conn.execute(
-                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at) VALUES (?, ?, 1, 'completed', ?, ?)",
+                    'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at, metadata_json) VALUES (?, ?, 1, \'completed\', ?, ?, \'{"result_contract":"compact-v1"}\')',
                     (f"attempt:{repo_id}", task_id, now, now),
                 )
                 conn.execute(
-                    "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at) VALUES (?, ?, ?, 'comment', ?)",
+                    "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES (?, ?, ?, 'comment_analysis', ?, json_object('result_contract','compact-v1'))",
                     (result_id, task_id, f"attempt:{repo_id}", now),
                 )
                 conn.execute(
@@ -9459,7 +9377,7 @@ raise SystemExit(0 if record["ok"] else 1)
                     (task_id, workstream_id, lifecycle, now, now),
                 )
                 conn.execute(
-                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status) VALUES (?, ?, 1, 'running')",
+                    'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, metadata_json) VALUES (?, ?, 1, \'running\', \'{"result_contract":"compact-v1"}\')',
                     (attempt_id, task_id),
                 )
             count = run_once._running_attempt_count_for_repos(conn, ["repo:a", "repo:b"])

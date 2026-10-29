@@ -135,8 +135,7 @@ class AcceptanceSuiteTests(unittest.TestCase):
                         "html_url": "https://github.com/x/y/issues/1#issuecomment-123",
                         "body": (
                             "<!-- robert-comment task_id=task-production-canary "
-                            "attempt_id=attempt-production-canary "
-                            "event_fingerprints=production-canary:marker-suite -->\n"
+                            "attempt_id=attempt-production-canary-marker-suite action_index=0 -->\n"
                             "Robert production write canary."
                         ),
                     }

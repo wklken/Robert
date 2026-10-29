@@ -26,7 +26,7 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
             original_insert(db_path)
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
-                    "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-comment'",
+                    "UPDATE worker_results SET metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-comment'",
                     (
                         json.dumps(
                             {
@@ -43,7 +43,7 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
                     ),
                 )
                 conn.execute(
-                    "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-pr'",
+                    "UPDATE worker_results SET metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-pr'",
                     (
                         json.dumps(
                             {

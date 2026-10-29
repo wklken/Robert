@@ -54,8 +54,7 @@ def _parse_target_url(target_url):
 def comment_body(marker_id):
     return (
         "<!-- robert-comment task_id=task-production-canary "
-        "attempt_id=attempt-production-canary "
-        f"event_fingerprints=production-canary:{marker_id} -->\n"
+        f"attempt_id=attempt-production-canary-{marker_id} action_index=0 -->\n"
         "Robert production write canary.\n\n"
         "This comment verifies that the configured publisher can create or "
         "deduplicate one GitHub issue/PR comment through the audited action path."
@@ -109,11 +108,11 @@ def _insert_canary_fixture(db_path, target, marker_id):
             """
             INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at, finished_at)
             VALUES (
-              'attempt-production-canary', 'task-production-canary', 1,
+              ?, 'task-production-canary', 1,
               'completed', ?, ?, ?
             )
             """,
-            (now, now, now),
+            (f"attempt-production-canary-{marker_id}", now, now, now),
         )
         conn.execute(
             """
@@ -124,15 +123,17 @@ def _insert_canary_fixture(db_path, target, marker_id):
             )
             VALUES (
               'result-production-canary', 'task-production-canary',
-              'attempt-production-canary', 'comment_analysis',
+              ?, 'comment_analysis',
               ?, '[]', 'production write canary', ?, ?
             )
             """,
             (
+                f"attempt-production-canary-{marker_id}",
                 json.dumps([f"production-canary:{marker_id}"]),
                 now,
                 json.dumps(
                     {
+                        "result_contract": "compact-v1",
                         "audit": {
                             "status": "accepted",
                             "action_scope": {

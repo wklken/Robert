@@ -343,6 +343,10 @@ def publish(config_path, *, dry_run=False):
     config = validate_config.validate_config(config_path, skip_external=True)
     if not config['ok']:
         return config
+    from robert_agent import result_cutover
+    cutover = result_cutover.check(config['db_path'])
+    if not cutover['ok']:
+        return cutover
     results, repo_ids = [], []
     for repo in config['repos']:
         with closing(sqlite3.connect(config['db_path'])) as conn:

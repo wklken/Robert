@@ -230,10 +230,10 @@ class VoteCoordinatorTests(unittest.TestCase):
                  'body': '@robert-bot 请让三个独立智能体各选一种路线，并报告各自的选择理由'}
         self.fixture.cycle([event])
         task, attempt = self.fixture.current()
-        result = record_result(self.db, {'task_id': task, 'attempt_id': attempt,
-            'output_type': 'classification_result', 'planned_github_actions': [],
-            'consumed_event_fingerprints': ['comment:first'], 'verification': [],
-            'used_skills': [], 'handoff': 'Explicit request for independent decisions', 'recommended_route': 'vote'})
+        result = record_result(self.db, {'task_id': task, 'attempt_id': attempt, 'output_type': 'classification_result',
+            'submission': {'planned_github_actions': [], 'consumed_event_fingerprints': ['comment:first'],
+                'verification': [], 'used_skills': [], 'handoff': 'Classified request',
+                'recommended_route': 'vote'}})
         self.assertTrue(result['ok'], result)
         self.fixture.cycle([])
         with vote_store.connect(self.db) as conn:
