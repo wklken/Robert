@@ -79,7 +79,7 @@ class TimeoutIsolationTests(unittest.TestCase):
             execution_store.ensure_subject(conn, 'task', task, 'human_request', now)
             conn.execute('''INSERT INTO route_decisions(route_decision_id,task_id,route_id,expected_output,confidence,created_at)
                 VALUES ('route-scope',?,'comment-analysis','comment_analysis','high',?)''', (task, now))
-            with mock.patch.object(run_once, '_action_scope_for_result', side_effect=subprocess.TimeoutExpired(['git', 'rev-parse'], 5)):
+            with mock.patch.object(run_once.result_scope, 'for_result', side_effect=subprocess.TimeoutExpired(['git', 'rev-parse'], 5)):
                 count = run_once._audit_completed_results(conn, repo, Path(fixture.db).parent,
                     fixture.db, {}, 'run-unused', now, True, [], {'remaining': 3})
             self.assertEqual(count, 0)

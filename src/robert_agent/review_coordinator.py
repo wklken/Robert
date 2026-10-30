@@ -149,9 +149,7 @@ class Coordinator(StageCoordinator):
                 (self.round_id + ':merged', self.task_id, self.attempt_id, 'review_report', str(path),
                  store.digest(path), path.stat().st_size, store.now()))
         action = {'type': 'submit_pr_review', 'target_url': f"https://github.com/{self.session['repo']}/pull/{self.session['pr_number']}",
-                  'body': body, 'round_id': self.round_id, 'commit_id': self.manifest['head_sha'],
-                  'base_sha': self.manifest['base_sha'], 'base_ref': self.manifest['base_ref'],
-                  'report_path': str(path), 'report_sha256': store.digest(path)}
+                  'body': body}
         payload = worker_result.build_result(self.task_id, self.attempt_id, 'multi_agent_review_report',
                     [self.session['trigger_fingerprint']], [], f'Review report: {path}', [action], used_skills=[])
         recorded = worker_result.record_result(self.db_path, payload)

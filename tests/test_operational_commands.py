@@ -1441,15 +1441,10 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
         self.assertIn("/usr/bin/python3.11 /agent/status.py", prompt)
-        self.assertIn("use the compact read-only status CLI", prompt)
-        self.assertIn("run latest", prompt)
+        self.assertIn("For control-plane state", prompt)
         self.assertIn("task task-1", prompt)
-        self.assertIn("attempt attempt-1", prompt)
-        self.assertIn("workstream github:example/backend!456", prompt)
-        self.assertIn("event <event_fingerprint>", prompt)
-        self.assertIn("events <query>", prompt)
-        self.assertIn("source <source_key-or-number-or-url>", prompt)
-        self.assertIn("artifact task-1 worker_stderr", prompt)
+        self.assertIn("/usr/bin/python3.11 /agent/status.py --help", prompt)
+        self.assertNotIn("run latest", prompt)
         self.assertIn("/usr/bin/python3.11 /worker/snapshot.py", prompt)
         self.assertIn("/usr/bin/python3.11 /worker/heartbeat.py", prompt)
         self.assertIn("/usr/bin/python3.11 /agent/result.py", prompt)
@@ -1778,7 +1773,7 @@ class OperationalCommandTests(unittest.TestCase):
         }
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (
                     json.dumps(
                         {
@@ -3769,7 +3764,7 @@ class OperationalCommandTests(unittest.TestCase):
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (
                     json.dumps(
                         {
@@ -4159,7 +4154,7 @@ class OperationalCommandTests(unittest.TestCase):
                 ),
             )
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (
                     json.dumps(
                         {
@@ -4334,7 +4329,7 @@ class OperationalCommandTests(unittest.TestCase):
             conn.execute(
                 """
                 UPDATE worker_results
-                SET metadata_json = ?
+                SET metadata_json=json_set(?, '$.result_contract', 'compact-v1')
                 WHERE result_id = 'result-1'
                 """,
                 (
@@ -4585,7 +4580,7 @@ class OperationalCommandTests(unittest.TestCase):
                 ),
             )
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (
                     json.dumps(
                         {
@@ -5232,7 +5227,7 @@ class OperationalCommandTests(unittest.TestCase):
             conn.execute(
                 """
                 UPDATE worker_results
-                SET metadata_json = ?
+                SET metadata_json=json_set(?, '$.result_contract', 'compact-v1')
                 WHERE result_id = 'result-1'
                 """,
                 (
@@ -5314,7 +5309,7 @@ class OperationalCommandTests(unittest.TestCase):
             conn.execute(
                 """
                 UPDATE worker_results
-                SET metadata_json = ?
+                SET metadata_json=json_set(?, '$.result_contract', 'compact-v1')
                 WHERE result_id = 'result-1'
                 """,
                 (
@@ -5439,7 +5434,7 @@ class OperationalCommandTests(unittest.TestCase):
             conn.execute(
                 """
                 UPDATE worker_results
-                SET metadata_json = ?
+                SET metadata_json=json_set(?, '$.result_contract', 'compact-v1')
                 WHERE result_id = 'result-1'
                 """,
                 (
@@ -5532,7 +5527,7 @@ class OperationalCommandTests(unittest.TestCase):
             conn.execute(
                 """
                 UPDATE worker_results
-                SET metadata_json = ?
+                SET metadata_json=json_set(?, '$.result_contract', 'compact-v1')
                 WHERE result_id = 'result-1'
                 """,
                 (
@@ -6068,12 +6063,8 @@ class OperationalCommandTests(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO worker_results(
-                  result_id, task_id, attempt_id, output_type,
-                  consumed_event_fingerprints_json, verification_json, handoff,
-                  created_at, metadata_json
-                )
-                VALUES ('result-1', 'task-1', 'attempt-1', 'comment_analysis', '["comment:1"]', '[]', 'ready', ?, ?)
+                INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, consumed_event_fingerprints_json, verification_json, handoff, created_at, metadata_json)
+                VALUES ('result-1', 'task-1', 'attempt-1', 'comment_analysis', '["comment:1"]', '[]', 'ready', ?, json_set(?, '$.result_contract', 'compact-v1'))
                 """,
                 (
                     now,
@@ -6169,7 +6160,7 @@ class OperationalCommandTests(unittest.TestCase):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET worktree_path = ?, branch_name = 'codex/fix'", (str(tree),))
             ws = conn.execute("SELECT workstream_id FROM tasks WHERE task_id='task-1'").fetchone()[0]
-            scope = run_once._action_scope_for_result(conn, "task-1", "attempt-1", ws)
+            scope = run_once.result_scope.for_result(conn, "task-1", "attempt-1", ws)
         self.assertEqual(scope["result_head_sha"], expected_sha)
         self.assertEqual(scope["head_owner"], "expected-owner")
 
@@ -6205,7 +6196,7 @@ class OperationalCommandTests(unittest.TestCase):
             conn.execute(
                 """
                 UPDATE worker_results
-                SET metadata_json = ?
+                SET metadata_json=json_set(?, '$.result_contract', 'compact-v1')
                 WHERE result_id = 'result-1'
                 """,
                 (
@@ -6391,15 +6382,8 @@ class OperationalCommandTests(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO worker_results(
-                  result_id, task_id, attempt_id, output_type,
-                  consumed_event_fingerprints_json, verification_json, handoff,
-                  created_at, metadata_json
-                )
-                VALUES (
-                  'result-publish', 'task-publish', 'attempt-publish',
-                  'comment_analysis', '["comment:1"]', '[]', 'ready', ?, '{}'
-                )
+                INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, consumed_event_fingerprints_json, verification_json, handoff, created_at, metadata_json)
+                VALUES ('result-publish', 'task-publish', 'attempt-publish', 'comment_analysis', '["comment:1"]', '[]', 'ready', ?, json_set('{}', '$.result_contract', 'compact-v1'))
                 """,
                 (now,),
             )
@@ -6508,15 +6492,8 @@ class OperationalCommandTests(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO worker_results(
-                  result_id, task_id, attempt_id, output_type,
-                  consumed_event_fingerprints_json, verification_json, handoff,
-                  created_at, metadata_json
-                )
-                VALUES (
-                  'result-publish', 'task-publish', 'attempt-publish',
-                  'comment_analysis', '["comment:1"]', '[]', 'ready', ?, '{}'
-                )
+                INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, consumed_event_fingerprints_json, verification_json, handoff, created_at, metadata_json)
+                VALUES ('result-publish', 'task-publish', 'attempt-publish', 'comment_analysis', '["comment:1"]', '[]', 'ready', ?, json_set('{}', '$.result_contract', 'compact-v1'))
                 """,
                 (now,),
             )
@@ -6631,15 +6608,8 @@ class OperationalCommandTests(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO worker_results(
-                  result_id, task_id, attempt_id, output_type,
-                  consumed_event_fingerprints_json, verification_json, handoff,
-                  created_at, metadata_json
-                )
-                VALUES (
-                  'result-pending-audit', 'task-result-pending', 'attempt-result-pending',
-                  'classification_result', '["comment:1"]', '[]', 'ready', ?, '{}'
-                )
+                INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, consumed_event_fingerprints_json, verification_json, handoff, created_at, metadata_json)
+                VALUES ('result-pending-audit', 'task-result-pending', 'attempt-result-pending', 'classification_result', '["comment:1"]', '[]', 'ready', ?, json_set('{}', '$.result_contract', 'compact-v1'))
                 """,
                 (now,),
             )
@@ -6663,7 +6633,7 @@ class OperationalCommandTests(unittest.TestCase):
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
-                "UPDATE worker_results SET metadata_json = ? WHERE result_id = 'result-1'",
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps(metadata, sort_keys=True),),
             )
             conn.execute(
@@ -6980,7 +6950,7 @@ class OperationalCommandTests(unittest.TestCase):
             conn.execute(
                 """
                 UPDATE worker_results
-                SET metadata_json = ?,
+                SET metadata_json=json_set(?, '$.result_contract', 'compact-v1'),
                     verification_json = ?
                 WHERE result_id = 'result-1'
                 """,
@@ -7014,7 +6984,7 @@ repos:
         return config_path
 
     def _dd_comment_body(self, text):
-        return "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 event_fingerprints=comment:1 -->\n" + text
+        return "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n" + text
 
     def _dd_pr_body(self, text, task_id="task-1"):
         return (

@@ -28,7 +28,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {'_ROBERT_CONTROL_DEADLINE': '0'}):
             with closing(sqlite3.connect(db)) as conn:
                 with self.assertRaises(subprocess.TimeoutExpired):
-                    run_once._action_scope_for_result(conn, 'task-1', 'attempt-1', 'ws-1')
+                    run_once.result_scope.for_result(conn, 'task-1', 'attempt-1', 'ws-1', command_runner=run_once.run_command)
                 self.assertEqual(conn.execute('SELECT audit_status FROM github_actions').fetchone()[0], 'accepted')
 
     def test_expired_control_deadline_prevents_audit_and_recovery_git_calls(self):
@@ -43,7 +43,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                     run_once._run_inspection_command(['git', 'status', '--short'], fixture.root)
                 with closing(sqlite3.connect(db)) as conn:
                     with self.assertRaises(subprocess.TimeoutExpired):
-                        run_once._action_scope_for_result(conn, 'task-1', 'attempt-1', 'ws-1')
+                        run_once.result_scope.for_result(conn, 'task-1', 'attempt-1', 'ws-1', command_runner=run_once.run_command)
                 runner.assert_not_called()
 
     def test_publication_requires_recorded_worker_process_stop(self):
@@ -130,16 +130,16 @@ class ControlplaneRemediationTests(unittest.TestCase):
             import hashlib
             entries = sorted((hashlib.sha256(str(i).encode()).hexdigest(), str(i)) for i in range(3))
             for i, (key, attempt) in enumerate(entries):
-                payload = {'attempt_id': attempt, 'task_id': 'task'}
+                payload = {'attempt_id': attempt, 'task_id': 'task', '_result_contract': 'compact-v1', '_submission_fingerprint': 'semantic'}
                 record = {'status': 'pending' if i == 2 else 'rejected', 'payload': payload,
-                          'fingerprint': result_spool.fingerprint(payload)}
+                          'fingerprint': 'semantic', 'result_contract': 'compact-v1', 'normalizer_version': 1}
                 (directory / (key + '.json')).write_text(json.dumps(record))
             received = []
             for _ in range(3):
                 with mock.patch.object(result_spool.time, 'monotonic', side_effect=[0, 0, 3]):
                     result_spool.replay(db, lambda *args, **kwargs: received.append(True) or {'ok': True, 'status': 'recorded'})
             self.assertEqual(received, [True])
-            self.assertEqual(len(list((directory / 'rejected').glob('*.json'))), 2)
+            self.assertEqual(len(list(directory.glob('*.invalid'))), 2)
 
     def test_maintenance_catches_up_more_than_one_event_batch(self):
         fixture = retention_fixture.RetentionTests()

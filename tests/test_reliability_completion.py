@@ -209,7 +209,7 @@ def writer(db,payload,notifier=None):
  response=result._record_result_db(db,payload,notifier=notifier)
  assert response['ok'], response
  os._exit(73)
-result_spool.submit(sys.argv[1],p,writer)
+result_spool.submit(sys.argv[1],p,writer,prepare=result._prepare,lookup=result._lookup)
 '''
         child=subprocess.run([sys.executable,'-c',program,str(fixture.db),str(payload)],capture_output=True,text=True,timeout=15)
         self.assertEqual(child.returncode,73,child.stderr)
@@ -338,45 +338,46 @@ class ReviewRegressionTests(unittest.TestCase):
             self.assertIsNone(timing['waiting_since'])
             self.assertIsNone(timing['lease_expires_at'])
 
-    def test_rejected_question_retains_worker_until_supervisor_cleanup_and_retry(self):
+    def test_rejected_question_can_be_corrected_without_killing_worker(self):
         import json
         import subprocess
         import sys
         from datetime import datetime, timezone
-        from tests.test_work_items import WorkItemCommandTests
-        from robert_agent import worker_identity, work_items, workbench
+        from tests.test_worker_protocol import WorkerProtocolTests
+        from robert_agent import worker_identity
         from robert_agent.worker import result
-        fixture=WorkItemCommandTests()
+        fixture = WorkerProtocolTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        task_id=fixture._failed_github_task()
-        child=subprocess.Popen([sys.executable,'-c','import time; print("ready", flush=True); time.sleep(60)'],start_new_session=True,stdout=subprocess.PIPE,text=True)
-        self.assertEqual(child.stdout.readline().strip(),'ready')
+        db = fixture._init_attempt_db()
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)
         def cleanup():
             if child.poll() is None:
                 child.kill()
             child.wait(timeout=10)
-            child.stdout.close()
         self.addCleanup(cleanup)
-        identity=worker_identity.capture_process_identity(child.pid)
-        now=datetime.now(timezone.utc).isoformat()
-        with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
-            conn.execute("UPDATE tasks SET lifecycle='running' WHERE task_id=?",(task_id,))
-            conn.execute("UPDATE workstreams SET lifecycle='active',active_task_id=? WHERE workstream_id='github:example/repo!21'",(task_id,))
-            conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at,heartbeat_at,metadata_json) VALUES ('question-attempt',?,1,'running',?,?,?)",(task_id,now,now,json.dumps({'dispatch':{'status':'running',**identity}})))
-        payload=result.build_result(task_id=task_id,attempt_id='question-attempt',output_type='waiting_for_user',consumed_event_fingerprints=[],verification=[],handoff='question',operator_question={'kind':'clarification','summary':'Which version?','choices':[]})
-        self.assertEqual(result.record_result(fixture.db_path,payload)['status'],'failed_validation')
+        identity = worker_identity.capture_process_identity(child.pid)
+        now = datetime.now(timezone.utc).isoformat()
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("UPDATE attempts SET started_at=?,heartbeat_at=?,metadata_json=json_set(metadata_json,'$.dispatch',json(?))", (now, now, json.dumps({'status': 'running', **identity})))
+        payload = result.build_result(task_id='task-1', attempt_id='attempt-1', output_type='waiting_for_user',
+            consumed_event_fingerprints=['comment:1'], verification=[], handoff='question',
+            operator_question={'kind': 'clarification', 'summary': 'Which version?', 'choices': []})
+        rejected = result.record_result(db, payload)
+        self.assertEqual(rejected['status'], 'failed_validation')
         self.assertIsNone(child.poll())
-        with closing(sqlite3.connect(fixture.db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE attempt_id='question-attempt'").fetchone()[0],'running')
-        detail=workbench.get_work_item(fixture.db_path,'github:example/repo!21')
-        self.assertEqual(detail['operator_state']['reason_code'],'question_not_deliverable')
-        with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
-            supervised = run_once._supervise_running_attempts(conn,'repo-1',{},now)
-            state = conn.execute("SELECT status,metadata_json FROM attempts WHERE attempt_id='question-attempt'").fetchone()
-            self.assertEqual(state[0], 'failed', (supervised, state))
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('SELECT status,failure_json FROM attempts').fetchone(), ('running', None))
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM worker_results').fetchone()[0], 0)
+        payload['submission']['planned_github_actions'] = [{'type': 'comment', 'body': 'Which version should I target?'}]
+        accepted = result.record_result(db, payload)
+        self.assertTrue(accepted['ok'], accepted)
+        self.assertIsNone(child.poll())
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
+            self.assertEqual(conn.execute('SELECT status FROM attempts').fetchone()[0], 'running')
+        child.terminate()
         child.wait(timeout=10)
-        with closing(sqlite3.connect(fixture.db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE attempt_id='question-attempt'").fetchone()[0],'failed')
-            self.assertIsNone(conn.execute("SELECT active_task_id FROM workstreams WHERE workstream_id='github:example/repo!21'").fetchone()[0])
-        self.assertTrue(work_items.retrigger_failed_github_task(fixture.db_path,task_id,context=fixture.context,idempotency_key='question-retry')['ok'])
+        with closing(sqlite3.connect(db)) as conn, conn:
+            run_once._supervise_running_attempts(conn, 'repo-1', {}, now)
+            self.assertEqual(conn.execute('SELECT status FROM attempts').fetchone()[0], 'completed')

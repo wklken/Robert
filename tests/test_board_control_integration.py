@@ -317,7 +317,7 @@ class BoardControlIntegrationTests(unittest.TestCase):
 
     def test_no_pr_results_and_existing_operator_routes_remain_available(self):
         from robert_agent import audit_result
-        from robert_agent.worker import result
+        from tests.result_fixtures import internal_result
         from robert_agent import web
         base = {
             "task_id": "task-local",
@@ -329,8 +329,8 @@ class BoardControlIntegrationTests(unittest.TestCase):
             "verification": [],
             "used_skills": [],
         }
-        analysis = result.build_result(**base, handoff="Analysis completed without code changes.")
-        no_op = result.build_result(**base, handoff="Code change is unnecessary; existing behavior is correct.")
+        analysis = internal_result(**base, handoff="Analysis completed without code changes.")
+        no_op = internal_result(**base, handoff="Code change is unnecessary; existing behavior is correct.")
         for payload in (analysis, no_op):
             audited = audit_result.audit_result(
                 payload,

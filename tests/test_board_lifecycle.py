@@ -196,11 +196,11 @@ class BoardLifecycleTests(unittest.TestCase):
             task_id = conn.execute("SELECT active_task_id FROM workstreams WHERE workstream_id=?", (item["workstream_id"],)).fetchone()[0]
             conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task_id,))
             metadata = {"publish": {"status": "publish_failed", "safe_error": "GitHub permission denied in /home/operator/private"}} if failed else {}
-            metadata.update({'body':'Done <!-- robert-comment test -->'})
+            metadata.update({'body':'Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->'})
             if audited:
                 conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('publication-attempt',?,1,'completed')", (task_id,))
                 scope = {'repo':'example/repo', 'sources':[{'source_type':'issue','number':1}]}
-                conn.execute("INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES ('result',?,'publication-attempt','comment_analysis','2026-10-22',?)", (task_id,json.dumps({'audit':{'status':'accepted','action_scope':scope}})))
+                conn.execute("INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES ('result', ?, 'publication-attempt', 'comment_analysis', '2026-10-22', json_set(?, '$.result_contract', 'compact-v1'))", (task_id,json.dumps({'audit':{'status':'accepted','action_scope':scope}})))
             conn.execute("INSERT INTO github_actions(action_id,task_id,action_type,audit_status,created_at,metadata_json) VALUES ('publish-action',?,'comment','accepted','2026-10-22',?)", (task_id, json.dumps(metadata)))
             if audited:
                 conn.execute("UPDATE github_actions SET result_id='result', target_url='https://github.com/example/repo/issues/1'")

@@ -40,7 +40,7 @@ class PublicationBudgetTests(unittest.TestCase):
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('t','ws','running','now','now')"
             )
             c.execute(
-                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','t',1,'completed')"
+                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status,metadata_json) VALUES ('a','t',1,'completed',json_object('result_contract','compact-v1'))"
             )
             scope = {
                 "repo": "x/y",
@@ -52,7 +52,7 @@ class PublicationBudgetTests(unittest.TestCase):
             }
             c.execute(
                 "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES ('r','t','a','new_pr','now',?)",
-                (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),),
+                (json.dumps({"result_contract": "compact-v1", "audit": {"status": "accepted", "action_scope": scope}}),),
             )
             c.execute(
                 "INSERT INTO github_actions VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -123,7 +123,7 @@ class PublicationBudgetTests(unittest.TestCase):
                     "accepted",
                     "not_published",
                     "zzz",
-                    json.dumps({"body": "Done <!-- robert-comment r -->"}),
+                    json.dumps({"body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"}),
                 ),
             )
         self.cycle()
@@ -170,13 +170,13 @@ class DurableResultTests(unittest.TestCase):
         self.fixture = WorkerProtocolTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        self.db = self.fixture._init_attempt_db()
+        self.db = self.fixture._init_attempt_db(output_type="local_result", route_id="local-result")
         from robert_agent.worker.result import build_result
 
         self.payload = build_result(
             task_id="task-1",
             attempt_id="attempt-1",
-            output_type="comment_analysis",
+            output_type="local_result",
             planned_github_actions=[],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -308,8 +308,8 @@ class WaitingResultTests(unittest.TestCase):
     def test_github_question_without_public_action_is_rejected_before_completion(self):
         from robert_agent.worker import result
 
-        self.payload.update(
-            output_type="waiting_for_user",
+        self.payload["output_type"] = "waiting_for_user"
+        self.payload["submission"].update(
             operator_question={
                 "kind": "clarification",
                 "summary": "Which version?",
@@ -321,17 +321,17 @@ class WaitingResultTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(c.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running")
             self.assertEqual(c.execute("SELECT status FROM attempts").fetchone()[0], "running")
-            failure = json.loads(c.execute("SELECT failure_json FROM attempts").fetchone()[0])
-            self.assertEqual(failure["reason_code"], "question_not_deliverable")
+            self.assertIsNone(c.execute("SELECT failure_json FROM attempts").fetchone()[0])
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
                 c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0
             )
             self.assertEqual(
-                c.execute("SELECT count(*) FROM notifications").fetchone()[0], 1
+                c.execute("SELECT count(*) FROM notifications").fetchone()[0], 0
             )
-
-
+        self.payload["output_type"] = "local_result"
+        self.payload["submission"].pop("operator_question")
+        self.assertTrue(result.record_result(self.db, self.payload)["ok"])
 
 
 class TransactionBoundaryTests(unittest.TestCase):
@@ -450,18 +450,22 @@ class ReplayBudgetTests(unittest.TestCase):
 
     def test_busy_replay_stops_after_first_short_wait(self):
         import time
-        from robert_agent import result_spool
+        from robert_agent import result_spool, result_contract
         from robert_agent.worker.result import replay_pending_results
 
         for number in range(2):
-            payload = {**self.payload, "attempt_id": f"pending-{number}"}
+            envelope = {**self.payload, "attempt_id": f"pending-{number}"}
+            digest = result_contract.semantic_fingerprint(envelope)
+            payload = {key: value for key, value in envelope.items() if key != "submission"} | envelope["submission"]
+            payload.update(_result_contract=result_contract.CONTRACT_ID, _normalizer_version=1, _submission_fingerprint=digest)
             with result_spool.locked_record(self.db, payload["attempt_id"]) as path:
                 result_spool.atomic_write(
                     path,
                     {
                         "status": "pending",
                         "payload": payload,
-                        "fingerprint": result_spool.fingerprint(payload),
+                        "fingerprint": digest,
+                        "result_contract": result_contract.CONTRACT_ID, "normalizer_version": 1,
                     },
                 )
         with closing(sqlite3.connect(self.db)) as lock:

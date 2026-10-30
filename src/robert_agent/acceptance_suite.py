@@ -117,7 +117,8 @@ def _verify_production_canary_evidence(evidence_url, marker_id, run_command=subp
     except ValueError:
         comment = {}
     body = comment.get("body") if isinstance(comment.get("body"), str) else ""
-    marker = f"production-canary:{marker_id}" if marker_id else "production-canary:"
+    marker = (f"attempt_id=attempt-production-canary-{marker_id} action_index=0"
+              if marker_id else "attempt_id=attempt-production-canary-")
     if marker not in body:
         return {
             "ok": False,

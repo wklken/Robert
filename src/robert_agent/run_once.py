@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from robert_agent import result_contract, result_cutover
 from contextlib import closing, contextmanager
 import hashlib
 import json
@@ -38,6 +39,7 @@ from robert_agent import worker_identity
 from robert_agent.worker_identity import live_process_group as _live_process_group
 from robert_agent import workflow_events
 from robert_agent.publication_lock import task_publication_lock
+from robert_agent import action_scope as result_scope
 from robert_agent.common import ControlDeadlineExceeded, emit, run_command
 from robert_agent import project_memory, runtime_knowledge, storage, usage, wakeup, work_items
 from robert_agent.worker import heartbeat as command_heartbeat, snapshot as worker_snapshot
@@ -2672,21 +2674,6 @@ def _active_task_id(conn, workstream_id):
     return row[0] if row else None
 
 
-def _task_has_event(conn, task_id, event_fingerprint):
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM task_events te
-        JOIN github_events ge ON ge.event_id = te.event_id
-        WHERE te.task_id = ?
-          AND ge.event_fingerprint = ?
-        LIMIT 1
-        """,
-        (task_id, event_fingerprint),
-    ).fetchone()
-    return bool(row)
-
-
 def _event_has_terminal_trigger(conn, event_fingerprint):
     row = conn.execute(
         """
@@ -2888,7 +2875,7 @@ def _event_context_markdown(events):
         metadata["body"] = f"<stored below, {len(body)} chars>"
         lines.extend(
             [
-                f"## Event {index}: {event.get('event_fingerprint', '')}",
+                f'<a id="event-{index}"></a>\n## Event {index}: {event.get("event_fingerprint", "")}',
                 "",
                 "Metadata:",
                 "",
@@ -2907,20 +2894,42 @@ def _event_context_markdown(events):
     return "\n".join(lines)
 
 
-def _write_github_context_artifacts(prompt_dir, events):
-    context_dir = prompt_dir / "context"
-    context_dir.mkdir(parents=True, exist_ok=True)
-    json_path = context_dir / "github-context.json"
-    md_path = context_dir / "github-context.md"
-    json_path.write_text(
-        json.dumps({"events": events}, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    md_path.write_text(_event_context_markdown(events), encoding="utf-8")
+def _atomic_replace_files(contents):
+    """Stage complete sibling files before atomically replacing each destination."""
+    staged = {}
+    try:
+        for path, content in contents.items():
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+            staged[path] = temporary
+            temporary.write_bytes(content)
+        for path, temporary in staged.items():
+            os.replace(temporary, path)
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+
+
+def _github_context_paths(prompt_dir, attempt_id):
     return {
-        "json_path": str(json_path),
-        "md_path": str(md_path),
+        "json_path": str(prompt_dir / f"{attempt_id}.github-context.json"),
+        "md_path": str(prompt_dir / f"{attempt_id}.github-context.md"),
+    }
+
+
+def _write_github_context_artifacts(prompt_dir, attempt_id, events):
+    paths = _github_context_paths(prompt_dir, attempt_id)
+    _atomic_replace_files({
+        Path(paths["json_path"]): json.dumps(
+            {"events": events}, ensure_ascii=False, indent=2, sort_keys=True
+        ).encode("utf-8"),
+        Path(paths["md_path"]): _event_context_markdown(events).encode("utf-8"),
+    })
+    return {
+        **paths,
         "event_count": len(events),
+        "current_event_fingerprint": events[0].get("event_fingerprint") if events else None,
         "event_fingerprints": [
             event.get("event_fingerprint")
             for event in events
@@ -3001,7 +3010,49 @@ def _upsert_route_decision(conn, task_id, route_result, run_now):
     )
 
 
-def _refresh_prepared_task(
+def _task_review_input_policy(conn, task_id):
+    row = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    return _json_object(row[0] if row else None).get("review_input_policy", "required")
+
+
+def _refresh_prepared_task(conn, data_dir, db_path, repo, event, run_now,
+                           dry_run, config_result=None):
+    state = _active_task_state(conn, event["workstream_id"])
+    if not state:
+        return None
+    # Persist event ingestion before contending with dispatch. No SQLite writer
+    # lock may be retained while acquiring the process lock or preparing Git.
+    conn.commit()
+    with task_publication_lock(db_path, state["task_id"]) as acquired:
+        if not acquired:
+            return None
+        current = _active_task_state(conn, event["workstream_id"])
+        owner = conn.execute("SELECT active_task_id FROM workstreams WHERE workstream_id=?",
+                             (event["workstream_id"],)).fetchone()
+        if (current != state or not owner or owner[0] != state["task_id"]
+                or current["task_lifecycle"] != "queued"
+                or current["attempt_status"] != "prepared"):
+            return None
+        prompt_path = _prompt_path_for_task(conn, data_dir, state["task_id"])
+        paths = [prompt_path, *(Path(path) for path in
+                 _github_context_paths(prompt_path.parent, state["attempt_id"]).values())]
+        previous = {path: path.read_bytes() if path.exists() else None for path in paths}
+        try:
+            result = _refresh_prepared_task_locked(
+                conn, data_dir, db_path, repo, event, run_now, dry_run, config_result)
+            conn.commit()  # Publish metadata before dispatch can acquire this lock.
+            return result
+        except BaseException:
+            conn.rollback()
+            _atomic_replace_files({path: content for path, content in previous.items()
+                                   if content is not None})
+            for path, content in previous.items():
+                if content is None:
+                    path.unlink(missing_ok=True)
+            raise
+
+
+def _refresh_prepared_task_locked(
     conn,
     data_dir,
     db_path,
@@ -3026,16 +3077,37 @@ def _refresh_prepared_task(
     route_result = _effective_route(config_result, repo, event)
     if route_result["route_id"] != "update-existing-pr":
         return None
-    event_known = _task_has_event(conn, state["task_id"], event["event_fingerprint"])
+    input_policy = route.review_input_policy(route_result["expected_output"], event)
+    if (state["expected_output"] in {"update_existing_pr", "review_comment"}
+            and _task_review_input_policy(conn, state["task_id"]) == "required"):
+        input_policy = "required"
+    prompt_path = _prompt_path_for_task(conn, data_dir, state["task_id"])
+    context_path = Path(_github_context_paths(prompt_path.parent, state["attempt_id"])["json_path"])
+    try:
+        prepared_events = json.loads(context_path.read_text(encoding="utf-8"))["events"]
+        event_known = any(item.get("event_fingerprint") == event["event_fingerprint"]
+                          for item in prepared_events)
+    except (OSError, ValueError, KeyError, TypeError):
+        event_known = False
     if (
         event_known
         and state["route_id"] == route_result["route_id"]
         and state["expected_output"] == route_result["expected_output"]
+        and _task_review_input_policy(conn, state["task_id"]) == input_policy
     ):
         return None
 
     conn.commit()  # External Git I/O must not retain the SQLite writer lock.
     worktree_result = _prepare_worktree(repo, event, route_result, dry_run=dry_run)
+    # Recheck after external preparation as well. Execution control can revoke
+    # ownership while Git is running; no stale input may be installed afterward.
+    current = _active_task_state(conn, event["workstream_id"])
+    owner = conn.execute("SELECT active_task_id FROM workstreams WHERE workstream_id=?",
+                         (event["workstream_id"],)).fetchone()
+    if (current != state or not owner or owner[0] != state["task_id"]
+            or not _execution_task_active(conn, state["task_id"], run_now)):
+        return None
+    conn.commit()
     related_events = _task_related_events(conn, state["task_id"])
     repo_id = _repo_id(repo["full_name"])
     runtime_knowledge_items = _load_runtime_knowledge(
@@ -3047,36 +3119,45 @@ def _refresh_prepared_task(
     )
     prompt_path = _prompt_path_for_task(conn, data_dir, state["task_id"])
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
-    github_context = _write_github_context_artifacts(prompt_path.parent, related_events)
+    github_context = _write_github_context_artifacts(prompt_path.parent, state["attempt_id"], related_events)
+    github_context["current_event_fingerprint"] = event["event_fingerprint"]
     runtime_context = _runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
-    prompt_path.write_text(
-        render_prompt.render_prompt(
-            {
-                "task_id": state["task_id"],
-                "attempt_id": state["attempt_id"],
-                "workstream_id": event["workstream_id"],
-            },
+    runtime_context["publication_targets"] = result_contract.target_urls({
+        "repo": repo["full_name"], "sources": result_scope.sources_for_workstream(conn, event["workstream_id"]),
+    })
+    prompt_text = render_prompt.render_prompt(
+        {
+            "task_id": state["task_id"],
+            "attempt_id": state["attempt_id"],
+            "workstream_id": event["workstream_id"],
+            "review_input_policy": input_policy,
+        },
+        route_result,
+        related_events,
+        runtime_context=runtime_context,
+        runtime_knowledge=runtime_knowledge_items,
+        project_memories=_retrieve_project_memories(
+            conn,
+            repo_id,
+            event["workstream_id"],
             route_result,
             related_events,
-            runtime_context=runtime_context,
-            runtime_knowledge=runtime_knowledge_items,
-            project_memories=_retrieve_project_memories(
-                conn,
-                repo_id,
-                event["workstream_id"],
-                route_result,
-                related_events,
-                runtime_knowledge_items,
-            ),
+            runtime_knowledge_items,
         ),
-        encoding="utf-8",
     )
+    _atomic_replace_files({prompt_path: prompt_text.encode("utf-8")})
     for artifact_type, path in [
+        ("prompt", str(prompt_path)),
         ("github_context_json", github_context["json_path"]),
         ("github_context_md", github_context["md_path"]),
     ]:
-        _insert_file_artifact(conn, state["task_id"], state["attempt_id"], artifact_type, path, run_now)
+        updated = conn.execute(
+            "UPDATE artifacts SET bytes=?, created_at=? WHERE attempt_id=? AND artifact_type=? AND path=?",
+            (Path(path).stat().st_size, run_now, state["attempt_id"], artifact_type, path),
+        )
+        if not updated.rowcount:
+            _insert_file_artifact(conn, state["task_id"], state["attempt_id"], artifact_type, path, run_now)
     conn.execute(
         """
         UPDATE tasks
@@ -3090,6 +3171,8 @@ def _refresh_prepared_task(
             state["task_id"],
         ),
     )
+    conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.review_input_policy',?) WHERE task_id=?",
+                 (input_policy, state["task_id"]))
     _upsert_route_decision(conn, state["task_id"], route_result, run_now)
     attempt_metadata_row = conn.execute(
         "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
@@ -3625,6 +3708,7 @@ def _prepare_detected_local_tasks(
                     "task_id": task_id,
                     "attempt_id": attempt_id,
                     "workstream_id": workstream_id,
+                    "review_input_policy": route.review_input_policy(route_result["expected_output"], normalized),
                 },
                 route_result,
                 local_events,
@@ -3635,6 +3719,7 @@ def _prepare_detected_local_tasks(
         _upsert_route_decision(conn, task_id, route_result, run_now)
         task_metadata = _json_object(task_metadata_json)
         task_metadata["local_source_reference"] = source_reference
+        task_metadata["review_input_policy"] = route.review_input_policy(route_result["expected_output"], normalized)
         conn.execute(
             """
             UPDATE tasks
@@ -3668,7 +3753,7 @@ def _prepare_detected_local_tasks(
                 (worktree_result or {}).get("branch_name"),
                 run_now,
                 run_now,
-                json.dumps({"origin_type": "web", "work_item_id": work_item_id}),
+                json.dumps({"origin_type": "web", "work_item_id": work_item_id, "result_contract": result_contract.CONTRACT_ID}),
             ),
         )
         _insert_file_artifact(conn, task_id, attempt_id, "task_context", context_path, run_now)
@@ -3946,6 +4031,7 @@ def _create_task_attempt_and_prompt(
         "attempt_id": attempt_id,
         "workstream_id": workstream_id,
         "task_kind": event.get("task_kind", "human_request"),
+        "review_input_policy": route.review_input_policy(route_result["expected_output"], event),
     }
     runtime_knowledge_items = _load_runtime_knowledge(
         conn,
@@ -3962,20 +4048,9 @@ def _create_task_attempt_and_prompt(
         related_events,
         runtime_knowledge_items,
     )
-    github_context = _write_github_context_artifacts(prompt_dir, related_events)
+    github_context = _write_github_context_artifacts(prompt_dir, attempt_id, related_events)
     runtime_context = _runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
-    prompt_path.write_text(
-        render_prompt.render_prompt(
-            task,
-            route_result,
-            related_events,
-            runtime_context=runtime_context,
-            runtime_knowledge=runtime_knowledge_items,
-            project_memories=project_memories,
-        ),
-        encoding="utf-8",
-    )
 
     conn.execute(
         """
@@ -4030,6 +4105,20 @@ def _create_task_attempt_and_prompt(
                 run_now,
             ),
         )
+    runtime_context["publication_targets"] = result_contract.target_urls({
+        "repo": repo["full_name"], "sources": result_scope.sources_for_workstream(conn, workstream_id),
+    })
+    prompt_path.write_text(
+        render_prompt.render_prompt(
+            task,
+            route_result,
+            related_events,
+            runtime_context=runtime_context,
+            runtime_knowledge=runtime_knowledge_items,
+            project_memories=project_memories,
+        ),
+        encoding="utf-8",
+    )
     conn.execute(
         """
         INSERT INTO tasks(
@@ -4056,17 +4145,11 @@ def _create_task_attempt_and_prompt(
             run_now,
             json.dumps(
                 {
-                    "remediation_episode_id": (
-                        ((event.get("metadata") or {}).get("remediation") or {}).get(
-                            "episode_id"
-                        )
-                    )
-                }
-                if event.get("task_kind") in {
-                    "ci_remediation",
-                    "merge_conflict_remediation",
-                }
-                else {},
+                    "review_input_policy": task["review_input_policy"],
+                    **({"remediation_episode_id": remediation_context.get("episode_id")}
+                       if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
+                       else {}),
+                },
                 ensure_ascii=False,
                 sort_keys=True,
             ),
@@ -4127,6 +4210,7 @@ def _create_task_attempt_and_prompt(
         if existing_pr_head_sha
         else {}
     )
+    attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
     conn.execute(
         """
         INSERT INTO attempts(
@@ -4298,6 +4382,7 @@ def _create_resume_attempt_and_prompt(
         "task_id": task_id,
         "attempt_id": attempt_id,
         "workstream_id": workstream_id,
+        "review_input_policy": _task_review_input_policy(conn, task_id),
     }
     worktree_result = {
         "worktree_path": worktree_path or "",
@@ -4321,8 +4406,12 @@ def _create_resume_attempt_and_prompt(
     runtime_context = _runtime_context(db_path, repo, worktree_result)
     runtime_context["recovery_context"] = recovery_context
     prompt_path = prompt_dir / f"{attempt_id}.prompt.md"
-    github_context = _write_github_context_artifacts(prompt_dir, events)
+    github_context = _write_github_context_artifacts(prompt_dir, attempt_id, events)
     runtime_context["github_context"] = github_context
+    repo_full_name = conn.execute("SELECT full_name FROM repos WHERE repo_id=?", (repo_id,)).fetchone()[0]
+    runtime_context["publication_targets"] = result_contract.target_urls({
+        "repo": repo_full_name, "sources": result_scope.sources_for_workstream(conn, workstream_id),
+    })
     prompt_path.write_text(
         render_prompt.render_prompt(
             task,
@@ -4358,6 +4447,7 @@ def _create_resume_attempt_and_prompt(
     )
     if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
         attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
+    attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
     conn.execute(
         """
         INSERT INTO attempts(
@@ -4979,6 +5069,9 @@ def _dispatch_queued_locked(
     route_worker_models=None,
     config_result=None,
 ):
+    cutover = result_cutover.check(db_path)
+    if not cutover["ok"]:
+        return [cutover]
     results = []
     default_worker = default_worker or (workers or [])[0]
     workers_by_name = {
@@ -5202,19 +5295,6 @@ def _dispatch_queued_locked(
     return results
 
 
-def _legacy_recommended_route_from_handoff(output_type, handoff):
-    if output_type != "classification_result":
-        return ""
-    for line in (handoff or "").splitlines():
-        match = re.fullmatch(r"\s*Recommend route\s+([a-z0-9][a-z0-9-]*)\s*\.?\s*", line, re.I)
-        if not match:
-            continue
-        recommended_route = match.group(1).lower()
-        if recommended_route in route.ROUTES and recommended_route != "classification-result":
-            return recommended_route
-    return ""
-
-
 def _load_result_payload(conn, result_row):
     (
         result_id,
@@ -5245,8 +5325,6 @@ def _load_result_payload(conn, result_row):
         actions.append(action)
     metadata = json.loads(metadata_json) if metadata_json else {}
     recommended_route = metadata.get("recommended_route", "")
-    if not recommended_route:
-        recommended_route = _legacy_recommended_route_from_handoff(output_type, handoff)
     return {
         "result_id": result_id,
         "task_id": task_id,
@@ -5260,115 +5338,18 @@ def _load_result_payload(conn, result_row):
         "memory_delta": metadata.get("memory_delta"),
         "used_memory_ids": metadata.get("used_memory_ids", []),
         "review_point_evaluation": metadata.get("review_point_evaluation", []),
+        "review_input_kind": metadata.get("review_input_kind"),
         "recommended_route": recommended_route,
         "branch_slug": metadata.get("branch_slug", ""),
         "consumed_work_item_event_ids": metadata.get(
             "consumed_work_item_event_ids",
             [],
         ),
+        "submission_head_sha": metadata.get("submission_head_sha"),
         "operator_question": metadata.get("operator_question"),
         "remediation_evidence": metadata.get("remediation_evidence"),
     }
 
-
-def _action_scope_for_result(conn, task_id, attempt_id, workstream_id):
-    row = conn.execute(
-        """
-        SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name,
-               a.metadata_json, t.task_kind, t.metadata_json
-        FROM tasks t
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        JOIN repos r ON r.repo_id = w.repo_id
-        JOIN attempts a ON a.attempt_id = ?
-        WHERE t.task_id = ?
-          AND t.workstream_id = ?
-        """,
-        (attempt_id, task_id, workstream_id),
-    ).fetchone()
-    if not row:
-        return None
-    sources = [
-        {
-            "source_type": source_type,
-            "number": number,
-        }
-        for source_type, number in conn.execute(
-            """
-            SELECT DISTINCT gs.source_type, gs.number
-            FROM github_sources gs
-            WHERE gs.source_id IN (
-              SELECT primary_source_id
-              FROM workstreams
-              WHERE workstream_id = ?
-              UNION
-              SELECT source_id
-              FROM workstream_sources
-              WHERE workstream_id = ?
-            )
-            ORDER BY gs.source_type, gs.number
-            """,
-            (workstream_id, workstream_id),
-        )
-    ]
-    action_scope = {
-        "repo": row[0],
-        "base_branch": row[1],
-        "worktree_path": row[2] or "",
-        "branch_name": row[3] or "",
-        "remote": "origin",
-        "sources": sources,
-    }
-    if action_scope["worktree_path"] and action_scope["branch_name"]:
-        # Pin the controller-observed commit and fork, never worker supplied values.
-        for command, field in ((["git", "rev-parse", "HEAD"], "result_head_sha"),
-                               (["git", "remote", "get-url", "origin"], "head_owner")):
-            try:
-                inspected = run_command(command, cwd=action_scope["worktree_path"],
-                                           capture_output=True, text=True, timeout=5)
-            except OSError:
-                continue
-            if inspected.returncode == 0 and inspected.stdout.strip():
-                value = inspected.stdout.strip()
-                if field == "head_owner":
-                    value = publish._github_remote_owner(value)
-                if value:
-                    action_scope[field] = value
-    attempt_metadata = _json_object(row[4])
-    existing_pr_head_sha = attempt_metadata.get("existing_pr_head_sha")
-    if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
-        action_scope["existing_pr_head_sha"] = existing_pr_head_sha
-    task_metadata = _json_object(row[6])
-    review = review_store.session(conn, task_id=task_id)
-    if review and review["manifest"] and review["report_path"]:
-        action_scope.update(
-            review_round_id=review["round_id"], review_head_sha=review["manifest"]["head_sha"],
-            review_base_sha=review["manifest"]["base_sha"], review_base_ref=review["manifest"]["base_ref"],
-            review_report_path=review["report_path"], review_report_sha256=review["report_sha256"],
-        )
-    vote = vote_store.session(conn, task_id=task_id)
-    if vote and vote['manifest'] and vote['report_path']:
-        from robert_agent import vote_files
-        manifest_path = str(Path(vote['manifest']['context_dir']) / 'manifest.json')
-        target_kind = 'pull' if vote['source_type'] == 'pull_request' else 'issues'
-        action_scope.update(vote_round_id=vote['round_id'], vote_snapshot_id=vote['manifest']['snapshot_id'],
-            vote_report_path=vote['report_path'], vote_report_sha256=vote['report_sha256'],
-            vote_manifest_path=manifest_path, vote_manifest_sha256=vote_files.digest(manifest_path),
-            vote_target_url=f"https://github.com/{vote['repo']}/{target_kind}/{vote['number']}",
-            vote_publisher=vote['request']['repo']['github_account'])
-    episode_id = task_metadata.get("remediation_episode_id")
-    if row[5] in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
-        episode = remediation.load_episode(conn, episode_id)
-        if episode:
-            action_scope.update(
-                {
-                    "task_kind": row[5],
-                    "episode_id": episode_id,
-                    "pr_number": episode["metadata"].get("pr_number"),
-                    "observed_head_sha": episode["observed_head_sha"],
-                    "observed_base_sha": episode["observed_base_sha"],
-                }
-            )
-    return action_scope
 
 
 def _set_github_actions_status(conn, result_id, status):
@@ -6143,6 +6124,10 @@ def _recover_orphaned_classification_results(
         if not _execution_parent_allows_child(conn, row[1]):
             continue
         workstream_id = row[8]
+        if _json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
+            # Old results remain audit history or unresolved cutover work. Never
+            # consume, publish or terminalize them through the new protocol.
+            continue
         payload = _load_result_payload(conn, result_row)
         if not payload.get("recommended_route"):
             continue
@@ -6250,6 +6235,10 @@ def _audit_completed_results(
         verification_policy = route.verification_policy_for(row[13])
         task_kind = row[14]
         task_metadata = _json_object(row[15])
+        if _json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
+            # Old results remain audit history or unresolved cutover work. Never
+            # consume, publish or terminalize them through the new protocol.
+            continue
         payload = _load_result_payload(conn, result_row)
         origin_row = conn.execute(
             "SELECT origin_type FROM work_items WHERE workstream_id = ?",
@@ -6259,7 +6248,7 @@ def _audit_completed_results(
         _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
         conn.commit()
         try:
-            action_scope = _action_scope_for_result(conn, payload['task_id'], payload['attempt_id'], workstream_id)
+            action_scope = result_scope.for_result(conn, payload['task_id'], payload['attempt_id'], workstream_id, command_runner=run_command)
         except ControlDeadlineExceeded:
             raise
         except subprocess.TimeoutExpired as exc:
@@ -6306,6 +6295,7 @@ def _audit_completed_results(
             task_kind=task_kind,
             remediation_context=remediation_context,
             remediation_attestation=remediation_attestation,
+            review_input_policy=task_metadata.get("review_input_policy", "required"),
         )
         _record_result_audit(conn, payload["result_id"], audit)
         wakeup.consume_wakeups_for_results(
@@ -6489,6 +6479,10 @@ def _finalize_published_results(
         if not _execution_task_active(conn, row[1], run_now):
             continue
         workstream_id = row[8]
+        if _json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
+            # Old results remain audit history or unresolved cutover work. Never
+            # consume, publish or terminalize them through the new protocol.
+            continue
         payload = _load_result_payload(conn, result_row)
         if not _result_audit_accepted(conn, payload["result_id"]):
             continue
@@ -7590,6 +7584,9 @@ def run_once(
     data_dir = Path(config_result["data_dir"])
     db_path = Path(config_result["db_path"])
     storage.init_database(db_path)
+    cutover = result_cutover.check(db_path)
+    if not cutover["ok"]:
+        return cutover
     with closing(sqlite3.connect(db_path)) as pool_conn, pool_conn:
         review_store.configure_process_pool(pool_conn, config_result['review_max_concurrency'])
     with closing(sqlite3.connect(db_path)) as guard:

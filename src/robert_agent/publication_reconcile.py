@@ -15,7 +15,7 @@ from robert_agent import pr_health, review_publish, vote_publish
 
 
 COMMENT_MARKER_RE = re.compile(
-    r"<!--\s*robert-comment\b.*?-->",
+    r"<!--\s*robert-comment\s+task_id=\S+\s+attempt_id=\S+\s+action_index=\d+\s*-->",
     re.I | re.S,
 )
 WORKSTREAM_MARKER_RE = re.compile(

@@ -2,7 +2,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from robert_agent import validate_config
+from robert_agent import validate_config, result_cutover
 from robert_agent.route_config import (
     load_route_policies,
     resolve_route_config,
@@ -27,6 +27,9 @@ def doctor(config_path, skip_external=False):
             "checks": checks,
             "safe_error": validated.get("safe_error"),
         }
+
+    cutover = result_cutover.check(validated["db_path"])
+    checks["result_contract_cutover"] = {**cutover, "status": "passed" if cutover["ok"] else "failed"}
 
     checks['workflow_engine']={'status':'passed','mode':'sqlite','configured':True}
 

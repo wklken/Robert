@@ -27,11 +27,11 @@ PUBLISH_COMMAND_TIMEOUT_SECONDS = 60
 
 
 COMMENT_MARKER_RE = re.compile(
-    r"<!--\s*(?:robert-comment|dd-comment)\b.*?-->",
+    r"<!--\s*robert-comment\s+task_id=\S+\s+attempt_id=\S+\s+action_index=\d+\s*-->",
     re.I | re.S,
 )
 WORKSTREAM_MARKER_RE = re.compile(
-    r"<!--\s*(?:robert-workstream|dd-workstream)\b.*?-->",
+    r"<!--\s*robert-workstream\b.*?-->",
     re.I | re.S,
 )
 
@@ -1328,6 +1328,11 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
 
     with closing(sqlite3.connect(db_path)) as conn:
         execution_store.require_migrated(conn)
+        from robert_agent import result_cutover
+        cutover = result_cutover.inspect(conn, db_path)
+        if not cutover["ok"]:
+            return {**cutover, "pending_count": 0, "published_count": 0,
+                    "deduplicated_count": 0, "skipped_count": 0, "failed_count": 0}
         conn.row_factory = sqlite3.Row
         actions = _ready_actions(conn, limit, repo_id=repo_id, task_ids=task_ids)
     if dry_run:

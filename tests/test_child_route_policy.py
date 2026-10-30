@@ -36,10 +36,10 @@ class ChildRoutePolicyTests(unittest.TestCase):
             db = root / 'data' / 'robert.sqlite3'
             with closing(sqlite3.connect(db)) as conn:
                 task_id, attempt_id = conn.execute('SELECT task_id,attempt_id FROM attempts').fetchone()
-            result = record_result(db, {'task_id': task_id, 'attempt_id': attempt_id,
-                'output_type': 'classification_result', 'planned_github_actions': [],
-                'consumed_event_fingerprints': ['comment:unclear-42'], 'verification': [],
-                'handoff': 'Recommend new-pr', 'used_skills': [], 'recommended_route': 'new-pr'})
+            result = record_result(db, {'task_id': task_id, 'attempt_id': attempt_id, 'output_type': 'classification_result',
+                'submission': {'planned_github_actions': [], 'consumed_event_fingerprints': ['comment:unclear-42'],
+                    'verification': [], 'used_skills': [], 'handoff': 'Classified request',
+                    'recommended_route': 'new-pr', 'branch_slug': 'classified-change'}})
             self.assertTrue(result['ok'], result)
             second = run_once(config_path, dry_run=True, skip_external=True)
             self.assertTrue(second['ok'], second)

@@ -14,7 +14,7 @@ from robert_agent import publish
 
 COMMENT_BODY = (
     "<!-- robert-comment task_id=task-comment attempt_id=attempt-comment "
-    "event_fingerprints=comment:1 -->\nExisting comment"
+    "action_index=0 -->\nExisting comment"
 )
 PR_BODY = (
     "<!-- robert-workstream\n"
@@ -157,9 +157,9 @@ def _insert_fixture(db_path):
             """
             INSERT INTO worker_results(
               result_id, task_id, attempt_id, output_type,
-              consumed_event_fingerprints_json, verification_json, handoff, created_at
+              consumed_event_fingerprints_json, verification_json, handoff, created_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, '["comment:1"]', '[]', 'ready', ?)
+            VALUES (?, ?, ?, ?, '["comment:1"]', '[]', 'ready', ?, json_object('result_contract','compact-v1'))
             """,
             [
                 ("result-comment", "task-comment", "attempt-comment", "comment_analysis", now),
