@@ -128,6 +128,8 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             hard_timeout_seconds=timeout,
         )
         process = run_once_module._dispatch_process_status(metadata)
+        if not received_result and process['status'] == 'dead' and not run_once_module._inspection_due(metadata.get('inspection_retry', {}), now):
+            continue
         if process['status'] != 'alive_same' or status.get('terminate'):
             return True
         if received_result:
@@ -223,12 +225,24 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
             JOIN tasks t ON t.task_id=a.task_id
             WHERE (wr.result_id=wakeups.result_id OR a.attempt_id=wakeups.attempt_id)
               AND a.status='completed' AND NOT COALESCE({supervise.occupied_attempt_sql()},0)
-              AND t.lifecycle IN ('queued','running') AND {execution_store.runnable_sql()}))
+              AND t.lifecycle IN ('queued','running') AND {execution_store.runnable_sql()}
+              AND (json_extract(wr.metadata_json,'$.audit_observation.next_retry_at') IS NULL
+                   OR julianday(json_extract(wr.metadata_json,'$.audit_observation.next_retry_at'))<=julianday(?))))
         LIMIT 1
         """,
-        [now, now, include_publication] + wakeup_repo_params + waiting_ids,
+        [now, now, include_publication] + wakeup_repo_params + waiting_ids + [now],
     ).fetchone()
-    if pending_wakeup or _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
+    # Durable results remain runnable after a lost/consumed wakeup or audit retry.
+    result_clause, result_params = _repo_filter('w', repo_ids)
+    unaudited = conn.execute(f"""SELECT 1 FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
+        JOIN tasks t ON t.task_id=wr.task_id JOIN workstreams w ON w.workstream_id=t.workstream_id
+        WHERE t.lifecycle IN ('queued','running') AND a.status='completed'
+          AND NOT COALESCE({supervise.occupied_attempt_sql()},0)
+          AND json_extract(wr.metadata_json,'$.audit') IS NULL AND {execution_store.runnable_sql()}
+          AND (json_extract(wr.metadata_json,'$.audit_observation.next_retry_at') IS NULL
+               OR julianday(json_extract(wr.metadata_json,'$.audit_observation.next_retry_at'))<=julianday(?))
+          {result_clause} LIMIT 1""", [now, *result_params]).fetchone()
+    if pending_wakeup or unaudited or _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
         return True
     fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
     fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
@@ -258,11 +272,13 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
           (c.subject_type='remediation_episode' AND c.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))
         WHERE a.status='failed' AND t.lifecycle='failed' AND w.lifecycle='failed'
           AND json_extract(a.failure_json,'$.status')='failed_timeout'
+          AND (json_extract(a.metadata_json,'$.inspection_retry.next_retry_at') IS NULL
+               OR julianday(json_extract(a.metadata_json,'$.inspection_retry.next_retry_at'))<=julianday(?))
           AND c.binding_status='active' AND {execution_store.runnable_sql()}
           AND (a.finished_at IS NULL OR julianday(a.finished_at)<=julianday(?))
           AND a.attempt_no=(SELECT MAX(latest.attempt_no) FROM attempts latest WHERE latest.task_id=t.task_id)
           {workstream_repo_clause} LIMIT 1""",
-        [now, *workstream_repo_params],
+        [now, now, *workstream_repo_params],
     ).fetchone()
     if recovery_pending:
         return True
@@ -274,6 +290,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
         JOIN workstreams w ON w.workstream_id = t.workstream_id
         JOIN repos r ON r.repo_id = w.repo_id
         WHERE a.status = 'prepared'
+          AND json_extract(t.metadata_json,'$.dispatch_wait') IS NULL
           AND (json_extract(a.metadata_json,'$.resume.not_before_at') IS NULL
                OR julianday(json_extract(a.metadata_json,'$.resume.not_before_at'))<=julianday(?))
           AND t.lifecycle IN ('queued', 'running')
@@ -412,6 +429,7 @@ def run_loop(
         stop_reason = "max_cycles"
     summary = {
         "ok": stop_reason != "run_once_failed",
+        **({'failure_scope': cycle_results[-1]['failure_scope']} if cycle_results and cycle_results[-1].get('failure_scope') else {}),
         "status": "completed" if stop_reason != "run_once_failed" else "failed",
         "cycles": len(cycle_results),
         "stop_reason": stop_reason,
