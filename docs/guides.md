@@ -98,6 +98,19 @@ limit no larger than that global limit. Use actual checkouts and branch names.
 A repository's optional `github_account` overrides the global account for event
 routing; it does not switch the authenticated `gh` session.
 
+### GitHub request context
+
+Robert includes the Issue/PR body and relevant discussion in each attempt's
+prompt and context archive. Duplicate observations with the same event identity
+merge body completeness and update time without changing trigger authorization.
+A missing body does not erase an observed body; a newer, explicitly empty body
+does clear it. Comment bodies use their own update time.
+
+Source enrichment caches and durable scan batches include a context format
+version. An upgrade that changes this format requires a fresh scan before old
+batches can be admitted. Existing attempts retain their original input archives;
+upgrading does not rewrite a completed attempt or answer a waiting task.
+
 ## Worker Adapters
 
 ```yaml

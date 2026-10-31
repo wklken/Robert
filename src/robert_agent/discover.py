@@ -3,9 +3,50 @@ import argparse
 import json
 import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from robert_agent.common import emit, run_command
+
+
+SOURCE_CONTEXT_VERSION = 2
+
+
+def _body_context(raw, *, legacy_empty_unknown=False):
+    # Older normalized payloads defaulted missing bodies to an unmarked "".
+    default_observed = bool(raw.get("body")) if legacy_empty_unknown else True
+    observed = "body" in raw and raw.get("body_observed", default_observed) is True
+    updated_at = raw.get("body_updated_at")
+    if observed and not updated_at:
+        updated_at = (raw.get("source_updated_at") if raw.get("event_type") in {"assigned", "notification"}
+                      else raw.get("event_at"))
+    return {"body": raw.get("body") or "", "body_observed": observed,
+            "body_updated_at": updated_at if observed else None}
+
+
+def _body_time(context):
+    try:
+        value = datetime.fromisoformat(context["body_updated_at"].replace("Z", "+00:00"))
+        return value if value.tzinfo is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def merge_event_body(preferred, duplicate):
+    """Merge body observations without changing the preferred event's authority."""
+    if (preferred.get("source_key") != duplicate.get("source_key")
+            or preferred.get("event_fingerprint") != duplicate.get("event_fingerprint")
+            or preferred.get("authorization_status") != duplicate.get("authorization_status")):
+        return preferred
+    current = _body_context(preferred, legacy_empty_unknown=True)
+    candidate = _body_context(duplicate, legacy_empty_unknown=True)
+    current_time, candidate_time = _body_time(current), _body_time(candidate)
+    use_candidate = candidate["body_observed"] and (
+        not current["body_observed"]
+        or (candidate_time is not None and (current_time is None or candidate_time > current_time))
+        or (current_time is None and candidate_time is None and not current["body"] and bool(candidate["body"]))
+    )
+    return {**preferred, **(candidate if use_candidate else current)}
 
 
 def source_key(repo_full_name, source_type, number):
@@ -58,7 +99,7 @@ def normalize_events(raw_events, repo_config):
                 "event_fingerprint": normalized_event_fingerprint
                 or event_fingerprint(event_type, event_id),
                 "mentions_dd": (_mentions_dd(body, github_account) if "body" in raw else bool(raw.get("mentions_dd"))),
-                "body": body,
+                **_body_context(raw),
                 "metadata": metadata,
                 "has_open_dd_pr": bool(has_open_dd_pr),
             }
@@ -249,6 +290,8 @@ def _issue_search_to_raw(item, event_type, github_account=None):
         "author_association": item.get("authorAssociation"),
         "title": item.get("title", ""),
         "body": body,
+        "body_observed": "body" in item,
+        "body_updated_at": item.get("updatedAt"),
         "url": item.get("url"),
         "event_at": item.get("updatedAt"),
         "intent": _infer_intent(item.get("title", ""), body, event_type, github_account),
@@ -389,7 +432,9 @@ def _source_metadata(raw, repo_config, runner):
         {
             **raw,
             "title": payload.get("title") or raw.get("title", ""),
-            "body": (payload.get("body") or "") if raw.get("event_type") in {"notification", "assigned"} else raw.get("body", ""),
+            **(_body_context({"body": payload["body"], "body_updated_at": payload.get("updated_at")})
+               if raw.get("event_type") in {"notification", "assigned"} and "body" in payload
+               else _body_context(raw)),
             "state": payload.get("state") or raw.get("state", ""),
             "state_reason": payload.get("state_reason"),
             "source_updated_at": payload.get("updated_at"),
@@ -530,6 +575,8 @@ def _comment_to_raw(raw, comment, event_type="comment", repo_config=None, runner
         "author_association": association,
         "actor_permission": permission,
         "body": comment.get("body") or "",
+        "body_observed": "body" in comment,
+        "body_updated_at": comment.get("updated_at") or comment.get("created_at") or comment.get("submitted_at"),
         "event_at": comment.get("created_at") or comment.get("submitted_at") or raw.get("event_at"),
     }
     if comment.get("id"):

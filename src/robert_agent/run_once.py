@@ -2799,7 +2799,8 @@ def _task_related_events(conn, task_id, include_consumed=False):
     by_fingerprint = {item['event_fingerprint']: item for item in refreshed}
     for event in events + consumed_events:
         snapshot = by_fingerprint.get(event.get('event_fingerprint'), {})
-        event.update({key: snapshot[key] for key in ('body', 'title', 'source_updated_at') if key in snapshot})
+        event.update({key: snapshot[key] for key in ('body', 'title', 'source_updated_at',
+            'body_observed', 'body_updated_at', 'source_body', 'operator_responses') if key in snapshot})
     return events + consumed_events
 
 
@@ -3250,6 +3251,13 @@ def _insert_source_and_event(conn, repo_id, event, run_now):
         ),
     )
     event_id = _event_id(event["event_fingerprint"])
+    previous = conn.execute(
+        "SELECT payload_json FROM github_events WHERE event_fingerprint = ?",
+        (event["event_fingerprint"],),
+    ).fetchone()
+    if previous:
+        # Routing and prompt creation must use the same body as durable context.
+        event.update(discover.merge_event_body(event, json.loads(previous[0])))
     conn.execute(
         """
         INSERT INTO github_events(
@@ -3799,6 +3807,112 @@ def _prepare_detected_local_tasks(
     return prepared
 
 
+def _prepare_github_operator_tasks(conn, data_dir, db_path, repo, repo_id, run_id,
+                                   run_now, dry_run, dispatch_queue, dispatch_budget,
+                                   prompt_paths, config_result=None):
+    from robert_agent import github_operator
+    from robert_agent.publication_lock import task_publication_lock
+    for pending in github_operator.pending_tasks(conn, [repo_id]):
+        if dispatch_budget['remaining'] <= 0:
+            break
+        if github_operator.blocked(conn, pending):
+            continue
+        observed, source = github_operator.source_read(conn, pending)
+        if not observed:
+            continue
+        task_id = pending['task_id']
+        conn.commit()
+        with task_publication_lock(db_path, task_id) as acquired:
+            if not acquired:
+                continue
+            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
+            if not current or github_operator.blocked(conn, current):
+                continue
+            context_task = current['parent_task_id']
+            events = []
+            seen = set()
+            while context_task and context_task not in seen and not events:
+                seen.add(context_task)
+                events = _task_related_events(conn, context_task, include_consumed=True)
+                parent = conn.execute('SELECT parent_task_id FROM tasks WHERE task_id=?', (context_task,)).fetchone()
+                context_task = parent[0] if parent else None
+            # Notification trust is derived from the current configuration,
+            # never from a persisted boolean set by an earlier scanner.
+            trusted = set(repo.get('trusted_actors', []))
+            for event in events:
+                if event.get('event_type') == 'notification':
+                    event['trusted_trigger_found'] = bool(
+                        event.get('authorization_lookup_complete') is not False and (
+                            (event.get('assigned_to') == repo['github_account'] and event.get('assignment_actor_login') in trusted)
+                            or (event.get('requested_reviewer') == repo['github_account'] and event.get('requester_login') in trusted)
+                            or (event.get('mentions_dd') and event.get('actor_login') in trusted)))
+            authorized = [event for event in events if
+                authorize.authorize_event(event, repo, known_workstreams=set())['authorization_status']
+                in {'authorized_trigger', 'accepted_context'}]
+            reason = None
+            if not isinstance(source, dict) or 'body' not in source:
+                reason = 'github_operator_context_unavailable'
+            elif source.get('state', '').lower() != 'open':
+                reason = 'github_operator_source_closed'
+            elif not authorized:
+                reason = 'github_operator_authorization_unavailable'
+            if reason:
+                if _finalize_failed_task(conn, task_id, current['workstream_id'], run_now, {'status': reason}):
+                    work_items.record_system_event(conn, current['work_item_id'], event_type='execution_failed',
+                        idempotency_key='github-operator-failed:' + task_id,
+                        body='GitHub operator request stopped: ' + reason + '. Inspect the source and retry execution.',
+                        metadata={'task_id': task_id, 'reason_code': reason}, now=run_now)
+                    conn.execute("UPDATE wakeups SET status='consumed',consumed_run_id=?,updated_at=? WHERE wakeup_id=?",
+                                 (run_id, run_now, current['wakeup_id']))
+                continue
+            responses = conn.execute('''SELECT event_id,event_type,actor_identity,body,created_at
+                FROM work_item_events WHERE work_item_id=? AND event_type IN
+                ('user_response','changes_requested','reopened','retry_requested')
+                ORDER BY created_at,event_id''', (current['work_item_id'],)).fetchall()
+            operator_responses = [dict(zip(('event_id','event_type','actor_identity','body','created_at'), row))
+                                  for row in responses]
+            refreshed = []
+            trigger = authorized[0]
+            for event in [trigger, *(item for item in events if item is not trigger)]:
+                updated = dict(event)
+                if event['source_type'] == current['source_type'] and event['number'] == current['number']:
+                    updated.update(title=source.get('title', event.get('title', '')),
+                                   source_updated_at=source.get('updated_at'), source_body=source['body'] or '')
+                    if event['event_type'] in {'assigned', 'notification', 'mention'}:
+                        updated.update(body=source['body'] or '', body_observed=True,
+                                       body_updated_at=source.get('updated_at'))
+                refreshed.append(updated)
+            refreshed[0]['operator_responses'] = operator_responses
+            event = refreshed[0]
+            parent_route = conn.execute('SELECT route_id FROM tasks WHERE task_id=?', (current['parent_task_id'],)).fetchone()
+            route_id = parent_route[0] if parent_route else None
+            if route_id in {None, 'waiting-for-user'}:
+                route_id = 'classification-result'
+            route_result = _effective_route(config_result, repo, event, route_id=route_id)
+            conn.commit()
+            try:
+                worktree_result = _prepare_worktree(repo, event, route_result, dry_run)
+            except ControlDeadlineExceeded:
+                raise
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+                worktree_result = {'ok': False, 'status': 'github_operator_worktree_unavailable'}
+            # Cancellation and source reconciliation may run during Git I/O.
+            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
+            if (not current or github_operator.blocked(conn, current)
+                    or github_operator.source_read(conn, current) != (observed, source)):
+                continue
+            info = _create_task_attempt_and_prompt(conn, data_dir, db_path, repo, repo_id,
+                event, route_result, {'workstream_id': current['workstream_id']}, run_now,
+                worktree_result=worktree_result, parent_task_id=current['parent_task_id'],
+                related_events=refreshed, existing_task_id=task_id)
+            if not info:
+                continue
+            conn.execute("UPDATE wakeups SET status='consumed',consumed_run_id=?,updated_at=? WHERE wakeup_id=?",
+                         (run_id, run_now, current['wakeup_id']))
+            _queue_dispatch(dispatch_queue, info, worktree_result, dispatch_budget, repo_id=repo_id, repo=repo)
+            prompt_paths.append(str(info['prompt_path']))
+
+
 def _prepare_github_retrigger_tasks(
     conn,
     data_dir,
@@ -4002,11 +4116,22 @@ def _create_task_attempt_and_prompt(
     parent_task_id=None,
     related_events=None,
     retrigger_wakeup_id=None,
+    existing_task_id=None,
 ):
     remediation_context = (
         (event.get("metadata") or {}).get("remediation") or {}
     )
-    if parent_task_id and not _execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id):
+    existing = None
+    if existing_task_id:
+        existing = conn.execute('''SELECT t.metadata_json FROM tasks t
+            JOIN workstreams w ON w.active_task_id=t.task_id
+            WHERE t.task_id=? AND t.workstream_id=? AND t.lifecycle='detected'
+              AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.task_id)
+              AND json_extract(t.metadata_json,'$.trigger_work_item_event_id') IS NOT NULL''',
+            (existing_task_id, stream['workstream_id'])).fetchone()
+        if not existing or not _execution_task_active(conn, existing_task_id, run_now):
+            return None
+    if not existing_task_id and parent_task_id and not _execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id):
         return None
     if remediation_context.get("episode_id") and not _execution_episode_active(
         conn,
@@ -4036,7 +4161,7 @@ def _create_task_attempt_and_prompt(
         refreshed_context = json.loads(saved[0]).get('refreshed_context') if saved else None
     workstream_id = stream["workstream_id"]
     source_id = _source_id(event["source_key"])
-    task_id = _id("task")
+    task_id = existing_task_id or _id("task")
     attempt_id = _id("attempt")
     prompt_dir = data_dir / "artifacts" / task_id
     prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -4134,45 +4259,49 @@ def _create_task_attempt_and_prompt(
         ),
         encoding="utf-8",
     )
-    conn.execute(
-        """
-        INSERT INTO tasks(
-          task_id, workstream_id, task_kind, lifecycle, parent_task_id,
-          priority, route_id, expected_output, created_at, updated_at,
-          metadata_json
-        )
-        VALUES (?, ?, ?, ?, ?, 'P1', ?, ?, ?, ?, ?)
-        """,
-        (
-            task_id,
-            workstream_id,
-            event.get("task_kind", "human_request"),
+    task_metadata = {
+        **(_json_object(existing[0]) if existing else {}),
+        "review_input_policy": task["review_input_policy"],
+        **({'refreshed_context': related_events} if existing else
+           {'refreshed_context': refreshed_context} if refreshed_context else {}),
+        **({"remediation_episode_id": remediation_context.get("episode_id")}
+           if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"} else {}),
+    }
+    if existing:
+        conn.execute('''UPDATE tasks SET lifecycle=?,route_id=?,expected_output=?,updated_at=?,metadata_json=?
+            WHERE task_id=?''', (task_lifecycle, route_result['route_id'], route_result['expected_output'],
+                                 run_now, json.dumps(task_metadata, ensure_ascii=False), task_id))
+    else:
+        conn.execute(
+            """
+            INSERT INTO tasks(
+              task_id, workstream_id, task_kind, lifecycle, parent_task_id,
+              priority, route_id, expected_output, created_at, updated_at,
+              metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, 'P1', ?, ?, ?, ?, ?)
+            """,
             (
-                "queued"
-                if blocked
-                and event.get("task_kind", "human_request") == "human_request"
-                else task_lifecycle
+                task_id,
+                workstream_id,
+                event.get("task_kind", "human_request"),
+                (
+                    "queued"
+                    if blocked
+                    and event.get("task_kind", "human_request") == "human_request"
+                    else task_lifecycle
+                ),
+                parent_task_id,
+                route_result["route_id"],
+                route_result["expected_output"],
+                run_now,
+                run_now,
+                json.dumps(task_metadata, ensure_ascii=False, sort_keys=True),
             ),
-            parent_task_id,
-            route_result["route_id"],
-            route_result["expected_output"],
-            run_now,
-            run_now,
-            json.dumps(
-                {
-                    "review_input_policy": task["review_input_policy"],
-                    **({'refreshed_context': refreshed_context} if refreshed_context else {}),
-                    **({"remediation_episode_id": remediation_context.get("episode_id")}
-                       if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
-                       else {}),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-        ),
-    )
+        )
     if not _execution_task_active(conn, task_id, run_now):
-        conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+        if not existing:
+            conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         return None
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         round_store = vote_store if route_result.get("native_vote_workers") else review_store
@@ -7087,7 +7216,9 @@ def _run_repo_pipeline(
         decisions.extend(execution_replay.decisions(conn,repo_id,run_now,system_decisions if not fixture_path and (not skip_external or observation is not None) else [],repo=repo))
         unique_decisions={}
         for event in decisions:
-            unique_decisions.setdefault(event['event_fingerprint'],event)
+            fingerprint = event['event_fingerprint']
+            previous = unique_decisions.get(fingerprint)
+            unique_decisions[fingerprint] = discover.merge_event_body(previous, event) if previous else event
         decisions = list(unique_decisions.values())
         decisions = sorted(decisions, key=_event_priority)
         summary["decision_count"] = len(decisions)
@@ -7129,6 +7260,9 @@ def _run_repo_pipeline(
                 prompt_paths,
                 config_result=config_result,
             ))
+        if dispatch_budget["remaining"] > 0:
+            _prepare_github_operator_tasks(conn, data_dir, db_path, repo, repo_id, run_id,
+                run_now, dry_run, dispatch_queue, dispatch_budget, prompt_paths, config_result)
         if dispatch_budget["remaining"] > 0:
             _prepare_detected_local_tasks(
                 conn,

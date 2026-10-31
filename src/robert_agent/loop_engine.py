@@ -202,6 +202,9 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
     if not isinstance(now, str):
         now = now.isoformat()
     wakeup_repo_clause, wakeup_repo_params = _repo_filter("", repo_ids)
+    from robert_agent import github_operator
+    waiting_ids = github_operator.waiting_wakeup_ids(conn, repo_ids)
+    waiting_clause = ' AND wakeup_id NOT IN (' + ','.join('?' for _ in waiting_ids) + ')' if waiting_ids else ''
     pending_wakeup = conn.execute(
         f"""
         SELECT 1
@@ -214,6 +217,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
           AND (expires_at IS NULL OR expires_at > ?)
           AND (? OR reason!='publish_retry_ready')
           {wakeup_repo_clause}
+          {waiting_clause}
           AND (reason!='worker_result_ready' OR EXISTS (
             SELECT 1 FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
             JOIN tasks t ON t.task_id=a.task_id
@@ -222,7 +226,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
               AND t.lifecycle IN ('queued','running') AND {execution_store.runnable_sql()}))
         LIMIT 1
         """,
-        [now, now, include_publication] + wakeup_repo_params,
+        [now, now, include_publication] + wakeup_repo_params + waiting_ids,
     ).fetchone()
     if pending_wakeup or _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
         return True
