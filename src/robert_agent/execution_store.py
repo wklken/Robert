@@ -305,6 +305,7 @@ def record_historical_facts(conn, binding, signals=()):
 
 def runnable_sql(alias="t"):
     return f"""(json_extract({alias}.metadata_json,'$.execution_attention') IS NULL
+      AND json_extract({alias}.metadata_json,'$.audit_retry_required') IS NULL
       AND NOT EXISTS (SELECT 1 FROM execution_subjects control WHERE
       control.binding_status='attention' AND
       ((control.subject_type='task' AND control.subject_id={alias}.task_id) OR

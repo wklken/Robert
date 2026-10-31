@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-from robert_agent import result_contract, result_cutover
+from robert_agent import result_contract, result_cutover, result_spool
 from contextlib import closing, contextmanager
 import hashlib
 import json
@@ -836,7 +836,8 @@ def _init_repo_steps(conn, run_id, repo_id):
 
 
 def _upsert_repo(conn, repo):
-    repo_id = _repo_id(repo["full_name"])
+    existing = conn.execute("SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)).fetchone()
+    repo_id = existing[0] if existing else _repo_id(repo["full_name"])
     conn.execute(
         """
         INSERT INTO repos(
@@ -937,12 +938,64 @@ def _supervision_observation_current(conn, attempt_id, task_id, snapshot, receiv
                 and _execution_task_active(conn, task_id, run_now))
 
 
+@contextmanager
+def _result_transition(conn, attempt_id, task_id, snapshot, received_result, run_now):
+    """Serialize a destructive transition with durable submission and replay."""
+    database = next((row[2] for row in conn.execute('PRAGMA database_list') if row[1] == 'main'), '')
+    conn.commit()
+    if not database:
+        yield _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now)
+        return
+    try:
+        with result_spool.locked_record(database, attempt_id, blocking=False) as path:
+            if path.exists():
+                yield False
+                return
+            current = _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now)
+            try:
+                yield current
+            except BaseException:
+                conn.rollback()
+                raise
+            else:
+                conn.commit()  # Never unlock while the terminal decision is uncommitted.
+    except BlockingIOError:
+        yield False
+
+
+def _inspection_due(state, now):
+    return state.get('retryable', True) and (not state.get('next_retry_at')
+        or retry_policy.timestamp(state['next_retry_at']) <= retry_policy.timestamp(now))
+
+
 def _defer_attempt_inspection(conn, attempt_id, task_id, snapshot, received_result, run_now, exc):
-    if _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now):
-        deferred = {'status': 'inspection_timeout', 'retryable': True, 'timeout_seconds': exc.timeout}
-        if _json_object(snapshot[2]).get('supervise') != deferred:
-            conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.supervise',json(?)) WHERE attempt_id=?",
-                         (json.dumps(deferred), attempt_id))
+    with _result_transition(conn, attempt_id, task_id, snapshot, received_result, run_now) as current:
+        if not current:
+            return
+        metadata = _json_object(snapshot[2])
+        previous = metadata.get('inspection_retry', {})
+        deferred = {**retry_policy.failure_state(previous, 'Git inspection timed out', run_now),
+                    'status': 'inspection_timeout', 'timeout_seconds': exc.timeout}
+        conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.supervise',json(?),'$.inspection_retry',json(?)) WHERE attempt_id=?",
+                     (json.dumps(deferred), json.dumps(deferred), attempt_id))
+        if not deferred['retryable']:
+            # Process exit was proven before recovery inspection. Native children
+            # still require their own exit proof before releasing the parent.
+            conn.commit()
+            stopped = native_rounds.terminate_children(conn, task_id) != 'attention'
+            stream = conn.execute('SELECT workstream_id FROM tasks WHERE task_id=?', (task_id,)).fetchone()[0]
+            if stopped:
+                conn.execute("UPDATE attempts SET status='failed',finished_at=?,failure_json=?,metadata_json=json_set(metadata_json,'$.process_stopped_at',?) WHERE attempt_id=?",
+                    (run_now, json.dumps(deferred), run_now, attempt_id))
+                _finalize_failed_task(conn, task_id, stream, run_now, {'status': 'inspection_retry_exhausted'})
+            else:
+                _mark_task_binding_attention(conn, task_id, run_now)
+            item = work_items.resolve_work_item_for_workstream(conn, stream)
+            if item:
+                work_items.record_system_event(conn, item['work_item_id'], event_type='execution_failed',
+                    idempotency_key='inspection:' + attempt_id, body='Git inspection retries exhausted. Inspect saved work and retry.',
+                    metadata={'task_id': task_id}, now=run_now)
+            _insert_notification(conn, 'inspection_retry_exhausted', 'recorded', run_now, {'task_id': task_id, **deferred})
 
 
 def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=None, db_path=None, repo=None, *, allow_recovery=True, task_id=None):
@@ -1045,32 +1098,37 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
             if process_status['status'] == 'alive_same':
                 continue  # A received result is not an exited process.
         if process_status["status"] == "unknown":
-            supervised += 1
-            attention = {
-                "ok": False,
-                "status": "worker_identity_attention",
-                "process": process_status,
-                "reason": "recorded Worker identity could not be verified",
-            }
-            metadata["supervise"] = attention
-            _mark_task_binding_attention(conn, task_id, run_now)
-            conn.execute(
-                "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
-                (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
-            )
-            _insert_notification(
-                conn,
-                "worker_identity_attention",
-                "recorded",
-                run_now,
-                {
-                    "task_id": task_id,
-                    "attempt_id": attempt_id,
-                    "workstream_id": workstream_id,
-                },
-            )
-            continue
+            with _result_transition(conn, attempt_id, task_id, snapshot, received_result, run_now) as current:
+                if not current:
+                    continue
+                supervised += 1
+                attention = {
+                    "ok": False,
+                    "status": "worker_identity_attention",
+                    "process": process_status,
+                    "reason": "recorded Worker identity could not be verified",
+                }
+                metadata["supervise"] = attention
+                _mark_task_binding_attention(conn, task_id, run_now)
+                conn.execute(
+                    "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
+                    (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
+                )
+                _insert_notification(
+                    conn,
+                    "worker_identity_attention",
+                    "recorded",
+                    run_now,
+                    {
+                        "task_id": task_id,
+                        "attempt_id": attempt_id,
+                        "workstream_id": workstream_id,
+                    },
+                )
+                continue
         if process_status["status"] == "dead" and allow_recovery:
+            if not _inspection_due(metadata.get('inspection_retry', {}), run_now):
+                continue
             worktree_row = conn.execute(
                 "SELECT worktree_path FROM attempts WHERE attempt_id = ?",
                 (attempt_id,),
@@ -1117,118 +1175,121 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 and db_path is not None
                 and repo is not None
             ):
-                status = {
-                    **process_status,
-                    "ok": False,
-                    "status": "needs_resume",
-                    "original_status": (
-                        "failed_timeout"
-                        if status["status"] == "failed_timeout"
-                        else "failed_worker_process_exited"
-                    ),
-                    "terminate": False,
-                    "recovery": recovery,
-                    "error_class": recovery.get("error_class"),
-                }
-                metadata["supervise"] = status
-                recovery_subject_type, recovery_subject_id = _recovery_subject(
-                    conn, task_id
-                )
-                recovery_decision = execution_operations.classify_recovery(
-                    conn,
-                    recovery_subject_type,
-                    recovery_subject_id,
-                    attempt_id,
-                    {"identity_status": "dead", **recovery},
-                    now=run_now,
-                )
-                if recovery_decision == "attention":
-                    supervised += 1
-                    reason = recovery.get('reason_code') or 'recovery_budget_exhausted'
-                    failure = {'status': reason}
-                    if recovery.get("rate_limit_failure"):
-                        failure.update(error_class="rate_limited", recovery=recovery)
-                    conn.execute("UPDATE attempts SET status='failed',finished_at=?,failure_json=? WHERE attempt_id=?",(run_now,json.dumps(failure),attempt_id))
-                    conn.execute("UPDATE tasks SET lifecycle='failed',updated_at=? WHERE task_id=?",(run_now,task_id))
-                    conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",(run_now,workstream_id))
-                    metadata["supervise"] = {
-                        **status,
-                        "status": "worker_identity_attention",
-                        "recovery_decision": recovery_decision,
-                        "reason": recovery.get("reason_code") or "Automatic recovery quota exhausted; inspect and cancel this execution before retrying.",
+                with _result_transition(conn, attempt_id, task_id, snapshot, received_result, run_now) as current:
+                    if not current:
+                        continue
+                    status = {
+                        **process_status,
+                        "ok": False,
+                        "status": "needs_resume",
+                        "original_status": (
+                            "failed_timeout"
+                            if status["status"] == "failed_timeout"
+                            else "failed_worker_process_exited"
+                        ),
+                        "terminate": False,
+                        "recovery": recovery,
+                        "error_class": recovery.get("error_class"),
                     }
-                    conn.execute(
-                        "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
-                        (
-                            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-                            attempt_id,
-                        ),
+                    metadata["supervise"] = status
+                    recovery_subject_type, recovery_subject_id = _recovery_subject(
+                        conn, task_id
                     )
-                    _insert_notification(
+                    recovery_decision = execution_operations.classify_recovery(
                         conn,
-                        "worker_identity_attention",
-                        "recorded",
-                        run_now,
-                        {
-                            "task_id": task_id,
-                            "attempt_id": attempt_id,
-                            "workstream_id": workstream_id,
-                        },
+                        recovery_subject_type,
+                        recovery_subject_id,
+                        attempt_id,
+                        {"identity_status": "dead", **recovery},
+                        now=run_now,
                     )
-                    continue
-                resume = _create_resume_attempt_and_prompt(
-                    conn,
-                    Path(data_dir),
-                    Path(db_path),
-                    repo,
-                    repo_id,
-                    task_id,
-                    workstream_id,
-                    attempt_id,
-                    run_now,
-                    recovery,
-                )
-                if resume:
-                    supervised += 1
-                    metadata["resume"] = resume
-                    conn.execute(
-                        """
-                        UPDATE attempts
-                        SET status = 'failed', finished_at = ?, failure_json = ?, metadata_json = ?
-                        WHERE attempt_id = ?
-                        """,
-                        (
+                    if recovery_decision == "attention":
+                        supervised += 1
+                        reason = recovery.get('reason_code') or 'recovery_budget_exhausted'
+                        failure = {'status': reason}
+                        if recovery.get("rate_limit_failure"):
+                            failure.update(error_class="rate_limited", recovery=recovery)
+                        conn.execute("UPDATE attempts SET status='failed',finished_at=?,failure_json=? WHERE attempt_id=?",(run_now,json.dumps(failure),attempt_id))
+                        conn.execute("UPDATE tasks SET lifecycle='failed',updated_at=? WHERE task_id=?",(run_now,task_id))
+                        conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",(run_now,workstream_id))
+                        metadata["supervise"] = {
+                            **status,
+                            "status": "worker_identity_attention",
+                            "recovery_decision": recovery_decision,
+                            "reason": recovery.get("reason_code") or "Automatic recovery quota exhausted; inspect and cancel this execution before retrying.",
+                        }
+                        conn.execute(
+                            "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
+                            (
+                                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                                attempt_id,
+                            ),
+                        )
+                        _insert_notification(
+                            conn,
+                            "worker_identity_attention",
+                            "recorded",
                             run_now,
-                            json.dumps(status, sort_keys=True),
-                            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-                            attempt_id,
-                        ),
-                    )
-                    _insert_notification(
+                            {
+                                "task_id": task_id,
+                                "attempt_id": attempt_id,
+                                "workstream_id": workstream_id,
+                            },
+                        )
+                        continue
+                    resume = _create_resume_attempt_and_prompt(
                         conn,
-                        "worker_resume_prepared",
-                        "recorded",
+                        Path(data_dir),
+                        Path(db_path),
+                        repo,
+                        repo_id,
+                        task_id,
+                        workstream_id,
+                        attempt_id,
                         run_now,
-                        {
-                            "task_id": task_id,
-                            "attempt_id": attempt_id,
-                            "resume_attempt_id": resume["attempt_id"],
-                            "workstream_id": workstream_id,
-                            "recovery_artifact_path": resume["recovery_artifact_path"],
-                        },
+                        recovery,
                     )
+                    if resume:
+                        supervised += 1
+                        metadata["resume"] = resume
+                        conn.execute(
+                            """
+                            UPDATE attempts
+                            SET status = 'failed', finished_at = ?, failure_json = ?, metadata_json = ?
+                            WHERE attempt_id = ?
+                            """,
+                            (
+                                run_now,
+                                json.dumps(status, sort_keys=True),
+                                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                                attempt_id,
+                            ),
+                        )
+                        _insert_notification(
+                            conn,
+                            "worker_resume_prepared",
+                            "recorded",
+                            run_now,
+                            {
+                                "task_id": task_id,
+                                "attempt_id": attempt_id,
+                                "resume_attempt_id": resume["attempt_id"],
+                                "workstream_id": workstream_id,
+                                "recovery_artifact_path": resume["recovery_artifact_path"],
+                            },
+                        )
+                        continue
+                    _record_recovery_creation_attention(
+                        conn,
+                        attempt_id=attempt_id,
+                        task_id=task_id,
+                        workstream_id=workstream_id,
+                        metadata=metadata,
+                        status=status,
+                        run_now=run_now,
+                    )
+                    supervised += 1
                     continue
-                _record_recovery_creation_attention(
-                    conn,
-                    attempt_id=attempt_id,
-                    task_id=task_id,
-                    workstream_id=workstream_id,
-                    metadata=metadata,
-                    status=status,
-                    run_now=run_now,
-                )
-                supervised += 1
-                continue
             if status["status"] == "failed_timeout" and not transport_exhausted:
                 status = {**status, "process": process_status, "recovery": recovery}
             else:
@@ -1308,44 +1369,47 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 )
             continue
         previous_termination = metadata.get("termination")
-        metadata["termination"] = _terminate_owned_attempt(conn, task_id, metadata)
-        if not _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now):
-            continue
-        if metadata["termination"]["status"] not in {"terminated", "not_found", "already_dead"}:
-            if previous_termination != metadata["termination"]:
-                _insert_notification(conn, "worker_cleanup_pending", "recorded", run_now,
-                                     {"task_id": task_id, "attempt_id": attempt_id,
-                                      "termination": metadata["termination"]})
-            # Keep ownership and capacity until process cleanup is confirmed.
+        with _result_transition(conn, attempt_id, task_id, snapshot, received_result, run_now) as current:
+            if not current:
+                continue
+            metadata["termination"] = _terminate_owned_attempt(conn, task_id, metadata)
+            if not _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now):
+                continue
+            if metadata["termination"]["status"] not in {"terminated", "not_found", "already_dead"}:
+                if previous_termination != metadata["termination"]:
+                    _insert_notification(conn, "worker_cleanup_pending", "recorded", run_now,
+                                         {"task_id": task_id, "attempt_id": attempt_id,
+                                          "termination": metadata["termination"]})
+                # Keep ownership and capacity until process cleanup is confirmed.
+                conn.execute(
+                    "UPDATE attempts SET status = 'running', metadata_json = ? WHERE attempt_id = ?",
+                    (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
+                )
+                continue
             conn.execute(
-                "UPDATE attempts SET status = 'running', metadata_json = ? WHERE attempt_id = ?",
-                (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
+                """
+                UPDATE attempts
+                SET status = 'failed', finished_at = ?, failure_json = ?, metadata_json = ?
+                WHERE attempt_id = ?
+                """,
+                (
+                    run_now,
+                    json.dumps(status, sort_keys=True),
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    attempt_id,
+                ),
             )
-            continue
-        conn.execute(
-            """
-            UPDATE attempts
-            SET status = 'failed', finished_at = ?, failure_json = ?, metadata_json = ?
-            WHERE attempt_id = ?
-            """,
-            (
+            _finalize_failed_task(conn, task_id, workstream_id, run_now, status)
+            if not allow_recovery:
+                _close_task_binding_if_terminal(conn, task_id, run_now)
+            _insert_notification(
+                conn,
+                _supervision_failure_notification_type(status["status"]),
+                "recorded",
                 run_now,
-                json.dumps(status, sort_keys=True),
-                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-                attempt_id,
-            ),
-        )
-        _finalize_failed_task(conn, task_id, workstream_id, run_now, status)
-        if not allow_recovery:
-            _close_task_binding_if_terminal(conn, task_id, run_now)
-        _insert_notification(
-            conn,
-            _supervision_failure_notification_type(status["status"]),
-            "recorded",
-            run_now,
-            {"task_id": task_id, "attempt_id": attempt_id, "workstream_id": workstream_id,
-             **{key: status[key] for key in ("reason_code", "safe_error", "required_action") if key in status}},
-        )
+                {"task_id": task_id, "attempt_id": attempt_id, "workstream_id": workstream_id,
+                 **{key: status[key] for key in ("reason_code", "safe_error", "required_action") if key in status}},
+            )
     return supervised
 
 
@@ -1401,6 +1465,8 @@ def _recover_failed_timeout_attempts(
         if not _execution_task_active(conn, task_id, run_now):
             continue
         metadata = _json_object(metadata_json)
+        if not _inspection_due(metadata.get('inspection_retry', {}), run_now):
+            continue
         snapshot = ('failed', heartbeat_at, metadata_json)
         conn.commit()
         process_status = _dispatch_process_status(metadata)
@@ -1724,7 +1790,7 @@ def _load_known_workstreams(conn, repo_id):
             SELECT workstream_id
             FROM workstreams
             WHERE repo_id = ?
-              AND lifecycle != 'canceled'
+              AND (lifecycle != 'canceled' OR json_extract(metadata_json,'$.remote_reconciliation') IS NOT NULL)
             """,
             (repo_id,),
         )
@@ -1848,6 +1914,39 @@ def _remote_terminal_state(source_type, remote_state):
 
 
 def _record_remote_terminal_state(
+    conn,
+    repo_id,
+    workstream_id,
+    source_id,
+    source_key,
+    source_type,
+    number,
+    task_id,
+    remote_state,
+    workstream_lifecycle,
+    audit_type,
+    run_now,
+):
+    from robert_agent.publication_lock import task_publication_lock
+    database = next((row[2] for row in conn.execute('PRAGMA database_list') if row[1] == 'main'), '')
+    args = (conn, repo_id, workstream_id, source_id, source_key, source_type, number,
+            task_id, remote_state, workstream_lifecycle, audit_type, run_now)
+    if not task_id or not database:
+        return _record_remote_terminal_state_locked(*args)
+    conn.commit()
+    with task_publication_lock(database, task_id) as locked:
+        if not locked:
+            return False  # Reobserve after the in-flight publisher/launcher commits.
+        try:
+            result = _record_remote_terminal_state_locked(*args)
+            conn.commit()
+            return result
+        except BaseException:
+            conn.rollback()
+            raise
+
+
+def _record_remote_terminal_state_locked(
     conn,
     repo_id,
     workstream_id,
@@ -2001,6 +2100,7 @@ def _record_remote_terminal_state(
              json.dumps(metadata, sort_keys=True), attempt_id),
         )
     _close_task_binding_if_terminal(conn, task_id, run_now)
+    publish.retire_unstarted_actions(conn, task_id, run_now)
     workstream_metadata_row = conn.execute(
         "SELECT metadata_json FROM workstreams WHERE workstream_id = ?",
         (workstream_id,),
@@ -2496,6 +2596,11 @@ def _collect_pr_remediation_decisions(
             "repo_id": repo_id,
             "number": number,
         }
+        if conn.execute("""SELECT 1 FROM tasks t JOIN worker_results wr ON wr.task_id=t.task_id
+                WHERE t.workstream_id=? AND t.task_kind IN ('ci_remediation','merge_conflict_remediation')
+                  AND t.lifecycle IN ('queued','running','waiting_for_user') AND wr.output_type='waiting_for_user' LIMIT 1""",
+                (workstream_id,)).fetchone():
+            continue  # Deliver and resolve this question before admitting more automatic repair.
         remediation.upsert_health_episodes(
             conn,
             repo=repo_with_id,
@@ -3664,7 +3769,17 @@ def _prepare_detected_local_tasks(
             "base_branch": repo["default_base_branch"],
         }
         conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-        worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
+        try:
+            worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
+        except ControlDeadlineExceeded:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            reason = _safe_route_error(exc)['safe_error']
+            _finalize_failed_task(conn, task_id, workstream_id, run_now, {'status': 'preparation_failed', 'safe_error': reason})
+            work_items.record_system_event(conn, work_item_id, event_type='execution_failed',
+                idempotency_key='prepare:' + task_id, body=reason, metadata={'task_id': task_id}, now=run_now)
+            conn.execute("UPDATE wakeups SET status='consumed',updated_at=? WHERE task_id=? AND status='pending'", (run_now, task_id))
+            continue
         skill_status = route_result.get("skill_status") or {"runnable": True}
         if not skill_status["runnable"] or (worktree_result and not worktree_result.get("ok", True)):
             reason = ("missing required route skills: " + ", ".join(skill_status["missing_required"])
@@ -3855,6 +3970,16 @@ def _prepare_github_operator_tasks(conn, data_dir, db_path, repo, repo_id, run_i
             authorized = [event for event in events if
                 authorize.authorize_event(event, repo, known_workstreams=set())['authorization_status']
                 in {'authorized_trigger', 'accepted_context'}]
+            parent_row = conn.execute('SELECT task_kind,metadata_json FROM tasks WHERE task_id=?', (current['parent_task_id'],)).fetchone()
+            parent_episode = (_json_object(parent_row[1]).get('remediation_episode_id') if parent_row else None)
+            episode = remediation.load_episode(conn, parent_episode) if parent_episode else None
+            operator_episode_reply = bool(parent_row and parent_row[0] in {'ci_remediation', 'merge_conflict_remediation'}
+                and episode and episode['status'] == 'exhausted'
+                and episode.get('metadata', {}).get('last_transition_reason') == 'worker_waiting_for_user')
+            if operator_episode_reply and not authorized:
+                # The local operator command is the fresh authority. Preserve the
+                # old system event as context without reviving its ended Episode.
+                authorized = list(events[:1])
             reason = None
             if not isinstance(source, dict) or 'body' not in source:
                 reason = 'github_operator_context_unavailable'
@@ -3889,10 +4014,18 @@ def _prepare_github_operator_tasks(conn, data_dir, db_path, repo, repo_id, run_i
                                        body_updated_at=source.get('updated_at'))
                 refreshed.append(updated)
             refreshed[0]['operator_responses'] = operator_responses
+            if operator_episode_reply:
+                response = operator_responses[-1] if operator_responses else {'body': ''}
+                refreshed[0] = {**refreshed[0], 'task_kind': 'human_request', 'actor_kind': 'operator',
+                    'event_type': 'manual_operator_request', 'body': response['body'],
+                    'intent': discover.infer_intent(None, response['body'], 'manual_operator_request'),
+                    'metadata': {}, 'operator_responses': operator_responses}
             event = refreshed[0]
             parent_route = conn.execute('SELECT route_id FROM tasks WHERE task_id=?', (current['parent_task_id'],)).fetchone()
             route_id = parent_route[0] if parent_route else None
-            if route_id in {None, 'waiting-for-user'}:
+            if operator_episode_reply:
+                route_id = None
+            elif route_id in {None, 'waiting-for-user'}:
                 route_id = 'classification-result'
             route_result = _effective_route(config_result, repo, event, route_id=route_id)
             conn.commit()
@@ -4215,11 +4348,11 @@ def _create_task_attempt_and_prompt(
         # Native rounds have a separate explicit-request admission contract;
         # canceling one round does not cancel later independent review requests.
         item = work_items.resolve_work_item_for_workstream(conn, stream['workstream_id'])
-        if item and item['canceled_at']:
+        if item and item['canceled_at'] and (new_request_event is None or _operator_canceled_item(conn, item)):
             return None
         current_stream = conn.execute('SELECT lifecycle FROM workstreams WHERE workstream_id=?',
                                       (stream['workstream_id'],)).fetchone()
-        if current_stream and current_stream[0] == 'canceled':
+        if current_stream and current_stream[0] == 'canceled' and new_request_event is None:
             return None
     if remediation_context.get("episode_id") and not _execution_episode_active(
         conn,
@@ -4311,6 +4444,8 @@ def _create_task_attempt_and_prompt(
         route_confidence=route_result.get("confidence", "low"),
         now=run_now,
     )
+    if item['origin_type'] == 'github' and item['canceled_at'] and new_request_event is not None:
+        conn.execute('UPDATE work_items SET canceled_at=NULL,completed_at=NULL,updated_at=?,version=version+1 WHERE work_item_id=?', (run_now, item['work_item_id']))
     if item["origin_type"] == "github" and item["completed_at"] and not item["canceled_at"]:
         conn.execute(
             """UPDATE work_items SET completed_at=NULL, updated_at=?, version=version+1
@@ -4873,7 +5008,8 @@ def _execution_task_active(conn, task_id, run_now=None):
         return False
     run_now = run_now or _now()
     task_kind, metadata_json = row
-    if _json_object(metadata_json).get('execution_attention'):
+    if (_json_object(metadata_json).get('execution_attention')
+            or _json_object(metadata_json).get('audit_retry_required')):
         return False
     if task_kind == "human_request":
         return execution_operations.claim_subject(
@@ -4898,6 +5034,18 @@ def _execution_task_active(conn, task_id, run_now=None):
             now=run_now,
         ) is not None
     return False
+
+
+def _waiting_reply_allowed(conn, task_id, now):
+    row = conn.execute('SELECT task_kind,lifecycle,metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+    if not row or row[1] != 'waiting_for_user':
+        return False
+    if row[0] in {'ci_remediation', 'merge_conflict_remediation'}:
+        episode = _json_object(row[2]).get('remediation_episode_id')
+        state = conn.execute('SELECT status,metadata_json FROM pr_remediation_episodes WHERE episode_id=?', (episode,)).fetchone()
+        if state and state[0] == 'exhausted' and _json_object(state[1]).get('last_transition_reason') == 'worker_waiting_for_user':
+            return True  # The trusted reply owns a fresh human subject, not the ended Episode.
+    return _execution_task_active(conn, task_id, now)
 
 
 def _execution_episode_active(conn, episode_id, run_now=None):
@@ -4942,6 +5090,12 @@ def _execution_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=
     )
 
 
+def _operator_canceled_item(conn, item):
+    if not item or not item['canceled_at']:
+        return False
+    return bool(conn.execute("SELECT 1 FROM work_item_events WHERE work_item_id=? AND event_type='canceled' AND actor_kind!='system' LIMIT 1", (item['work_item_id'],)).fetchone())
+
+
 def _github_followup_allows_new_subject(conn, repo, event, parent_task_id):
     """Admit a fresh trusted request, preserving the prior execution's state."""
     if (not parent_task_id or not _is_driving_context_event(event)
@@ -4952,16 +5106,17 @@ def _github_followup_allows_new_subject(conn, repo, event, parent_task_id):
     if conn.execute('SELECT 1 FROM task_events WHERE event_id=? LIMIT 1',
                     (_event_id(event['event_fingerprint']),)).fetchone():
         return False
-    parent = conn.execute('''SELECT t.lifecycle,w.lifecycle,w.active_task_id
+    parent = conn.execute('''SELECT t.lifecycle,w.lifecycle,w.active_task_id,t.metadata_json
         FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
         WHERE t.task_id=? AND w.workstream_id=? AND w.repo_id=?''',
         (parent_task_id, event['workstream_id'], _repo_id(repo['full_name']))).fetchone()
-    if (not parent or parent[0] not in {'completed', 'failed'}
-            or parent[1] not in {'completed', 'failed'} or parent[2]
+    remote_canceled = bool(parent and parent[0] == 'canceled' and _json_object(parent[3]).get('remote_reconciliation'))
+    if (not parent or (parent[0] not in {'completed', 'failed'} and not remote_canceled)
+            or (parent[1] not in {'completed', 'failed'} and not remote_canceled) or parent[2]
             or _latest_task_id(conn, event['workstream_id']) != parent_task_id):
         return False
     item = work_items.resolve_work_item_for_workstream(conn, event['workstream_id'])
-    if not item or item['canceled_at']:
+    if not item or (item['canceled_at'] and (not remote_canceled or _operator_canceled_item(conn, item))):
         return False
     facts = work_item_control.lifecycle_facts(conn, item)
     if (facts['running'] or facts['actions'] or facts['cleanup_pending']
@@ -5048,9 +5203,14 @@ def _queue_dispatch(
     if not task_info or task_info.get("blocked"):
         return False
     if dispatch_budget is not None:
+        repo_remaining = dispatch_budget.get('repo_remaining', {})
+        if repo_id in repo_remaining and repo_remaining[repo_id] <= 0:
+            return False
         if dispatch_budget["remaining"] <= 0:
             return False
         dispatch_budget["remaining"] -= 1
+        if repo_id in repo_remaining:
+            repo_remaining[repo_id] -= 1
     dispatch_queue.append(
         {
             "task_info": task_info,
@@ -5063,6 +5223,10 @@ def _queue_dispatch(
 
 
 def _queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
+    if repo.get('max_concurrency') is not None:
+        reserved = sum(item['repo_id'] == repo_id for item in dispatch_queue)
+        capacity = min(capacity, max(0, int(repo['max_concurrency'])
+            - _running_attempt_count(conn, repo_id) - reserved))
     if capacity <= 0:
         return 0
     rows = conn.execute(
@@ -5080,6 +5244,7 @@ def _queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
         )
         WHERE w.repo_id = ?
           AND a.status = 'prepared'
+          AND json_extract(t.metadata_json,'$.dispatch_wait') IS NULL
           AND {execution_store.runnable_sql()}
           AND t.lifecycle IN ('queued', 'running')
           AND ar.artifact_type = 'prompt'
@@ -5336,6 +5501,22 @@ def _dispatch_queued(db_path, repo_ids, dispatch_queue, dry_run, max_concurrency
         return results
 
 
+def _ordinary_dispatch_allowed(conn, task_id, repo):
+    row = conn.execute('SELECT task_kind,metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+    if not row or row[0] != 'human_request':
+        return True  # System remediation is governed by its Episode policy.
+    metadata = _json_object(row[1])
+    item = conn.execute("SELECT wi.origin_type FROM work_items wi JOIN tasks t ON t.workstream_id=wi.workstream_id WHERE t.task_id=?", (task_id,)).fetchone()
+    if (item and item[0] == 'web') or metadata.get('trigger_work_item_event_id'):
+        return True
+    events = _task_related_events(conn, task_id, include_consumed=True)
+    if not events:
+        return False
+    return any(_reauthorize_saved_request(event, repo,
+        known_workstreams=[] if event.get('event_type') in {'assigned', 'review_request', 'notification'}
+            else [event['workstream_id']]).get('drives_execution') for event in events)
+
+
 def _dispatch_queued_locked(
     db_path,
     repo_ids,
@@ -5407,6 +5588,8 @@ def _dispatch_queued_locked(
                                 "requested_worker": task_info.get("requested_worker"),
                             },
                         )
+                    conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.dispatch_wait','manual_worker_unavailable') WHERE task_id=?",
+                                 (task_info['task_id'],))
                 continue
         elif config_result and config_result.get("version") == 1:
             policy = ROUTE_POLICIES.get(task_info.get("route_id"))
@@ -5452,6 +5635,17 @@ def _dispatch_queued_locked(
         }
         with closing(sqlite3.connect(db_path)) as conn:
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
+        if not native_review and config_result:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                if not _ordinary_dispatch_allowed(conn, task_info['task_id'], repo):
+                    now = _now()
+                    conn.execute("UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'", (now, task_info['attempt_id']))
+                    _finalize_failed_task(conn, task_info['task_id'], task_info['workstream_id'], now,
+                        {'status': 'current_authorization_rejected'})
+                    _insert_notification(conn, 'execution_authorization_rejected', 'recorded', now,
+                        {'task_id': task_info['task_id'], 'reason_code': 'current_authorization_rejected',
+                         'required_action': 'Review current trust policy before explicitly retrying.'})
+                    continue
         if native_review and config_result and not _native_request_allowed(native_review, repo, config_result):
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -6190,6 +6384,26 @@ def _create_child_task_for_recommended_route(
     return task_info
 
 
+def _finalize_superseded_result(conn, result_id, now):
+    row = conn.execute("SELECT wr.task_id,t.workstream_id,t.task_kind FROM worker_results wr JOIN tasks t ON t.task_id=wr.task_id WHERE wr.result_id=?", (result_id,)).fetchone()
+    if not row or row[2] != 'human_request' or not _execution_task_active(conn, row[0], now):
+        return False
+    actions = conn.execute("SELECT publish_status,metadata_json FROM github_actions WHERE result_id=?", (result_id,)).fetchall()
+    if not actions or any(status not in {'published', 'skipped'} for status, _ in actions):
+        return False
+    if not any(status == 'skipped' and _json_object(encoded).get('publish', {}).get('reason_code') == 'superseded' for status, encoded in actions):
+        return False
+    _finalize_failed_task(conn, row[0], row[1], now, {'status': 'publication_superseded',
+        'safe_error': 'The remote branch changed. Retry from the current head.'})
+    item = work_items.resolve_work_item_for_workstream(conn, row[1])
+    if item:
+        work_items.record_system_event(conn, item['work_item_id'], event_type='execution_failed',
+            idempotency_key='superseded:' + result_id, body='The remote branch changed. Retry from the current head.',
+            metadata={'task_id': row[0], 'result_id': result_id}, now=now)
+    conn.execute("UPDATE wakeups SET status='consumed',updated_at=? WHERE result_id=? AND status='pending'", (now, result_id))
+    return True
+
+
 def _result_actions_all_published(conn, result_id):
     rows = conn.execute(
         """
@@ -6265,6 +6479,10 @@ def _finalize_accepted_result(
         "SELECT work_item_id, origin_type FROM work_items WHERE workstream_id = ?",
         (workstream_id,),
     ).fetchone()
+    if work_item_row is None:
+        related_item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+        if related_item:
+            work_item_row = (related_item['work_item_id'], related_item['origin_type'])
     if payload["output_type"] == "waiting_for_user":
         _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
         if work_item_row:
@@ -6283,6 +6501,9 @@ def _finalize_accepted_result(
                 now=run_now,
             )
         _mark_task_waiting_for_user(conn, payload["task_id"], workstream_id, run_now)
+        subject_type, subject_id = _execution_subject_for_task(conn, payload['task_id'])
+        if subject_type == 'remediation_episode':
+            remediation.exhaust_episode(conn, episode_id=subject_id, reason='worker_waiting_for_user', now=run_now)
         return True
     for action in payload["planned_github_actions"]:
         if action.get("type") == "open_pr":
@@ -6593,6 +6814,9 @@ def _audit_completed_results(
             # Old results remain audit history or unresolved cutover work. Never
             # consume, publish or terminalize them through the new protocol.
             continue
+        observation = _json_object(result_row[7]).get('audit_observation', {})
+        if not _inspection_due(observation, run_now):
+            continue
         payload = _load_result_payload(conn, result_row)
         origin_row = conn.execute(
             "SELECT origin_type FROM work_items WHERE workstream_id = ?",
@@ -6606,8 +6830,18 @@ def _audit_completed_results(
         except ControlDeadlineExceeded:
             raise
         except subprocess.TimeoutExpired as exc:
+            failure = {**retry_policy.failure_state(observation, 'Audit inspection timed out', run_now),
+                       'status': 'inspection_timeout', 'timeout_seconds': exc.timeout}
             conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit_observation',json(?)) WHERE result_id=?",
-                         (json.dumps({'status': 'inspection_timeout', 'retryable': True, 'timeout_seconds': exc.timeout}), payload['result_id']))
+                         (json.dumps(failure), payload['result_id']))
+            if not failure['retryable']:
+                conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.audit_retry_required',?) WHERE task_id=?", (payload['result_id'], payload['task_id']))
+                item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+                if item:
+                    work_items.record_system_event(conn, item['work_item_id'], event_type='execution_failed',
+                        idempotency_key='audit:' + payload['result_id'], body='Audit inspection stopped. Retry to inspect this saved result again.',
+                        metadata={'task_id': payload['task_id'], 'result_id': payload['result_id'], 'kind': 'audit_inspection'}, now=run_now)
+                _insert_notification(conn, 'audit_inspection_exhausted', 'recorded', run_now, {'task_id': payload['task_id'], **failure})
             continue
         remediation_context = None
         remediation_attestation = None
@@ -6676,19 +6910,6 @@ def _audit_completed_results(
             audited += 1
             continue
 
-        if (
-            task_kind
-            in {"ci_remediation", "merge_conflict_remediation"}
-            and payload["output_type"] == "waiting_for_user"
-        ):
-            remediation.exhaust_episode(
-                conn,
-                episode_id=task_metadata.get(
-                    "remediation_episode_id"
-                ),
-                reason="worker_waiting_for_user",
-                now=run_now,
-            )
         _set_github_actions_status(conn, payload["result_id"], "accepted")
         memory_status = project_memory.record_memory_delta(
             conn,
@@ -6839,6 +7060,9 @@ def _finalize_published_results(
             continue
         payload = _load_result_payload(conn, result_row)
         if not _result_audit_accepted(conn, payload["result_id"]):
+            continue
+        if _finalize_superseded_result(conn, payload['result_id'], run_now):
+            finalized += 1
             continue
         if not _result_actions_all_published(conn, payload["result_id"]):
             continue
@@ -7444,8 +7668,10 @@ def _run_repo_pipeline(
                 repo_id,
                 repo,
                 dispatch_queue,
-                dispatch_budget["remaining"],
+                min(dispatch_budget['remaining'], dispatch_budget.get('repo_remaining', {}).get(repo_id, dispatch_budget['remaining'])),
             )
+            if repo_id in dispatch_budget.get('repo_remaining', {}):
+                dispatch_budget['repo_remaining'][repo_id] -= queued_prepared_count
             dispatch_budget["remaining"] = max(
                 0,
                 dispatch_budget["remaining"] - queued_prepared_count,
@@ -7547,7 +7773,7 @@ def _run_repo_pipeline(
             if _is_driving_context_event(event):
                 waiting_task = _waiting_task_state(conn, event["workstream_id"])
                 if waiting_task:
-                    if not _execution_task_active(conn, waiting_task["task_id"], run_now):
+                    if not _waiting_reply_allowed(conn, waiting_task["task_id"], run_now):
                         continue
                     if not _is_trusted_actor(event, repo):
                         _append_event_to_active_task(conn, event, "context", run_now)
@@ -8076,7 +8302,9 @@ def run_once(
         )
         if max_dispatches is not None:
             capacity_remaining = min(capacity_remaining, max(0, int(max_dispatches)))
-        dispatch_budget = {"remaining": capacity_remaining}
+        dispatch_budget = {"remaining": capacity_remaining, 'repo_remaining': {
+            rid: max(0, int(repo.get('max_concurrency', max_concurrency)) - _running_attempt_count(conn, rid))
+            for rid, repo in repos}}
         publish_budget = {
             "remaining": (
                 None
@@ -8144,6 +8372,13 @@ def run_once(
                 except Exception as exc:
                     dispatch_error = _safe_dispatch_error(exc)
                 dispatch_queue.clear()
+                dispatched = sum(result.get('status') in {'running', 'completed_by_worker_result'} for result in dispatch_results)
+                dispatch_budget['remaining'] = max(0, max_concurrency - _running_attempt_count_for_repos(conn, repo_ids))
+                if max_dispatches is not None:
+                    dispatch_budget['remaining'] = min(dispatch_budget['remaining'], max(0, max_dispatches - dispatched))
+                dispatch_budget['repo_remaining'] = {
+                    rid: max(0, int(candidate.get('max_concurrency', max_concurrency)) - _running_attempt_count(conn, rid))
+                    for rid, candidate in repos}
 
         aggregate_counts = {
             "supervised_count": sum(item["supervised_count"] for item in repo_summaries),
@@ -8492,6 +8727,7 @@ def run_once(
         return {
             "ok": False,
             "status": dispatch_failure.get("status", "failed_dispatch"),
+            "failure_scope": "task",
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -8503,6 +8739,7 @@ def run_once(
         return {
             "ok": False,
             "status": "partial_failure",
+            "failure_scope": ('controller' if any(item.get('failure_status') == 'repository_pipeline_failed' for item in repo_summaries) else 'repository'),
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -8523,6 +8760,7 @@ def run_once(
         return {
             "ok": False,
             "status": failure_status,
+            "failure_scope": ('controller' if any(item.get('failure_status') == 'repository_pipeline_failed' for item in repo_summaries) else 'repository'),
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
