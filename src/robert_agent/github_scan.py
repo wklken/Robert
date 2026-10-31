@@ -244,16 +244,33 @@ def _scan_repo(config, repo, session, hints):
                                     for row in run_once._remote_source_rows(conn, repo_id)))
         pending_rows = conn.execute('SELECT batch_id,context_digest,raw_events_json,retry_at FROM github_scan_batches WHERE repo_id=? AND completed_at IS NULL AND attention_reason IS NULL', (repo_id,)).fetchall()
         pending = [(row[2],) for row in pending_rows]
+        # A successful batch is not proof that every driving event created a
+        # task. Reobserve orphaned requests; never dispatch their saved payload
+        # or its historical authorization without fresh source reads.
+        trusted = list(repo.get('trusted_actors') or [])
+        placeholders = ','.join('?' for _ in trusted) or 'NULL'
+        unlinked = conn.execute(f'''SELECT ge.payload_json FROM github_events ge
+            JOIN github_sources gs ON gs.source_id=ge.source_id
+            JOIN workstreams w ON w.primary_source_id=gs.source_id AND w.repo_id=ge.repo_id
+            WHERE ge.repo_id=? AND ge.authorization_status='accepted_context'
+              AND ge.actor_login IN ({placeholders}) AND ge.actor_login!=?
+              AND ge.actor_kind!='github_system' AND lower(gs.state)='open'
+              AND w.lifecycle IN ('completed','failed') AND w.active_task_id IS NULL
+              AND NOT EXISTS(SELECT 1 FROM task_events te WHERE te.event_id=ge.event_id)
+              AND NOT EXISTS(SELECT 1 FROM work_items wi WHERE wi.workstream_id=w.workstream_id
+                             AND wi.canceled_at IS NOT NULL)''',
+            [repo_id, *trusted, repo['github_account']]).fetchall()
     hints = list(hints)
-    for (encoded,) in pending:
-        for raw in json.loads(encoded):
-            source = (raw.get('source_type', 'issue'), raw['number'])
-            if not any((kind, number) == source for kind, number, _ in sources):
-                sources.append((*source, False))
-            if not any(h.get('number') == raw['number'] and h.get('source_type') == raw.get('source_type', 'issue') for h in hints):
-                hints.append({'id': str(raw.get('id') or raw.get('event_fingerprint')), 'repo_full_name': repo['full_name'],
-                    'number': raw['number'], 'source_type': raw.get('source_type', 'issue'),
-                    'event_type': 'notification', 'event_at': raw.get('event_at')})
+    recovery_events = [json.loads(encoded) for (encoded,) in unlinked]
+    for raw in [*(raw for (encoded,) in pending for raw in json.loads(encoded)),
+                *(raw for raw in recovery_events if raw.get('drives_execution'))]:
+        source = (raw.get('source_type', 'issue'), raw['number'])
+        if not any((kind, number) == source for kind, number, _ in sources):
+            sources.append((*source, False))
+        if not any(h.get('number') == raw['number'] and h.get('source_type') == raw.get('source_type', 'issue') for h in hints):
+            hints.append({'id': str(raw.get('id') or raw.get('event_fingerprint')), 'repo_full_name': repo['full_name'],
+                'number': raw['number'], 'source_type': raw.get('source_type', 'issue'),
+                'event_type': 'notification', 'event_at': raw.get('event_at')})
     remote_states = {}
     context = context_digest(repo, known, config=config)
     try:
@@ -268,6 +285,24 @@ def _scan_repo(config, repo, session, hints):
                         check_allowlist=ci['check_allowlist'], max_summary_chars=ci['max_failure_summary_chars'], runner=recorded)
         events = session.collect_events(repo, known_workstreams=known, notification_hints=hints,
             include_notifications=False, review_author_allowlist=review_allowlist(config, repo))
+        # Notification lookup can return only the latest mention (or an older
+        # assignment). Read the full discussion for each orphaned source so an
+        # earlier unconsumed request cannot be hidden by a newer comment.
+        for source_type, number in dict.fromkeys(
+                (raw.get('source_type', 'issue'), raw['number'])
+                for raw in recovery_events if raw.get('drives_execution')):
+            if remote_states.get((source_type, number)) is None:
+                continue
+            raw = {'number': number, 'source_type': source_type, 'event_type': 'notification'}
+            enriched, state = discover._source_metadata(raw, repo, session)
+            if (state or '').lower() != 'open':
+                continue
+            enriched = discover._enrich_pull_request_metadata(enriched, repo, session)
+            discussion = session.source_events(repo, enriched,
+                lambda enriched=enriched: discover._enrich_known_workstream_contexts(enriched, repo, session),
+                known_workstreams=known, notification_hints=[h for h in hints
+                    if h['number'] == number and h['source_type'] == source_type])
+            events.extend(event for event in discussion if event.get('event_type') != 'notification')
         for raw in [*events, *(raw for (encoded,) in pending for raw in json.loads(encoded))]:
             source = (raw.get('source_type', 'issue'), raw['number'])
             if source not in remote_states:
