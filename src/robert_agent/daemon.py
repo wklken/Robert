@@ -707,6 +707,8 @@ def _record_control_outcome(context, lane, result, *, now=None):
     if result.get('ok'):
         context.control_failures[lane] = 0
         context.control_retry_at.pop(lane, None)
+        if lane in context.control_attention:
+            return  # A completed child cannot clear an operator stop or its notice.
         with closing(daemon_state.connect(context.db_path)) as conn, conn:
             conn.execute("""UPDATE notifications SET status='resolved'
                 WHERE notification_type='control_plane_failed' AND status!='resolved'
@@ -717,6 +719,8 @@ def _record_control_outcome(context, lane, result, *, now=None):
     context.control_retry_at[lane] = time.monotonic() + context.daemon_config['local_poll_seconds'] * 2 ** (failures - 1)
     diagnostic = _event_result(result)
     permanent = diagnostic.get('cause_status') == 'blocked_result_contract_cutover' or result.get('status') == 'attention'
+    if context.control_attention.get(lane, {}).get('cause_status') == 'blocked_result_contract_cutover':
+        return  # Preserve the global stop while recording child outcomes separately.
     if not permanent and failures < CONTROL_MAX_ATTEMPTS:
         return
     attention = {'control_lane': lane, 'reason_code': 'control_plane_failed',
@@ -773,9 +777,11 @@ def run_once_decision(
 ):
     now = now or daemon_state.utc_now()
     from robert_agent import result_cutover
+    _poll_background_lanes(context, now=now)
     if any(item.get('cause_status') == 'blocked_result_contract_cutover' for item in context.control_attention.values()):
         _maybe_prune(context, now=now)
         if not context.dry_run:
+            result_cutover.prepare(context.db_path, now=now, isolated_only=True)
             notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
         return {'ok': True, 'decision': 'control_attention'}
     cutover = result_cutover.check(context.db_path) if context.dry_run else result_cutover.prepare(context.db_path, now=now)
@@ -857,14 +863,9 @@ def run_once_decision(
     return {"ok": True, "decision": "idle"}
 
 
-def _background_decision(context, *, now, child_runner=run_child_json):
-    from robert_agent import publish as publisher
-    from robert_agent.worker.result import replay_pending_results
-    _maybe_prune(context, now=now)
-    if not context.dry_run:
-        replay_pending_results(context.db_path)
-    lanes = context.background_lanes
-    for name, lane in lanes.items():
+def _poll_background_lanes(context, *, now):
+    # Admission can pause independently of supervision of children we own.
+    for name, lane in (context.background_lanes or {}).items():
         result = lane.poll()
         if result is not None:
             _record_control_outcome(context, name, result, now=now)
@@ -876,6 +877,15 @@ def _background_decision(context, *, now, child_runner=run_child_json):
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
                 daemon_state.record_event(conn, context.daemon_run_id, name + '_completed',
                     'ok' if result.get('ok') else 'failed', result, now=now)
+
+
+def _background_decision(context, *, now, child_runner=run_child_json):
+    from robert_agent import publish as publisher
+    from robert_agent.worker.result import replay_pending_results
+    _maybe_prune(context, now=now)
+    if not context.dry_run:
+        replay_pending_results(context.db_path)
+    lanes = context.background_lanes
     with closing(daemon_state.connect(context.db_path)) as conn:
         repo_ids = context.repo_ids or [context.repo_id]
         local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids,

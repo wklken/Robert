@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -174,7 +176,7 @@ class CutoverRecoveryTests(unittest.TestCase):
         with patch.object(daemon.time, 'monotonic', return_value=100):
             daemon._record_control_outcome(context, 'local', failure, now=self.now)
         self.assertEqual(context.control_failures['local'], 1)
-        with patch.object(result_cutover, 'prepare', side_effect=AssertionError('must not repeat blocked guard')), patch.object(daemon, '_maybe_prune'), patch.object(daemon.notify, 'deliver_pending'):
+        with patch.object(result_cutover, 'check', side_effect=AssertionError('must not repeat blocked guard')), patch.object(daemon, '_maybe_prune'), patch.object(daemon.notify, 'deliver_pending'):
             self.assertEqual(daemon.run_once_decision(context, now=self.now)['decision'], 'control_attention')
 
     def test_loop_error_diagnostics_keep_the_contract_blocker(self):
@@ -184,6 +186,161 @@ class CutoverRecoveryTests(unittest.TestCase):
             'required_action': 'Inspect incompatible task results.'}]})
         self.assertEqual(payload['cause_status'], 'blocked_result_contract_cutover')
         self.assertEqual(payload['blockers'][0]['task_id'], 'bad')
+
+    def github_item(self):
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')")
+            conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
+            conn.execute("UPDATE work_items SET origin_type='github',origin_source_id='source' WHERE work_item_id='item'")
+            conn.execute("INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)", (json.dumps({'event_type': 'assigned', 'number': 205}), self.now))
+            conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES('bad','event','trigger',?)", (self.now,))
+
+    def test_isolated_worker_exit_releases_capacity_and_allows_retrigger(self):
+        from robert_agent import discover, supervise, work_items
+        self.github_item()
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+            result_cutover.prepare(self.db, now=self.now)
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+            self.assertTrue(result_cutover.prepare(self.db, now=self.now)['ok'])
+            with closing(sqlite3.connect(self.db)) as conn:
+                self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts a WHERE task_id=\'bad\' AND ' + supervise.occupied_attempt_sql()).fetchone()[0], 0)
+                self.assertEqual(conn.execute('SELECT COUNT(*) FROM work_item_events').fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT output_type FROM worker_results WHERE result_id='old'").fetchone()[0], 'classification_result')
+            context = work_items.CommandContext('operator', 'owner', frozenset({'repo'}), frozenset())
+            with patch.object(discover, '_source_metadata', return_value=({'body': 'refreshed'}, 'open')):
+                requested = work_items.retrigger_failed_github_task(self.db, 'bad', context=context, idempotency_key='after-exit')
+            self.assertTrue(requested['ok'], requested)
+
+    def test_isolated_completed_worker_exit_releases_capacity_without_rewriting_result(self):
+        from robert_agent import supervise
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+            result_cutover.prepare(self.db, now=self.now)
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE attempts SET status='completed',finished_at='original' WHERE task_id='bad'")
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+            result_cutover.prepare(self.db, now=self.now)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts a WHERE task_id=\'bad\' AND ' + supervise.occupied_attempt_sql()).fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT status,finished_at FROM attempts WHERE task_id='bad'").fetchone(), ('completed', 'original'))
+
+    def test_global_cutover_pause_still_times_out_real_control_children(self):
+        from robert_agent.control_lane import ControlLane
+        context = self.context()
+        for latched in (False, True):
+            with self.subTest(latched=latched):
+                context.control_attention.clear()
+                lane = ControlLane(self.db, 'scan', context.daemon_run_id)
+                self.addCleanup(lane.stop)
+                context.background_lanes = {'scan': lane}
+                lane.start([sys.executable, '-c', 'import time; time.sleep(30)'], timeout_seconds=10)
+                process = lane.process
+                deadline = time.monotonic() + 5
+                while lane._state() == 'starting' and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertEqual(lane._state(), 'running')
+                lane.started = time.monotonic() - 20
+                failure = {'ok': False, 'status': 'blocked_result_contract_cutover'}
+                if latched:
+                    daemon._record_control_outcome(context, 'local', failure, now=self.now)
+                with patch.object(result_cutover, 'prepare', return_value=failure), patch.object(daemon, '_maybe_prune'), patch.object(daemon.notify, 'deliver_pending'), patch.object(lane, 'start', side_effect=AssertionError('paused lane must not start')):
+                    decision = daemon.run_once_decision(context, now=self.now)
+                self.assertEqual(decision['decision'], 'control_attention')
+                self.assertIsNotNone(process.poll(), 'existing child exceeded its deadline while globally paused')
+                self.assertIsNone(lane.process)
+                with closing(sqlite3.connect(self.db)) as conn:
+                    self.assertEqual(conn.execute('SELECT status FROM github_control_children WHERE child_id=?', (lane.identifier,)).fetchone()[0], 'stopped')
+                    event = conn.execute("SELECT metadata_json FROM daemon_events WHERE daemon_run_id=? AND event_type='scan_completed'", (context.daemon_run_id,)).fetchone()
+                    self.assertEqual(json.loads(event[0])['status'], 'child_timeout')
+
+    def test_latched_pause_reaps_isolated_attempt_without_resuming_guard(self):
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+            result_cutover.prepare(self.db, now=self.now)
+        context = self.context()
+        daemon._record_control_outcome(context, 'local', {'ok': False, 'status': 'blocked_result_contract_cutover'}, now=self.now)
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}), patch.object(result_cutover, 'check', side_effect=AssertionError('latched guard must not resume')), patch.object(daemon, '_maybe_prune'), patch.object(daemon.notify, 'deliver_pending'):
+            daemon.run_once_decision(context, now=self.now)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'failed')
+        self.assertIn('local', context.control_attention)
+
+    def test_main_board_offers_retrigger_only_after_isolated_worker_stops(self):
+        self.github_item()
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+            result_cutover.prepare(self.db, now=self.now)
+        self.assertEqual(board.get_work_item_detail(self.db, 'item')['valid_commands'], ['cancel'])
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+            result_cutover.prepare(self.db, now=self.now)
+        self.assertEqual(board.get_work_item_detail(self.db, 'item')['valid_commands'], ['retrigger', 'cancel'])
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,created_at) VALUES('pending','old','bad','comment','pending','not_published',?)", (self.now,))
+        self.assertEqual(board.get_work_item_detail(self.db, 'item')['valid_commands'], ['cancel'])
+
+    def test_ordinary_approve_cannot_resolve_cutover_isolation(self):
+        from robert_agent import work_items
+        self.github_item()
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+            result_cutover.prepare(self.db, now=self.now)
+        card = board.get_work_item_detail(self.db, 'item')
+        context = work_items.CommandContext('operator', 'owner', frozenset({'repo'}), frozenset())
+        with self.assertRaisesRegex(work_items.WorkItemConflictError, 'Retrigger'):
+            work_items.execute_command(self.db, 'item', command='approve', context=context, expected_version=card['version'], idempotency_key='approve-cutover')
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM work_item_events').fetchone()[0], 1)
+
+    def test_isolated_exit_observation_retains_unknown_identity_and_native_ownership(self):
+        from robert_agent import native_rounds
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+            result_cutover.prepare(self.db, now=self.now)
+        for status, owner in (('unknown', None), ('dead', {'round_id': 'round'})):
+            with self.subTest(status=status), patch.object(run_once, '_dispatch_process_status', return_value={'status': status}), patch.object(native_rounds, 'owner', return_value=(None, owner)), patch.object(run_once, '_terminate_attempt_process') as terminate:
+                self.assertTrue(result_cutover.prepare(self.db, now=self.now)['ok'])
+                terminate.assert_not_called()
+                with closing(sqlite3.connect(self.db)) as conn:
+                    self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'running')
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM notifications').fetchone()[0], 1)
+
+    def test_exit_observation_does_not_overwrite_a_changed_attempt(self):
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+            result_cutover.prepare(self.db, now=self.now)
+        def process_changed(metadata):
+            with closing(sqlite3.connect(self.db)) as conn, conn:
+                conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.dispatch.pid',99999999) WHERE task_id='bad'")
+            return {'status': 'dead'}
+        with patch.object(run_once, '_dispatch_process_status', side_effect=process_changed):
+            result_cutover.prepare(self.db, now=self.now)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'running')
+
+    def test_main_board_retrigger_route_creates_one_recovery_and_hides_pending_action(self):
+        from robert_agent import discover, web
+        self.github_item()
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+            result_cutover.prepare(self.db, now=self.now)
+            context = web.ControlContext(str(self.db), 'owner', frozenset({'repo'}), frozenset(), frozenset({'http://127.0.0.1:8765'}), 'csrf', True, None)
+            headers = {'Host': '127.0.0.1:8765', 'Origin': 'http://127.0.0.1:8765', 'Content-Type': 'application/json', 'X-Robert-CSRF-Token': 'csrf', 'X-Idempotency-Key': 'board-recovery'}
+            self.assertIn('retrigger', board.get_work_item_detail(self.db, 'item')['valid_commands'])
+            with patch.object(discover, '_source_metadata', return_value=({'body': 'fresh source'}, 'open')):
+                status, _, body = web.handle_dashboard_post('/api/tasks/bad/retrigger', b'{}', self.db, control_context=context, request_headers=headers)
+            self.assertEqual(status, 202, body)
+            self.assertTrue(json.loads(body)['ok'])
+        self.assertEqual(board.get_work_item_detail(self.db, 'item')['valid_commands'], ['cancel'])
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type='execution_recovery_requested'").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups WHERE status='pending'").fetchone()[0], 1)
+
+    def test_completion_during_pause_preserves_global_latch_and_notification(self):
+        from unittest.mock import Mock
+        context = self.context()
+        daemon._record_control_outcome(context, 'scan', {'ok': False, 'status': 'blocked_result_contract_cutover'}, now=self.now)
+        lane = Mock()
+        lane.poll.return_value = {'ok': True, 'status': 'done'}
+        context.background_lanes = {'scan': lane}
+        with patch.object(result_cutover, 'check', side_effect=AssertionError('must remain paused')), patch.object(daemon, '_maybe_prune'), patch.object(daemon.notify, 'deliver_pending'):
+            self.assertEqual(daemon.run_once_decision(context, now=self.now)['decision'], 'control_attention')
+        self.assertEqual(context.control_attention['scan']['cause_status'], 'blocked_result_contract_cutover')
+        lane.start.assert_not_called()
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT status FROM notifications WHERE notification_type='control_plane_failed'").fetchone()[0], 'recorded')
 
 
 class RuntimeAndContextTests(unittest.TestCase):

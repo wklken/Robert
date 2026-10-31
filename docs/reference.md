@@ -507,16 +507,22 @@ other lanes continue. The daemon stays resident and renews its lease so a servic
 manager cannot turn a permanent failure into a restart loop. Repair the cause,
 then restart the daemon to resume the lane. An unidentifiable result-spool or
 database-inspection blocker stops all automatic execution immediately.
+While new execution is paused, existing scan and publication children are still
+polled, timed out and reaped, and their outcomes are recorded. A child's completion
+does not clear an operator stop; repair and restart are still required.
 
 An incompatible result associated with a known task instead isolates that task
 and puts its card in Waiting for You. Old results and pending publications remain
 preserved and cannot be consumed or published by the new protocol. Unrelated
 tasks continue. Recorded workers keep their capacity until process exit is proven;
 uncertain identities require operator cleanup. Once workers have stopped and
-pending publications have been reconciled, use the task detail's Retrigger control
+pending publications have been reconciled, use Retrigger on the main board or task detail
 to replace an isolated GitHub task with refreshed source context. The operator
 request closes the old execution and preserves its results, events, and attention
 history. Other affected work can be canceled and replaced after reconciliation.
+Isolated workers continue to receive exit checks even during a global stop;
+confirmed exits release capacity without ingesting or rewriting their results.
+Ordinary Approve cannot resolve protocol isolation or create recovery work.
 Internal helper scripts always use Robert's own interpreter, including when an
 older `python_bin` override remains in configuration after an upgrade.
 

@@ -1003,6 +1003,8 @@ def execute_command(
                 raise WorkItemConflictError("a completed work item must be reopened first")
 
             facts = work_item_control.lifecycle_facts(conn, item)
+            if command != 'cancel' and 'result_contract_cutover' in facts['workflow_attention']:
+                raise WorkItemConflictError('Incompatible execution requires explicit recovery. Confirm workers stopped and use Retrigger for GitHub tasks, or Cancel and create replacement work.')
             if facts["source_closed"] and command != "cancel":
                 raise WorkItemConflictError("The GitHub source is closed. Cancel this item; reopen the source on GitHub before starting new work.")
             if facts["running"] and command not in {"cancel", "approve"}:
