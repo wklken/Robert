@@ -198,6 +198,12 @@ def _valid_commands(column, attention, *, running=False, publishing=False):
     return ["cancel"]
 
 
+def _waiting_github_context(conn, task_id):
+    from robert_agent import github_operator
+    task = next(iter(github_operator.pending_tasks(conn, task_id=task_id)), None)
+    return bool(task and not github_operator.source_read(conn, task)[0])
+
+
 def _project_item(conn, row, *, controls=None, facts=None):
     work_item_id = row["work_item_id"]
     workstream_id = row["workstream_id"]
@@ -234,6 +240,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
         column, reason_code, reason_summary = "waiting", "manual_worker_unavailable", unavailable["summary"]
     elif attention and all(a["type"] == "operator_decision_required" for a in attention) and not facts["approval_task_id"] and not running and not publication_in_progress:
         column, reason_code, reason_summary = "waiting", "no_runnable_task", "No active task remains for this decision. Refresh the source state or cancel this item."
+    elif task and task['lifecycle'] == 'detected' and row['origin_type'] == 'github' and not running and not publication_in_progress and not any(a['type'] == 'operator_decision_required' for a in attention) and _waiting_github_context(conn, task['task_id']):
+        column, reason_code, reason_summary = 'todo', 'github_context_refresh_pending', 'Queued; waiting for the background scanner to refresh GitHub context.'
     elif task and task["lifecycle"] in {"detected", "authorized", "classified", "queued"} and not running and not publication_in_progress and not any(a["type"] == "operator_decision_required" for a in attention):
         column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
     elif attention and (not running or attention[0]["type"] == "operator_decision_required") and not publication_in_progress and not (pr and attention[0]["type"] in {"publication_failed", "unmerged_pr_closed", "review_attention"}):
@@ -317,7 +325,12 @@ def _project_item(conn, row, *, controls=None, facts=None):
                 binding = execution_store.read_binding(conn,'task',task['task_id'])
                 ownership_blocked = binding and (binding['binding_status']=='attention' or binding.get('owner_engine')=='dbos')
                 pending = conn.execute("SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json, '$.kind')='github_retrigger'", (task["task_id"],)).fetchone()
-                card["valid_commands"] = ([] if pending or ownership_blocked else ["retrigger"]) + ["cancel"]
+                operator_failure = (
+                    json.loads(task['metadata_json'] or '{}').get('trigger_work_item_event_id')
+                    and any(a['type'] == 'execution_failed' and a['metadata'].get('task_id') == task['task_id'] for a in attention)
+                )
+                recovery_command = 'retry' if operator_failure else 'retrigger'
+                card["valid_commands"] = ([] if pending or ownership_blocked else [recovery_command]) + ["cancel"]
             else:
                 card["valid_commands"] = ["retry", "cancel"]
     if not facts["approval_task_id"] and any(a["type"] == "operator_decision_required" for a in attention):
