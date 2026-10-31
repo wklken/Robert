@@ -301,6 +301,13 @@ def _project_item(conn, row, *, controls=None, facts=None):
     if not row["canceled_at"] and not row["completed_at"]:
         if facts["source_closed"] or facts["cleanup_pending"]:
             card["valid_commands"] = ["cancel"]
+        elif task and json.loads(task['metadata_json'] or '{}').get('execution_attention', {}).get('reason_code') == 'result_contract_cutover':
+            from robert_agent import native_rounds
+            _, owner = native_rounds.owner(conn, task['task_id'])
+            prepared = conn.execute("SELECT 1 FROM attempts WHERE task_id=? AND status='prepared'", (task['task_id'],)).fetchone()
+            pending = conn.execute("SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json,'$.kind')='github_retrigger'", (task['task_id'],)).fetchone()
+            recoverable = row['origin_type'] != 'web' and not (running or publication_in_progress or owner or prepared or pending)
+            card['valid_commands'] = (['retrigger'] if recoverable else []) + ['cancel']
         elif unavailable and not running and not publication_in_progress:
             card["valid_commands"] = ["retry", "cancel"]
         elif failures and not running:

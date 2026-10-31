@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 from uuid import uuid4
 
 from robert_agent import wakeup, wakeup_notifier, work_item_control
@@ -591,7 +592,37 @@ def retrigger_failed_github_task(
 ):
     idempotency_key = _validate_idempotency_key(idempotency_key)
     db_path = Path(db_path).expanduser()
-    with closing(sqlite3.connect(db_path, isolation_level=None)) as conn:
+    # Refresh missing source content outside the write transaction. Preserve
+    # the original event; the new prompt receives an audited context snapshot.
+    refreshed_context = None
+    recovery_snapshot = None
+    with closing(sqlite3.connect(db_path)) as reader:
+        reader.row_factory = sqlite3.Row
+        snapshot = reader.execute("""SELECT t.metadata_json, r.full_name, r.github_account, w.repo_id
+            FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
+            JOIN repos r ON r.repo_id=w.repo_id WHERE t.task_id=?""", (task_id,)).fetchone()
+        if snapshot and snapshot['repo_id'] in context.allowed_repo_ids:
+            attention = _decode_json(snapshot['metadata_json'], {}).get('execution_attention', {})
+            if attention.get('reason_code') == 'result_contract_cutover':
+                recovery_snapshot = snapshot['metadata_json']
+                from robert_agent import discover
+                from robert_agent.run_once import _task_related_events
+                refreshed_context = _task_related_events(reader, task_id)
+                refreshed = []
+                for event in refreshed_context:
+                    updated, state = discover._source_metadata(event, dict(snapshot), subprocess.run)
+                    if state is None:
+                        raise WorkItemConflictError('GitHub source refresh failed; retry after access is restored')
+                    if state.lower() != 'open':
+                        raise WorkItemConflictError('retrigger requires an open GitHub source')
+                    refreshed.append(updated)
+                if not refreshed:
+                    raise WorkItemConflictError('source context is unavailable; inspect the original task')
+                refreshed_context = refreshed
+    from robert_agent.publication_lock import task_publication_lock
+    with ExitStack() as locks, closing(sqlite3.connect(db_path, isolation_level=None)) as conn:
+        if not locks.enter_context(task_publication_lock(db_path, task_id)):
+            raise WorkItemConflictError('A publication is in progress; retry after it finishes')
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
@@ -601,7 +632,7 @@ def retrigger_failed_github_task(
                 """
                 SELECT t.task_id, t.lifecycle, t.workstream_id, w.repo_id,
                        w.lifecycle AS workstream_lifecycle, w.active_task_id,
-                       gs.state AS source_state
+                       gs.state AS source_state, t.metadata_json
                 FROM tasks t
                 JOIN workstreams w ON w.workstream_id = t.workstream_id
                 JOIN github_sources gs ON gs.source_id = w.primary_source_id
@@ -613,11 +644,15 @@ def retrigger_failed_github_task(
                 raise WorkItemNotFoundError("task not found")
             from robert_agent import execution_store
             binding = execution_store.get_binding(conn, "task", task_id)
-            if row["lifecycle"] != "failed":
+            attention = _decode_json(row['metadata_json'], {}).get('execution_attention', {})
+            cutover_recovery = attention.get('reason_code') == 'result_contract_cutover'
+            if cutover_recovery and recovery_snapshot != row['metadata_json']:
+                raise WorkItemConflictError('execution state changed; refresh before recovery')
+            if row["lifecycle"] != "failed" and not cutover_recovery:
                 raise WorkItemConflictError("only a failed GitHub task can be retriggered")
             if row["source_state"].lower() != "open":
                 raise WorkItemConflictError("retrigger requires an open GitHub source")
-            if row["active_task_id"] is not None:
+            if row["active_task_id"] is not None and not (cutover_recovery and row['active_task_id'] == task_id):
                 raise WorkItemConflictError("the workstream already has an active task")
             latest = conn.execute(
                 """
@@ -635,7 +670,7 @@ def retrigger_failed_github_task(
             # ownership of the old workflow, nor overlap an uncertain process.
             if conn.execute("SELECT 1 FROM attempts WHERE task_id=? AND status IN ('prepared','running','stale')", (task_id,)).fetchone():
                 raise WorkItemConflictError("worker termination must be confirmed before retry")
-            if conn.execute("SELECT 1 FROM github_actions WHERE task_id=? AND audit_status='accepted' AND publish_status='not_published'", (task_id,)).fetchone():
+            if conn.execute("SELECT 1 FROM github_actions WHERE task_id=? AND audit_status IN ('pending','accepted') AND publish_status='not_published'", (task_id,)).fetchone():
                 raise WorkItemConflictError("pending publication must be reconciled or canceled before retry")
             failed_attempt = conn.execute("SELECT metadata_json FROM attempts WHERE task_id=? ORDER BY attempt_no DESC LIMIT 1", (task_id,)).fetchone()
             if failed_attempt:
@@ -644,6 +679,31 @@ def retrigger_failed_github_task(
                     from robert_agent.run_once import _dispatch_process_status
                     if _dispatch_process_status(process_metadata)['status'] != 'dead':
                         raise WorkItemConflictError("worker termination must be confirmed before retry")
+            if cutover_recovery:
+                from robert_agent import native_rounds
+                _, owner = native_rounds.owner(conn, task_id)
+                if owner:
+                    raise WorkItemConflictError('Review workers must be reconciled before recovery')
+                recovery_now = utc_now()
+                work_item_control.require_idle_repository(conn, row['repo_id'], recovery_now)
+                metadata = _decode_json(row['metadata_json'], {})
+                metadata['recovered_execution_attention'] = {**metadata.pop('execution_attention'),
+                    'recovered_at': recovery_now, 'requested_by': context.actor_identity}
+                conn.execute("UPDATE tasks SET lifecycle='failed',metadata_json=?,updated_at=? WHERE task_id=?",
+                             (json.dumps(metadata), recovery_now, task_id))
+                conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",
+                             (recovery_now, row['workstream_id']))
+                item = resolve_work_item_for_workstream(conn, row['workstream_id'])
+                if item:
+                    unresolved = conn.execute("SELECT event_id FROM work_item_events WHERE work_item_id=? AND idempotency_key=?",
+                                              (item['work_item_id'], 'result-contract-cutover:' + task_id)).fetchone()
+                    _insert_event(conn, item['work_item_id'], event_type='execution_recovery_requested',
+                        actor_kind=context.actor_kind, actor_identity=context.actor_identity,
+                        idempotency_key='cutover-recovery:' + hashlib.sha256(idempotency_key.encode()).hexdigest(),
+                        resolves_event_id=unresolved['event_id'] if unresolved else None,
+                        body='Replace incompatible execution using refreshed GitHub context; preserve original evidence.',
+                        metadata={'task_id': task_id, 'kind': 'result_contract_cutover'}, now=recovery_now)
+                conn.execute("UPDATE notifications SET status='resolved' WHERE notification_id=?", ('notification-cutover-' + task_id,))
             if binding and binding['binding_status'] != 'terminal':
                 execution_store.close_binding(conn, "task", task_id, utc_now())
 
@@ -674,6 +734,7 @@ def retrigger_failed_github_task(
                     "parent_task_id": task_id,
                     "requested_by": context.actor_identity,
                     "workstream_id": row["workstream_id"],
+                    **({'refreshed_context': refreshed_context} if refreshed_context is not None else {}),
                 },
             )
             should_notify = requested.get("status") != "already_pending"
@@ -942,6 +1003,8 @@ def execute_command(
                 raise WorkItemConflictError("a completed work item must be reopened first")
 
             facts = work_item_control.lifecycle_facts(conn, item)
+            if command != 'cancel' and 'result_contract_cutover' in facts['workflow_attention']:
+                raise WorkItemConflictError('Incompatible execution requires explicit recovery. Confirm workers stopped and use Retrigger for GitHub tasks, or Cancel and create replacement work.')
             if facts["source_closed"] and command != "cancel":
                 raise WorkItemConflictError("The GitHub source is closed. Cancel this item; reopen the source on GitHub before starting new work.")
             if facts["running"] and command not in {"cancel", "approve"}:

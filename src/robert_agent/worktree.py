@@ -93,17 +93,21 @@ def plan_worktree(
 
     worktree_root.mkdir(parents=True, exist_ok=True)
     if mode == "new_branch":
-        run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True)
+        run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True, text=True, capture_output=True)
         run_command(
             ["git", "worktree", "add", str(worktree_path), "-b", branch_name, start_point],
             cwd=repo_root,
             check=True,
+            text=True,
+            capture_output=True,
         )
     else:
         run_command(
             ["git", "worktree", "add", str(worktree_path), branch_name],
             cwd=repo_root,
             check=True,
+            text=True,
+            capture_output=True,
         )
     return result
 
@@ -356,6 +360,8 @@ def plan_review_worktree(
             ["git", "fetch", "upstream", base_branch],
             cwd=repo_root,
             check=True,
+            text=True,
+            capture_output=True,
         )
         run_command(
             [
@@ -366,16 +372,20 @@ def plan_review_worktree(
             ],
             cwd=repo_root,
             check=True,
+            text=True,
+            capture_output=True,
         )
         run_command(
             ["git", "reset", "--hard", review_ref],
             cwd=worktree_path,
             check=True,
+            text=True,
+            capture_output=True,
         )
         return result
 
     worktree_root.mkdir(parents=True, exist_ok=True)
-    run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True)
+    run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True, text=True, capture_output=True)
     run_command(
         [
             "git",
@@ -385,6 +395,8 @@ def plan_review_worktree(
         ],
         cwd=repo_root,
         check=True,
+        text=True,
+        capture_output=True,
     )
     run_command(
         [
@@ -398,6 +410,8 @@ def plan_review_worktree(
         ],
         cwd=repo_root,
         check=True,
+        text=True,
+        capture_output=True,
     )
     return result
 
@@ -453,7 +467,7 @@ def plan_analysis_worktree(
     if not dry_run:
         worktree_root.mkdir(parents=True, exist_ok=True)
         for command in commands:
-            run_command(command, cwd=repo_root, check=True)
+            run_command(command, cwd=repo_root, check=True, text=True, capture_output=True)
     return {
         "ok": True,
         "status": (

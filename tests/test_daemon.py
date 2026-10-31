@@ -806,6 +806,8 @@ repos:
         self.assertIsNone(error)
         self.assertIsNotNone(context)
         self.assertIsNone(context.next_live_poll_at)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE attempts SET metadata_json=json_object('result_contract','compact-v1') WHERE attempt_id='attempt-1'")
 
         def child_runner(command, **_kwargs):
             calls.append(command)

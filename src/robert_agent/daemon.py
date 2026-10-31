@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import json
 import os
@@ -31,6 +31,7 @@ CONTROL_KILL_REAP_SECONDS = 2
 CONTROL_GROUP_PROOF_SECONDS = 5
 STOP_SLEEP_SLICE_SECONDS = 1
 LEASE_WAIT_MAX_SLICE_SECONDS = 5
+CONTROL_MAX_ATTEMPTS = 3
 
 
 @dataclass
@@ -54,6 +55,9 @@ class DaemonContext:
     next_health_at: float = 0.0
     publisher_retry_at: float = 0.0
     background_lanes: dict | None = None
+    control_failures: dict = field(default_factory=dict)
+    control_retry_at: dict = field(default_factory=dict)
+    control_attention: dict = field(default_factory=dict)
 
 
 def _script_path(name):
@@ -366,6 +370,8 @@ def _idle_sleep_seconds(context, *, now=None):
     local_poll_seconds = context.daemon_config["local_poll_seconds"]
     if context.background_lanes is not None and context.background_lanes['scan'].process is not None:
         return local_poll_seconds
+    if _control_blocked(context, 'scan'):
+        return local_poll_seconds
     if context.next_live_poll_at is None:
         return local_poll_seconds
     remaining_seconds = max(
@@ -376,6 +382,8 @@ def _idle_sleep_seconds(context, *, now=None):
 
 
 def _sleep_seconds_after_decision(context, result, *, now=None):
+    if result.get('decision') == 'control_attention':
+        return context.daemon_config['local_poll_seconds']
     if result.get("decision") == "idle":
         return _idle_sleep_seconds(context, now=now)
     if result.get("decision") == "local_drain":
@@ -496,6 +504,16 @@ def _event_result(result):
             item["run_id"][:128] for item in cycles[:20]
             if isinstance(item, dict) and isinstance(item.get("run_id"), str)
         ]
+    cause = next((item for item in reversed(cycles or []) if isinstance(item, dict) and not item.get('ok')), result)
+    if not result.get('ok'):
+        if isinstance(cause.get('status'), str):
+            payload['cause_status'] = cause['status'][:200]
+        if isinstance(cause.get('required_action'), str):
+            payload['required_action'] = cause['required_action'][:2000]
+        if isinstance(cause.get('blockers'), list):
+            payload['blockers'] = [{key: str(value)[:200] for key, value in item.items()
+                if key in {'kind', 'task_id', 'attempt_id', 'result_id'}}
+                for item in cause['blockers'][:50] if isinstance(item, dict)]
     child = result.get("child")
     child = child if isinstance(child, dict) else {}
     if isinstance(child.get("returncode"), int):
@@ -602,6 +620,9 @@ def _maybe_prune(context, *, now):
 
 
 def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json, now=None):
+    blocked = _control_blocked(context, 'local')
+    if blocked:
+        return blocked
     command = build_loop_command(
         context.config_path,
         context.workflow_path,
@@ -624,6 +645,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
         timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
     )
     _reconcile_child_result(context, result)
+    _record_control_outcome(context, 'local', result, now=now)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
             conn,
@@ -637,6 +659,9 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
 
 
 def _run_live_poll(context, child_runner=run_child_json, now=None):
+    blocked = _control_blocked(context, 'scan')
+    if blocked:
+        return blocked
     command = build_run_once_command(
         context.config_path,
         context.workflow_path,
@@ -656,6 +681,7 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
         timeout_seconds=context.daemon_config["live_run_timeout_seconds"],
     )
     _reconcile_child_result(context, result)
+    _record_control_outcome(context, 'scan', result, now=now)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
             conn,
@@ -666,6 +692,50 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
             now=now,
         )
     return result
+
+
+def _control_blocked(context, lane):
+    if lane in context.control_attention:
+        return {**context.control_attention[lane], 'ok': False, 'status': 'control_plane_attention'}
+    if time.monotonic() < context.control_retry_at.get(lane, 0):
+        return {'ok': True, 'status': 'control_backoff', 'stop_reason': 'no_progress'}
+    return None
+
+
+def _record_control_outcome(context, lane, result, *, now=None):
+    """Bound each control lane independently; an attention latch stays resident."""
+    if result.get('ok'):
+        context.control_failures[lane] = 0
+        context.control_retry_at.pop(lane, None)
+        if lane in context.control_attention:
+            return  # A completed child cannot clear an operator stop or its notice.
+        with closing(daemon_state.connect(context.db_path)) as conn, conn:
+            conn.execute("""UPDATE notifications SET status='resolved'
+                WHERE notification_type='control_plane_failed' AND status!='resolved'
+                AND json_extract(metadata_json,'$.control_lane')=?""", (lane,))
+        return
+    failures = context.control_failures.get(lane, 0) + 1
+    context.control_failures[lane] = failures
+    context.control_retry_at[lane] = time.monotonic() + context.daemon_config['local_poll_seconds'] * 2 ** (failures - 1)
+    diagnostic = _event_result(result)
+    permanent = diagnostic.get('cause_status') == 'blocked_result_contract_cutover' or result.get('status') == 'attention'
+    if context.control_attention.get(lane, {}).get('cause_status') == 'blocked_result_contract_cutover':
+        return  # Preserve the global stop while recording child outcomes separately.
+    if not permanent and failures < CONTROL_MAX_ATTEMPTS:
+        return
+    attention = {'control_lane': lane, 'reason_code': 'control_plane_failed',
+        'failure_count': failures, 'retryable': False,
+        'required_action': diagnostic.get('required_action') or
+            'Automatic retries stopped. Inspect the control failure, repair its cause, then restart the daemon.',
+        **diagnostic}
+    context.control_attention[lane] = attention
+    with closing(daemon_state.connect(context.db_path)) as conn, conn:
+        conn.execute("""INSERT OR IGNORE INTO notifications
+            (notification_id,notification_type,channel,status,created_at,metadata_json)
+            VALUES (?,'control_plane_failed','local','recorded',?,?)""",
+            ('notification-control-stop-' + context.daemon_run_id + '-' + lane,
+             now or daemon_state.utc_now(), json.dumps(attention)))
+        daemon_state.record_event(conn, context.daemon_run_id, 'control_plane_attention', 'attention', attention, now=now)
 
 
 def _rate_limit_decision(context, rate_limit_runner, *, now=None):
@@ -706,6 +776,20 @@ def run_once_decision(
     rate_limit_runner=subprocess.run,
 ):
     now = now or daemon_state.utc_now()
+    from robert_agent import result_cutover
+    _poll_background_lanes(context, now=now)
+    if any(item.get('cause_status') == 'blocked_result_contract_cutover' for item in context.control_attention.values()):
+        _maybe_prune(context, now=now)
+        if not context.dry_run:
+            result_cutover.prepare(context.db_path, now=now, isolated_only=True)
+            notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+        return {'ok': True, 'decision': 'control_attention'}
+    cutover = result_cutover.check(context.db_path) if context.dry_run else result_cutover.prepare(context.db_path, now=now)
+    if not cutover['ok']:
+        _record_control_outcome(context, 'local', cutover, now=now)
+        if not context.dry_run:
+            notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+        return {'ok': False, 'decision': 'control_attention', 'result': cutover}
     if context.background_lanes is not None:
         return _background_decision(context, now=now, child_runner=child_runner)
     _maybe_prune(context, now=now)
@@ -758,6 +842,8 @@ def run_once_decision(
             "drain_result": drain_result,
         }
     if local_work:
+        if _control_blocked(context, 'local'):
+            return {'ok': True, 'decision': 'control_attention'}
         rate_decision = _rate_limit_decision(context, rate_limit_runner, now=now)
         result = _run_local_drain(
             context,
@@ -777,16 +863,12 @@ def run_once_decision(
     return {"ok": True, "decision": "idle"}
 
 
-def _background_decision(context, *, now, child_runner=run_child_json):
-    from robert_agent import publish as publisher
-    from robert_agent.worker.result import replay_pending_results
-    _maybe_prune(context, now=now)
-    if not context.dry_run:
-        replay_pending_results(context.db_path)
-    lanes = context.background_lanes
-    for name, lane in lanes.items():
+def _poll_background_lanes(context, *, now):
+    # Admission can pause independently of supervision of children we own.
+    for name, lane in (context.background_lanes or {}).items():
         result = lane.poll()
         if result is not None:
+            _record_control_outcome(context, name, result, now=now)
             if name == 'publish':
                 context.publisher_retry_at = time.monotonic() + (5 if result.get('ok') else 30)
             if name == 'scan':
@@ -795,6 +877,15 @@ def _background_decision(context, *, now, child_runner=run_child_json):
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
                 daemon_state.record_event(conn, context.daemon_run_id, name + '_completed',
                     'ok' if result.get('ok') else 'failed', result, now=now)
+
+
+def _background_decision(context, *, now, child_runner=run_child_json):
+    from robert_agent import publish as publisher
+    from robert_agent.worker.result import replay_pending_results
+    _maybe_prune(context, now=now)
+    if not context.dry_run:
+        replay_pending_results(context.db_path)
+    lanes = context.background_lanes
     with closing(daemon_state.connect(context.db_path)) as conn:
         repo_ids = context.repo_ids or [context.repo_id]
         local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids,
@@ -816,15 +907,17 @@ def _background_decision(context, *, now, child_runner=run_child_json):
     if context.next_live_poll_at is None and not due:
         context.next_live_poll_at = _iso_after(now, context.daemon_config['github_poll_seconds'])
     command = [sys.executable, '-B', _script_path('github_scan.py'), '--config', context.config_path]
-    if due and lanes['scan'].process is None:
+    if due and lanes['scan'].process is None and not _control_blocked(context, 'scan'):
         context.startup_live_poll_pending = False
         lanes['scan'].start(command, timeout_seconds=context.daemon_config['live_run_timeout_seconds'])
-    if (pending_publish or pending_delivery) and lanes['publish'].process is None and time.monotonic() >= context.publisher_retry_at:
+    if (pending_publish or pending_delivery) and lanes['publish'].process is None and time.monotonic() >= context.publisher_retry_at and not _control_blocked(context, 'publish'):
         publish_command = command + ['--publish']
         if context.dry_run:
             publish_command.append('--dry-run')
         lanes['publish'].start(publish_command, timeout_seconds=context.daemon_config['local_drain_timeout_seconds'])
     if local_work:
+        if _control_blocked(context, 'local'):
+            return {'ok': True, 'decision': 'control_attention'}
         result = _run_local_drain(context, skip_publish=True, child_runner=child_runner, now=now)
         return {'ok': result.get('ok', False), 'decision': 'local_drain', 'result': result}
     return {'ok': True, 'decision': 'idle'}

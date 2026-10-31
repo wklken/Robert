@@ -389,6 +389,7 @@ def _source_metadata(raw, repo_config, runner):
         {
             **raw,
             "title": payload.get("title") or raw.get("title", ""),
+            "body": (payload.get("body") or "") if raw.get("event_type") in {"notification", "assigned"} else raw.get("body", ""),
             "state": payload.get("state") or raw.get("state", ""),
             "state_reason": payload.get("state_reason"),
             "source_updated_at": payload.get("updated_at"),

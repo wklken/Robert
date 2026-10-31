@@ -70,7 +70,7 @@ class CutoverTests(unittest.TestCase):
         self.assertFalse(result_cutover.inspect(db, '/tmp/nonexistent-cutover-test-db')['ok'])
         db.close()
 
-    def test_direct_publisher_blocks_legacy_push_before_external_effects(self):
+    def test_direct_publisher_isolates_legacy_push_before_external_effects(self):
         import sqlite3
         from unittest.mock import Mock
         from tests.test_reliability import PublicationBudgetTests
@@ -82,14 +82,14 @@ class CutoverTests(unittest.TestCase):
             conn.execute("UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.result_contract')")
         commands = Mock(side_effect=AssertionError("old protocol must not reach external effects"))
         response = publish.publish_ready_actions(fixture.db, run_command=commands)
-        self.assertEqual(response['status'], 'blocked_result_contract_cutover', response)
-        self.assertFalse(response['ok'])
+        self.assertTrue(response['ok'], response)
+        self.assertEqual(response['pending_count'], 0)
         commands.assert_not_called()
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM publication_intents').fetchone()[0], 0)
             self.assertEqual(conn.execute('SELECT publish_status FROM github_actions').fetchone()[0], 'not_published')
 
-    def test_background_publisher_blocks_cutover_before_notification_delivery(self):
+    def test_background_publisher_delivers_attention_for_isolated_legacy_work(self):
         import sqlite3
         from unittest.mock import patch
         from tests.test_reliability import PublicationBudgetTests
@@ -104,10 +104,11 @@ class CutoverTests(unittest.TestCase):
              patch('robert_agent.notify.deliver_pending') as notify, \
              patch.object(github_scan, '_budget', return_value=True), \
              patch('robert_agent.publish.publish_ready_actions') as publish:
+            publish.return_value = {'ok': True}
             response = github_scan.publish('unused')
-        self.assertEqual(response['status'], 'blocked_result_contract_cutover', response)
-        notify.assert_not_called()
-        publish.assert_not_called()
+        self.assertTrue(response['ok'], response)
+        notify.assert_called_once()
+        publish.assert_called_once()
 
     def test_completed_legacy_result_with_active_workstream_is_not_terminal_history(self):
         import sqlite3

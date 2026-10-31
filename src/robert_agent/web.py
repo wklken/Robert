@@ -149,6 +149,8 @@ def _is_authorized_unattached_event(event):
 
 
 def _task_operator_state(task):
+    if task.get('execution_attention'):
+        return 'needs_attention', 'inspect_execution_attention'
     if task["lifecycle"] in {"failed", "canceled"}:
         notification = task.get("latest_notification") or {}
         if notification.get("notification_type") == "worker_timeout":
@@ -354,7 +356,10 @@ def _attach_task_operator_state(conn, recent_tasks):
             },
         )
 
+    attention_by_task = {row['task_id']: (_decode_json(row['metadata_json']) or {}).get('execution_attention')
+        for row in conn.execute(f'SELECT task_id,metadata_json FROM tasks WHERE task_id IN ({placeholders})', task_ids)}
     for task in recent_tasks:
+        task['execution_attention'] = attention_by_task.get(task['task_id'])
         task.update(actions_by_task.get(task["task_id"], {}))
         latest_attempt = attempts_by_task.get(task["task_id"]) or {}
         task["latest_attempt_id"] = latest_attempt.get("attempt_id")
