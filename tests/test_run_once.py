@@ -8517,6 +8517,15 @@ raise SystemExit(0 if record["ok"] else 1)
                 (str(pr_prompt), now),
             )
 
+            for task, stream, source in [('task-pr', 'github:example/backend!2886', 'source:github:example/backend!2886'),
+                                         ('task-older', 'github:example/backend#2878', 'source:github:example/backend#2878')]:
+                event = {'event_type': 'comment', 'event_fingerprint': task, 'actor_login': 'wklken',
+                         'body': '@robert-bot analyze this', 'workstream_id': stream,
+                         'source_key': stream, 'source_type': 'issue', 'number': 2878}
+                conn.execute("INSERT INTO github_events(event_id,repo_id,source_id,event_fingerprint,event_type,payload_json,event_at) VALUES(?,'repo:example/backend',?,?,'comment',?,?)",
+                             (task, source, task, json.dumps(event), now))
+                conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES(?,?,'trigger',?)", (task, task, now))
+
         calls = []
         original_dispatch = run_once.dispatch.dispatch_worker
 

@@ -98,6 +98,8 @@ class BoardLifecycleTests(unittest.TestCase):
                             conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at) VALUES ('child-attempt',?,1,'running',?)", (child_task, now))
                     else:
                         conn.execute("INSERT INTO github_actions(action_id,task_id,action_type,audit_status,created_at) VALUES ('pending-publication',?,'comment','accepted',?)", (task_id, now))
+                        # Only an uncertain in-flight effect must keep closure pending.
+                        conn.execute("INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,status,created_at,updated_at) VALUES('unknown-effect','pending-publication','unknown-effect','fingerprint','executing',?,?)", (now, now))
                     self.assertTrue(run_once._record_remote_terminal_state(
                         conn, "repo-1", item["workstream_id"], source_id, source_id,
                         "issue", 16, task_id,

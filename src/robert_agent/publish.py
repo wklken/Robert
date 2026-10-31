@@ -1176,15 +1176,16 @@ def _prepare_publication_intent(db_path, action_id, run_command):
 def _mark_skipped(conn, action, result, now):
     review_publish.record_outcome(conn, action, result.get("status"), now)
     vote_publish.record_outcome(conn, action, result.get("status"), now)
-    if (action.get("action_type") == "submit_pr_review" or vote_publish.is_vote(action)) and result.get("status") == "superseded":
+    if result.get("status") == "superseded":
         intent = _load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
             execution_store.transition_publication_intent(
                 conn, intent["publication_id"], "confirmed_absent", now,
-                remote_evidence={"reason_code": "review_snapshot_changed", "status": "confirmed_absent"})
+                remote_evidence={"reason_code": "publication_superseded", "status": "confirmed_absent"})
     metadata = _decode_json(action["metadata_json"])
     metadata["publish"] = {
         "status": "skipped",
+        "reason_code": result.get('status'),
         "skipped_at": now,
         "safe_error": result.get("safe_error", ""),
     }
@@ -1224,6 +1225,26 @@ def _skip_pending_result_actions(
     for row in rows:
         _mark_skipped(conn, dict(row), result, now)
     return len(rows)
+
+
+def retire_unstarted_actions(conn, task_id, now):
+    """Retire only actions whose durable intent proves no unknown external effect."""
+    previous_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        actions = conn.execute("SELECT * FROM github_actions WHERE task_id=? AND publish_status='not_published'", (task_id,)).fetchall()
+        for row in actions:
+            action = dict(row)
+            intent = _load_intent(conn, action['action_id'])
+            if intent and intent['status'] not in {'prepared', 'confirmed_absent', 'failed'}:
+                continue
+            if intent and intent['status'] != 'confirmed_absent':
+                execution_store.transition_publication_intent(conn, intent['publication_id'], 'executing', now)
+                execution_store.transition_publication_intent(conn, intent['publication_id'], 'confirmed_absent', now,
+                    remote_evidence={'reason_code': 'source_closed_before_publication'})
+            _mark_skipped(conn, action, {'status': 'source_closed', 'safe_error': 'Source closed before publication began.'}, now)
+    finally:
+        conn.row_factory = previous_factory
 
 
 def _record_failure(conn, action, result, now, *, reconcile_required=False):
@@ -1517,7 +1538,15 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                     if reconciliation["status"] == "confirmed_absent" and scope is not None:
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
-                            if not execution_operations.publication_scope_is_current(
+                            terminal_task = conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (action['task_id'],)).fetchone()
+                            if terminal_task and terminal_task[0] in {'canceled', 'failed', 'ignored'}:
+                                latest = _load_intent(conn, action['action_id'])
+                                execution_store.transition_publication_intent(conn, latest['publication_id'], 'confirmed_absent', now,
+                                    remote_evidence=reconciliation.get('evidence', {}))
+                                _mark_skipped(conn, action, {'status': 'source_closed', 'safe_error': 'Stopped execution; remote effect confirmed absent.'}, now)
+                                skipped_count += 1
+                                current = {**current, 'state': 'retired'}
+                            elif not execution_operations.publication_scope_is_current(
                                 conn, action.get("task_id"), scope
                             ):
                                 reconciliation = {
@@ -1558,6 +1587,8 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                                     now,
                                     remote_evidence=retry_evidence,
                                 )
+                        if current.get('state') == 'retired':
+                            continue
                         if reconciliation["status"] == "confirmed_absent":
                             current = {**current, "state": "ready", "intent": latest}
                         else:
@@ -1664,6 +1695,12 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                                 },
                                 now=now,
                             )
+                        scope = _trusted_action_scope(conn, action) or {}
+                        if (result['status'] == 'superseded' and result_id
+                                and not scope.get('review_round_id') and not scope.get('vote_round_id')
+                                and scope.get('task_kind') not in {'ci_remediation', 'merge_conflict_remediation'}):
+                            from robert_agent import run_once
+                            run_once._finalize_superseded_result(conn, result_id, now)
                     continue
                 # A non-zero/raised remote command is ambiguous.  Keep the intent in
                 # executing and let the next pass reconcile before any retry.

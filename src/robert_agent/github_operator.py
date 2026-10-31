@@ -14,9 +14,9 @@ def pending_tasks(conn, repo_ids=(), *, task_id=None):
         w.repo_id,r.full_name,gs.number,gs.source_type
         FROM tasks t JOIN workstreams w ON w.active_task_id=t.task_id AND w.workstream_id=t.workstream_id
         JOIN repos r ON r.repo_id=w.repo_id
-        JOIN work_items wi ON wi.workstream_id=w.workstream_id
-        JOIN github_sources gs ON gs.source_id=wi.origin_source_id
-        JOIN wakeups wu ON wu.task_id=t.task_id AND wu.work_item_id=wi.work_item_id
+        JOIN wakeups wu ON wu.task_id=t.task_id
+        JOIN work_items wi ON wi.work_item_id=wu.work_item_id
+        JOIN github_sources gs ON gs.source_id=w.primary_source_id
         WHERE wi.origin_type='github' AND wi.canceled_at IS NULL AND wi.completed_at IS NULL
           AND t.lifecycle='detected' AND t.task_kind='human_request'
           AND wu.reason='manual_operator_request' AND wu.status='pending'

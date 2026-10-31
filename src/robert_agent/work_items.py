@@ -522,7 +522,9 @@ def _create_task(
     requested_worker=None,
     trigger_event_id=None,
     now,
+    workstream_id=None,
 ):
+    workstream_id = workstream_id or item['workstream_id']
     task_id = f"task-{uuid4().hex}"
     routing_mode = routing_mode or item["routing_mode"]
     if routing_mode == "auto":
@@ -544,7 +546,7 @@ def _create_task(
         """,
         (
             task_id,
-            item["workstream_id"],
+            workstream_id,
             parent_task_id,
             item["priority"],
             routing_mode,
@@ -560,7 +562,7 @@ def _create_task(
         SET lifecycle = 'active', active_task_id = ?, updated_at = ?
         WHERE workstream_id = ?
         """,
-        (task_id, now, item["workstream_id"]),
+        (task_id, now, workstream_id),
     )
     wakeup.request_wakeup(
         conn,
@@ -1007,6 +1009,33 @@ def execute_command(
                 raise WorkItemConflictError('Incompatible execution requires explicit recovery. Confirm workers stopped and use Retrigger for GitHub tasks, or Cancel and create replacement work.')
             if facts["source_closed"] and command != "cancel":
                 raise WorkItemConflictError("The GitHub source is closed. Cancel this item; reopen the source on GitHub before starting new work.")
+            audit_task = work_item_control.current_task(conn, facts['streams'])
+            audit_result_id = (_decode_json(audit_task['metadata_json'], {}).get('audit_retry_required') if audit_task else None)
+            if command == 'retry' and audit_result_id:
+                work_item_control.require_idle_repository(conn, item['repo_id'], utc_now())
+                from robert_agent.publication_lock import task_publication_lock
+                if (facts['running'] or facts['workflow_attention'] or facts['cleanup_pending']
+                        or not locks.enter_context(task_publication_lock(db_path, audit_task['task_id']))):
+                    raise WorkItemConflictError('The saved result is not idle. Resolve active ownership before retrying its audit.')
+                saved = conn.execute("SELECT attempt_id,metadata_json FROM worker_results WHERE result_id=? AND task_id=?", (audit_result_id, audit_task['task_id'])).fetchone()
+                if not saved or _decode_json(saved['metadata_json'], {}).get('audit'):
+                    raise WorkItemConflictError('The audit state changed. Refresh before retrying.')
+                if conn.execute('SELECT 1 FROM publication_intents pi JOIN github_actions ga ON ga.action_id=pi.action_id WHERE ga.result_id=?', (audit_result_id,)).fetchone():
+                    raise WorkItemConflictError('Publication has started; reconcile it before retrying.')
+                now = utc_now()
+                conn.execute("UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.audit_observation') WHERE result_id=?", (audit_result_id,))
+                conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.audit_retry_required'),updated_at=? WHERE task_id=?", (now, audit_task['task_id']))
+                unresolved = _unresolved_event(conn, work_item_id, {'execution_failed'})
+                if expected_event_id and (not unresolved or unresolved['event_id'] != expected_event_id):
+                    raise WorkItemConflictError('The audit failure changed. Refresh before retrying.')
+                conn.execute('UPDATE work_items SET version=version+1,updated_at=? WHERE work_item_id=?', (now, work_item_id))
+                retry = {'ok': True, 'command': command, 'item': _item_from_row(_load_item(conn, work_item_id)),
+                         'task_id': audit_task['task_id'], 'result_id': audit_result_id,
+                         'resolved_event_id': unresolved['event_id'] if unresolved else None}
+                _insert_event(conn, work_item_id, event_type='retry_requested', actor_kind=context.actor_kind,
+                    actor_identity=context.actor_identity, idempotency_key=idempotency_key,
+                    resolves_event_id=retry['resolved_event_id'], metadata={'command_result': retry}, now=now)
+                return _commit_result(conn, db_path, retry, notifier)
             if facts["running"] and command not in {"cancel", "approve"}:
                 raise WorkItemConflictError("An attempt is still running; stop it before starting another attempt.")
             if facts["actions"] and command not in {"cancel", "retry_publish"}:
@@ -1207,6 +1236,13 @@ def execute_command(
                     elif requested_worker is not None:
                         raise WorkItemValidationError("routing_mode is required with requested_worker")
                     parent = _active_or_latest_task(conn, item["workstream_id"])
+                    question_task_id = unresolved_metadata.get('task_id') if command == 'reply' else None
+                    if question_task_id:
+                        question_task = conn.execute('SELECT * FROM tasks WHERE task_id=?', (question_task_id,)).fetchone()
+                        if (not question_task or question_task['workstream_id'] not in facts['streams']
+                                or question_task['lifecycle'] != 'waiting_for_user'):
+                            raise WorkItemConflictError('The question owner changed. Refresh before replying.')
+                        parent = question_task
                     parent_task_id = _finish_parent_for_child(conn, parent, now)
                     conn.execute(
                         "UPDATE work_items SET updated_at = ?, version = version + 1 WHERE work_item_id = ?",
@@ -1221,6 +1257,7 @@ def execute_command(
                         requested_worker=selected_worker,
                         trigger_event_id=idempotency_key,
                         now=now,
+                        workstream_id=parent['workstream_id'] if question_task_id else None,
                     )
                 resolved_event_id = unresolved["event_id"] if unresolved else None
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from robert_agent.common import emit, run_command
 
 
-SOURCE_CONTEXT_VERSION = 2
+SOURCE_CONTEXT_VERSION = 3
 
 
 def _body_context(raw, *, legacy_empty_unknown=False):
@@ -724,7 +724,7 @@ def _enrich_known_workstream_context(raw, repo_config, runner):
     return _enrich_known_workstream_contexts(raw, repo_config, runner)[-1]
 
 
-def _trusted_trigger_from_source(
+def _trusted_triggers_from_source(
     raw,
     repo_config,
     runner,
@@ -742,26 +742,20 @@ def _trusted_trigger_from_source(
         # This notification requests a new native review round. An older
         # assignment is not its trigger, even if that assignment was trusted.
         requested = _timeline_review_request(raw, repo_config, runner)
-        return {**requested,
+        return [{**requested,
                 'actor_login': requested.get('requester_login') or requested.get('actor_login'),
-                'trusted_trigger_found': requested.get('requester_login') in trusted}
+                'trusted_trigger_found': requested.get('requester_login') in trusted}]
+
+    # A known source may carry new requests after its assignment was consumed.
+    # Keep every discussion event's identity; authorization uses current trust.
+    # Review-request notifications retain their dedicated timeline semantics.
+    if raw_workstream_id in known_workstreams and raw.get('notification_reason') != 'review_requested':
+        contexts = _enrich_known_workstream_contexts(raw, repo_config, runner)
+        if any(event.get('event_type') != 'notification'
+               or event.get('authorization_lookup_complete') is False for event in contexts):
+            return [{**event, 'trusted_trigger_found': False} for event in reversed(contexts)]
 
     def _discussion_result():
-        if raw_workstream_id in known_workstreams:
-            context_event = _enrich_known_workstream_context(raw, repo_config, runner)
-            if context_event.get("authorization_lookup_complete") is False:
-                return {
-                    **context_event,
-                    "trusted_trigger_found": False,
-                    "authorization_lookup_complete": False,
-                }
-            if context_event.get("id") != raw.get("id"):
-                return {
-                    **context_event,
-                    "trusted_trigger_found": False,
-                    "authorization_lookup_complete": True,
-                }
-
         mention = _enrich_mention(raw, repo_config, runner)
         if mention.get("authorization_lookup_complete") is False:
             return {
@@ -780,41 +774,41 @@ def _trusted_trigger_from_source(
 
     assigned = _timeline_assignment(raw, repo_config, runner)
     if assigned.get("authorization_lookup_complete") is False:
-        return {
+        return [{
             **raw,
             "trusted_trigger_found": False,
             "authorization_lookup_complete": False,
-        }
+        }]
     if assigned.get("assignment_actor_login") in trusted:
-        return {
+        return [{
             **assigned,
             "trusted_trigger_found": True,
             "authorization_lookup_complete": True,
-        }
+        }]
 
     review_request = _timeline_review_request(raw, repo_config, runner)
     if review_request.get("authorization_lookup_complete") is False:
-        return {
+        return [{
             **raw,
             "trusted_trigger_found": False,
             "authorization_lookup_complete": False,
-        }
+        }]
     if review_request.get("requester_login") in trusted:
-        return {
+        return [{
             **review_request,
             "trusted_trigger_found": True,
             "authorization_lookup_complete": True,
-        }
+        }]
 
     discussion_result = _discussion_result()
     if discussion_result is not None:
-        return discussion_result
+        return [discussion_result]
 
-    return {
+    return [{
         **raw,
         "trusted_trigger_found": False,
         "authorization_lookup_complete": True,
-    }
+    }]
 
 
 def collect_live_events(
@@ -920,10 +914,10 @@ def collect_live_events(
             enriched, source_state = _source_metadata(raw, repo_config, runner)
             if source_state and source_state.lower() != "open":
                 return []
-            return [_trusted_trigger_from_source(
+            return _trusted_triggers_from_source(
                 enriched, repo_config, runner, known_workstreams=known_workstreams,
                 review_author_allowlist=review_author_allowlist,
-            )]
+            )
         raw_events.extend(source_events(raw, load_notification))
 
     return raw_events

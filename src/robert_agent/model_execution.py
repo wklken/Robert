@@ -51,6 +51,11 @@ def _raise_rate_limit(launched):
         raise ModelRateLimited('rate_limited: ' + failure['message'])
 
 
+def _launch_failed_without_process(recorded):
+    return (recorded.get('ok') is False and recorded.get('status') == 'failed_dispatch'
+            and recorded.get('pid') is None and not recorded.get('cleanup_pending'))
+
+
 def _group_finished(recorded):
     """A dead leader alone cannot prove its output files have stopped changing."""
     pid = recorded.get('pid')
@@ -102,7 +107,13 @@ def terminate_children(conn, task_id, store=store):
         if run['status'] not in {'starting', 'running', 'failed'}:
             continue
         recorded = run['dispatch']
+        if _launch_failed_without_process(recorded):
+            updates.append((run['run_id'], {'slot_reserved': 0}))
+            outcomes.append('already_dead')
+            continue
         if run['status'] == 'failed' and not recorded.get('pid'):
+            if run['slot_reserved']:
+                outcomes.append('attention')
             continue
         if _group_finished(recorded):
             updates.append((run['run_id'], {'slot_reserved': 0}))
@@ -265,7 +276,8 @@ class StageCoordinator:
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
                     reserved.extend((run_store, run) for run in run_store.reserved_runs(conn))
         for run_store, run in reserved:
-            if run['dispatch'] and _group_finished(run['dispatch']):
+            if (_launch_failed_without_process(run['dispatch'])
+                    or (run['dispatch'] and _group_finished(run['dispatch']))):
                 with self.store.connect(self.db_path) as conn:
                     run_store.release_finished_slot(conn, run)
 

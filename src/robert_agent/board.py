@@ -234,6 +234,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
         column, reason_code, reason_summary = "waiting", "workflow_attention", "Automatic execution stopped: " + facts["workflow_attention"][0]
     elif facts["cleanup_pending"]:
         column, reason_code, reason_summary = "waiting", "worker_cleanup_pending", "Worker cleanup is incomplete: " + facts["cleanup_pending"][0]
+    elif task and json.loads(task['metadata_json'] or '{}').get('audit_retry_required') and not running:
+        column, reason_code, reason_summary = 'waiting', 'audit_inspection_exhausted', 'Audit inspection stopped. Retry the saved result after repairing Git access.'
     elif failures and not running:
         column, reason_code, reason_summary = "waiting", "publication_failed", failures[0]["reason"] or "Publication failed; retry the existing result."
     elif unavailable and not running and not publication_in_progress:
@@ -317,6 +319,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
             native_stopped = not owner or conn.execute("SELECT 1 FROM attempts WHERE task_id=? AND json_extract(metadata_json,'$.process_stopped_at') IS NOT NULL ORDER BY attempt_no DESC LIMIT 1", (task['task_id'],)).fetchone()
             recoverable = row['origin_type'] != 'web' and native_stopped and not (running or publication_in_progress or prepared or pending)
             card['valid_commands'] = (['retrigger'] if recoverable else []) + ['cancel']
+        elif task and json.loads(task['metadata_json'] or '{}').get('audit_retry_required') and not running:
+            card['valid_commands'] = ['retry', 'cancel']
         elif unavailable and not running and not publication_in_progress:
             card["valid_commands"] = ["retry", "cancel"]
         elif failures and not running:
