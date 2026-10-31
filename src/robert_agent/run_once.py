@@ -4117,7 +4117,10 @@ def _create_task_attempt_and_prompt(
     related_events=None,
     retrigger_wakeup_id=None,
     existing_task_id=None,
+    new_request_event=None,
 ):
+    if not conn.in_transaction:
+        conn.execute('BEGIN IMMEDIATE')
     remediation_context = (
         (event.get("metadata") or {}).get("remediation") or {}
     )
@@ -4131,8 +4134,23 @@ def _create_task_attempt_and_prompt(
             (existing_task_id, stream['workstream_id'])).fetchone()
         if not existing or not _execution_task_active(conn, existing_task_id, run_now):
             return None
-    if not existing_task_id and parent_task_id and not _execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id):
+    if new_request_event is not None:
+        # History linkage does not transfer ownership of the old execution.
+        # Recheck after worktree I/O, which releases the SQLite writer lock.
+        if not _github_followup_allows_new_subject(conn, repo, new_request_event, parent_task_id):
+            return None
+    elif not existing_task_id and parent_task_id and not _execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id):
         return None
+    if not (route_result.get('native_review_workers') or route_result.get('native_vote_workers')):
+        # Native rounds have a separate explicit-request admission contract;
+        # canceling one round does not cancel later independent review requests.
+        item = work_items.resolve_work_item_for_workstream(conn, stream['workstream_id'])
+        if item and item['canceled_at']:
+            return None
+        current_stream = conn.execute('SELECT lifecycle FROM workstreams WHERE workstream_id=?',
+                                      (stream['workstream_id'],)).fetchone()
+        if current_stream and current_stream[0] == 'canceled':
+            return None
     if remediation_context.get("episode_id") and not _execution_episode_active(
         conn,
         remediation_context["episode_id"],
@@ -4156,7 +4174,7 @@ def _create_task_attempt_and_prompt(
     if retrigger_wakeup_id:
         saved = conn.execute('SELECT metadata_json FROM wakeups WHERE wakeup_id=?', (retrigger_wakeup_id,)).fetchone()
         refreshed_context = json.loads(saved[0]).get('refreshed_context') if saved else None
-    elif parent_task_id:
+    elif parent_task_id and new_request_event is None:
         saved = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (parent_task_id,)).fetchone()
         refreshed_context = json.loads(saved[0]).get('refreshed_context') if saved else None
     workstream_id = stream["workstream_id"]
@@ -4266,6 +4284,8 @@ def _create_task_attempt_and_prompt(
            {'refreshed_context': refreshed_context} if refreshed_context else {}),
         **({"remediation_episode_id": remediation_context.get("episode_id")}
            if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"} else {}),
+        **({'new_request_event_id': _event_id(new_request_event['event_fingerprint'])}
+           if new_request_event is not None else {}),
     }
     if existing:
         conn.execute('''UPDATE tasks SET lifecycle=?,route_id=?,expected_output=?,updated_at=?,metadata_json=?
@@ -4844,6 +4864,37 @@ def _execution_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=
     return not binding or (
         binding["binding_status"] == "active"
     )
+
+
+def _github_followup_allows_new_subject(conn, repo, event, parent_task_id):
+    """Admit a fresh trusted request, preserving the prior execution's state."""
+    if (not parent_task_id or not _is_driving_context_event(event)
+            or not _is_trusted_actor(event, repo)
+            or event.get('actor_kind') == 'github_system'
+            or event.get('actor_login') == repo['github_account']):
+        return False
+    if conn.execute('SELECT 1 FROM task_events WHERE event_id=? LIMIT 1',
+                    (_event_id(event['event_fingerprint']),)).fetchone():
+        return False
+    parent = conn.execute('''SELECT t.lifecycle,w.lifecycle,w.active_task_id
+        FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
+        WHERE t.task_id=? AND w.workstream_id=? AND w.repo_id=?''',
+        (parent_task_id, event['workstream_id'], _repo_id(repo['full_name']))).fetchone()
+    if (not parent or parent[0] not in {'completed', 'failed'}
+            or parent[1] not in {'completed', 'failed'} or parent[2]
+            or _latest_task_id(conn, event['workstream_id']) != parent_task_id):
+        return False
+    item = work_items.resolve_work_item_for_workstream(conn, event['workstream_id'])
+    if not item or item['canceled_at']:
+        return False
+    facts = work_item_control.lifecycle_facts(conn, item)
+    if (facts['running'] or facts['actions'] or facts['cleanup_pending']
+            or facts['workflow_attention'] or facts['source_closed']):
+        return False
+    placeholders = ','.join('?' for _ in facts['streams'])
+    return not conn.execute(f'''SELECT 1 FROM tasks WHERE workstream_id IN ({placeholders})
+        AND lifecycle NOT IN ('completed','failed','canceled','ignored') LIMIT 1''',
+        facts['streams']).fetchone()
 
 
 def _execution_reconcile_task_allowed(conn, task_id, run_now):
@@ -7390,6 +7441,14 @@ def _run_repo_pipeline(
                         run_now,
                     ):
                         continue
+                    # Cancellation or a different reply can win while Git I/O
+                    # releases the writer. Never rewrite that stopped parent.
+                    if not conn.in_transaction:
+                        conn.execute('BEGIN IMMEDIATE')
+                    current_waiting = _waiting_task_state(conn, event['workstream_id'])
+                    if (not current_waiting or current_waiting['task_id'] != waiting_task['task_id']
+                            or not _execution_parent_allows_child(conn, waiting_task['task_id'])):
+                        continue
                     conn.execute(
                         "UPDATE tasks SET lifecycle = 'completed', updated_at = ? WHERE task_id = ?",
                         (run_now, waiting_task["task_id"]),
@@ -7471,8 +7530,16 @@ def _run_repo_pipeline(
                     summary["current_state_closed_skip_count"] += 1
                     continue
                 retry_parent_id = _latest_task_id(conn, event["workstream_id"])
+                if retry_parent_id and not _github_followup_allows_new_subject(conn, repo, event, retry_parent_id):
+                    continue
                 retry_context = _failed_parent_context_events(conn, retry_parent_id)
-                task_event = retry_context[0] if retry_context else event
+                # A completed request's issue title describes old work. Infer
+                # this new instruction on its own; ambiguous questions go to
+                # classification instead of inheriting an old "bug"/"报错".
+                task_event = retry_context[0] if retry_context else {
+                    **event,
+                    'intent': discover.infer_intent(None, event.get('body'), event['event_type'], repo['github_account']),
+                }
                 retry_related = (
                     _dedupe_events_by_fingerprint(retry_context + [event])
                     if retry_context
@@ -7517,6 +7584,7 @@ def _run_repo_pipeline(
                     worktree_result=worktree_result,
                     parent_task_id=retry_parent_id,
                     related_events=retry_related,
+                    new_request_event=event if retry_parent_id else None,
                 )
                 if task_info is None:
                     continue
