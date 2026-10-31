@@ -3250,6 +3250,13 @@ def _insert_source_and_event(conn, repo_id, event, run_now):
         ),
     )
     event_id = _event_id(event["event_fingerprint"])
+    previous = conn.execute(
+        "SELECT payload_json FROM github_events WHERE event_fingerprint = ?",
+        (event["event_fingerprint"],),
+    ).fetchone()
+    if previous:
+        # Routing and prompt creation must use the same body as durable context.
+        event.update(discover.merge_event_body(event, json.loads(previous[0])))
     conn.execute(
         """
         INSERT INTO github_events(
@@ -7087,7 +7094,9 @@ def _run_repo_pipeline(
         decisions.extend(execution_replay.decisions(conn,repo_id,run_now,system_decisions if not fixture_path and (not skip_external or observation is not None) else [],repo=repo))
         unique_decisions={}
         for event in decisions:
-            unique_decisions.setdefault(event['event_fingerprint'],event)
+            fingerprint = event['event_fingerprint']
+            previous = unique_decisions.get(fingerprint)
+            unique_decisions[fingerprint] = discover.merge_event_body(previous, event) if previous else event
         decisions = list(unique_decisions.values())
         decisions = sorted(decisions, key=_event_priority)
         summary["decision_count"] = len(decisions)

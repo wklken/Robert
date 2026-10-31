@@ -139,7 +139,7 @@ class GitHubReadSession:
         key = 'source:' + source + ':' + raw['event_type']
         context = [repo['github_account'], sorted(repo.get('trusted_actors', [])),
                    sorted(review_author_allowlist or []), source in set(known_workstreams or [])]
-        version = _digest([raw, context, notification_hints])
+        version = _digest([discover.SOURCE_CONTEXT_VERSION, raw, context, notification_hints])
         cached = self._get(key, version)
         if cached is not None:
             self._stats['cache_hits'] += 1

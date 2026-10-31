@@ -27,7 +27,7 @@ def review_allowlist(config, repo):
 
 
 def context_digest(repo, known_workstreams, *, config=None):
-    values = [repo['full_name'], repo['github_account'], sorted(repo.get('trusted_actors', [])),
+    values = [discover.SOURCE_CONTEXT_VERSION, repo['full_name'], repo['github_account'], sorted(repo.get('trusted_actors', [])),
               sorted(known_workstreams), review_allowlist(config, repo), os.environ.get('GH_HOST', 'github.com')]
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
