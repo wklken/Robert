@@ -76,6 +76,9 @@ checks repository-specific trust rules, creates or resumes a workstream, selects
 a route, prepares a task workspace, launches a local worker, audits its
 structured result, and deduplicates approved GitHub actions before publication.
 
+See the [architecture and mechanism diagrams (Chinese)](docs/architecture.md)
+for component relationships, control flows, and sequences for complex mechanisms.
+
 ## Security and Trust
 
 GitHub text is untrusted input. Only configured actors can trigger work.

@@ -62,6 +62,9 @@ Robert 使用已认证的 `gh` CLI 轮询 GitHub，规范化事件，应用仓�
 创建或恢复 workstream，准备任务目录，启动本地 Worker，审计结构化结果，并
 在发布前执行去重。
 
+整体架构、模块关系及复杂机制的流程图和时序图见
+[架构与运行机制](docs/architecture.md)。
+
 ## 环境要求
 
 - Linux 或 macOS；Windows 通过 WSL 使用。
