@@ -196,7 +196,7 @@ robert config validate --config ~/.config/robert/config.yml --output json
 | `hard_timeout_minutes` | 45 | Supervision wall-time limit, independent of worker adapter timeout. |
 | `worker_startup_grace_seconds` | 300 | Grace period for a starting worker. |
 | `lease_ttl_minutes` | 9 | Task lease duration. |
-| `python_bin` | Interpreter running Robert (`sys.executable`) | Python executable used for worker helper commands; an explicit override must be able to import `robert_agent`. |
+| `python_bin` | Interpreter running Robert (`sys.executable`) | Accepted for older configuration compatibility. Internal worker helpers always use the interpreter running Robert so an old environment cannot submit an incompatible result after an upgrade. |
 | `daemon.local_poll_seconds` | 5 | Local state/supervision polling. |
 | `daemon.github_poll_seconds` | 300 | Resident scanner startup/error fallback; `daemon --once` retains this polling interval. See [GitHub polling](github-polling.md). |
 | `daemon.github_poll_when_full_seconds` | 600 | Legacy synchronous polling while capacity is full; resident scanning ignores this slowdown. |
@@ -499,6 +499,26 @@ context children, prepared-task reroutes, and local work items. Canceled work it
 or resumed by later commands; completed items must be reopened first.
 
 ### Bounded recovery and delivery
+
+Each daemon control lane retries failures at most three times, with exponential
+backoff starting at `daemon.local_poll_seconds`. A successful cycle resets that
+lane's budget. Exhaustion records a local operator notice and stops that lane;
+other lanes continue. The daemon stays resident and renews its lease so a service
+manager cannot turn a permanent failure into a restart loop. Repair the cause,
+then restart the daemon to resume the lane. An unidentifiable result-spool or
+database-inspection blocker stops all automatic execution immediately.
+
+An incompatible result associated with a known task instead isolates that task
+and puts its card in Waiting for You. Old results and pending publications remain
+preserved and cannot be consumed or published by the new protocol. Unrelated
+tasks continue. Recorded workers keep their capacity until process exit is proven;
+uncertain identities require operator cleanup. Once workers have stopped and
+pending publications have been reconciled, use the task detail's Retrigger control
+to replace an isolated GitHub task with refreshed source context. The operator
+request closes the old execution and preserves its results, events, and attention
+history. Other affected work can be canceled and replaced after reconciliation.
+Internal helper scripts always use Robert's own interpreter, including when an
+older `python_bin` override remains in configuration after an upgrade.
 
 Worker authentication failures (`401`, `Unauthorized`, expired credentials) stop
 recovery immediately and expose an operator action. Other dead-worker recovery

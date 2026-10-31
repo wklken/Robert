@@ -1440,23 +1440,25 @@ class OperationalCommandTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("/usr/bin/python3.11 /agent/status.py", prompt)
+        import sys
+        self.assertIn(f"{sys.executable} /agent/status.py", prompt)
         self.assertIn("For control-plane state", prompt)
         self.assertIn("task task-1", prompt)
-        self.assertIn("/usr/bin/python3.11 /agent/status.py --help", prompt)
+        self.assertIn(f"{sys.executable} /agent/status.py --help", prompt)
         self.assertNotIn("run latest", prompt)
-        self.assertIn("/usr/bin/python3.11 /worker/snapshot.py", prompt)
-        self.assertIn("/usr/bin/python3.11 /worker/heartbeat.py", prompt)
-        self.assertIn("/usr/bin/python3.11 /agent/result.py", prompt)
+        self.assertIn(f"{sys.executable} /worker/snapshot.py", prompt)
+        self.assertIn(f"{sys.executable} /worker/heartbeat.py", prompt)
+        self.assertIn(f"{sys.executable} /agent/result.py", prompt)
 
-    def test_runtime_context_uses_configured_python_bin(self):
+    def test_runtime_context_uses_running_python_bin(self):
         from robert_agent import run_once
         context = run_once._runtime_context(
             self.root / "dd.sqlite3",
             {"default_base_branch": "master", "python_bin": "/opt/python/bin/python3"},
         )
 
-        self.assertEqual(context["python_bin"], "/opt/python/bin/python3")
+        import sys
+        self.assertEqual(context["python_bin"], sys.executable)
         self.assertTrue(context["status_script"].endswith("status.py"))
 
     def test_supervise_classifies_stale_and_timeout(self):

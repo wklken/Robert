@@ -347,6 +347,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
                     args,
                     """{
                       "title": "Need work",
+                      "body": "Suppress expected plugin 404 warning logs",
                       "state": "open",
                       "updated_at": "2026-07-04T01:00:00Z",
                       "html_url": "https://github.com/Org/repo-a/issues/10",
@@ -392,6 +393,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[0]["repo"], "Org/repo-a")
         self.assertEqual(events[0]["event_fingerprint"], "assigned:assign-a")
         self.assertEqual(events[0]["assignment_actor_login"], "alice")
+        self.assertEqual(events[0]["body"], "Suppress expected plugin 404 warning logs")
         self.assertNotIn(["gh", "api", "notifications", "--paginate", "--slurp"], calls)
 
     def test_repo_live_events_ignores_mismatched_preloaded_notification_hints(self):

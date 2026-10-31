@@ -300,7 +300,8 @@ def render_prompt(
     recommended_skills = route_result.get("recommended_skills", required_skills)
     policy = _verification_policy(route_result)
     db_path = runtime_context.get("db_path", "")
-    python_bin = runtime_context.get("python_bin", sys.executable or "python3")
+    # These scripts import Robert modules; an override may load an older package.
+    python_bin = sys.executable or "python3"
     result_script = runtime_context.get("result_script", "")
     status_script = runtime_context.get("status_script", "status.py")
     identity = {

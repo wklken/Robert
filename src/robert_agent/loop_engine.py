@@ -207,6 +207,8 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
         SELECT 1
         FROM wakeups
         WHERE status = 'pending'
+          AND (task_id IS NULL OR (reason='manual_operator_request' AND json_extract(metadata_json,'$.kind')='github_retrigger')
+               OR EXISTS (SELECT 1 FROM tasks t WHERE t.task_id=wakeups.task_id AND {execution_store.runnable_sql()}))
           AND COALESCE(json_extract(metadata_json,'$.kind'),'') NOT IN ('dbos_handoff','github_observation_ready','github_context_refresh')
           AND not_before_at <= ?
           AND (expires_at IS NULL OR expires_at > ?)

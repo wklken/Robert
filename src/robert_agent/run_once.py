@@ -963,6 +963,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
           AND ({supervise.occupied_attempt_sql()}
                OR (a.status='prepared' AND json_extract(a.metadata_json,'$.result_validation') IS NOT NULL))
           AND t.lifecycle IN ('queued', 'running')
+          AND {execution_store.runnable_sql()}
         """,
         (repo_id,),
     ).fetchall()
@@ -2792,6 +2793,13 @@ def _task_related_events(conn, task_id, include_consumed=False):
             consumed_events.append(event)
         else:
             events.append(event)
+    # Enrich recovery content while retaining the original trigger authority.
+    metadata = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+    refreshed = json.loads(metadata[0] or '{}').get('refreshed_context', []) if metadata else []
+    by_fingerprint = {item['event_fingerprint']: item for item in refreshed}
+    for event in events + consumed_events:
+        snapshot = by_fingerprint.get(event.get('event_fingerprint'), {})
+        event.update({key: snapshot[key] for key in ('body', 'title', 'source_updated_at') if key in snapshot})
     return events + consumed_events
 
 
@@ -3337,7 +3345,7 @@ def _runtime_context(db_path, repo, worktree_result=None):
     worktree_result = worktree_result or {}
     return {
         "db_path": str(db_path),
-        "python_bin": repo.get("python_bin") or sys.executable or "python3",
+        "python_bin": sys.executable or "python3",
         "result_script": str(_worker_result_script()),
         "snapshot_script": str(_worker_snapshot_script()),
         "heartbeat_script": str(_worker_heartbeat_script()),
@@ -3807,7 +3815,7 @@ def _prepare_github_retrigger_tasks(
 ):
     rows = conn.execute(
         """
-        SELECT wu.wakeup_id, wu.task_id, t.workstream_id, t.route_id
+        SELECT wu.wakeup_id, wu.task_id, t.workstream_id, t.route_id, wu.metadata_json
         FROM wakeups wu
         JOIN tasks t ON t.task_id = wu.task_id
         JOIN workstreams w ON w.workstream_id = t.workstream_id
@@ -3823,10 +3831,10 @@ def _prepare_github_retrigger_tasks(
         (repo_id,),
     ).fetchall()
     prepared_workstreams = set()
-    for wakeup_id, parent_task_id, workstream_id, parent_route_id in rows:
+    for wakeup_id, parent_task_id, workstream_id, parent_route_id, wakeup_metadata in rows:
         if dispatch_budget["remaining"] <= 0:
             break
-        related_events = _failed_parent_context_events(conn, parent_task_id)
+        related_events = json.loads(wakeup_metadata).get('refreshed_context') or _failed_parent_context_events(conn, parent_task_id)
         if not related_events:
             continue
         task_event = related_events[0]
@@ -4019,6 +4027,13 @@ def _create_task_attempt_and_prompt(
     related_events = list(related_events or [event])
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         related_events = [event]
+    refreshed_context = None
+    if retrigger_wakeup_id:
+        saved = conn.execute('SELECT metadata_json FROM wakeups WHERE wakeup_id=?', (retrigger_wakeup_id,)).fetchone()
+        refreshed_context = json.loads(saved[0]).get('refreshed_context') if saved else None
+    elif parent_task_id:
+        saved = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (parent_task_id,)).fetchone()
+        refreshed_context = json.loads(saved[0]).get('refreshed_context') if saved else None
     workstream_id = stream["workstream_id"]
     source_id = _source_id(event["source_key"])
     task_id = _id("task")
@@ -4146,6 +4161,7 @@ def _create_task_attempt_and_prompt(
             json.dumps(
                 {
                     "review_input_policy": task["review_input_policy"],
+                    **({'refreshed_context': refreshed_context} if refreshed_context else {}),
                     **({"remediation_episode_id": remediation_context.get("episode_id")}
                        if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
                        else {}),
@@ -4632,6 +4648,8 @@ def _execution_task_active(conn, task_id, run_now=None):
         return False
     run_now = run_now or _now()
     task_kind, metadata_json = row
+    if _json_object(metadata_json).get('execution_attention'):
+        return False
     if task_kind == "human_request":
         return execution_operations.claim_subject(
             conn,
@@ -4674,6 +4692,8 @@ def _execution_episode_active(conn, episode_id, run_now=None):
 def _execution_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
     if not parent_task_id:
         return True
+    if conn.execute("SELECT 1 FROM tasks WHERE task_id=? AND json_extract(metadata_json,'$.execution_attention') IS NOT NULL", (parent_task_id,)).fetchone():
+        return False
     binding = execution_store.get_binding(conn, "task", parent_task_id)
     if retrigger_wakeup_id is not None:
         # An audited operator request starts a new subject. It never reopens
@@ -4698,6 +4718,8 @@ def _execution_parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=
 
 
 def _execution_reconcile_task_allowed(conn, task_id, run_now):
+    if conn.execute("SELECT 1 FROM tasks WHERE task_id=? AND json_extract(metadata_json,'$.execution_attention') IS NOT NULL", (task_id,)).fetchone():
+        return False
     binding = execution_store.get_binding(conn, "task", task_id)
     if binding:
         return binding["binding_status"] in {
@@ -7584,7 +7606,7 @@ def run_once(
     data_dir = Path(config_result["data_dir"])
     db_path = Path(config_result["db_path"])
     storage.init_database(db_path)
-    cutover = result_cutover.check(db_path)
+    cutover = result_cutover.check(db_path) if dry_run else result_cutover.prepare(db_path)
     if not cutover["ok"]:
         return cutover
     with closing(sqlite3.connect(db_path)) as pool_conn, pool_conn:

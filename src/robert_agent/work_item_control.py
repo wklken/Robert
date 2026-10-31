@@ -62,6 +62,10 @@ def lifecycle_facts(conn, item, *, controls=None):
                            'reason': safe_text(publication.get('safe_error')) + ' ' + safe_text(publication.get('required_action') or (('Next retry: ' + publication['next_retry_at']) if publication.get('next_retry_at') else '')), 'failed_at': publication.get('failed_at'),
                            **{key: publication.get(key) for key in ('reason_code','attempt_count','max_attempts','retryable','next_retry_at','required_action')}})
     attention = []
+    for (encoded,) in conn.execute(f"SELECT metadata_json FROM tasks WHERE workstream_id IN ({placeholders})", streams):
+        stopped = json.loads(encoded or '{}').get('execution_attention')
+        if isinstance(stopped, dict):
+            attention.append(safe_text(stopped.get('reason_code') or 'Execution requires operator attention.'))
     from robert_agent import execution_store
     subjects=set()
     for task_id,episode_id in conn.execute(f"SELECT task_id,json_extract(metadata_json,'$.remediation_episode_id') FROM tasks WHERE workstream_id IN ({placeholders})",streams):

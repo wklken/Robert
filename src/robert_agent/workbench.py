@@ -239,6 +239,8 @@ def _load_state(conn, workstream_id=None):
         for task in stream_tasks:
             metadata = _decode_json(task.get('metadata_json'), {}) or {}
             binding = controls.get(('task', task['task_id'])) or controls.get(('remediation_episode', metadata.get('remediation_episode_id')))
+            if metadata.get('execution_attention'):
+                attention[task['workstream_id']] = safe_text(metadata['execution_attention'].get('reason_code'))
             if binding and binding['binding_status'] == 'attention':
                 metadata = _decode_json(binding['metadata_json'], {}) or {}
                 attention[task['workstream_id']] = safe_text(metadata.get('reason_code') or 'execution_attention_required')
@@ -867,8 +869,8 @@ def get_work_item(db_path, workstream_id):
         "controls": {
             "can_retrigger": bool(
                 current_task
-                and current_task["lifecycle"] == "failed"
-                and workstream["workstream_lifecycle"] == "failed"
+                and ((current_task["lifecycle"] == "failed" and workstream["workstream_lifecycle"] == "failed")
+                     or _decode_json(current_task.get('metadata_json'), {}).get('execution_attention', {}).get('reason_code') == 'result_contract_cutover')
                 and str(workstream.get("source_state") or "").lower() == "open"
                 and not retrigger_pending
             ),

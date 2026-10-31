@@ -1,5 +1,7 @@
 from pathlib import Path
 import subprocess
+import sys
+import json
 import tempfile
 import unittest
 
@@ -38,6 +40,15 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['status'], 'blocked_unmanaged_worktree')
         self.assertEqual((human / 'data').read_text(), 'human changes')
+
+    def test_worktree_creation_keeps_control_stdout_valid_json(self):
+        result = subprocess.run([sys.executable, '-B', '-m', 'robert_agent.worktree',
+            '--repo-root', str(self.repo), '--worktree-root', str(self.managed),
+            '--source-number', '205', '--short-slug', 'warning', '--base-branch', 'main'],
+            text=True, capture_output=True, check=True)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload['ok'])
+        self.assertTrue(Path(payload['worktree_path']).is_dir())
 
     def test_review_rejects_dirty_managed_worktree(self):
         first = plan_review_worktree(self.repo, self.managed, 42, 'title', 'main', dry_run=False)

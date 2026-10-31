@@ -344,7 +344,7 @@ def publish(config_path, *, dry_run=False):
     if not config['ok']:
         return config
     from robert_agent import result_cutover
-    cutover = result_cutover.check(config['db_path'])
+    cutover = result_cutover.check(config['db_path']) if dry_run else result_cutover.prepare(config['db_path'])
     if not cutover['ok']:
         return cutover
     results, repo_ids = [], []

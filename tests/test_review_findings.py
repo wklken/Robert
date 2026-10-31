@@ -130,7 +130,7 @@ class RunDirectoryRecoveryTests(unittest.TestCase):
 class IdleSchedulingTests(unittest.TestCase):
     def test_fractional_deadline_waits_instead_of_spinning(self):
         now = datetime.now(timezone.utc)
-        context = SimpleNamespace(daemon_config={'local_poll_seconds': 5}, background_lanes=None,
+        context = SimpleNamespace(daemon_config={'local_poll_seconds': 5}, background_lanes=None, control_attention={}, control_retry_at={},
             next_live_poll_at=(now + timedelta(seconds=.4)).isoformat())
         waits = []
         daemon._wait_for_next_decision(context, {'decision': 'idle'}, now=now, sleeper=waits.append)

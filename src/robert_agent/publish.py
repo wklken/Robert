@@ -1047,6 +1047,9 @@ def _prepare_publication_intent(db_path, action_id, run_command):
         if not action_row:
             return {"state": "missing", "action": None, "intent": None, "scope": None}
         action = dict(action_row)
+        if not conn.execute("SELECT 1 FROM tasks t WHERE t.task_id=? AND " + execution_store.runnable_sql(),
+                            (action['task_id'],)).fetchone():
+            return {"state": "missing", "action": action, "intent": None, "scope": None}
         if action["publish_status"] != "not_published" or action["audit_status"] != "accepted":
             return {"state": "missing", "action": action, "intent": None, "scope": None}
         scope = _trusted_action_scope(conn, action)
@@ -1304,6 +1307,8 @@ def _ready_actions(conn, limit, repo_id=None, task_ids=None):
     repo_filter += """ AND NOT EXISTS (SELECT 1 FROM execution_subjects control JOIN tasks own ON own.task_id=github_actions.task_id
         WHERE control.binding_status='attention' AND ((control.subject_type='task' AND control.subject_id=own.task_id)
         OR (control.subject_type='remediation_episode' AND control.subject_id=json_extract(own.metadata_json,'$.remediation_episode_id'))))"""
+    repo_filter += """ AND EXISTS (SELECT 1 FROM tasks t WHERE t.task_id=github_actions.task_id
+        AND json_extract(t.metadata_json,'$.execution_attention') IS NULL)"""
     return [
         dict(row)
         for row in conn.execute(
@@ -1329,7 +1334,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
     with closing(sqlite3.connect(db_path)) as conn:
         execution_store.require_migrated(conn)
         from robert_agent import result_cutover
-        cutover = result_cutover.inspect(conn, db_path)
+        cutover = result_cutover.inspect(conn, db_path) if dry_run else result_cutover.prepare(db_path)
         if not cutover["ok"]:
             return {**cutover, "pending_count": 0, "published_count": 0,
                     "deduplicated_count": 0, "skipped_count": 0, "failed_count": 0}
