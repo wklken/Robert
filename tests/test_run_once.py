@@ -7298,8 +7298,11 @@ time.sleep(.3)
             )
 
         original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_group = run_once._live_process_group
         original_terminate = run_once.worker_identity.terminate_recorded_identity
         try:
+            # The fake PID must not inspect unrelated processes on the CI host.
+            run_once._live_process_group = lambda _pid: False
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
@@ -7313,6 +7316,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
+            run_once._live_process_group = original_group
             run_once.worker_identity.inspect_recorded_identity = original_inspect
             run_once.worker_identity.terminate_recorded_identity = original_terminate
 
@@ -7370,8 +7374,11 @@ time.sleep(.3)
             )
 
         original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_group = run_once._live_process_group
         original_terminate = run_once.worker_identity.terminate_recorded_identity
         try:
+            # The fake PID must not inspect unrelated processes on the CI host.
+            run_once._live_process_group = lambda _pid: False
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
@@ -7385,6 +7392,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
+            run_once._live_process_group = original_group
             run_once.worker_identity.inspect_recorded_identity = original_inspect
             run_once.worker_identity.terminate_recorded_identity = original_terminate
 
@@ -7549,6 +7557,7 @@ time.sleep(.3)
             )
 
         original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_group = run_once._live_process_group
         original_terminate = run_once.worker_identity.terminate_recorded_identity
         original_collect_notifications = run_once.discover.collect_account_notifications
         original_collect = run_once.discover.collect_live_events
@@ -7568,6 +7577,8 @@ time.sleep(.3)
             raise subprocess.CalledProcessError(1, ["gh", "search", "issues"])
 
         try:
+            # The fake PID must not inspect unrelated processes on the CI host.
+            run_once._live_process_group = lambda _pid: False
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
@@ -7583,6 +7594,7 @@ time.sleep(.3)
                 skip_external=False,
             )
         finally:
+            run_once._live_process_group = original_group
             run_once.worker_identity.inspect_recorded_identity = original_inspect
             run_once.worker_identity.terminate_recorded_identity = original_terminate
             run_once.discover.collect_account_notifications = original_collect_notifications

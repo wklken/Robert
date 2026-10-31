@@ -626,6 +626,8 @@ def retrigger_failed_github_task(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
+        from robert_agent import native_rounds
+        native_exit = native_rounds.observe_exit(conn, task_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(
@@ -680,9 +682,7 @@ def retrigger_failed_github_task(
                     if _dispatch_process_status(process_metadata)['status'] != 'dead':
                         raise WorkItemConflictError("worker termination must be confirmed before retry")
             if cutover_recovery:
-                from robert_agent import native_rounds
-                _, owner = native_rounds.owner(conn, task_id)
-                if owner:
+                if not native_exit['all_stopped'] or not native_rounds.exit_observation_current(conn, task_id, native_exit):
                     raise WorkItemConflictError('Review workers must be reconciled before recovery')
                 recovery_now = utc_now()
                 work_item_control.require_idle_repository(conn, row['repo_id'], recovery_now)
@@ -1080,6 +1080,25 @@ def execute_command(
                     task_id=task_id, metadata={"kind": "publication_retry"}, now=now)
                 conn.execute("UPDATE work_items SET updated_at=?, version=version+1 WHERE work_item_id=?", (now, work_item_id))
                 resolved_event_id = None
+            elif command == 'retry' and (handoff_failure := _unresolved_event(conn, work_item_id, {'execution_failed'})) and (
+                    _decode_json(handoff_failure['metadata_json'], {}).get('kind') == 'pending_handoff'):
+                work_item_control.require_idle_repository(conn, item['repo_id'], now)
+                parent = _active_or_latest_task(conn, item['workstream_id'])
+                handoff = _decode_json(parent['metadata_json'], {}).get('pending_handoff', {}) if parent else {}
+                from robert_agent.run_once import _execution_subject_for_task
+                binding = execution_store.get_binding(conn, *_execution_subject_for_task(conn, parent['task_id'])) if parent else None
+                stream = conn.execute('SELECT lifecycle,active_task_id FROM workstreams WHERE workstream_id=?', (item['workstream_id'],)).fetchone()
+                if (not parent or parent['lifecycle'] != 'completed' or handoff.get('status') != 'attention'
+                        or _decode_json(handoff_failure['metadata_json'], {}).get('task_id') != parent['task_id']
+                        or not stream or stream[0] != 'active' or stream[1] != parent['task_id']
+                        or not binding or binding['binding_status'] != 'active'
+                        or (expected_event_id and handoff_failure['event_id'] != expected_event_id)):
+                    raise WorkItemConflictError('The pending request changed. Refresh before retrying.')
+                conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.pending_handoff',json(?)),updated_at=? WHERE task_id=?",
+                    (json.dumps({'status': 'pending', 'retryable': True, 'previous_failure': handoff}), now, parent['task_id']))
+                conn.execute('UPDATE work_items SET updated_at=?,version=version+1 WHERE work_item_id=?', (now, work_item_id))
+                task_id = parent['task_id']
+                resolved_event_id = handoff_failure['event_id']
             elif command == "reopen":
                 if item["completed_at"] is None or item["canceled_at"] is not None:
                     raise WorkItemConflictError("only a completed work item can be reopened")

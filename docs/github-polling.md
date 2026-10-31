@@ -23,6 +23,12 @@ The daemon owns scanner and publisher subprocesses. Their startup identity is pe
 
 Notification polling follows `X-Poll-Interval` when supplied, with a 60-second fallback after a completed scan. `Retry-After` on notification responses and core-quota reset times can extend the delay. A full worker pool does not increase the resident scanner interval to 600 seconds. `github_poll_seconds` still controls delayed startup and recovery after a scanner failure without a returned interval. Polling is scheduled after a scan completes, so a slow scan cannot overlap another scan in the same daemon. While a scan is running, the daemon waits on its local polling/wakeup interval instead of treating the elapsed remote poll deadline as immediate work. An unchanged child-attention condition is reported once.
 
+Context changes create a `github_context_refresh` wakeup. An idle resident scanner
+can refresh those repositories immediately with cached notification hints, without
+polling notifications early or moving their normal deadline. Refresh has its own
+5-second success / 30-second failure gate and honors longer core-quota reset delays.
+The existing scan-lane retry budget still applies.
+
 ## Durable observations and retries
 
 SQLite stores complete discovery events, including discussion text needed for local replay. This is not a `since`-based partial discussion mirror. Keep the database under the same access and backup controls as existing `github_events`; caches do not appear in command metrics or public replies. Existing audit and publication redaction gates remain in force.
@@ -30,6 +36,26 @@ SQLite stores complete discovery events, including discussion text needed for lo
 A cache hit skips remote reads, **not local authorization or routing**. A failed worktree preparation, busy repository lease, or failed local pipeline retries after 30 seconds with exponential backoff capped at 300 seconds. Five failed attempts retain the batch in attention, record an operator notification, and stop automatic replay. A failed context refresh has the same bound. Context-mismatched batches wait for a fresh scan without waking local drain; publisher-only work wakes only the publisher. New observations do not overwrite unconsumed events. When discovery configuration changes, a fresh scan carries each pending event identity into the new context and local authorization runs again; source-level coverage alone cannot discard an older event. Coverage is tracked per source: an unrelated failed read does not invalidate every source. When one replay source is unavailable, readable events can still route and the run records the partial discovery failure.
 
 The latest successful or failed safety read is stored per endpoint, so a new failure cannot fall back to an old successful state. Reads older than one hour are unavailable for replay. Completed batches and their scan wakeups are removed; pending batches survive until handled. Expired discovery caches are removed during cache writes. No existing domain tables are migrated destructively.
+
+Accepted worker results can leave additional unconsumed requests. Their ordinary
+handoff is persisted before worktree preparation and survives a controller restart.
+Transient preparation failures use at most three attempts within ten minutes, with
+backoff; permanent failures stop immediately. The completed parent result is retained.
+An exhausted handoff appears as a work-item execution failure; **Retry** resumes the
+pending request without repeating the completed parent work. Failed GitHub **Retrigger**
+preparation uses the same budget and exposes a new Retrigger once the cause is repaired.
+
+After a local control lane stops admitting work, the daemon still runs a bounded
+supervision child for existing workers. It respects repository leases and task locks,
+checks process identity, enforces timeouts and records confirmed exits. It does not
+prepare recovery attempts, route events, audit or publish results, or clear the pause.
+Native review/vote sessions retain their history, but proven-stopped model groups and
+parents can release occupied capacity. Unknown process ownership continues to require
+operator inspection.
+
+Unstarted native review/vote rounds are reauthorized against current trusted actors
+and route enablement both when materializing a task and before dispatching a prepared
+attempt. A saved request is audit evidence, not a permanent execution grant.
 
 ## Inspecting and recovering attention
 

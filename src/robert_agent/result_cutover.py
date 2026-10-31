@@ -122,9 +122,8 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                 for attempt in snapshots:
                     metadata = json.loads(attempt['metadata_json'] or '{}')
                     if run_once._dispatch_process_status(metadata)['status'] == 'dead':
-                        _, owner = native_rounds.owner(conn, task_id)
-                        if not owner:
-                            stopped.append(attempt)
+                        stopped.append(attempt)
+                native_exit = native_rounds.observe_exit(conn, task_id)
                 with conn:
                     conn.execute('BEGIN IMMEDIATE')
                     task = conn.execute('SELECT * FROM tasks WHERE task_id=?', (task_id,)).fetchone()
@@ -144,8 +143,8 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                         if task['task_kind'] == 'human_request' and task['lifecycle'] not in {'completed', 'failed'}:
                             execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
                             execution_store.mark_binding_attention(conn, 'task', task_id, now)
-                    _, owner = native_rounds.owner(conn, task_id)
-                    if owner:
+                    current_native = native_rounds.release_observed_slots(conn, task_id, native_exit)
+                    if not current_native or not native_exit['all_stopped']:
                         stopped = []
                     for attempt in stopped:
                         # A completed result remains historical evidence. Only
