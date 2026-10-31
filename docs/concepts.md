@@ -18,6 +18,9 @@ publish modules enforce separate policies.
 Robert uses polling in the first beta. It does not include a webhook receiver
 or GitHub App authentication.
 
+The [architecture and mechanism diagrams (Chinese)](architecture.md) trace the
+current modules, resident daemon lanes, worker handoffs, recovery, and publication.
+
 ## Workflow
 
 ```mermaid
