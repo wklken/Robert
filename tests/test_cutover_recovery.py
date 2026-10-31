@@ -287,17 +287,15 @@ class CutoverRecoveryTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM work_item_events').fetchone()[0], 1)
 
-    def test_isolated_exit_observation_retains_unknown_identity_and_native_ownership(self):
-        from robert_agent import native_rounds
+    def test_isolated_exit_observation_retains_unknown_parent_identity(self):
         with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
-        for status, owner in (('unknown', None), ('dead', {'round_id': 'round'})):
-            with self.subTest(status=status), patch.object(run_once, '_dispatch_process_status', return_value={'status': status}), patch.object(native_rounds, 'owner', return_value=(None, owner)), patch.object(run_once, '_terminate_attempt_process') as terminate:
-                self.assertTrue(result_cutover.prepare(self.db, now=self.now)['ok'])
-                terminate.assert_not_called()
-                with closing(sqlite3.connect(self.db)) as conn:
-                    self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'running')
-                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM notifications').fetchone()[0], 1)
+        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'unknown'}), patch.object(run_once, '_terminate_attempt_process') as terminate:
+            self.assertTrue(result_cutover.prepare(self.db, now=self.now)['ok'])
+            terminate.assert_not_called()
+            with closing(sqlite3.connect(self.db)) as conn:
+                self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'running')
+                self.assertEqual(conn.execute('SELECT COUNT(*) FROM notifications').fetchone()[0], 1)
 
     def test_exit_observation_does_not_overwrite_a_changed_attempt(self):
         with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):

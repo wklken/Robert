@@ -112,8 +112,9 @@ def session(conn, *, round_id=None, task_id=None):
     return decode(dict(zip([c[0] for c in cursor.description], row))) if row else None
 
 
-def enqueue(conn, repo, event, route, workers):
-    key = f"{repo['full_name']}:{event['number']}:{event['event_fingerprint']}"
+def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
+    trigger = event['event_fingerprint'] + (':recovery:' + recovery_key if recovery_key else '')
+    key = f"{repo['full_name']}:{event['number']}:{trigger}"
     round_id = 'review-' + hashlib.sha256(key.encode()).hexdigest()[:24]
     request = {
         'repo': dict(repo), 'event': dict(event), 'route': dict(route),
@@ -124,7 +125,7 @@ def enqueue(conn, repo, event, route, workers):
         round_id,repo,pr_number,workstream_id,trigger_fingerprint,request_json,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?)''',
         (round_id, repo['full_name'], event['number'], event['workstream_id'],
-         event['event_fingerprint'], json.dumps(request, ensure_ascii=False), timestamp, timestamp))
+         trigger, json.dumps(request, ensure_ascii=False), timestamp, timestamp))
     return session(conn, round_id=round_id)
 
 

@@ -7,7 +7,7 @@ import sqlite3
 import time
 
 from robert_agent.common import emit
-from robert_agent import storage, wakeup, execution_store, retry_policy, supervise
+from robert_agent import storage, wakeup, execution_store, retry_policy, supervise, pending_handoff
 from robert_agent import run_once as run_once_module
 from robert_agent import validate_config
 
@@ -245,6 +245,8 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
     if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
         return True
     scoped_repos = repo_ids or [row[0] for row in conn.execute('SELECT repo_id FROM repos')]
+    if pending_handoff.ready_rows(conn, scoped_repos, now):
+        return True
     if run_once_module.has_orphaned_classification_result(conn, scoped_repos, now):
         return True
     recovery_pending = conn.execute(

@@ -314,7 +314,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
             _, owner = native_rounds.owner(conn, task['task_id'])
             prepared = conn.execute("SELECT 1 FROM attempts WHERE task_id=? AND status='prepared'", (task['task_id'],)).fetchone()
             pending = conn.execute("SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json,'$.kind')='github_retrigger'", (task['task_id'],)).fetchone()
-            recoverable = row['origin_type'] != 'web' and not (running or publication_in_progress or owner or prepared or pending)
+            native_stopped = not owner or conn.execute("SELECT 1 FROM attempts WHERE task_id=? AND json_extract(metadata_json,'$.process_stopped_at') IS NOT NULL ORDER BY attempt_no DESC LIMIT 1", (task['task_id'],)).fetchone()
+            recoverable = row['origin_type'] != 'web' and native_stopped and not (running or publication_in_progress or prepared or pending)
             card['valid_commands'] = (['retrigger'] if recoverable else []) + ['cancel']
         elif unavailable and not running and not publication_in_progress:
             card["valid_commands"] = ["retry", "cancel"]

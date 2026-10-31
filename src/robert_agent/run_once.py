@@ -33,7 +33,7 @@ from robert_agent import validate_config
 from robert_agent import workstream
 from robert_agent import worktree
 from robert_agent import work_item_control
-from robert_agent import retry_policy, execution_operations
+from robert_agent import retry_policy, execution_operations, pending_handoff
 from robert_agent import execution_store
 from robert_agent import worker_identity
 from robert_agent.worker_identity import live_process_group as _live_process_group
@@ -945,7 +945,7 @@ def _defer_attempt_inspection(conn, attempt_id, task_id, snapshot, received_resu
                          (json.dumps(deferred), attempt_id))
 
 
-def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=None, db_path=None, repo=None):
+def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=None, db_path=None, repo=None, *, allow_recovery=True, task_id=None):
     rows = conn.execute(
         f"""
         SELECT
@@ -964,8 +964,9 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                OR (a.status='prepared' AND json_extract(a.metadata_json,'$.result_validation') IS NOT NULL))
           AND t.lifecycle IN ('queued', 'running')
           AND {execution_store.runnable_sql()}
+          AND (? IS NULL OR t.task_id=?)
         """,
-        (repo_id,),
+        (repo_id, task_id, task_id),
     ).fetchall()
     supervised = 0
     now_dt = _parse_time(run_now)
@@ -1069,7 +1070,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 },
             )
             continue
-        if process_status["status"] == "dead":
+        if process_status["status"] == "dead" and allow_recovery:
             worktree_row = conn.execute(
                 "SELECT worktree_path FROM attempts WHERE attempt_id = ?",
                 (attempt_id,),
@@ -1249,6 +1250,9 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 status = {**status, "status": category, "reason_code": category,
                           "safe_error": "Worker stopped: " + category,
                           "required_action": "Repair the reported cause, then retry the task."}
+        elif process_status["status"] == "dead":
+            status = {"ok": False, "status": "failed_worker_process_exited", "terminate": False,
+                      "reason_code": "control_paused", "required_action": "Repair the paused controller, then explicitly retry this task."}
         runtime_seconds = (now_dt - _parse_time(started_at)).total_seconds()
         has_worker_phase = conn.execute(
             "SELECT 1 FROM worker_phases WHERE attempt_id = ? LIMIT 1",
@@ -1332,6 +1336,8 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
             ),
         )
         _finalize_failed_task(conn, task_id, workstream_id, run_now, status)
+        if not allow_recovery:
+            _close_task_binding_if_terminal(conn, task_id, run_now)
         _insert_notification(
             conn,
             _supervision_failure_notification_type(status["status"]),
@@ -3913,6 +3919,30 @@ def _prepare_github_operator_tasks(conn, data_dir, db_path, repo, repo_id, run_i
             prompt_paths.append(str(info['prompt_path']))
 
 
+def _record_retrigger_preparation_failure(conn, wakeup_id, task_id, workstream_id, exc, now):
+    if not conn.in_transaction:
+        conn.execute('BEGIN IMMEDIATE')
+    row = conn.execute("SELECT metadata_json FROM wakeups WHERE wakeup_id=? AND status='pending'", (wakeup_id,)).fetchone()
+    if not row or not _execution_parent_allows_child(conn, task_id, retrigger_wakeup_id=wakeup_id):
+        return
+    metadata = _json_object(row[0])
+    failure = retry_policy.failure_state(metadata.get('preparation_retry', {}),
+        getattr(exc, 'stderr', None) or str(exc), now, retryable=not isinstance(exc, FileNotFoundError))
+    metadata['preparation_retry'] = failure
+    conn.execute("""UPDATE wakeups SET status=?,not_before_at=?,attempt_count=?,metadata_json=?,updated_at=?
+        WHERE wakeup_id=? AND status='pending'""",
+        ('pending' if failure['retryable'] else 'canceled', failure['next_retry_at'] or now,
+         failure['attempt_count'], json.dumps(metadata), now, wakeup_id))
+    if not failure['retryable']:
+        _insert_notification(conn, 'github_retrigger_failed', 'recorded', now, {'task_id': task_id, **failure})
+        item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+        if item:
+            work_items.record_system_event(conn, item['work_item_id'], event_type='execution_failed',
+                idempotency_key='retrigger-preparation:' + wakeup_id,
+                body='Recovery preparation stopped. ' + failure['required_action'],
+                metadata={'task_id': task_id, **failure}, now=now)
+
+
 def _prepare_github_retrigger_tasks(
     conn,
     data_dir,
@@ -3936,13 +3966,15 @@ def _prepare_github_retrigger_tasks(
         WHERE wu.repo_id = ?
           AND wu.reason = 'manual_operator_request'
           AND wu.status = 'pending'
+          AND julianday(wu.not_before_at)<=julianday(?)
+          AND (wu.expires_at IS NULL OR julianday(wu.expires_at)>julianday(?))
           AND json_extract(wu.metadata_json, '$.kind') = 'github_retrigger'
           AND t.lifecycle = 'failed'
           AND w.lifecycle = 'failed'
           AND w.active_task_id IS NULL
         ORDER BY wu.created_at, wu.wakeup_id
         """,
-        (repo_id,),
+        (repo_id, run_now, run_now),
     ).fetchall()
     prepared_workstreams = set()
     for wakeup_id, parent_task_id, workstream_id, parent_route_id, wakeup_metadata in rows:
@@ -3960,13 +3992,19 @@ def _prepare_github_retrigger_tasks(
         )
         saved_review = native_rounds.session(conn, task_id=parent_task_id)
         if saved_review:
-            route_result = saved_review["request"]["route"]
+            if not _native_request_allowed(saved_review, repo, config_result):
+                _record_retrigger_preparation_failure(conn, wakeup_id, parent_task_id, workstream_id,
+                    ValueError('invalid configuration: current native request policy rejected'), run_now)
+                continue
+            route_result = _effective_route(config_result, repo, task_event,
+                route_id='vote' if 'source_type' in saved_review else 'review-pr')
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
             worktree_result = _prepare_worktree(repo, task_event, route_result, dry_run)
         except ControlDeadlineExceeded:
             raise
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        except (OSError, subprocess.SubprocessError) as exc:
+            _record_retrigger_preparation_failure(conn, wakeup_id, parent_task_id, workstream_id, exc, run_now)
             continue
         stream = {
             "workstream_id": workstream_id,
@@ -4056,8 +4094,27 @@ def _resume_waiting_vote(conn, repo, event, run_now):
     return True
 
 
+def _reauthorize_saved_request(event, repo, *, known_workstreams=()):
+    candidate = {**event, 'mentions_dd': bool(discover.bot_requests(event.get('body'), repo['github_account']))}
+    if candidate.get('event_type') == 'notification':
+        trusted = set(repo.get('trusted_actors', []))
+        candidate['trusted_trigger_found'] = bool(candidate.get('authorization_lookup_complete') is not False and (
+            (candidate.get('assigned_to') == repo['github_account'] and candidate.get('assignment_actor_login') in trusted)
+            or (candidate.get('requested_reviewer') == repo['github_account'] and candidate.get('requester_login') in trusted)
+            or (candidate['mentions_dd'] and candidate.get('actor_login') in trusted)))
+    return authorize.authorize_event(candidate, repo, known_workstreams=set(known_workstreams))
+
+
+def _native_request_allowed(entry, repo, config_result):
+    authorized = _reauthorize_saved_request(entry['request']['event'], repo)
+    route_id = 'vote' if 'source_type' in entry else 'review-pr'
+    current_route = _effective_route(config_result, repo, authorized, route_id=route_id)
+    workers_key = 'native_vote_workers' if route_id == 'vote' else 'native_review_workers'
+    return bool(authorized.get('drives_execution') and current_route.get(workers_key))
+
+
 def _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
-                            dry_run, dispatch_queue, dispatch_budget, round_store=review_store):
+                            dry_run, dispatch_queue, dispatch_budget, round_store=review_store, config_result=None):
     table = "vote_sessions" if round_store is vote_store else "review_sessions"
     queued = conn.execute(f"""SELECT round_id FROM {table} rs
         WHERE rs.repo=? AND rs.task_id IS NULL AND rs.status='queued'
@@ -4087,6 +4144,11 @@ def _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
                for other in ('review_sessions', 'vote_sessions')):
             continue
         event = entry["request"]["event"]
+        if not _native_request_allowed(entry, repo, config_result):
+            round_store.update(conn, round_id, status='canceled', error='current authorization or native route no longer permits this request')
+            _insert_notification(conn, 'native_request_canceled', 'recorded', run_now,
+                {'round_id': round_id, 'reason_code': 'current_policy_rejected', 'repo_id': repo_id})
+            continue
         if _record_current_state_closed_source_if_needed(
             conn, repo_id, _source_id(event["source_key"]),
             _event_id(event["event_fingerprint"]), event, run_now
@@ -4095,7 +4157,7 @@ def _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
             continue
         task_info = _create_task_attempt_and_prompt(
             conn, data_dir, db_path, repo, repo_id, event, entry["request"]["route"],
-            {"workstream_id": entry["workstream_id"]}, run_now,
+            {"workstream_id": entry["workstream_id"]}, run_now, native_round_id=round_id,
         )
         if task_info:
             _queue_dispatch(dispatch_queue, task_info, None, dispatch_budget,
@@ -4118,12 +4180,20 @@ def _create_task_attempt_and_prompt(
     retrigger_wakeup_id=None,
     existing_task_id=None,
     new_request_event=None,
+    native_round_id=None,
 ):
     if not conn.in_transaction:
         conn.execute('BEGIN IMMEDIATE')
     remediation_context = (
         (event.get("metadata") or {}).get("remediation") or {}
     )
+    if native_round_id:
+        round_store = vote_store if route_result.get('native_vote_workers') else review_store
+        selected_round = round_store.session(conn, round_id=native_round_id)
+        if (not selected_round or selected_round['task_id'] or selected_round['status'] != 'queued'
+                or selected_round['workstream_id'] != stream['workstream_id']
+                or selected_round['request']['event']['event_fingerprint'] != event['event_fingerprint']):
+            return None
     existing = None
     if existing_task_id:
         existing = conn.execute('''SELECT t.metadata_json FROM tasks t
@@ -4326,7 +4396,13 @@ def _create_task_attempt_and_prompt(
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         round_store = vote_store if route_result.get("native_vote_workers") else review_store
         workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
-        entry = round_store.enqueue(conn, repo, event, route_result, workers)
+        recovery_key = None
+        if retrigger_wakeup_id and parent_task_id:
+            parent = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (parent_task_id,)).fetchone()
+            if parent and _json_object(parent[0]).get('recovered_execution_attention', {}).get('reason_code') == 'result_contract_cutover':
+                recovery_key = retrigger_wakeup_id
+        entry = (round_store.session(conn, round_id=native_round_id) if native_round_id
+                 else round_store.enqueue(conn, repo, event, route_result, workers, recovery_key=recovery_key))
         round_store.update(conn, entry["round_id"], task_id=task_id, status="queued", error=None)
     if blocked and event.get("task_kind", "human_request") == "human_request":
         conn.execute(
@@ -5376,6 +5452,21 @@ def _dispatch_queued_locked(
         }
         with closing(sqlite3.connect(db_path)) as conn:
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
+        if native_review and config_result and not _native_request_allowed(native_review, repo, config_result):
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute('BEGIN IMMEDIATE')
+                current = _current_dispatch_target(conn, task_info['attempt_id'])
+                if current is not None:
+                    now = _now()
+                    conn.execute("UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'", (now, task_info['attempt_id']))
+                    conn.execute("UPDATE tasks SET lifecycle='canceled',updated_at=? WHERE task_id=?", (now, task_info['task_id']))
+                    conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL,updated_at=? WHERE active_task_id=?", (now, task_info['task_id']))
+                    round_store = vote_store if 'source_type' in native_review else review_store
+                    round_store.update(conn, native_review['round_id'], status='canceled', error='current authorization or native route no longer permits this request')
+                    _close_task_binding_if_terminal(conn, task_info['task_id'], now)
+                    _insert_notification(conn, 'native_request_canceled', 'recorded', now,
+                        {'task_id': task_info['task_id'], 'round_id': native_review['round_id'], 'reason_code': 'current_policy_rejected'})
+            continue
         if native_review:
             configured = native_review["request"]["workers"]
             timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
@@ -5791,6 +5882,40 @@ def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workst
         )
 
 
+def _save_pending_handoff(conn, task_id, state):
+    conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.pending_handoff',json(?)) WHERE task_id=?",
+        (json.dumps(state), task_id))
+
+
+def _pending_handoff_current(conn, task_id, workstream_id):
+    return bool(_execution_parent_allows_child(conn, task_id) and conn.execute("""SELECT 1
+        FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
+        LEFT JOIN work_items wi ON wi.workstream_id=w.workstream_id
+        LEFT JOIN github_sources gs ON gs.source_id=w.primary_source_id
+        WHERE t.task_id=? AND t.workstream_id=? AND t.lifecycle='completed'
+          AND w.lifecycle='active' AND w.active_task_id=t.task_id
+          AND wi.canceled_at IS NULL AND COALESCE(lower(gs.state),'open')!='closed'
+          AND NOT EXISTS(SELECT 1 FROM tasks child WHERE child.parent_task_id=t.task_id)""",
+        (task_id, workstream_id)).fetchone())
+
+
+def _recover_pending_handoffs(conn, repo_id, data_dir, db_path, repo, run_now, dry_run,
+                              dispatch_queue, dispatch_budget, config_result):
+    recovered = 0
+    for task_id, stream_id in pending_handoff.ready_rows(conn, [repo_id], run_now):
+        if not _pending_handoff_current(conn, task_id, stream_id):
+            continue
+        child = _create_child_task_for_pending_events(conn, data_dir, db_path, repo, repo_id,
+            task_id, stream_id, _pending_events_for_task(conn, task_id, []), run_now, dry_run,
+            dispatch_queue, dispatch_budget, config_result=config_result)
+        if child:
+            recovered += 1
+        state = _json_object(conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()[0]).get('pending_handoff', {})
+        if state.get('status') not in {'pending', 'attention'}:
+            _close_task_binding_if_terminal(conn, task_id, run_now)
+    return recovered
+
+
 def _create_child_task_for_pending_events(
     conn,
     data_dir,
@@ -5820,6 +5945,7 @@ def _create_child_task_for_pending_events(
     ):
         return None
     if not pending_events:
+        _save_pending_handoff(conn, parent_task_id, {'status': 'completed', 'retryable': False})
         conn.execute(
             """
             UPDATE workstreams
@@ -5830,23 +5956,12 @@ def _create_child_task_for_pending_events(
         )
         return None
 
-    # Recheck saved context under today's policy, including the distinct
-    # requester checks for assignment and explicit review requests.
-    child_event = None
-    for pending_event in pending_events:
-        candidate = {
-            **pending_event,
-            "mentions_dd": bool(discover.bot_requests(pending_event.get("body"), repo["github_account"])),
-        }
-        explicit_request = candidate.get("event_type") in {"assigned", "review_request"}
-        decision = authorize.authorize_event(
-            candidate, repo,
-            known_workstreams=set() if explicit_request else {workstream_id},
-        )
-        if decision.get("drives_execution"):
-            child_event = decision
-            break
+    # Saved discussion is data; only a current trusted request may drive its child.
+    child_event = next((decision for pending_event in pending_events
+                        if (decision := _reauthorize_saved_request(pending_event, repo, known_workstreams=(
+                            () if pending_event.get('event_type') in {'assigned', 'review_request', 'notification'} else (workstream_id,)))).get('drives_execution')), None)
     if child_event is None:
+        _save_pending_handoff(conn, parent_task_id, {'status': 'completed', 'retryable': False})
         conn.execute(
             """
             UPDATE workstreams
@@ -5861,8 +5976,41 @@ def _create_child_task_for_pending_events(
         "source_relationship": workstream.source_relationship(child_event),
     }
     route_result = _effective_route(config_result, repo, child_event)
-    conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-    worktree_result = _prepare_worktree(repo, child_event, route_result, dry_run)
+    parent = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (parent_task_id,)).fetchone()
+    metadata = _json_object(parent[0]) if parent else {}
+    handoff = metadata.get('pending_handoff') or {}
+    if not handoff.get('retryable', True) or (handoff.get('next_retry_at') and
+            retry_policy.timestamp(handoff['next_retry_at']) > retry_policy.timestamp(run_now)):
+        return None
+    _save_pending_handoff(conn, parent_task_id, {**handoff, 'status': 'pending'})
+    conn.commit()  # Persist continuation ownership before external Git I/O.
+    try:
+        worktree_result = _prepare_worktree(repo, child_event, route_result, dry_run)
+    except ControlDeadlineExceeded:
+        raise
+    except (OSError, subprocess.SubprocessError) as exc:
+        if not parent_task_id:
+            raise
+        if not conn.in_transaction:
+            conn.execute('BEGIN IMMEDIATE')
+        if not _pending_handoff_current(conn, parent_task_id, workstream_id):
+            return None
+        failure = retry_policy.failure_state(handoff, getattr(exc, 'stderr', None) or str(exc),
+            run_now, retryable=not isinstance(exc, FileNotFoundError))
+        _save_pending_handoff(conn, parent_task_id, {**failure, 'status': 'pending' if failure['retryable'] else 'attention'})
+        if not failure['retryable']:
+            _insert_notification(conn, 'pending_handoff_failed', 'recorded', run_now, {'task_id': parent_task_id, **failure})
+            item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+            if item:
+                work_items.record_system_event(conn, item['work_item_id'], event_type='execution_failed',
+                    idempotency_key='pending-handoff:' + parent_task_id + ':' + failure['first_failed_at'],
+                    body='Pending request preparation stopped. ' + failure['required_action'],
+                    metadata={'kind': 'pending_handoff', 'task_id': parent_task_id, **failure}, now=run_now)
+        return None
+    if not conn.in_transaction:
+        conn.execute('BEGIN IMMEDIATE')
+    if parent_task_id and not _pending_handoff_current(conn, parent_task_id, workstream_id):
+        return None
     task_info = _create_task_attempt_and_prompt(
         conn,
         data_dir,
@@ -5884,6 +6032,8 @@ def _create_child_task_for_pending_events(
     )
     if task_info is None:
         return None
+    _save_pending_handoff(conn, parent_task_id, {**handoff, 'status': 'completed',
+        'retryable': False, 'next_retry_at': None, 'child_task_id': task_info['task_id']})
     _queue_dispatch(
         dispatch_queue,
         task_info,
@@ -6254,7 +6404,9 @@ def _finalize_accepted_result(
         dispatch_budget,
         config_result=config_result,
     )
-    _close_task_binding_if_terminal(conn, payload["task_id"], run_now)
+    handoff = _json_object(conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (payload['task_id'],)).fetchone()[0]).get('pending_handoff', {})
+    if handoff.get('status') not in {'pending', 'attention'}:
+        _close_task_binding_if_terminal(conn, payload["task_id"], run_now)
     return True
 
 
@@ -6956,6 +7108,8 @@ def _run_repo_pipeline(
                     output={"reason": error["status"]},
                 )
             return summary
+        audited_result_count += _recover_pending_handoffs(conn, repo_id, data_dir, db_path, repo,
+            run_now, dry_run, dispatch_queue, dispatch_budget, config_result)
         summary["audited_result_count"] = audited_result_count
         _mark_repo_run_step(
             conn,
@@ -7670,9 +7824,9 @@ def _run_repo_pipeline(
             active_workstreams.add(task_info["workstream_id"])
 
         _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
-                                dry_run, dispatch_queue, dispatch_budget)
+                                dry_run, dispatch_queue, dispatch_budget, config_result=config_result)
         _prepare_queued_reviews(conn, data_dir, db_path, repo, repo_id, run_now,
-                                dry_run, dispatch_queue, dispatch_budget, round_store=vote_store)
+                                dry_run, dispatch_queue, dispatch_budget, round_store=vote_store, config_result=config_result)
         execution_replay.acknowledge_effects(conn,repo_id,run_now)
 
         if invalidation_attempt_ids:
