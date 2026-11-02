@@ -49,6 +49,62 @@ class RoutingTests(unittest.TestCase):
             ["fast-code-path", "fast-zoom-out", "fast-verify-review-point"],
         )
 
+    def test_statistics_request_with_mention_in_any_position_is_comment_only(self):
+        from robert_agent import discover, route
+
+        background = "目前启用 ty + django-types 后，报错分别有哪些？是否可以修复或者某类可以忽略？"
+        request = "你跑一遍，统计分析下结果"
+        for body in (
+            f"@robert-bot {background}\n{request}",
+            f"{background}\n@robert-bot {request}",
+            f"{background}\n{request} @robert-bot\n",
+        ):
+            with self.subTest(body=body):
+                intent = discover.infer_intent("调研：能否使用 ty 替代 mypy", body, "comment", "robert-bot")
+                self.assertEqual(intent, "analysis")
+                policy = route.route_task({"intent": intent, "source_type": "issue"})
+                self.assertEqual(policy["expected_output"], "comment_analysis")
+                self.assertEqual(policy["allowed_github_actions"], ["comment"])
+
+    def test_trailing_and_middle_mentions_preserve_explicit_request_intents(self):
+        from robert_agent import discover
+
+        for body, expected in (
+            ("实现分页 @robert-bot", "small_change"),
+            ("add @robert-bot unit tests", "add_tests"),
+            ("分析 @robert-bot 这个报错", "analysis"),
+            ("请修复这个报错 @robert-bot", "bug_fix"),
+            ("do not fix this bug @robert-bot", "unclear"),
+            ("不要修复这个失败，统计结果 @robert-bot", "analysis"),
+            ("不要再修复这个报错，统计一下 @robert-bot", "analysis"),
+            ("分析报错，不要修复；修复方案仅作参考 @robert-bot", "analysis"),
+            ("是否可以修复这个报错？ @robert-bot", "analysis"),
+            ("Can these errors be fixed or ignored? @robert-bot", "analysis"),
+            ("Please run the check and summarize the errors @robert-bot", "analysis"),
+            ("先统计报错，再修复这些问题并提交 PR @robert-bot", "bug_fix"),
+            ("Please analyze the errors and fix the regression @robert-bot", "bug_fix"),
+            ("@alice 修复这个报错。 @robert-bot 统计分析结果", "analysis"),
+            ("统计接口调用失败 @robert-bot", "bug_fix"),
+            ("The statistics API has a bug @robert-bot", "bug_fix"),
+            ("The summary endpoint has a bug @robert-bot", "bug_fix"),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(discover.infer_intent("", body, "comment", "robert-bot"), expected)
+
+    def test_quoted_and_code_instructions_do_not_override_live_statistics_request(self):
+        from robert_agent import discover
+
+        for background in (
+            "> 请修复报错并提交 PR",
+            "```\n请修复报错并提交 PR\n```",
+            "~~~text\n请修复报错并提交 PR\n~~~",
+            "    请修复报错并提交 PR",
+            "`请修复报错并提交 PR`",
+        ):
+            with self.subTest(background=background):
+                body = f"{background}\n统计报错结果 @robert-bot"
+                self.assertEqual(discover.infer_intent("Bug: failed checks", body, "comment", "robert-bot"), "analysis")
+
     def test_new_pr_route_only_advertises_publisher_supported_actions(self):
         from robert_agent import route
         result = route.route_task({"intent": "bug_fix"})

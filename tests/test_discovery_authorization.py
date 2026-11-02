@@ -41,6 +41,20 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
                 }])[0]
                 self.assertFalse(decision["drives_execution"])
 
+    def test_trailing_mention_authorizes_analysis_of_the_complete_request(self):
+        from robert_agent import discover
+
+        body = "目前有哪些报错，是否可以修复？\n你跑一遍，统计分析下结果 @robert-bot"
+        raw = discover._issue_search_to_raw(
+            {"number": 123, "title": "类型检查调研", "body": body,
+             "author": {"login": "wklken"}},
+            "mention", "robert-bot",
+        )
+        decision = self.normalize_and_authorize([raw])[0]
+        self.assertTrue(decision["drives_execution"])
+        self.assertEqual(decision["intent"], "analysis")
+        self.assertEqual(decision["body"], body)
+
     def test_only_trusted_actor_drives_known_workstream(self):
         for association in ("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", None):
             for permission in ("admin", "maintain", "write", "triage", None):
