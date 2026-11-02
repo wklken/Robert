@@ -194,10 +194,7 @@ def infer_dd_workstream_from_pr_body(body, repo_full_name):
     return {}
 
 
-def bot_requests(body, github_account):
-    """Extract unquoted instruction segments addressed to this exact configured account."""
-    if not github_account:
-        return []
+def _unquoted_text(body):
     lines = []
     fence = None
     for line in (body or "").splitlines():
@@ -216,10 +213,24 @@ def bot_requests(body, github_account):
             continue
         lines.append(line)
     text = "\n".join(lines)
-    text = re.sub(r"(`+)[\s\S]*?\1", "", text)
+    return re.sub(r"(`+)[\s\S]*?\1", "", text)
+
+
+def bot_requests(body, github_account):
+    """Read the full unquoted message when this account is its only recipient."""
+    if not github_account:
+        return []
+    text = _unquoted_text(body)
     mention = rf"(?<![\w@])@{re.escape(github_account)}(?=$|[\s,:：，])"
+    matches = list(re.finditer(mention, text, re.I))
+    if not matches:
+        return []
+    request = re.sub(mention, "", text, flags=re.I)
+    # Keep separately addressed instructions separate in multi-recipient messages.
+    if not re.search(r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]*", request):
+        return [request.strip(' \t\n,:：，')]
     return [re.split(r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]*", text[match.end():], maxsplit=1)[0].strip(' \t\n,:：，')
-            for match in re.finditer(mention, text, re.I)]
+            for match in matches]
 
 
 def is_vote_request(body, github_account=None):
@@ -248,24 +259,32 @@ def infer_intent(title, body, event_type, github_account=None):
         return "review_request"
     if is_vote_request(body, github_account):
         return "vote"
-    text = f"{title or ''}\n{body or ''}".lower()
     if re.search(r"@\S+\s+(?:please\s+)?review\b", body or "", re.I):
         return "review_request"
-    clean_body = re.sub(r"```[\s\S]*?```", "", body or "")
-    clean_body = '\n'.join(line for line in clean_body.splitlines() if not line.lstrip().startswith('>'))
+    clean_body = _unquoted_text(body)
     requests = bot_requests(body, github_account)
     instruction = (requests[0] if requests else re.sub(r'^@\S+\s+', '', clean_body.strip())).lower()
+    text = f"{title or ''}\n{instruction}".lower()
+    fix_prohibited = re.search(r"(?:不要|无需|别).{0,8}修复|\b(?:do not|don't)\s+fix\b", instruction)
     prefix = r'^(?:(?:please|can you|could you)\s+|请(?:帮我)?|帮我)?'
-    if re.match(prefix + r'(?:分析|讨论|解释|为什么|为何|analy[sz]e\b|analysis\b|explain\b|discuss\b)', instruction):
-        return 'analysis'
     if re.match(prefix + r'(?:fix\b|修复)', instruction):
         return 'bug_fix'
     if re.match(prefix + r'(?:add\s+(?:unit\s+)?tests?\b|write\s+tests?\b|补充测试|增加测试)', instruction):
         return 'add_tests'
     if re.match(prefix + r'(?:implement\b|add\b|build\b|create\b|support\b|实现|支持|增加|添加)', instruction):
         return 'small_change'
-    if (not re.search(r"(?:不要|无需|别).{0,8}修复|\b(?:do not|don't)\s+fix\b", instruction)
-            and re.search(r'\b(?:bug|fix|fixes|fixed)\b|修复|报错|失败', text)):
+    if not fix_prohibited and re.search(
+            r'(?:[;；。.!?\n]\s*|并|然后|再|\b(?:and|then)\s+)'
+            r'(?:(?:please|can you|could you)\s+|请(?:帮我)?|帮我)?(?:fix\b|修复)', instruction):
+        return 'bug_fix'
+    if re.match(prefix + r'(?:分析|讨论|解释|为什么|为何|analy[sz]e\b|analysis\b|explain\b|discuss\b)', instruction):
+        return 'analysis'
+    # Requests to count errors or assess repairability do not authorize a fix.
+    if re.search(r'(?:统计|汇总)(?:\s|分析|一下|下|结果|报错|错误|诊断|数量)|\bsummari[sz]e\b|'
+                 r'\b(?:provide|show|give|collect)\b[^?.!\n]{0,40}\b(?:statistics|summary|breakdown)\b|'
+                 r'是否.{0,20}(?:修复|忽略)|\b(?:can|could)\b[^?.!\n]{0,80}\b(?:fixed|ignored)\b', instruction):
+        return 'analysis'
+    if not fix_prohibited and re.search(r'\b(?:bug|fix|fixes|fixed)\b|修复|报错|失败', text):
         return 'bug_fix'
     if any(
         word in text

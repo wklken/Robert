@@ -100,6 +100,13 @@ routing; it does not switch the authenticated `gh` session.
 
 ### GitHub request context
 
+The configured bot mention can appear at the beginning, middle, or end of a
+message. When it is the only recipient, Robert reads the whole message after
+excluding quoted text and code. Separately addressed instructions in messages
+with multiple recipients stay separate. Requests to summarize errors or assess
+whether they can be fixed or ignored receive an analysis comment; an explicit
+request to implement a fix can route to a pull request.
+
 Robert includes the Issue/PR body and relevant discussion in each attempt's
 prompt and context archive. Duplicate observations with the same event identity
 merge body completeness and update time without changing trigger authorization.
