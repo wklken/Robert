@@ -16,7 +16,7 @@ from unittest.mock import patch
 import yaml
 
 from tests import test_review_workspace as workspace_fixture
-from robert_agent import dispatch, loop_engine, publish, review_coordinator, review_files, review_store, run_once, validate_config
+from robert_agent import dispatch, loop_engine, publish, review_coordinator, review_files, review_store, run_once, validate_config, work_items
 from robert_agent.init_config import init_config
 from robert_agent.resource_files import resource
 
@@ -150,6 +150,98 @@ class ReviewCoordinatorTests(unittest.TestCase):
         self.assertEqual(counts[('synthesis', 'codex')], 1)
         prompts = [call[2] for call in self.calls if call[0] == 'review']
         self.assertEqual(len(set(prompts)), 1)
+
+    def test_report_is_normalized_before_hash_registration_and_submission(self):
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        original = review_files.render_merged
+        def report(*args):
+            return original(*args) + '\nExample: password=secret; path /root/example/report; host 10.0.0.12\n'
+        with patch.object(review_files, 'render_merged', side_effect=report):
+            path = driver.run()
+        body = path.read_text()
+        self.assertIn('password=<redacted>', body)
+        self.assertIn('<local-path>', body)
+        self.assertIn('<internal-ip>', body)
+        with review_store.connect(self.db) as conn:
+            session = review_store.session(conn, task_id=driver.task_id)
+            self.assertEqual(session['report_sha256'], review_store.digest(path))
+            action = json.loads(conn.execute('SELECT metadata_json FROM github_actions WHERE task_id=?',
+                                            (driver.task_id,)).fetchone()[0])
+            self.assertEqual(action['body'], body)
+            self.assertEqual(action['report_sha256'], session['report_sha256'])
+
+    def test_blocked_report_retains_model_artifacts_and_stops_automatic_recovery(self):
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        original = review_files.render_merged
+        def report(*args):
+            return original(*args) + '\npassword=private-example-value\n'
+        with patch.object(review_files, 'render_merged', side_effect=report):
+            with self.assertRaisesRegex(RuntimeError, 'redaction_blocked.*credential_assignment.*line'):
+                driver.run()
+        with review_store.connect(self.db) as conn:
+            session = review_store.session(conn, task_id=driver.task_id)
+            self.assertEqual(session['status'], 'attention')
+            self.assertNotIn('private-example-value', session['error'])
+            self.assertTrue(all(run['status'] == 'succeeded' for run in review_store.runs(conn, driver.round_id)))
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM worker_results').fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM github_actions').fetchone()[0], 0)
+            recovery = run_once._inspect_attempt_recovery(conn, driver.attempt_id, driver.task_id,
+                                                         driver.manifest['worktree_path'])
+            self.assertEqual(recovery['status'], 'unrecoverable')
+            self.assertEqual(recovery['reason_code'], 'redaction_blocked')
+        # Explicit retry after repairing the cause reuses every sealed model stage.
+        counts = Counter((call[0], call[1]) for call in self.calls)
+        self.coordinator().run()
+        self.assertEqual(Counter((call[0], call[1]) for call in self.calls), counts)
+
+    def test_daemon_preserves_submission_rejection_in_task_failure_and_notification(self):
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        diagnostic = {'ok': False, 'status': 'failed_validation', 'reason_code': 'redaction_blocked',
+            'field_path': 'planned_github_actions[0].body', 'safe_error': 'credential_assignment at line 2, column 1',
+            'findings': [{'rule': 'credential_assignment', 'line': 2, 'column': 1}],
+            'required_action': 'Redact the report.'}
+        with patch.object(review_coordinator.worker_result, 'record_result', return_value=diagnostic):
+            with self.assertRaisesRegex(RuntimeError, 'redaction_blocked'):
+                driver.run()
+        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
+        self.addCleanup(process.kill)
+        self.addCleanup(process.wait, 5)
+        identity = review_coordinator.worker_identity.capture_process_identity(process.pid)
+        process.kill()
+        process.wait(timeout=5)
+        with review_store.connect(self.db) as conn:
+            now = review_store.now()
+            conn.execute("""UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,
+                metadata_json=json_set(metadata_json,'$.dispatch',json(?)) WHERE attempt_id=?""",
+                (now, now, json.dumps(identity), driver.attempt_id))
+            conn.execute("UPDATE tasks SET lifecycle='running' WHERE task_id=?", (driver.task_id,))
+            repo_id = conn.execute('SELECT repo_id FROM workstreams WHERE workstream_id=?',
+                                  (driver.session['workstream_id'],)).fetchone()[0]
+        with review_store.connect(self.db) as conn:
+            run_once._supervise_running_attempts(conn, repo_id, {}, now,
+                data_dir=self.db.parent, db_path=self.db, repo={})
+            failure = json.loads(conn.execute('SELECT failure_json FROM attempts WHERE attempt_id=?',
+                                             (driver.attempt_id,)).fetchone()[0])
+            self.assertEqual(failure['status'], 'failed_validation')
+            self.assertEqual(failure['reason_code'], 'redaction_blocked')
+            self.assertEqual(failure['findings'], diagnostic['findings'])
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
+            notification = json.loads(conn.execute("""SELECT metadata_json FROM notifications
+                WHERE notification_type='worker_result_validation_failed'""").fetchone()[0])
+            self.assertEqual(notification['reason_code'], 'redaction_blocked')
+        counts = Counter((call[0], call[1]) for call in self.calls)
+        context = work_items.CommandContext('operator', 'maintainer', frozenset({repo_id}), frozenset())
+        work_items.retrigger_failed_github_task(self.db, driver.task_id, context=context,
+                                                idempotency_key='retry-redacted-report')
+        self.cycle([])
+        retried = self.coordinator()
+        self.assertNotEqual(retried.task_id, driver.task_id)
+        self.assertEqual(retried.round_id, driver.round_id)
+        self.assertTrue(retried.run().is_file())
+        self.assertEqual(Counter((call[0], call[1]) for call in self.calls), counts)
 
     def test_advanced_target_branch_completes_review_at_captured_pr_base(self):
         self.cycle([self.event()])

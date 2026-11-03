@@ -50,6 +50,11 @@ def failure(audit):
     """Expose stable categories and locations without echoing submitted text."""
     violations = audit.get("violations", [])
     message = audit.get("safe_error", "")
+    if violations and violations[0] in {"redaction_blocked", "redaction_required"}:
+        return {"ok": False, "status": "failed_validation", "reason_code": violations[0],
+                "field_path": audit.get("field_path", "planned_github_actions"),
+                "findings": audit.get("findings", []), "safe_error": message,
+                "required_action": "Redact the indicated public text and submit again in this attempt."}
     known = {"action_scope", "web_origin_github_action", "invalid_review_input_policy",
              "invalid_review_input_kind", "missing_review_point_evaluation", "invalid_review_point_evaluation",
              "missing_mixed_request_handoff", "no_implemented_review_points", "invalid_remediation_evidence",

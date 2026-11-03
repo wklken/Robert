@@ -7,7 +7,7 @@ import shutil
 import signal
 import subprocess
 
-from robert_agent import review_files, review_workspace, worker_identity  # noqa: F401
+from robert_agent import redaction, result_validation, review_files, review_workspace, worker_identity  # noqa: F401
 from robert_agent import review_store as store
 from robert_agent.model_execution import (StageCoordinator, ReviewStopped, ReviewSuperseded,
     _active, _group_finished, _wait_for_group_exit, terminate_children)  # noqa: F401
@@ -27,6 +27,13 @@ def same_revision(manifest, pr):
     return (pr.get('state') == 'open' and pr.get('head', {}).get('sha') == manifest['head_sha']
             and pr.get('base', {}).get('sha') == manifest['base_sha']
             and pr.get('base', {}).get('ref') == manifest['base_ref'])
+
+
+class ReviewSubmissionRejected(RuntimeError):
+    def __init__(self, diagnostic):
+        self.diagnostic = diagnostic
+        super().__init__(f"review result was rejected: {diagnostic['reason_code']} "
+                         f"at {diagnostic['field_path']}: {diagnostic['safe_error']}")
 
 
 class Coordinator(StageCoordinator):
@@ -138,6 +145,15 @@ class Coordinator(StageCoordinator):
         evaluation = review_files.read_evaluation(result['evaluation_path'], self.manifest, records)
         body = review_files.render_merged(self.manifest, records, evaluation)
         body += f'\n<!-- robert-review round={self.round_id} -->\n'
+        redacted = redaction.redact_text(body)
+        if not redacted['ok']:
+            finding = redacted['findings'][0]
+            raise ReviewSubmissionRejected(result_validation.failure({
+                'violations': ['redaction_blocked'], 'field_path': 'planned_github_actions[0].body',
+                'findings': redacted['findings'],
+                'safe_error': f"{finding['rule']} at line {finding['line']}, column {finding['column']}",
+            }))
+        body = redacted['text']
         path = Path(self.manifest['artifact_root']) / 'synthesis' / 'merged-review.md'
         path.write_text(body, encoding='utf-8')
         review_workspace.verify_snapshot(self.manifest)
@@ -154,7 +170,12 @@ class Coordinator(StageCoordinator):
                     [self.session['trigger_fingerprint']], [], f'Review report: {path}', [action], used_skills=[])
         recorded = worker_result.record_result(self.db_path, payload)
         if not recorded.get('ok'):
+            if recorded.get('status') == 'failed_validation':
+                raise ReviewSubmissionRejected(recorded)
             raise RuntimeError('review result was rejected: ' + recorded.get('status', 'unknown'))
+        with store.connect(self.db_path) as conn:
+            conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.submission_validation') WHERE attempt_id=?",
+                         (self.attempt_id,))
         return path
 
     def run(self):
@@ -164,6 +185,10 @@ class Coordinator(StageCoordinator):
         except Exception as exc:
             with store.connect(self.db_path) as conn:
                 status = 'superseded' if isinstance(exc, ReviewSuperseded) else 'failed'
+                if isinstance(exc, ReviewSubmissionRejected):
+                    status = 'attention'
+                    conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.submission_validation',json(?)) WHERE attempt_id=?",
+                                 (json.dumps(exc.diagnostic), self.attempt_id))
                 if isinstance(exc, ReviewStopped):
                     status = 'canceled' if not _active(conn, self.task_id, self.attempt_id) else 'attention'
                 store.update(conn, self.round_id, status=status, error=str(exc))

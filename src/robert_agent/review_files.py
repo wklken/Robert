@@ -320,6 +320,9 @@ def _common_prompt(manifest):
             'Do not publish to GitHub, access credentials, modify source/context, or inspect other attempts. '
             'Do not launch detached or background processes; wait for all tool processes before exiting. '
             'Write free-text summaries, findings, evidence and reasons in Chinese; preserve JSON keys, enum values, source paths and identifiers. '
+            'Redact credentials in all output, including code examples and URLs: replace their values with <redacted>. '
+            'Replace local absolute paths, internal IP addresses and internal domains with placeholders; keep repository-relative source locations. '
+            'Preserve each finding and its reproducible input structure without copying sensitive values. '
             'Write only to the existing directory named by ROBERT_REVIEW_OUTPUT_DIR; do not expand that variable into this prompt.\n')
 
 
