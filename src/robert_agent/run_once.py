@@ -4405,7 +4405,9 @@ def _create_task_attempt_and_prompt(
         recovery_key = None
         if retrigger_wakeup_id and parent_task_id:
             parent = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (parent_task_id,)).fetchone()
-            if parent and _json_object(parent[0]).get('recovered_execution_attention', {}).get('reason_code') == 'result_contract_cutover':
+            previous_round = round_store.session(conn, task_id=parent_task_id)
+            if ((previous_round and previous_round['status'] == 'superseded')
+                    or (parent and _json_object(parent[0]).get('recovered_execution_attention', {}).get('reason_code') == 'result_contract_cutover')):
                 recovery_key = retrigger_wakeup_id
         entry = (round_store.session(conn, round_id=native_round_id) if native_round_id
                  else round_store.enqueue(conn, repo, event, route_result, workers, recovery_key=recovery_key))

@@ -151,6 +151,42 @@ class ReviewCoordinatorTests(unittest.TestCase):
         prompts = [call[2] for call in self.calls if call[0] == 'review']
         self.assertEqual(len(set(prompts)), 1)
 
+    def test_retrigger_superseded_review_creates_round_for_current_revision(self):
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        driver.prepare()
+        old_manifest = dict(driver.manifest)
+        self.git_fixture.commit('value = 3\n')
+        with self.assertRaises(review_coordinator.ReviewSuperseded):
+            driver.run()
+        with review_store.connect(self.db) as conn:
+            now = review_store.now()
+            run_once._finalize_failed_task(conn, driver.task_id, driver.session['workstream_id'],
+                                         now, {'status': 'failed_worker_process_exited'})
+            conn.execute("UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=?",
+                         (now, driver.attempt_id))
+            # The fixture launcher does not start a real coordinator process.
+            conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.dispatch') WHERE attempt_id=?",
+                         (driver.attempt_id,))
+            repo_id = conn.execute('SELECT repo_id FROM workstreams WHERE workstream_id=?',
+                                  (driver.session['workstream_id'],)).fetchone()[0]
+        context = work_items.CommandContext('operator', 'maintainer', frozenset({repo_id}), frozenset())
+        work_items.retrigger_failed_github_task(self.db, driver.task_id, context=context,
+                                                idempotency_key='retry-current-revision')
+        self.cycle([])
+        retried = self.coordinator()
+        self.assertNotEqual(retried.round_id, driver.round_id)
+        self.assertTrue(retried.run().is_file())
+        self.assertNotEqual(retried.manifest['head_sha'], old_manifest['head_sha'])
+        self.assertEqual(retried.manifest['head_sha'], self.git_fixture.head)
+        self.cycle([])
+        with review_store.connect(self.db) as conn:
+            original = review_store.session(conn, round_id=driver.round_id)
+            self.assertEqual(original['status'], 'superseded')
+            self.assertEqual(original['task_id'], driver.task_id)
+            self.assertEqual(original['manifest'], old_manifest)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM review_sessions').fetchone()[0], 2)
+
     def test_report_is_normalized_before_hash_registration_and_submission(self):
         self.cycle([self.event()])
         driver = self.coordinator()
