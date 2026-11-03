@@ -142,7 +142,15 @@ class LifecycleRemediationTests(unittest.TestCase):
         def terminate(*args, **kwargs):
             args[0].commit()  # Match the real cleanup helper's unlocked I/O boundary.
             self.stop_process(process)
-            receipts.append(result.record_result(fixture.db, fixture.payload))
+            # Model a receipt that already passed submission serialization before
+            # cleanup began; the supervisor must recheck the committed DB fact.
+            from robert_agent import result_contract
+            payload, rejection = result._prepare(fixture.db, fixture.payload)
+            self.assertIsNone(rejection)
+            payload.update(_submission_fingerprint=result_contract.semantic_fingerprint(fixture.payload),
+                           _result_contract=result_contract.CONTRACT_ID,
+                           _normalizer_version=result_contract.NORMALIZER_VERSION)
+            receipts.append(result._record_result_db(fixture.db, payload))
             return {'status': 'already_dead'}
 
         with closing(sqlite3.connect(fixture.db)) as conn, conn:

@@ -731,6 +731,16 @@ def _control_blocked(context, lane):
 
 def _record_control_outcome(context, lane, result, *, now=None):
     """Bound each control lane independently; an attention latch stays resident."""
+    quota_wait = (result.get('status') == 'core_rate_limit_floor'
+        or bool(result.get('failures')) and all(item.get('reason') == 'core_rate_limit_floor' for item in result['failures']))
+    domain_failure = result.get('failure_scope') in {'repository', 'task'}
+    if quota_wait or domain_failure:
+        # Defer the affected domain without turning healthy controller execution
+        # into a permanent lane stop. Real crashes/deadlines still consume budget.
+        context.control_failures[lane] = 0
+        context.control_retry_at[lane] = time.monotonic() + max(
+            context.daemon_config['local_poll_seconds'], int(result.get('retry_after_seconds') or 0))
+        return
     if result.get('ok'):
         context.control_failures[lane] = 0
         context.control_retry_at.pop(lane, None)

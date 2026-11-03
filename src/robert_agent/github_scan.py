@@ -388,6 +388,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             'poll_interval_seconds': max(intervals, default=60),
             'retry_after_seconds': max(intervals, default=0) if any(
                 item['reason'] == 'core_rate_limit_floor' for item in failures) else 0,
+            'failure_scope': 'repository' if failures else None,
             'github_reads': {account: session.metrics() for account, session in sessions.items()}}
 
 
@@ -411,7 +412,7 @@ def publish(config_path, *, dry_run=False):
         session = GitHubReadSession(config['db_path'], account=config['repos'][0]['github_account'], host=os.environ.get('GH_HOST', 'github.com'))
         try:
             if not _budget(session, config):
-                return {'ok': False, 'status': 'core_rate_limit_floor'}
+                return {'ok': False, 'status': 'core_rate_limit_floor', 'retry_after_seconds': session.poll_interval_seconds or 60}
         except ControlDeadlineExceeded:
             raise
         except (subprocess.SubprocessError, OSError, ValueError):
@@ -419,7 +420,7 @@ def publish(config_path, *, dry_run=False):
     for repo_id in repo_ids:
         results.append(publisher.publish_ready_actions(config['db_path'], repo_id=repo_id, dry_run=dry_run, limit=5))
     wakeup_notifier.notify(config['db_path'])
-    return {'ok': all(result.get('ok') for result in results), 'status': 'published', 'repo_count': len(results)}
+    return {'ok': all(result.get('ok') for result in results), 'status': 'published', 'repo_count': len(results), 'failure_scope': 'task' if any(not result.get('ok') for result in results) else None}
 
 
 def manage_batches(config_path, *, retry=None, dry_run=False):

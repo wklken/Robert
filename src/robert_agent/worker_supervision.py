@@ -1,11 +1,11 @@
 """Bounded supervision of existing workers while automatic admission is paused."""
 import argparse
-from contextlib import ExitStack, closing
+from contextlib import closing
 import json
 import os
 import sqlite3
 
-from robert_agent import result_spool, run_once, validate_config, worker_identity
+from robert_agent import run_once, validate_config, worker_identity
 from robert_agent.worker.result import replay_pending_results
 from robert_agent.common import ControlDeadlineExceeded, emit
 from robert_agent.publication_lock import task_publication_lock
@@ -31,9 +31,10 @@ def run(config_path):
                          (run_id, now, str(config_path), json.dumps(summary)))
         try:
             for repo in config['repos']:
-                repo_id = run_once._repo_id(repo['full_name'])
-                if not conn.execute('SELECT 1 FROM repos WHERE repo_id=?', (repo_id,)).fetchone():
+                row = conn.execute('SELECT repo_id FROM repos WHERE full_name=?', (repo['full_name'],)).fetchone()
+                if not row:
                     continue
+                repo_id = row[0]
                 with conn:
                     lease = run_once._acquire_agent_lease(conn, repo_id, run_id, now, config.get('lease_ttl_minutes', 9))
                 if not lease['ok']:
@@ -46,20 +47,9 @@ def run(config_path):
                             if not acquired:
                                 continue
                             try:
-                                # Submission owns this lock from pre-audit through durable spool/DB
-                                # handoff. Hold it through finalization so a deferred or concurrent
-                                # result cannot be turned into a failed execution before ingestion.
-                                with ExitStack() as result_locks:
-                                    attempts = conn.execute('SELECT attempt_id FROM attempts WHERE task_id=?', (task_id,)).fetchall()
-                                    paths = [result_locks.enter_context(result_spool.locked_record(db_path, attempt_id, blocking=False))
-                                             for (attempt_id,) in attempts]
-                                    if any(path.exists() for path in paths):
-                                        continue
-                                    supervised += run_once._supervise_running_attempts(conn, repo_id, config,
-                                        run_once._now(), allow_recovery=False, task_id=task_id)
-                                    conn.commit()
-                            except BlockingIOError:
-                                continue  # A submit/replay still owns durable result handoff.
+                                supervised += run_once._supervise_running_attempts(conn, repo_id, config,
+                                    run_once._now(), allow_recovery=False, task_id=task_id)
+                                conn.commit()
                             except ControlDeadlineExceeded:
                                 raise
                             except Exception as exc:
