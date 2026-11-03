@@ -114,6 +114,13 @@ class ReviewFilesTests(unittest.TestCase):
         self.assertIn('多 reviewer review', same_model_report)
         self.assertNotIn('多模型 review', same_model_report)
 
+    def test_native_review_prompts_require_redacted_public_output(self):
+        for prompt in (review_files.build_reviewer_prompt(self.manifest),
+                       review_files.build_synthesis_prompt(self.manifest, self.root / 'inputs.json')):
+            self.assertIn('Redact', prompt)
+            self.assertIn('<redacted>', prompt)
+            self.assertIn('local absolute paths', prompt)
+
     def test_reviewer_and_synthesis_prompts_require_adversarial_review(self):
         prompts = {
             'reviewer': review_files.build_reviewer_prompt(self.manifest),

@@ -50,6 +50,28 @@ class PreSubmitAuditTests(unittest.TestCase):
         payload["submission"]["planned_github_actions"][0]["target_url"] = "https://github.com/example/backend/pull/456"
         self.assertTrue(result.record_result(db, payload)["ok"])
 
+    def test_redaction_rejection_preserves_body_location_and_can_be_corrected(self):
+        db, task, attempt, _, _ = self.prepare('comment')
+        payload = self.waiting(task, attempt, [{'type': 'comment',
+            'target_url': 'https://github.com/example/backend/pull/456',
+            'body': 'Question\npassword=private-example-value'}])
+        rejected = result.record_result(db, payload)
+        self.assertEqual(rejected['reason_code'], 'redaction_blocked')
+        self.assertEqual(rejected['field_path'], 'planned_github_actions[0].body')
+        self.assertEqual(rejected['findings'], [{'rule': 'credential_assignment', 'line': 2, 'column': 1}])
+        self.assertNotIn('private-example-value', str(rejected))
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM worker_results').fetchone()[0], 0)
+        payload['submission']['planned_github_actions'][0]['body'] = 'Question\npassword=<redacted>'
+        self.assertTrue(result.record_result(db, payload)['ok'])
+
+    def test_public_text_needing_normalization_has_a_redaction_error(self):
+        db, task, attempt, _, _ = self.prepare('comment')
+        rejected = result.record_result(db, self.waiting(task, attempt, [{'type': 'comment',
+            'target_url': 'https://github.com/example/backend/pull/456', 'body': 'Question: password=secret'}]))
+        self.assertEqual(rejected['reason_code'], 'redaction_required')
+        self.assertEqual(rejected['field_path'], 'planned_github_actions[0].body')
+
     def test_missing_question_is_rejected_before_any_durable_submission(self):
         db, task, attempt, _, _ = self.prepare("comment")
         body = "Question"

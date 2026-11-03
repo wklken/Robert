@@ -541,20 +541,23 @@ def _audit_verification_contract(result, verification_policy, actual_types):
 
 
 def _audit_public_text(actions):
-    needs_redaction = False
-    for action in actions:
-        for field in PUBLIC_TEXT_FIELDS:
+    needs_redaction = None
+    for index, action in enumerate(actions):
+        for field in sorted(PUBLIC_TEXT_FIELDS):
             value = action.get(field)
             if not isinstance(value, str) or not value:
                 continue
             result = redaction.redact_text(value)
+            field_path = f"planned_github_actions[{index}].{field}"
             if not result["ok"]:
-                return "redaction_blocked"
-            if result.get("text") != value:
-                needs_redaction = True
-    if needs_redaction:
-        return "redaction_required"
-    return None
+                finding = result["findings"][0]
+                return {"violations": ["redaction_blocked"], "field_path": field_path,
+                        "findings": result["findings"],
+                        "safe_error": f"redaction_blocked: {finding['rule']} at line {finding['line']}, column {finding['column']}"}
+            if result.get("text") != value and needs_redaction is None:
+                needs_redaction = {"violations": ["redaction_required"], "field_path": field_path,
+                                   "safe_error": "Public text requires redaction before submission."}
+    return needs_redaction
 
 
 def _audit_operator_question(result):
@@ -697,7 +700,7 @@ def audit_result(
         return {
             "ok": False,
             "status": "policy_violation",
-            "violations": [redaction_violation],
+            **redaction_violation,
         }
 
     publisher_error = _audit_publisher_requirements(actions)

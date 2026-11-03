@@ -532,6 +532,8 @@ def _terminal_transport_failure(logs):
 def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
     review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
     if review:
+        row = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+        diagnostic = _json_object(row[0] if row else None).get('submission_validation', {})
         return {
             "status": "recoverable_progress" if review["status"] not in {"canceled", "superseded", "attention"} else "unrecoverable",
             "reason_code": "native_review_checkpoint", "round_id": review["round_id"],
@@ -539,6 +541,8 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
             "worktree_path": str(worktree_path or review["manifest"].get("worktree_path", "")),
             "progress_signals": ["native_review_checkpoint"],
             "logs": _attempt_log_tails(conn, attempt_id), "commands": [],
+            **({key: diagnostic[key] for key in ('reason_code', 'field_path', 'findings', 'safe_error', 'required_action')
+                if key in diagnostic} if review['status'] == 'attention' else {}),
         }
     commands = _attempt_command_records(conn, attempt_id, task_id, persist=False)
     logs = _attempt_log_tails(conn, attempt_id)
@@ -1253,6 +1257,8 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
         elif process_status["status"] == "dead":
             status = {"ok": False, "status": "failed_worker_process_exited", "terminate": False,
                       "reason_code": "control_paused", "required_action": "Repair the paused controller, then explicitly retry this task."}
+        if process_status['status'] == 'dead' and metadata.get('submission_validation'):
+            status = {**metadata['submission_validation'], 'terminate': False}
         runtime_seconds = (now_dt - _parse_time(started_at)).total_seconds()
         has_worker_phase = conn.execute(
             "SELECT 1 FROM worker_phases WHERE attempt_id = ? LIMIT 1",
@@ -1344,7 +1350,7 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
             "recorded",
             run_now,
             {"task_id": task_id, "attempt_id": attempt_id, "workstream_id": workstream_id,
-             **{key: status[key] for key in ("reason_code", "safe_error", "required_action") if key in status}},
+             **{key: status[key] for key in ("reason_code", "field_path", "findings", "safe_error", "required_action") if key in status}},
         )
     return supervised
 

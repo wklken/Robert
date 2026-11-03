@@ -4,8 +4,8 @@ import re
 
 
 SECRET_PATTERNS = [
-    re.compile(r"Authorization\s*:[ \t]*(?!(?:none|null|\.\.\.)(?:$|[\s,;]))[^\s,;]+", re.I),
-    re.compile(r"Cookie\s*:", re.I),
+    re.compile(r"Authorization\s*:(?![ \t]*<redacted>[ \t]*(?:\r?\n|$))[ \t]*(?!(?:none|null|\.\.\.)(?:$|[\s,;]))[^\s,;]+", re.I),
+    re.compile(r"Cookie\s*:(?![ \t]*<redacted>[ \t]*(?:\r?\n|$))", re.I),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\btoken\s*:\s*(?:ghp|github_pat|gho|ghu|ghs|ghr)_[A-Za-z0-9_]+", re.I),
     re.compile(r"\b(?:ghp|github_pat|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{12,}\b"),
@@ -19,23 +19,25 @@ SECRET_PATTERNS = [
 
 # Match credential assignments, not names such as max_tokens or comparisons.
 SECRET_ASSIGNMENT = re.compile(
-    r"\b(?:[A-Za-z0-9]+_)*(?:token|password|passwd|api_key|secret)\b"
+    r"\b(?P<name>(?:[A-Za-z0-9]+_)*(?:token|password|passwd|api_key|secret))\b"
     r"\s*[:=](?!=)\s*(?:[\"'](?P<quoted>[^\"'\r\n]+)[\"']|(?P<bare>[A-Za-z0-9_./+=$-]+))",
     re.I,
 )
-PLACEHOLDER_VALUES = {"none", "null", "true", "false", "...", "example", "placeholder", "redacted"}
+PLACEHOLDER_VALUES = {"none", "null", "true", "false", "...", "example", "placeholder", "redacted", "<redacted>"}
 
 
-def _has_secret_assignment(text):
-    for match in SECRET_ASSIGNMENT.finditer(text):
-        value = match["quoted"] or match["bare"]
-        if value.lower() in PLACEHOLDER_VALUES:
-            continue
-        if match["bare"] and value.startswith(("$", "os.environ", "os.getenv")):
-            continue
-        if len(value) >= 6:
-            return True
-    return False
+def _finding(text, match, rule):
+    start = match.start()
+    return {"rule": rule, "line": text.count("\n", 0, start) + 1,
+            "column": start - text.rfind("\n", 0, start)}
+
+
+def _synthetic_password(text, match):
+    if match["name"].lower() != "password" or (match["quoted"] or match["bare"]).lower() != "secret":
+        return False
+    # A partial bare match (e.g. secret!suffix) must remain blocked.
+    return bool(match["quoted"] or match.end() == len(text)
+                or text[match.end()] in " \t\r\n&,;`)]}")
 
 
 LOCAL_PATH = re.compile(r"(?<![\w.-])(?:/Users|/home|/root|/data|/tmp|/var/folders)/[^\s:;,)]+")
@@ -44,14 +46,30 @@ INTERNAL_DOMAIN = re.compile(r"\b[A-Za-z0-9.-]+\.(?:woa\.com|corp|internal|local
 
 
 def redact_text(text):
-    if _has_secret_assignment(text) or any(pattern.search(text) for pattern in SECRET_PATTERNS):
+    findings = []
+    replacements = []
+    for match in SECRET_ASSIGNMENT.finditer(text):
+        value = match["quoted"] or match["bare"]
+        if _synthetic_password(text, match):
+            replacements.append(match.span("quoted" if match["quoted"] else "bare"))
+        elif (value.lower() not in PLACEHOLDER_VALUES
+              and not (match["bare"] and value.startswith(("$", "os.environ", "os.getenv")))
+              and len(value) >= 6):
+            findings.append(_finding(text, match, "credential_assignment"))
+    for pattern in SECRET_PATTERNS:
+        findings.extend(_finding(text, match, "high_risk_secret") for match in pattern.finditer(text))
+    if findings:
         return {
             "ok": False,
             "status": "blocked_secret",
             "safe_error": "text contains a high-risk secret pattern",
+            "findings": sorted(findings, key=lambda item: (item["line"], item["column"], item["rule"])),
         }
 
-    redacted = LOCAL_PATH.sub("<local-path>", text)
+    redacted = text
+    for start, end in reversed(replacements):
+        redacted = redacted[:start] + "<redacted>" + redacted[end:]
+    redacted = LOCAL_PATH.sub("<local-path>", redacted)
     redacted = INTERNAL_IP.sub("<internal-ip>", redacted)
     redacted = INTERNAL_DOMAIN.sub("<internal-domain>", redacted)
     return {

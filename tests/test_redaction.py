@@ -8,6 +8,40 @@ AGENT = PACKAGE_ROOT
 
 
 class RedactionTests(unittest.TestCase):
+    def test_synthetic_password_literals_are_normalized_without_changing_url_shape(self):
+        from robert_agent import redaction
+
+        for text, expected in (
+            ('redis://localhost:6379/0?password=secret&db=1',
+             'redis://localhost:6379/0?password=<redacted>&db=1'),
+            ('password="secret"', 'password="<redacted>"'),
+            ("PASSWORD='SECRET'", "PASSWORD='<redacted>'"),
+            ('example: `password=secret`', 'example: `password=<redacted>`'),
+        ):
+            with self.subTest(text=text):
+                result = redaction.redact_text(text)
+                self.assertTrue(result['ok'], result)
+                self.assertEqual(result['text'], expected)
+                self.assertEqual(redaction.redact_text(expected)['text'], expected)
+
+    def test_example_password_does_not_exempt_other_credentials_or_literal_suffixes(self):
+        from robert_agent import redaction
+
+        for text in ('password=secret!suffix', 'password=secret-value', 'api_key=secret',
+                     '示例：password=private-example-value',
+                     '```text\npassword=secret\nAuthorization: Bearer private-value\n```'):
+            with self.subTest(text=text):
+                result = redaction.redact_text(text)
+                self.assertFalse(result['ok'], result)
+
+    def test_blocked_text_reports_rule_and_location_without_returning_the_value(self):
+        from robert_agent import redaction
+
+        result = redaction.redact_text('Example report\npassword=private-example-value')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['findings'], [{'rule': 'credential_assignment', 'line': 2, 'column': 1}])
+        self.assertNotIn('private-example-value', str(result))
+
     def test_token_configuration_and_comparisons_are_not_credentials(self):
         from robert_agent import redaction
 
@@ -15,6 +49,16 @@ class RedactionTests(unittest.TestCase):
                      "api_key=...", "password = None", "TOKEN = os.environ['TOKEN']"):
             with self.subTest(text=text):
                 self.assertTrue(redaction.redact_text(text)["ok"])
+
+    def test_redacted_header_values_are_allowed_but_suffixes_and_other_headers_are_blocked(self):
+        from robert_agent import redaction
+
+        self.assertTrue(redaction.redact_text('Authorization: <redacted>\nCookie: <redacted>')['ok'])
+        self.assertTrue(redaction.redact_text('Authorization:  <redacted>  \r\nCookie:\t<redacted>\r\n')['ok'])
+        for text in ('Authorization: <redacted>suffix', 'Cookie: <redacted>suffix',
+                     'Authorization: <redacted>\nCookie: private-value'):
+            with self.subTest(text=text):
+                self.assertFalse(redaction.redact_text(text)['ok'])
 
     def test_literal_password_api_key_and_jwt_are_blocked(self):
         import base64
