@@ -117,7 +117,7 @@ Robert 固定渲染中文 `merged-review.md`，经现有审计链路提交绑定
 - 配置了 `fallback_model` 时，同轮同阶段同一 worker 连续两次超时，下一次重试使用备用模型；其他 worker 的失败不会计入。实际选择在启动前持久化，恢复、报告和 Board 使用该值，reviewer prompt 不变。CLI 的 `default` 表示未指定具体模型，不推测其实际名称；相同模型配置不宣称为不同模型。
 - 原成功文件缺失或 hash 改变，不再作为有效结果使用。无法确认进程身份或启动结果时停止自动执行；未知启动按上面的人工恢复流程处理，不盲目拉起第二个进程。主进程退出但进程组仍存在时同样停止，不能把仍可能变化的文件登记为成功。
 - 使用现有任务 Retry/Cancel 和 publication retry。发布失败沿用原 action/result，仅重试发布和远端对账。
-- 发布前再次核对 head、base、目标分支和 PR 是否仍打开；变化标记 `superseded`，需要新触发请求。已有排队请求会继续执行。
+- 发布前再次核对 head、base、目标分支和 PR 是否仍打开；变化标记 `superseded`，需要新触发请求。确认旧进程已停止后，重新触发失败任务会创建新轮次并读取当前 PR；旧轮次及其产物保留。已有排队请求会继续执行。
 - 发布按 repository、PR、round 去重；遇到模糊响应先分页查询 PR Reviews，核对 marker、commit 和完整正文，不能确认时不重复发布。
 - `robert status` 任务详情和 Board 执行历史显示轮次、SHA、各阶段/模型状态及失败原因。
 
