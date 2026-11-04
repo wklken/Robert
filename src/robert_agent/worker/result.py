@@ -212,6 +212,13 @@ def _prepare(db_path, envelope):
             checked = audit_result.audit_result(normalized, final=False, **settings)
             if checked["ok"]:
                 if any(action["type"] == "push_existing_pr" for action in normalized["planned_github_actions"]):
+                    if action_scope.observe_worktree_status(settings["action_scope"]) != "clean":
+                        response = result_validation.failure({
+                            "violations": ["uncommitted_worktree"],
+                            "safe_error": "Push results require a clean worktree with all task-owned changes committed.",
+                        })
+                        result_validation._record_diagnostic(db_path, envelope, response["reason_code"])
+                        return None, response
                     normalized["submission_head_sha"] = action_scope.observe_head(settings["action_scope"])
                 return normalized, None
             response = result_validation.failure(checked)

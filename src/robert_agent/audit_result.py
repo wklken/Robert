@@ -754,6 +754,11 @@ def audit_result(
             return {"ok": False, "status": "policy_violation",
                     "violations": ["submission_head_changed"],
                     "safe_error": "Final HEAD differs from the submitted commit or cannot be verified."}
+        worktree_status = action_scope.get("worktree_status")
+        if worktree_status != "clean":
+            violation = "uncommitted_worktree" if worktree_status == "dirty" else "worktree_status_unavailable"
+            return {"ok": False, "status": "policy_violation", "violations": [violation],
+                    "safe_error": "Final push worktree has uncommitted changes or its clean state cannot be verified."}
 
     remediation_violation = _audit_remediation_evidence(
         result,

@@ -37,6 +37,11 @@ Route requirements:
   `branch_slug` of at most 60 characters. Classification cannot modify source.
 - New PRs plan push then open. Updates always include an outcome comment after
   any push. All actions must belong to the route's allowed action set.
+  Before submitting a push result, commit all task-owned changes locally,
+  including documentation, and leave a clean worktree. Robert publishes the
+  audited commit; it does not stage or commit working-tree changes. Staged,
+  unstaged and untracked changes block submission and final audit; ignored local
+  artifacts do not. A submission rejection can be corrected in the same attempt.
 - For controller policy `classify`, explicitly set `review_input_kind` to
   `request`, `review_feedback` or `mixed`. Feedback requires nonempty
   `review_point_evaluation`; mixed also requires a nonempty `handoff` identifying

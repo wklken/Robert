@@ -229,6 +229,7 @@ def _publication_guidance(route_result, runtime_context):
         sections.append("For comments supply type and body.")
     if "push_existing_pr" in allowed:
         sections.append("push_existing_pr has only type.")
+        sections.append("Commit all task-owned changes locally before submitting a result that plans push_existing_pr, including documentation changes. Verify git status --short is clean; preserve unrelated work and keep temporary verification artifacts outside the worktree or ignored. Robert publishes commits; it does not stage or commit working-tree changes. Never run git push directly.")
     if "open_pr" in allowed:
         sections.append("For open_pr supply type, title/body and issue_resolution for issue-sourced PRs. When selecting target_url, choose its source issue.")
         sections.append("Plan push_existing_pr before open_pr. Select issue_resolution=complete only when all requested scope is delivered. For intentional partial delivery set partial and provide nonempty remaining_scope. Robert generates the issue link; omit issue/PR closing or reference statements from body. Ordinary documentation links are allowed.")

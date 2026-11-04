@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from tests import test_review_input_workflow as integration
-from robert_agent import result_contract, result_cutover, result_spool, run_once
+from robert_agent import action_scope, result_contract, result_cutover, result_spool, run_once
 from robert_agent.worker import result
 
 
@@ -81,6 +81,107 @@ class SubmissionHeadTests(unittest.TestCase):
     def test_git_read_failure_is_validation_unavailable(self):
         db, _, _, envelope = self.fixture()
         with patch('robert_agent.action_scope.subprocess.run', side_effect=OSError('unavailable')):
+            receipt = result.record_result(db, envelope)
+        self.assertEqual(receipt['status'], 'validation_unavailable')
+        self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])
+
+    def assert_uncommitted_push_can_be_corrected(self, state):
+        db, task, attempt, envelope = self.fixture()
+        document = self.tree / 'document.md'
+        document.write_text('original\n')
+        self.git('add', 'document.md')
+        self.git('commit', '-m', 'original document')
+        if state == 'untracked':
+            (self.tree / 'new.md').write_text('new document\n')
+        else:
+            document.write_text('requested change\n')
+            if state == 'staged':
+                self.git('add', 'document.md')
+        rejected = result.record_result(db, envelope)
+        self.assertEqual(rejected['status'], 'failed_validation', rejected)
+        self.assertEqual(rejected['reason_code'], 'uncommitted_worktree')
+        self.assertIn('commit', rejected['required_action'].lower())
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM worker_results WHERE task_id=?', (task,)).fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT count(*) FROM github_actions WHERE task_id=?', (task,)).fetchone()[0], 0)
+        self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])
+        self.git('add', 'document.md' if state != 'untracked' else 'new.md')
+        self.git('commit', '-m', 'requested change')
+        self.assertTrue(result.record_result(db, envelope)['ok'])
+        self.assertEqual(self.metadata(db)['submission_head_sha'], self.git('rev-parse', 'HEAD'))
+        run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertEqual(self.metadata(db)['audit']['status'], 'accepted')
+
+    def test_unstaged_push_can_be_corrected_in_the_same_attempt(self):
+        self.assert_uncommitted_push_can_be_corrected('unstaged')
+
+    def test_staged_push_can_be_corrected_in_the_same_attempt(self):
+        self.assert_uncommitted_push_can_be_corrected('staged')
+
+    def test_untracked_push_can_be_corrected_in_the_same_attempt(self):
+        self.assert_uncommitted_push_can_be_corrected('untracked')
+
+    def test_final_audit_rejects_uncommitted_changes_with_unchanged_head(self):
+        db, _, _, envelope = self.fixture()
+        self.assertTrue(result.record_result(db, envelope)['ok'])
+        (self.tree / 'forgotten.md').write_text('uncommitted change\n')
+        run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertEqual(self.metadata(db)['audit']['violations'], ['uncommitted_worktree'])
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM github_actions WHERE audit_status='accepted'").fetchone()[0], 0)
+
+    def test_comment_only_result_does_not_require_a_clean_worktree(self):
+        db, _, _, envelope = self.fixture()
+        (self.tree / 'unrelated.md').write_text('unrelated work\n')
+        envelope['submission']['planned_github_actions'] = [{'type': 'comment', 'body': 'No update required.'}]
+        self.assertTrue(result.record_result(db, envelope)['ok'])
+        run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertEqual(self.metadata(db)['audit']['status'], 'accepted')
+
+    def test_ignored_local_artifacts_do_not_block_push(self):
+        db, _, _, envelope = self.fixture()
+        (self.tree / '.git/info/exclude').write_text('local.log\n')
+        (self.tree / 'local.log').write_text('local diagnostics\n')
+        self.assertTrue(result.record_result(db, envelope)['ok'])
+
+    def test_status_read_failure_does_not_reserve_a_result(self):
+        db, _, _, envelope = self.fixture()
+        original = action_scope.subprocess.run
+
+        def fail_status(command, **kwargs):
+            if 'status' in command[:3]:
+                return subprocess.CompletedProcess(command, 1, '', 'cannot read index')
+            return original(command, **kwargs)
+
+        with patch('robert_agent.action_scope.subprocess.run', side_effect=fail_status):
+            receipt = result.record_result(db, envelope)
+        self.assertEqual(receipt['status'], 'validation_unavailable')
+        self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])
+
+    def test_final_audit_cannot_accept_an_unreadable_worktree(self):
+        db, _, _, envelope = self.fixture()
+        self.assertTrue(result.record_result(db, envelope)['ok'])
+        original = run_once.run_command
+
+        def fail_status(command, **kwargs):
+            if 'status' in command[:3]:
+                return subprocess.CompletedProcess(command, 1, '', 'cannot read index')
+            return original(command, **kwargs)
+
+        with patch.object(run_once, 'run_command', side_effect=fail_status):
+            run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertEqual(self.metadata(db)['audit']['violations'], ['worktree_status_unavailable'])
+
+    def test_status_timeout_is_validation_unavailable(self):
+        db, _, _, envelope = self.fixture()
+        original = action_scope.subprocess.run
+
+        def timeout_status(command, **kwargs):
+            if 'status' in command[:3]:
+                raise subprocess.TimeoutExpired(command, 5)
+            return original(command, **kwargs)
+
+        with patch('robert_agent.action_scope.subprocess.run', side_effect=timeout_status):
             receipt = result.record_result(db, envelope)
         self.assertEqual(receipt['status'], 'validation_unavailable')
         self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])
