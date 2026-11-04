@@ -2595,6 +2595,7 @@ class WorkerProtocolTests(unittest.TestCase):
         return {
             "repo": "x/y",
             "result_head_sha": "a" * 40,
+            "worktree_status": "clean",
             "base_branch": "master",
             "worktree_path": "/repo/.worktrees/dd-1",
             "branch_name": "codex/dd-1",

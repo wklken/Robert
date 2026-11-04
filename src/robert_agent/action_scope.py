@@ -87,6 +87,10 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
                     value = publish._github_remote_owner(value)
                 if value:
                     action_scope[field] = value
+        try:
+            action_scope["worktree_status"] = observe_worktree_status(action_scope, command_runner=command_runner)
+        except OSError:
+            action_scope["worktree_status"] = "unavailable"
     attempt_metadata = _object(row[4])
     existing_pr_head_sha = attempt_metadata.get("existing_pr_head_sha")
     if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
@@ -140,3 +144,20 @@ def observe_head(scope, *, command_runner=None):
     if inspected.returncode != 0 or not head:
         raise OSError("Cannot observe submission HEAD")
     return head
+
+
+def observe_worktree_status(scope, *, command_runner=None):
+    """Check staged, unstaged and untracked changes without refreshing the index."""
+    command_runner = command_runner or subprocess.run
+    if not scope or not scope.get("worktree_path"):
+        raise OSError("Assigned worktree is unavailable")
+    try:
+        inspected = command_runner(
+            ["git", "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=normal"],
+            cwd=scope["worktree_path"], capture_output=True, text=True, timeout=5,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise OSError("Cannot inspect submission worktree") from exc
+    if inspected.returncode != 0:
+        raise OSError("Cannot inspect submission worktree")
+    return "dirty" if inspected.stdout.strip() else "clean"

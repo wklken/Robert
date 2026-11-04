@@ -50,6 +50,10 @@ def failure(audit):
     """Expose stable categories and locations without echoing submitted text."""
     violations = audit.get("violations", [])
     message = audit.get("safe_error", "")
+    if "uncommitted_worktree" in violations:
+        return {"ok": False, "status": "failed_validation", "reason_code": "uncommitted_worktree",
+                "field_path": "planned_github_actions", "safe_error": message,
+                "required_action": "Commit all task-owned changes locally, preserve unrelated work, and submit again in this attempt."}
     if violations and violations[0] in {"redaction_blocked", "redaction_required"}:
         return {"ok": False, "status": "failed_validation", "reason_code": violations[0],
                 "field_path": audit.get("field_path", "planned_github_actions"),

@@ -80,6 +80,16 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         self.assertIn("Do not invent review points", prompt)
         self.assertIn("If the request includes both", prompt)
 
+    def test_write_routes_require_local_commits_before_result_submission(self):
+        for route_id in ('new-pr', 'update-existing-pr'):
+            with self.subTest(route_id=route_id):
+                prompt = render_prompt.render_prompt(
+                    {'task_id': 'task-1', 'attempt_id': 'attempt-1', 'workstream_id': 'github:x/y!1'},
+                    route.ROUTES[route_id], [{'event_type': 'comment', 'body': 'Update documentation'}],
+                )
+                self.assertIn('Commit all task-owned changes locally before submitting', prompt)
+                self.assertIn('Robert publishes commits; it does not stage or commit working-tree changes', prompt)
+
 
 class ReviewInputIntegrationTests(unittest.TestCase):
     setUp = run_tests.RunOnceDryRunTests.setUp
