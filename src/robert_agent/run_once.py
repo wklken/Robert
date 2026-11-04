@@ -3470,6 +3470,7 @@ def _runtime_context(db_path, repo, worktree_result=None):
     worktree_result = worktree_result or {}
     return {
         "db_path": str(db_path),
+        "github_account": repo.get("github_account", ""),
         "python_bin": sys.executable or "python3",
         "result_script": str(_worker_result_script()),
         "snapshot_script": str(_worker_snapshot_script()),

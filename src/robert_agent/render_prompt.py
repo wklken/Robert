@@ -4,6 +4,7 @@ import json
 import sys
 
 from robert_agent.common import emit
+from robert_agent.review_policy import guidance as review_policy_guidance
 
 
 def _planned_actions_example(route_result, runtime_context):
@@ -83,7 +84,7 @@ def _route_scope_guidance(route_result):
 - When recommended_route is new-pr, record a concise meaningful lowercase English kebab-case branch_slug based on the requested change."""
 
 
-def _pr_review_guidance(route_result):
+def _pr_review_guidance(route_result, runtime_context):
     if route_result["expected_output"] != "pr_review_comment":
         return ""
     return """Review PR source workflow:
@@ -92,10 +93,13 @@ def _pr_review_guidance(route_result):
 - Use fast-review-github-pr review discipline: inspect the PR source, compare the merge base against HEAD, and prioritize correctness, regressions, security, and missing tests.
 - Apply adversarial review: challenge the change's assumptions with counterexamples, boundary inputs, failure paths, and conflicting evidence; report only findings supported by source or test evidence.
 - Do not push branches, open PRs, submit GitHub PR reviews, or publish comments directly.
-- Record exactly one planned comment containing the actual review conclusion. Robert adds the trusted PR author mention."""
+- Record exactly one planned comment containing the actual review conclusion. Robert adds the trusted PR author mention.
+- Put any decision request and its decision-owner mention in that planned comment body; do not supply program-owned author fields.
+
+""" + review_policy_guidance(runtime_context.get("github_account", ""))
 
 
-def _review_point_evaluation_guidance(route_result, task_kind="human_request", input_policy="required"):
+def _review_point_evaluation_guidance(route_result, task_kind="human_request", input_policy="required", runtime_context=None):
     if task_kind in {"ci_remediation", "merge_conflict_remediation"} or input_policy == "none":
         return ""
     expected_output = route_result["expected_output"]
@@ -123,7 +127,9 @@ Review-point steps apply to review_feedback and mixed:"""
 - After a push, include a comment explaining the changes."""
         if input_policy == "classify":
             steps += "\n- For mixed, separately requested changes may justify a push even when all review claims are rejected; explain those changes in handoff. Never implement an incorrect or unverified claim."
-    return selection + steps
+    return (selection + steps + "\n\nThe policy below applies only when evaluating review feedback, not an ordinary request. "
+            "Put any decision request and its decision-owner mention in the planned comment body.\n"
+            + review_policy_guidance((runtime_context or {}).get("github_account", "")))
 
 
 def _remediation_context(events):
@@ -331,8 +337,8 @@ def render_prompt(
 - Reuse existing authorization; do not ask again merely because a repository deliverable is named SKILL.md.
 - Never publish GitHub side effects directly; return planned actions for Robert's audit and publisher."""]
     sections.extend([
-        _route_scope_guidance(route_result), _pr_review_guidance(route_result),
-        _review_point_evaluation_guidance(route_result, task_kind, input_policy),
+        _route_scope_guidance(route_result), _pr_review_guidance(route_result, runtime_context),
+        _review_point_evaluation_guidance(route_result, task_kind, input_policy, runtime_context),
         _remediation_guidance(task, runtime_context, events), _unit_test_guidance(route_result),
         _recovery_context(runtime_context), _input_context(runtime_context, events, origin_type),
     ])

@@ -79,6 +79,7 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         self.assertIn("review_feedback", prompt)
         self.assertIn("Do not invent review points", prompt)
         self.assertIn("If the request includes both", prompt)
+        self.assertIn("The policy below applies only when evaluating review feedback", prompt)
 
     def test_write_routes_require_local_commits_before_result_submission(self):
         for route_id in ('new-pr', 'update-existing-pr'):
@@ -136,6 +137,7 @@ class ReviewInputIntegrationTests(unittest.TestCase):
         self.assertEqual(metadata["review_input_policy"], "required")
         self.assertIn("Review-point evaluation (required for this task)", prompt)
         self.assertNotIn('review_input_kind="request"', prompt)
+        self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
 
 
 if __name__ == "__main__":

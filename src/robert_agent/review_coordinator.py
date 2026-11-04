@@ -60,6 +60,7 @@ class Coordinator(StageCoordinator):
                         self.round_id, pr, [self.request['event']],
                     )
                     if not self.manifest.get('frozen'):
+                        self.manifest['github_account'] = repo['github_account']
                         self.manifest['worker_config_sha256'] = hashlib.sha256(
                             json.dumps(self.request['workers'], sort_keys=True).encode()).hexdigest()
                         review_files.atomic_json(Path(self.manifest['context_dir']) / 'manifest.json', self.manifest)
