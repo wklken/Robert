@@ -14,6 +14,7 @@ class PromptScopeTests(unittest.TestCase):
             runtime_context={
                 "github_context": {"md_path": "/context/input.md", "json_path": "/context/input.json"},
                 "result_script": "/runtime/result.py", "status_script": "/runtime/status.py",
+                **kwargs.pop("runtime_context", {}),
             },
             **kwargs,
         )
@@ -49,11 +50,71 @@ class PromptScopeTests(unittest.TestCase):
         self.assertIn("verification", payload)
         self.assertIn("planned_github_actions", payload)
 
+    def test_new_pr_discloses_assumptions_and_decisions_in_public_body(self):
+        for origin_type in ("github", "web"):
+            with self.subTest(origin_type=origin_type):
+                prompt = self.render("new-pr", runtime_context={"origin_type": origin_type})
+                self.assertIn("PR body: assumptions and decisions", prompt)
+                guidance = prompt.split("PR body: assumptions and decisions\n", 1)[1].split("\n\n", 1)[0]
+                self.assertIn("GitHub PR body itself", guidance)
+                self.assertIn("defaults", guidance)
+                self.assertIn("scope exclusions", guidance)
+                self.assertIn("conflicting requirements", guidance)
+                self.assertIn("user-confirmed requirements", guidance)
+                self.assertIn("unverified assumptions", guidance)
+                self.assertIn("evidence", guidance)
+                self.assertIn("alternatives", guidance)
+                self.assertIn("impact", guidance)
+                self.assertIn("No material assumptions or discretionary decisions", guidance)
+                self.assertIn("waiting_for_user", guidance)
+                payload = json.loads(prompt.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0])
+                action = next(item for item in payload["planned_github_actions"] if item["type"] == "open_pr")
+                self.assertIn("## Assumptions and decisions", action["body"])
+
+    def test_pr_body_guidance_is_absent_without_open_pr_authority(self):
+        for route_id, route_config in route.ROUTES.items():
+            if "open_pr" in route_config["allowed_github_actions"]:
+                continue
+            with self.subTest(route_id=route_id):
+                prompt = self.render(route_id)
+                self.assertNotIn("PR body: assumptions and decisions", prompt)
+                self.assertNotIn("## Assumptions and decisions", prompt)
+
     def test_context_has_one_primary_entry_and_json_is_on_demand(self):
         prompt = self.render("new-pr")
         self.assertIn("Read /context/input.md first", prompt)
         self.assertIn("Use /context/input.json only when structured fields are needed", prompt)
         self.assertNotIn("Read those files before acting", prompt)
+
+    def test_code_tasks_keep_human_intent_and_verification_limits_visible(self):
+        for route_id in ("new-pr", "update-existing-pr"):
+            for origin in ("github", "web"):
+                with self.subTest(route_id=route_id, origin=origin):
+                    prompt = self.render(route_id, runtime_context={"origin_type": origin})
+                    guidance = prompt.split("Human collaboration:\n", 1)[1].split("\n\n", 1)[0]
+                    for requirement in (
+                        "observable acceptance criteria", "do not invent requirements",
+                        "existing authorization", "what changed in your understanding",
+                        "verification is now stale", "no new evidence",
+                        "what it proves", "what it does not prove",
+                        "PR body or outcome comment", "review entry points",
+                    ):
+                        self.assertIn(requirement, guidance)
+                    self.assertIn("could disprove the implementation", prompt)
+                    self.assertIn("requirements or established contracts", prompt)
+
+    def test_non_code_routes_do_not_receive_implementation_collaboration_workflow(self):
+        for route_id, config in route.ROUTES.items():
+            if config["expected_output"] in {"new_pr", "update_existing_pr"}:
+                continue
+            with self.subTest(route_id=route_id):
+                self.assertNotIn("Human collaboration:", self.render(route_id))
+
+    def test_source_review_checks_decisions_and_reports_coverage_limits(self):
+        prompt = self.render("review-pr")
+        self.assertIn("undisclosed decisions", prompt)
+        self.assertIn("unreviewed scope", prompt)
+        self.assertIn("not a defect by itself", prompt)
 
     def test_nonempty_memory_keeps_evidence_requirements(self):
         prompt = self.render("new-pr", project_memories=[{"memory_id": "m1", "short_summary": "Check callers"}])

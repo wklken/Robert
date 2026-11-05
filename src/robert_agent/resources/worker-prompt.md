@@ -13,6 +13,16 @@ in stdin, local action paths, repo/head/base/remote, hidden markers, trusted aut
 identity or remediation episode fields. The CLI binds task/attempt explicitly.
 Keep source declarations accurate; they do not attest verification independently.
 
+When `open_pr` is allowed, require a visible "Assumptions and decisions"
+("假设与决策" for Chinese) section in the public PR body and include it in the
+result example. Cover material defaults, scope exclusions and conflicting
+requirements; distinguish confirmed requirements, verified facts and unverified
+assumptions. State each assumption/choice, its basis, impact and meaningful
+alternatives with a concise reason for the choice. Explicitly state when there
+are none. Disclosure is not approval: blocking scope/authorization decisions
+still require `waiting_for_user`. Keep this guidance out of routes without
+`open_pr` authority.
+
 Prefill the origin's consumed array with this input set and explicitly allow
 handled subsets. Do not absorb events that arrive later. Required skills remain
 requirements; recommended skills are guidance and used_skills is actual evidence.
@@ -30,6 +40,21 @@ Review-comment is comment-only; source review publishes one real conclusion.
 
 Code tasks run meaningful affected tests and applicable repository gates. Mutation
 testing runs only when explicitly requested or repository rules require it.
+For nontrivial code tasks, identify the original goal, confirmed constraints,
+observable acceptance criteria and intended completion evidence before editing.
+Do not invent requirements or add approval steps for routine authorized choices.
+Exercise plausible counterexamples to critical changes; derive test expectations
+from requirements/contracts rather than copying implementation logic.
+For corrections, explain the revised understanding, affected behavior and stale
+verification; retain valid work. Revisit intent when repeated corrections make no
+progress. Blocking questions identify the exact decision, options, consequences
+and recommendation without repeating already answered questions.
+PR bodies/outcome comments and handoff connect key acceptance criteria to evidence
+and its limits, including important unverified behavior. Substantial changes also
+provide concise review entry points and significant tradeoffs. Keep this execution
+workflow scoped to code routes. Source reviews check declared and undisclosed
+decisions against the request and code, separate human tradeoffs from defects,
+and report actual coverage and limitations even when no defects are found.
 Waiting results provide an actionable operator question; GitHub also needs a
 comment and no push. Web waiting contains no public action. Preserve recovery
 instructions and report valid reused/skipped checks accurately.

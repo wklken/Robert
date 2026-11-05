@@ -267,7 +267,7 @@ def _table(value):
 
 
 def render_merged(manifest, records, evaluation):
-    _validated_records(manifest, records)
+    result_lookup = _validated_records(manifest, records)
     labels = [f"{record['worker_id']} ({record['model']})" for record in records]
     models = ' + '.join(labels)
     distinct = len({record['model'] for record in records}) == len(records)
@@ -293,11 +293,19 @@ def render_merged(manifest, records, evaluation):
         lines.append(f"- **{label}：{finding['title']}** — `{_location(finding)}`：{finding['reason']}")
     if not dismissed:
         lines.append('无')
-    lines.extend(['', '### Agent Agreement Summary', '',
+    lines.extend(['', '### Review Coverage and Limitations', '',
+                  '以下为各 reviewer 声明的审查范围；未发现缺陷不代表验证全部行为，模型一致也不替代验证证据。', ''])
+    for record in records:
+        coverage = result_lookup[record['worker_id']]['coverage']
+        reviewed = ', '.join(f'`{path}`' for path in coverage['reviewed_paths']) or '未列出'
+        unreviewed = ', '.join(f'`{path}`' for path in coverage['unreviewed_paths']) or '未列出（不表示完整覆盖）'
+        lines.extend([f"#### {record['worker_id']} ({record['model']})", '',
+                      f'- 已审查：{reviewed}', f'- 未审查：{unreviewed}',
+                      f"- 检查、局限与待确认事项：{coverage['notes']}", ''])
+    lines.extend(['### Agent Agreement Summary', '',
                   '| Issue | ' + ' | '.join(_table(label) for label in labels) + ' | Verdict |',
                   '|-------|' + '|'.join('----------' for _ in records) + '|---------|'])
     # Only explicit reviewer dismissals count as a refutation; silence is unreported.
-    result_lookup = {record['worker_id']: read_result(record['result_path'], manifest) for record in records}
     for item in evaluation['items']:
         states = []
         for record in records:
@@ -333,6 +341,7 @@ def build_prepare_prompt(manifest):
             'Read root and relevant nested AGENTS.md, changed source, direct callers, types, and relevant tests. '
             'For large diffs prioritize core files in batches; record actual scope and omissions. Do not imply full coverage when sampling.\n'
             'Write context-summary.md describing architecture, contracts, test entrypoints and evidence locations. '
+            'Preserve the original request and confirmed constraints with their source references; distinguish them from PR-author claims and inferred intent. '
             'Write source-index.json.tmp then atomically rename to source-index.json, using '
             '{"files":[{"path":"relative/source.py","reason":"why relevant"}],"reading_notes":"actual read scope and omissions"}. '
             'Both files must be written under ROBERT_REVIEW_OUTPUT_DIR. Do not write findings.\n')
@@ -352,6 +361,9 @@ def build_reviewer_prompt(manifest):
             'Use batches for large diffs and report every unreviewed scope. '
             'Check correctness, security, concurrency/lifecycle, performance, boundaries, maintainability and useful test coverage. '
             'Apply adversarial review: challenge assumptions with counterexamples, boundary inputs, failure paths and conflicting evidence. '
+            'Check declared assumptions and decisions against the original request, actual source and compatibility contracts; look for material undisclosed decisions. '
+            'A product tradeoff requiring human judgment is not a defect by itself. Put unresolved product decisions in coverage.notes, separate from concrete defects. '
+            'Use coverage.notes to state checks actually performed, important unexecuted checks and limits of the evidence, even when no defects are found. '
             'Look for unnecessary abstractions, speculative extension points, duplicated logic, hidden assumptions and error-handling gaps. '
             'Report concrete introduced defects with trigger, impact, exact source location and evidence; distinguish pre-existing behavior. '
             'Validate dependency/contract/scope claims against actual added/deleted diff lines. '
@@ -373,6 +385,7 @@ def build_synthesis_prompt(manifest, inputs_path):
                'merge_recommendation': 'merge after fixes', 'merge_reason': '中文合并理由'}
     return (_common_prompt(manifest) + f'Read the frozen selected artifact list {inputs_path}. Read each listed result.json and report.md. '
             'Verify findings against shared source and actual diff; do not conduct an additional independent review or fill in failed models. '
+            'Read each reviewer\'s coverage limitations and qualify merge_reason accordingly; no findings or model agreement does not establish complete validation or human approval. '
             'Apply adversarial review to the supplied findings: seek counterexamples and counterevidence before confirming or dismissing each claim. '
             'Merge by root cause/location/trigger while retaining every source. A finding reported by one model must not be dismissed by majority vote; '
             'unreported and explicitly refuted are different states. Use added/deleted diff lines to verify dependency/contract/scope claims. '
