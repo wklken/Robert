@@ -10,6 +10,8 @@ import os
 from pathlib import Path, PurePosixPath
 import tempfile
 
+from robert_agent.review_policy import guidance as review_policy_guidance
+
 
 SCHEMA_VERSION = 1
 SEVERITIES = ('critical', 'high', 'medium', 'low')
@@ -357,6 +359,11 @@ def build_reviewer_prompt(manifest):
             'Validate dependency/contract/scope claims against actual added/deleted diff lines. '
             'For Python syntax claims use the project interpreter resolved in runtime-info; UNRESOLVED means unverified, not proof of invalid syntax. '
             'Do not read other reviewer results or add GitHub actions.\n'
+            + review_policy_guidance(manifest.get('github_account', ''))
+            + 'Use pr-info.json user.login as the PR author identity. Put decision requests with the decision-owner mention, '
+            'snapshot and evidence in coverage.notes; for an existing concrete finding also explain in suggestion whether it blocks. '
+            'Do not invent a finding to carry a decision request. Keep nonblocking suggestions explicit and justify '
+            'the merge recommendation in coverage.notes, including any unresolved material risk.\n'
             'Write the authoritative result to ROBERT_REVIEW_OUTPUT_DIR/result.json.tmp, close it, then atomically rename within that directory '
             'to result.json and exit. stdout/stderr are diagnostics only. Use this JSON schema (empty findings are valid; ids unique across '
             'findings and dismissed_findings; dismissed findings have the same fields plus reason; severities critical/high/medium/low):\n'
@@ -378,7 +385,16 @@ def build_synthesis_prompt(manifest, inputs_path):
             'unreported and explicitly refuted are different states. Use added/deleted diff lines to verify dependency/contract/scope claims. '
             'Use only the resolved project interpreter for Python syntax claims. Insufficient evidence is needs_confirmation; '
             'dismissed requires counterevidence. Cover every finding and dismissed finding exactly once with worker_id + finding_id, '
-            'and never add an unsourced finding. Dispositions: confirmed, dismissed, needs_confirmation. '
+            'and never add an unsourced finding. Dispositions: confirmed, dismissed, needs_confirmation.\n'
+            + review_policy_guidance(manifest.get('github_account', ''))
+            + 'Apply this policy only to verifying supplied claims and their merge implications; reviewer confidence and prior verdicts '
+            'are not evidence. Separate confirmed nonblocking improvements from blockers in reason/suggestion and merge_reason. '
+            'Use pr-info.json user.login as the PR author identity. Preserve unresolved decision requests from selected reviewers\' '
+            'coverage.notes in merge_reason even when items is empty; verify their stated evidence without inventing findings. '
+            'Put any decision request, the decision-owner mention, revision, evidence, options and recommendation in merge_reason '
+            'and relevant existing item reasons. Use needs_confirmation for unresolved supplied claims; do not label them dismissed '
+            'without counterevidence. Do not recommend ready to merge while a material risk awaits a decision. '
+            'Keep the existing schema and recommendation enums.\n'
             'Write evaluation.json.tmp under ROBERT_REVIEW_OUTPUT_DIR, close, atomically rename to evaluation.json, and exit. '
             'Use this schema; use an empty items array only when every reviewer has no findings:\n'
             + json.dumps(example, ensure_ascii=False, indent=2) + '\n')

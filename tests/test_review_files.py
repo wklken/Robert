@@ -134,6 +134,47 @@ class ReviewFilesTests(unittest.TestCase):
         self.assertIn('never add an unsourced finding', prompts['synthesis'])
         self.assertNotIn('adversarial review', review_files.build_prepare_prompt(self.manifest))
 
+    def test_review_policy_preserves_native_phase_and_result_contracts(self):
+        manifest = self.manifest | {'github_account': 'robert-bot'}
+        reviewer = review_files.build_reviewer_prompt(manifest)
+        synthesis = review_files.build_synthesis_prompt(manifest, self.root / 'inputs.json')
+        for prompt in (reviewer, synthesis):
+            self.assertIn('Treat every review round as a fresh independent judgment', prompt)
+            self.assertIn('Security review is required and proportional', prompt)
+            self.assertIn('A blocking finding needs', prompt)
+            self.assertIn('stop repeating the review', prompt)
+            self.assertIn('case-insensitively', prompt)
+            self.assertIn('@wklken', prompt)
+            self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
+        self.assertNotIn('Review judgment policy:', review_files.build_prepare_prompt(manifest))
+        self.assertIn('coverage.notes', reviewer)
+        self.assertIn('Do not invent a finding to carry a decision request', reviewer)
+        self.assertIn('merge_reason', synthesis)
+        self.assertIn('even when items is empty', synthesis)
+        self.assertIn('never add an unsourced finding', synthesis)
+        self.assertIn('needs_confirmation', synthesis)
+        self.assertIn('ready to merge', synthesis)
+
+    def test_missing_native_account_does_not_guess_robot_identity(self):
+        prompt = review_files.build_reviewer_prompt(self.manifest)
+        self.assertIn('Configured Robert GitHub account: ""', prompt)
+        self.assertIn('If identity cannot be established, ask @wklken', prompt)
+
+    def test_decision_request_without_findings_can_reach_public_merge_reason(self):
+        evaluation = self.evaluation() | {
+            'items': [], 'merge_reason': '当前快照的兼容性要求待决，请 @wklken 确认支持范围。',
+        }
+        self.result['findings'] = []
+        self.result['coverage']['notes'] = '当前快照的兼容性要求待决，请 @wklken 确认支持范围。'
+        self.result['merge_recommendation'] = 'merge after fixes'
+        record = self.record()
+        path = self.root / 'synthesis' / 'attempt-1' / 'evaluation.json'
+        review_files.atomic_json(path, evaluation)
+        accepted = review_files.read_evaluation(path, self.manifest, [record])
+        report = review_files.render_merged(self.manifest, [record], accepted)
+        self.assertIn(evaluation['merge_reason'], report)
+        self.assertIn('merge after fixes', report)
+
     def test_duplicate_or_invented_sources_and_unsafe_locations_are_rejected(self):
         record = self.record()
         path = self.root / 'synthesis' / 'attempt-1' / 'evaluation.json'

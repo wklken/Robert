@@ -61,6 +61,39 @@ class PromptScopeTests(unittest.TestCase):
         self.assertIn('"memory_id": "m1"', prompt)
         self.assertIn("used_memory_ids", prompt)
 
+    def test_review_policy_is_scoped_to_review_workflows(self):
+        for route_id in ("review-pr", "review-comment", "update-existing-pr"):
+            with self.subTest(route_id=route_id):
+                prompt = self.render(route_id)
+                self.assertIn("Treat every review round as a fresh independent judgment", prompt)
+                self.assertIn("Security review is required and proportional", prompt)
+                self.assertIn("A blocking finding needs", prompt)
+                self.assertIn("stop repeating the review", prompt)
+                self.assertIn("@wklken", prompt)
+        for route_id in ("classification-result", "new-pr", "comment-analysis"):
+            with self.subTest(route_id=route_id):
+                self.assertNotIn("Review judgment policy:", self.render(route_id))
+
+    def test_review_escalation_has_configured_identity_and_uses_planned_comment(self):
+        prompt = render_prompt.render_prompt(
+            {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y!1"},
+            route.ROUTES["review-pr"],
+            [{"source_type": "pull_request", "pr_author_login": "Robert-Bot"}],
+            runtime_context={"github_account": "robert-bot"},
+        )
+        self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
+        self.assertIn("case-insensitively", prompt)
+        self.assertIn("planned comment body", prompt)
+        self.assertIn("Robert adds the trusted PR author mention", prompt)
+
+    def test_review_policy_preserves_recovery_evidence_and_feedback_scope(self):
+        prompt = self.render("review-comment")
+        self.assertIn("Reuse still-valid edits and verification evidence on recovery", prompt)
+        self.assertIn("do not reuse a verdict as proof", prompt)
+        self.assertIn("The policy below applies only when evaluating review feedback", prompt)
+        self.assertIn("Do not expand supplied-feedback verification into a fresh source review", prompt)
+        self.assertIn("Do not modify source or plan a push", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

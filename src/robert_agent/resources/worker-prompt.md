@@ -27,6 +27,13 @@ review remains required. Feedback includes nonempty point evaluation, mixed also
 has handoff for its separate request; an all-clear report still needs evaluation.
 Keep adversarial source/test verification and do not implement unsupported claims.
 Review-comment is comment-only; source review publishes one real conclusion.
+Review workflows share [review-policy.md](review-policy.md): independent judgments
+of current evidence, proportional security review, explicit blocking criteria and
+human decisions when evidence stops progressing. Recovery may reuse valid work,
+but earlier verdicts do not prove a finding. Feedback verification stays within
+the supplied claims. Decision requests go in an allowed planned comment, mention
+the verified PR author, and use `@wklken` when that author is the configured Robert
+account. Robert still binds mechanical action fields and normal author mentions.
 
 Code tasks run meaningful affected tests and applicable repository gates. Mutation
 testing runs only when explicitly requested or repository rules require it.
