@@ -835,7 +835,8 @@ def run_once_decision(
     _maybe_prune(context, now=now)
     if not context.dry_run:
         from robert_agent.worker.result import replay_pending_results
-        replay_pending_results(context.db_path)
+        replay_pending_results(context.db_path,
+                               config=None if 'local' in context.control_attention else context.runtime_config)
         notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
     repo_ids = context.repo_ids or [context.repo_id]
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
@@ -928,7 +929,8 @@ def _background_decision(context, *, now, child_runner=run_child_json):
     from robert_agent.worker.result import replay_pending_results
     _maybe_prune(context, now=now)
     if not context.dry_run:
-        replay_pending_results(context.db_path)
+        replay_pending_results(context.db_path,
+                               config=None if 'local' in context.control_attention else context.runtime_config)
     lanes = context.background_lanes
     with closing(daemon_state.connect(context.db_path)) as conn:
         repo_ids = context.repo_ids or [context.repo_id]

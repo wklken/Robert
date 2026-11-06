@@ -16,7 +16,10 @@ def run(config_path):
     if not config.get('ok'):
         return config
     db_path = config['db_path']
-    replay_pending_results(db_path)
+    # Existing durable submissions may ingest while paused. This lane cannot
+    # claim a new supervised recovery action on behalf of paused admission.
+    recovery_config = {**config, 'supervision': {**config.get('supervision', {}), 'mode': 'observe'}}
+    replay_pending_results(db_path, config=recovery_config)
     now = run_once._now()
     run_id = run_once._id('supervision')
     summary = {'executor_id': os.environ.get('_ROBERT_EXECUTOR_ID'),

@@ -418,7 +418,9 @@ def publish(config_path, *, dry_run=False):
         except (subprocess.SubprocessError, OSError, ValueError):
             return {'ok': False, 'status': 'rate_limit_check_failed'}
     for repo_id in repo_ids:
-        results.append(publisher.publish_ready_actions(config['db_path'], repo_id=repo_id, dry_run=dry_run, limit=5))
+        from robert_agent import supervision_publication
+        kwargs = {'config': config} if supervision_publication.needs_config(config) else {}
+        results.append(publisher.publish_ready_actions(config['db_path'], repo_id=repo_id, dry_run=dry_run, limit=5, **kwargs))
     wakeup_notifier.notify(config['db_path'])
     return {'ok': all(result.get('ok') for result in results), 'status': 'published', 'repo_count': len(results), 'failure_scope': 'task' if any(not result.get('ok') for result in results) else None}
 

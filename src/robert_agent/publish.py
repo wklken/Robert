@@ -19,6 +19,7 @@ from robert_agent import (
     retry_policy,
     execution_operations,
     execution_store,
+    supervision_publication,
 )
 from robert_agent.common import emit, run_command as control_command
 from robert_agent.publication_lock import task_publication_lock
@@ -204,7 +205,7 @@ def _find_existing_comment(endpoint, marker, run_command):
     return {"ok": True, "status": "not_found", "command": command}
 
 
-def _publish_comment(action, run_command, conn=None):
+def _publish_comment(action, run_command, conn=None, recovery_guard=None):
     metadata = _decode_json(action["metadata_json"])
     body = metadata.get("body")
     if not isinstance(body, str) or not body:
@@ -230,7 +231,7 @@ def _publish_comment(action, run_command, conn=None):
     existing = _find_existing_comment(endpoint, marker, run_command)
     if not existing["ok"] or existing["status"] == "published":
         return existing
-    scope_guard = _publication_scope_guard(conn, action)
+    scope_guard = _publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     command = ["gh", "api", endpoint, "-f", f"body={body}"]
@@ -486,7 +487,7 @@ def _head_for_pr_create(repo, head, owner):
     return f"{owner}:{head}" if owner else head
 
 
-def _publish_open_pr(action, run_command, conn=None, trusted_head_owner=None):
+def _publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, recovery_guard=None):
     metadata = _decode_json(action["metadata_json"])
     repo = _metadata_value(metadata, "repo", "repository")
     head = _metadata_value(metadata, "head", "head_branch", "branch")
@@ -525,7 +526,7 @@ def _publish_open_pr(action, run_command, conn=None, trusted_head_owner=None):
     existing = _find_existing_open_pr(repo, head, marker, run_command, base=base, head_owner=head_owner)
     if not existing["ok"] or existing["status"] == "published":
         return existing
-    scope_guard = _publication_scope_guard(conn, action)
+    scope_guard = _publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     create_head = _head_for_pr_create(repo, head, head_owner)
@@ -578,7 +579,7 @@ def _publish_open_pr(action, run_command, conn=None, trusted_head_owner=None):
     }
 
 
-def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD"):
+def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", recovery_guard=None):
     metadata = _decode_json(action["metadata_json"])
     worktree_path = _metadata_value(metadata, "worktree_path")
     remote = _metadata_value(metadata, "remote") or "origin"
@@ -680,7 +681,7 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
         ]
     else:
         command = ["git", "push", remote, f"{source_ref}:{destination_ref}"]
-    scope_guard = _publication_scope_guard(conn, action)
+    scope_guard = _publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
@@ -697,6 +698,7 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD")
         "status": "published",
         "external_id": branch,
         "target_url": action["target_url"] or metadata.get("target_url") or metadata.get("url"),
+        "result_head_sha": result_head_sha,
         "response": {"stdout": getattr(completed, "stdout", "")},
         "command": command,
     }
@@ -728,9 +730,11 @@ def _publish_scope_violation(conn, action):
     return audit_result.action_scope_violation([payload], action_scope)
 
 
-def _publication_scope_guard(conn, action):
+def _publication_scope_guard(conn, action, recovery_guard=None):
     """Recheck the durable binding immediately before an external write."""
 
+    if recovery_guard and not recovery_guard():
+        return {'ok': False, 'status': 'supervision_fence_rejected', 'safe_error': 'Publication policy or recovery claim changed.'}
     if conn is None:
         return None
     scope = _trusted_action_scope(conn, action)
@@ -756,7 +760,7 @@ def _publication_scope_guard(conn, action):
     }
 
 
-def _publish_remediation_push(action, run_command, action_scope, conn=None):
+def _publish_remediation_push(action, run_command, action_scope, conn=None, recovery_guard=None):
     repo = action_scope.get("repo")
     pr_number = action_scope.get("pr_number")
     observed_head_sha = action_scope.get("observed_head_sha")
@@ -837,6 +841,7 @@ def _publish_remediation_push(action, run_command, action_scope, conn=None):
         run_command,
         conn=conn,
         source_ref=audited_result_head_sha,
+        recovery_guard=recovery_guard,
     )
     if result.get("status") == "published":
         result["result_head_sha"] = audited_result_head_sha
@@ -849,6 +854,7 @@ def _publish_action(
     conn=None,
     source_sha=None,
     trusted_head_owner=None,
+    recovery_guard=None,
 ):
     scope_violation = _publish_scope_violation(conn, action)
     if scope_violation:
@@ -858,23 +864,24 @@ def _publish_action(
             "safe_error": f"action scope validation failed: {scope_violation}",
             "retryable": False,
         }
-    scope_guard = _publication_scope_guard(conn, action)
+    scope_guard = _publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     if action["action_type"] == "submit_pr_review":
         return review_publish.publish(action, _trusted_action_scope(conn, action), run_command,
-                                      scope_guard=lambda: _publication_scope_guard(conn, action))
+                                      scope_guard=lambda: _publication_scope_guard(conn, action, recovery_guard))
     if action["action_type"] == "comment" and vote_publish.is_vote(action):
         return vote_publish.publish(action, _trusted_action_scope(conn, action), run_command,
-                                    scope_guard=lambda: _publication_scope_guard(conn, action))
+                                    scope_guard=lambda: _publication_scope_guard(conn, action, recovery_guard))
     if action["action_type"] == "comment":
-        return _publish_comment(action, run_command, conn=conn)
+        return _publish_comment(action, run_command, conn=conn, recovery_guard=recovery_guard)
     if action["action_type"] == "open_pr":
         return _publish_open_pr(
             action,
             run_command,
             conn=conn,
             trusted_head_owner=trusted_head_owner,
+            recovery_guard=recovery_guard,
         )
     if action["action_type"] == "push_existing_pr":
         action_scope = _trusted_action_scope(conn, action)
@@ -888,12 +895,14 @@ def _publish_action(
                 run_command,
                 action_scope,
                 conn=conn,
+                recovery_guard=recovery_guard,
             )
         return _publish_push_existing_pr(
             action,
             run_command,
             conn=conn,
             source_ref=source_sha or "HEAD",
+            recovery_guard=recovery_guard,
         )
     return {
         "ok": False,
@@ -917,7 +926,9 @@ def _delivery_receipt(conn, action, result, now):
         "scope": scope,
         "external_id": result.get("external_id") or reconciliation.get("external_id"),
         "target_url": result.get("target_url") or reconciliation.get("target_url") or action.get("target_url"),
-        "result_head_sha": result.get("result_head_sha") or reconciliation.get("source_sha") or response.get("head_sha"),
+        "result_head_sha": (result.get("result_head_sha") or reconciliation.get("source_sha")
+                            or (reconciliation.get("remote_sha") if action["action_type"] == "push_existing_pr" else None)
+                            or response.get("head_sha")),
         "expected_marker": marker,
         "confirmation_method": ("remote_reconciliation" if reconciliation else
                                 "remote_deduplication" if result.get("deduplicated") else "publisher_acknowledgement"),
@@ -1181,7 +1192,11 @@ def _prepare_publication_intent(db_path, action_id, run_command):
                     remote_evidence=evidence or None,
                 )
             )
-        elif latest["status"] == "failed":
+        elif latest["status"] in {"failed", "confirmed_absent"}:
+            if latest['status'] == 'confirmed_absent':
+                evidence = {**_decode_json(latest.get('remote_evidence_json')), **evidence,
+                            'retry_after_absence': True}
+                evidence.pop('status', None)
             latest = dict(
                 execution_store.transition_publication_intent(
                     conn,
@@ -1336,7 +1351,7 @@ def _record_remediation_publish_outcome(conn, action, result, now):
     )
 
 
-def _ready_actions(conn, limit, repo_id=None, task_ids=None):
+def _ready_actions(conn, limit, repo_id=None, task_ids=None, action_ids=None):
     repo_filter = ""
     params = [_now()]
     if repo_id:
@@ -1353,6 +1368,26 @@ def _ready_actions(conn, limit, repo_id=None, task_ids=None):
     if task_ids is not None:
         repo_filter += ' AND github_actions.task_id IN (' + ','.join('?' for _ in task_ids) + ')'
         params.extend(task_ids)
+    if action_ids is not None:
+        if not action_ids:
+            return []
+        repo_filter += ' AND github_actions.action_id IN (' + ','.join('?' for _ in action_ids) + ')'
+        params.extend(action_ids)
+    repo_filter += """ AND NOT EXISTS (SELECT 1 FROM github_actions earlier
+        JOIN publication_intents intent ON intent.action_id=earlier.action_id
+        WHERE earlier.result_id=github_actions.result_id AND earlier.publish_status='not_published'
+          AND json_extract(intent.remote_evidence_json,'$.supervision_retry_required')=1
+          AND (earlier.created_at<github_actions.created_at OR (earlier.created_at=github_actions.created_at
+               AND earlier.action_id<github_actions.action_id)))"""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='supervision_recovery_actions' AND type='table'").fetchone():
+        repo_filter += """ AND NOT EXISTS (SELECT 1 FROM supervision_recovery_actions recovery
+            WHERE recovery.scope_type='task' AND recovery.scope_id=github_actions.task_id
+              AND recovery.action_kind IN ('publication_retry','publication_reconcile')
+              AND recovery.status IN ('applying','observing','unknown')
+              AND (recovery.status IN ('applying','unknown') OR recovery.target_id=github_actions.action_id)
+              AND NOT (recovery.target_id=github_actions.action_id AND EXISTS(
+                  SELECT 1 FROM publication_intents pending WHERE pending.action_id=github_actions.action_id
+                    AND pending.status='executing')))"""
     repo_filter += """ AND NOT EXISTS (SELECT 1 FROM execution_subjects control JOIN tasks own ON own.task_id=github_actions.task_id
         WHERE control.binding_status='attention' AND ((control.subject_type='task' AND control.subject_id=own.task_id)
         OR (control.subject_type='remediation_episode' AND control.subject_id=json_extract(own.metadata_json,'$.remediation_episode_id'))))"""
@@ -1375,7 +1410,14 @@ def _ready_actions(conn, limit, repo_id=None, task_ids=None):
     ]
 
 
-def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subprocess.run, repo_id=None, task_ids=None):
+def _retry_budget_exhausted(prior, now):
+    first = prior.get('first_failed_at') or now
+    elapsed = (retry_policy.timestamp(now) - retry_policy.timestamp(first)).total_seconds()
+    return int(prior.get('attempt_count', 0)) >= retry_policy.MAX_ATTEMPTS or elapsed >= retry_policy.MAX_ELAPSED_SECONDS
+
+
+def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subprocess.run, repo_id=None, task_ids=None,
+                          *, action_ids=None, config=None):
     def bounded_command(*args, **kwargs):
         kwargs["timeout"] = min(kwargs.get("timeout") or PUBLISH_COMMAND_TIMEOUT_SECONDS, PUBLISH_COMMAND_TIMEOUT_SECONDS)
         return control_command(*args, runner=run_command, **kwargs)
@@ -1388,7 +1430,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
             return {**cutover, "pending_count": 0, "published_count": 0,
                     "deduplicated_count": 0, "skipped_count": 0, "failed_count": 0}
         conn.row_factory = sqlite3.Row
-        actions = _ready_actions(conn, limit, repo_id=repo_id, task_ids=task_ids)
+        actions = _ready_actions(conn, limit, repo_id=repo_id, task_ids=task_ids, action_ids=action_ids)
     if dry_run:
         return {
             "ok": True,
@@ -1414,6 +1456,14 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
             if not acquired:
                 busy_task_ids.add(action["task_id"])
                 continue
+            # The selection page predates this lock. Another publisher may
+            # already have completed the action or changed its eligibility.
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                ready = _ready_actions(conn, 1, action_ids=[action['action_id']])
+            if not ready:
+                continue
+            action = ready[0]
             # Consume the request before this pass, including reconciliation
             # failures, so a failed attempt never leaves retry disabled.
             with closing(sqlite3.connect(db_path)) as retry_conn, retry_conn:
@@ -1424,6 +1474,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                     (_now(), action["task_id"]),
                 )
             remote_effect_started = False
+            supervision = {}
             try:
                 result_id = action["result_id"]
                 now = _now()
@@ -1442,8 +1493,30 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                             _mark_skipped(conn, action, result, now)
                         skipped_count += 1
                     continue
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.row_factory = sqlite3.Row
+                    prior = _decode_json(action['metadata_json']).get('publish') or {}
+                    existing_intent = _load_intent(conn, action['action_id'])
+                    # Unknown effects can still be reconciled after the write budget is exhausted.
+                    if (not existing_intent or existing_intent['status'] not in {'executing', 'published'}) and _retry_budget_exhausted(prior, now):
+                        _record_failure(conn, action, {'safe_error': 'Automatic publication retry budget exhausted. Inspect and retry explicitly.', 'retryable': False}, now)
+                        failed_count += 1
+                        if result_id:
+                            failed_result_ids.add(result_id)
+                        continue
+                supervision = supervision_publication.begin(db_path, action, config, now)
+                if supervision['status'] == 'blocked':
+                    if result_id:
+                        failed_result_ids.add(result_id)
+                    if supervision.get('reason_code') == 'maintenance_policy_rejected':
+                        failed_count += 1
+                        failures.append({'action_id': action['action_id'], 'safe_error': 'Maintenance publication policy rejected.', 'command': []})
+                    continue
                 current = _prepare_publication_intent(db_path, action["action_id"], bounded_command)
                 if current["state"] == "missing":
+                    if supervision.get('claim'):
+                        with closing(sqlite3.connect(db_path)) as conn, conn:
+                            supervision_publication.finish(conn, supervision, outcome='rejected', action_id=action['action_id'], now=now)
                     continue
                 action = current["action"]
                 intent = current["intent"]
@@ -1463,11 +1536,15 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
                             _mark_published(conn, action, result, now)
+                            supervision_publication.finish(conn, supervision, outcome='observing', action_id=action['action_id'], now=now)
                     published_count += 1
                     deduplicated_count += 1
                     continue
 
                 if current["state"] == "attention":
+                    if supervision.get('claim'):
+                        with closing(sqlite3.connect(db_path)) as conn, conn:
+                            supervision_publication.finish(conn, supervision, outcome='unknown', action_id=action['action_id'], now=now)
                     failed_count += 1
                     failures.append(
                         {
@@ -1512,6 +1589,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                             reason_code,
                             now,
                         )
+                        supervision_publication.finish(conn, supervision, outcome='rejected', action_id=action['action_id'], now=now, reason=reason_code)
                     failed_count += 1
                     failures.append(
                         {
@@ -1558,6 +1636,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                             latest = _load_intent(conn, action["action_id"])
                             _mark_published(conn, action, result, now, intent=latest)
                             _record_remediation_publish_outcome(conn, action, result, now)
+                            supervision_publication.finish(conn, supervision, outcome='observing', action_id=action['action_id'], now=now)
                         published_count += 1
                         deduplicated_count += 1
                         continue
@@ -1570,8 +1649,10 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                             if terminal_task and terminal_task[0] in {'canceled', 'failed', 'ignored'}:
                                 latest = _load_intent(conn, action['action_id'])
                                 execution_store.transition_publication_intent(conn, latest['publication_id'], 'confirmed_absent', now,
-                                    remote_evidence=reconciliation.get('evidence', {}))
+                                    remote_evidence={**reconciliation.get('evidence', {}), 'status': 'confirmed_absent'})
                                 _mark_skipped(conn, action, {'status': 'source_closed', 'safe_error': 'Stopped execution; remote effect confirmed absent.'}, now)
+                                supervision_publication.finish(conn, supervision, outcome='failed', action_id=action['action_id'], now=now,
+                                    reason='request_no_longer_active')
                                 skipped_count += 1
                                 current = {**current, 'state': 'retired'}
                             elif not execution_operations.publication_scope_is_current(
@@ -1591,11 +1672,13 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                                 head_owner = persisted.get("head_owner") or current.get(
                                     "head_owner"
                                 )
-                                absent_evidence = dict(reconciliation.get("evidence", {}))
+                                absent_evidence = {**reconciliation.get('evidence', {}), 'status': 'confirmed_absent'}
                                 if source_sha:
                                     absent_evidence["source_sha"] = source_sha
                                 if head_owner:
                                     absent_evidence["head_owner"] = head_owner
+                                if supervision.get('reconcile_only'):
+                                    absent_evidence['supervision_retry_required'] = True
                                 execution_store.transition_publication_intent(
                                     conn,
                                     latest["publication_id"],
@@ -1603,6 +1686,14 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                                     now,
                                     remote_evidence=absent_evidence,
                                 )
+                                if supervision.get('reconcile_only'):
+                                    claim = supervision.get('claim') or {}
+                                    outcome = 'failed' if claim.get('action_kind') == 'publication_retry' else 'observing'
+                                    supervision_publication.finish(conn, supervision, outcome=outcome, action_id=action['action_id'], now=now,
+                                        reason='remote_effect_absent')
+                                    if result_id:
+                                        failed_result_ids.add(result_id)
+                                    continue
                                 retry_evidence = {"retry_after_absence": True}
                                 if source_sha:
                                     retry_evidence["source_sha"] = source_sha
@@ -1626,6 +1717,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                             conn.row_factory = sqlite3.Row
                             latest = _load_intent(conn, action["action_id"])
                             _mark_attention(conn, action, latest, scope, reconciliation, now)
+                            supervision_publication.finish(conn, supervision, outcome='unknown', action_id=action['action_id'], now=now)
                         failed_count += 1
                         failures.append(
                             {
@@ -1648,6 +1740,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                         conn.row_factory = sqlite3.Row
                         latest = _load_intent(conn, action["action_id"])
                         _mark_attention(conn, action, latest, scope, reconciliation, now)
+                        supervision_publication.finish(conn, supervision, outcome='rejected', action_id=action['action_id'], now=now)
                     failed_count += 1
                     failures.append(
                         {
@@ -1665,12 +1758,14 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
                     fresh = conn.execute('SELECT metadata_json FROM github_actions WHERE action_id=?',(action['action_id'],)).fetchone()
-                    metadata = _decode_json(fresh[0])
+                    before_charge = fresh[0]
+                    metadata = _decode_json(before_charge)
                     prior = metadata.get('publish') or {}
                     first = prior.get('first_failed_at') or now
-                    expired = (retry_policy.timestamp(now) - retry_policy.timestamp(first)).total_seconds() >= retry_policy.MAX_ELAPSED_SECONDS
-                    if int(prior.get('attempt_count',0)) >= retry_policy.MAX_ATTEMPTS or expired:
+                    if _retry_budget_exhausted(prior, now):
                         _record_failure(conn, action, {'safe_error':'Automatic publication retry budget exhausted. Inspect and retry explicitly.', 'retryable':False}, now)
+                        supervision_publication.finish(conn, supervision, outcome='rejected', action_id=action['action_id'], now=now,
+                            reason='native_budget_exhausted')
                         failed_count += 1
                         if result_id:
                             failed_result_ids.add(result_id)
@@ -1685,20 +1780,45 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                 with closing(sqlite3.connect(db_path)) as conn:
                     conn.row_factory = sqlite3.Row
                     remote_effect_started = True
+                    guard_kwargs = {}
+                    if supervision.get('guard_required') or supervision.get('reconcile_only'):
+                        guard_kwargs['recovery_guard'] = lambda: supervision_publication.guard(
+                            db_path, action, supervision, config, _now())
                     result = _publish_action(
                         action,
                         bounded_command,
                         conn=conn,
                         source_sha=current.get("source_sha"),
                         trusted_head_owner=current.get("head_owner"),
+                        **guard_kwargs,
                     )
                 now = _now()
+                if result['status'] == 'supervision_fence_rejected':
+                    with closing(sqlite3.connect(db_path)) as conn, conn:
+                        conn.row_factory = sqlite3.Row
+                        latest = _load_intent(conn, action['action_id'])
+                        # The final guard refused the command before a mutation. Preserve
+                        # the immutable intent and require a fresh typed claim for a retry.
+                        if latest and latest['status'] == 'executing':
+                            evidence = {**_decode_json(latest.get('remote_evidence_json')),
+                                        'status': 'confirmed_absent', 'reason_code': 'supervision_fence_rejected'}
+                            if supervision.get('claim'):
+                                evidence['supervision_retry_required'] = True
+                            execution_store.transition_publication_intent(conn, latest['publication_id'], 'confirmed_absent', now,
+                                remote_evidence=evidence)
+                        conn.execute('UPDATE github_actions SET metadata_json=? WHERE action_id=?', (before_charge, action['action_id']))
+                        supervision_publication.finish(conn, supervision, outcome='rejected', action_id=action['action_id'], now=now,
+                            reason='supervision_fence_rejected')
+                    if result_id:
+                        failed_result_ids.add(result_id)
+                    continue
                 if result["status"] == "published":
                     with closing(sqlite3.connect(db_path)) as conn, conn:
                         conn.row_factory = sqlite3.Row
                         latest = _load_intent(conn, action["action_id"])
                         _mark_published(conn, action, result, now, intent=latest)
                         _record_remediation_publish_outcome(conn, action, result, now)
+                        supervision_publication.finish(conn, supervision, outcome='observing', action_id=action['action_id'], now=now)
                     published_count += 1
                     if result.get("deduplicated"):
                         deduplicated_count += 1
@@ -1708,6 +1828,8 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                         conn.row_factory = sqlite3.Row
                         _record_remediation_publish_outcome(conn, action, result, now)
                         _mark_skipped(conn, action, result, now)
+                        supervision_publication.finish(conn, supervision, outcome='failed', action_id=action['action_id'], now=now,
+                            reason=result['status'])
                         skipped_count += 1
                         if result["status"] == "superseded" and result_id:
                             skipped_count += _skip_pending_result_actions(
@@ -1737,6 +1859,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                     _record_remediation_publish_outcome(conn, action, result, now)
                     _record_failure(conn, action, result, now,
                                     reconcile_required=result.get("retryable") is not False)
+                    supervision_publication.finish(conn, supervision, outcome='unknown', action_id=action['action_id'], now=now)
                 if result_id:
                     failed_result_ids.add(result_id)
                     action_scope = scope
@@ -1760,7 +1883,10 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                           "safe_error": "Publication command timed out after 60 seconds. Check connectivity and retry publication."}
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
-                    _record_failure(conn, action, result, _now(), reconcile_required=remote_effect_started)
+                    now = _now()
+                    _record_failure(conn, action, result, now, reconcile_required=remote_effect_started)
+                    supervision_publication.finish(conn, supervision, outcome='unknown' if remote_effect_started or supervision.get('reconcile_only') else 'rejected',
+                        action_id=action['action_id'], now=now)
                 failed_count += 1
                 failures.append({"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []})
                 if action["result_id"]:
@@ -1769,7 +1895,10 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                 result = {'status':'publish_failed','safe_error':type(exc).__name__, 'retryable': not isinstance(exc, FileNotFoundError)}
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
-                    _record_failure(conn, action, result, _now(), reconcile_required=remote_effect_started)
+                    now = _now()
+                    _record_failure(conn, action, result, now, reconcile_required=remote_effect_started)
+                    supervision_publication.finish(conn, supervision, outcome='unknown' if remote_effect_started or supervision.get('reconcile_only') else 'rejected',
+                        action_id=action['action_id'], now=now)
                 failed_count += 1
                 failures.append({'action_id':action['action_id'],'safe_error':result['safe_error'],'command':[]})
                 if action['result_id']:
@@ -1791,8 +1920,12 @@ def main(argv=None):
     parser.add_argument("--db", required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--config", help="Current Robert configuration for supervised or maintenance publication.")
     args = parser.parse_args(argv)
-    result = publish_ready_actions(args.db, dry_run=args.dry_run, limit=args.limit)
+    config = supervision_publication.fresh_config({'config_path': args.config}, args.db) if args.config else None
+    if args.config and not config:
+        return emit({'ok': False, 'status': 'failed_config', 'safe_error': 'Configuration is invalid or names a different database.'}, 3)
+    result = publish_ready_actions(args.db, dry_run=args.dry_run, limit=args.limit, config=config)
     return emit(result, 0 if result.get("ok") else 3)
 
 

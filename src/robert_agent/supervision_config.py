@@ -1,6 +1,6 @@
 """Validated, bounded settings for the independent observation service."""
 
-DEFAULTS = {'mode': 'observe', 'poll_seconds': 60, 'batch_size': 100, 'stall_seconds': 300, 'diagnosis': None}
+DEFAULTS = {'mode': 'observe', 'poll_seconds': 60, 'batch_size': 100, 'stall_seconds': 300, 'diagnosis': None, 'recovery': None}
 
 
 def normalize(raw):
@@ -19,4 +19,16 @@ def normalize(raw):
             raise ValueError(f'supervision.{key} must be an integer between 1 and {maximum}')
     from robert_agent.supervision_diagnose import normalize_diagnosis
     result['diagnosis'] = normalize_diagnosis(result['diagnosis'])
+    recovery = result['recovery']
+    if recovery is not None:
+        from robert_agent.supervision_actions import STAGES
+        if not isinstance(recovery, dict) or set(recovery) != {'allowed_actions', 'repositories'}:
+            raise ValueError('supervision.recovery requires allowed_actions and repositories')
+        for field in ('allowed_actions', 'repositories'):
+            values = recovery[field]
+            if not isinstance(values, list) or not values or len(values) > 100 or any(not isinstance(v, str) or not v for v in values):
+                raise ValueError('supervision.recovery lists must contain bounded nonempty strings')
+        if set(recovery['allowed_actions']) - set(STAGES):
+            raise ValueError('supervision.recovery contains an unsupported action')
+        result['recovery'] = {key: sorted(set(value)) for key, value in recovery.items()}
     return result

@@ -6138,7 +6138,8 @@ def _pending_handoff_current(conn, task_id, workstream_id):
 def _recover_pending_handoffs(conn, repo_id, data_dir, db_path, repo, run_now, dry_run,
                               dispatch_queue, dispatch_budget, config_result):
     recovered = 0
-    for task_id, stream_id in pending_handoff.ready_rows(conn, [repo_id], run_now):
+    for task_id, stream_id in pending_handoff.ready_rows(conn, [repo_id], run_now,
+            config=None if dry_run else config_result):
         if not _pending_handoff_current(conn, task_id, stream_id):
             continue
         child = _create_child_task_for_pending_events(conn, data_dir, db_path, repo, repo_id,
@@ -6167,6 +6168,7 @@ def _create_child_task_for_pending_events(
     dispatch_budget,
     config_result=None,
 ):
+    from robert_agent import supervision_actions
     if parent_task_id and not _execution_parent_allows_child(conn, parent_task_id):
         return None
     remediation_context = (
@@ -6219,6 +6221,13 @@ def _create_child_task_for_pending_events(
             retry_policy.timestamp(handoff['next_retry_at']) > retry_policy.timestamp(run_now)):
         return None
     _save_pending_handoff(conn, parent_task_id, {**handoff, 'status': 'pending'})
+    recovery_config = None if dry_run else config_result
+    gate = supervision_actions.begin(conn, task_id=parent_task_id, kind='handoff_resume',
+        target_id=parent_task_id, now=run_now, config=recovery_config,
+        native_retry=bool(handoff.get('attempt_count')))
+    if gate['status'] == 'blocked':
+        return None
+    claim = gate.get('claim')
     conn.commit()  # Persist continuation ownership before external Git I/O.
     try:
         worktree_result = _prepare_worktree(repo, child_event, route_result, dry_run)
@@ -6229,11 +6238,19 @@ def _create_child_task_for_pending_events(
             raise
         if not conn.in_transaction:
             conn.execute('BEGIN IMMEDIATE')
-        if not _pending_handoff_current(conn, parent_task_id, workstream_id):
+        checked_at = _now() if claim else run_now
+        if (not _pending_handoff_current(conn, parent_task_id, workstream_id)
+                or (claim and not supervision_actions.current(conn, claim, config=recovery_config, now=checked_at))):
+            if claim:
+                supervision_actions.finish(conn, claim, outcome='failed', now=checked_at,
+                    receipt={'reason_code': 'handoff_target_changed_after_preparation'})
             return None
         failure = retry_policy.failure_state(handoff, getattr(exc, 'stderr', None) or str(exc),
             run_now, retryable=not isinstance(exc, FileNotFoundError))
         _save_pending_handoff(conn, parent_task_id, {**failure, 'status': 'pending' if failure['retryable'] else 'attention'})
+        if claim:
+            supervision_actions.finish(conn, claim, outcome='failed', now=checked_at,
+                receipt={'reason_code': 'handoff_preparation_failed', 'native_retryable': failure['retryable']})
         if not failure['retryable']:
             _insert_notification(conn, 'pending_handoff_failed', 'recorded', run_now, {'task_id': parent_task_id, **failure})
             item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
@@ -6245,7 +6262,12 @@ def _create_child_task_for_pending_events(
         return None
     if not conn.in_transaction:
         conn.execute('BEGIN IMMEDIATE')
-    if parent_task_id and not _pending_handoff_current(conn, parent_task_id, workstream_id):
+    checked_at = _now() if claim else run_now
+    if ((parent_task_id and not _pending_handoff_current(conn, parent_task_id, workstream_id))
+            or (claim and not supervision_actions.current(conn, claim, config=recovery_config, now=checked_at))):
+        if claim:
+            supervision_actions.finish(conn, claim, outcome='failed', now=checked_at,
+                receipt={'reason_code': 'handoff_target_changed_after_preparation'})
         return None
     task_info = _create_task_attempt_and_prompt(
         conn,
@@ -6267,9 +6289,16 @@ def _create_child_task_for_pending_events(
         ],
     )
     if task_info is None:
+        if claim:
+            supervision_actions.finish(conn, claim, outcome='failed', now=checked_at,
+                receipt={'reason_code': 'handoff_successor_not_admitted'})
         return None
     _save_pending_handoff(conn, parent_task_id, {**handoff, 'status': 'completed',
         'retryable': False, 'next_retry_at': None, 'child_task_id': task_info['task_id']})
+    if claim and not supervision_actions.finish(conn, claim, outcome='observing', now=checked_at,
+            receipt={'child_task_id': task_info['task_id'], 'event_fingerprint': child_event['event_fingerprint']}):
+        conn.rollback()
+        return None
     _queue_dispatch(
         dispatch_queue,
         task_info,
@@ -6790,6 +6819,18 @@ def _recover_orphaned_classification_results(
     return recovered
 
 
+def _revalidate_audit_claim(conn, claim, config, now):
+    from robert_agent import supervision_actions
+    if not conn.in_transaction:
+        conn.execute('BEGIN IMMEDIATE')
+    if supervision_actions.current(conn, claim, config=config, now=now):
+        return True
+    # Git inspection is read-only. A stale claim has not applied an audit.
+    supervision_actions.finish(conn, claim, outcome='rejected', now=now,
+        receipt={'reason_code': 'audit_target_changed_after_inspection'})
+    return False
+
+
 def _audit_completed_results(
     conn,
     repo_id,
@@ -6803,6 +6844,7 @@ def _audit_completed_results(
     dispatch_budget,
     config_result=None,
 ):
+    from robert_agent import supervision_actions
     rows = conn.execute(
         """
         SELECT
@@ -6865,6 +6907,15 @@ def _audit_completed_results(
             (workstream_id,),
         ).fetchone()
         origin_type = origin_row[0] if origin_row else "github"
+        recovery_config = None if dry_run else config_result
+        if not conn.in_transaction:
+            conn.execute('BEGIN IMMEDIATE')
+        gate = supervision_actions.begin(conn, task_id=payload['task_id'], kind='audit_retry',
+            target_id=payload['result_id'], now=run_now, config=recovery_config,
+            native_retry=bool(observation.get('attempt_count')))
+        if gate['status'] == 'blocked':
+            continue
+        claim = gate.get('claim')
         _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
         conn.commit()
         try:
@@ -6872,6 +6923,9 @@ def _audit_completed_results(
         except ControlDeadlineExceeded:
             raise
         except subprocess.TimeoutExpired as exc:
+            checked_at = _now() if claim else run_now
+            if claim and not _revalidate_audit_claim(conn, claim, recovery_config, checked_at):
+                continue
             failure = {**retry_policy.failure_state(observation, 'Audit inspection timed out', run_now),
                        'status': 'inspection_timeout', 'timeout_seconds': exc.timeout}
             conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit_observation',json(?)) WHERE result_id=?",
@@ -6884,6 +6938,10 @@ def _audit_completed_results(
                         idempotency_key='audit:' + payload['result_id'], body='Audit inspection stopped. Retry to inspect this saved result again.',
                         metadata={'task_id': payload['task_id'], 'result_id': payload['result_id'], 'kind': 'audit_inspection'}, now=run_now)
                 _insert_notification(conn, 'audit_inspection_exhausted', 'recorded', run_now, {'task_id': payload['task_id'], **failure})
+            if claim:
+                supervision_actions.finish(conn, claim, outcome='failed', now=checked_at,
+                    receipt={'result_id': payload['result_id'], 'reason_code': 'audit_inspection_timeout',
+                             'native_retryable': failure['retryable']})
             continue
         remediation_context = None
         remediation_attestation = None
@@ -6911,6 +6969,9 @@ def _audit_completed_results(
                         ),
                     )
                 )
+        checked_at = _now() if claim else run_now
+        if claim and not _revalidate_audit_claim(conn, claim, recovery_config, checked_at):
+            continue
         if not _execution_task_active(conn, payload["task_id"], run_now):
             continue
         audit = audit_result.audit_result(
@@ -6927,6 +6988,10 @@ def _audit_completed_results(
             remediation_attestation=remediation_attestation,
             review_input_policy=task_metadata.get("review_input_policy", "required"),
         )
+        if claim and not supervision_actions.finish(conn, claim, now=checked_at,
+                outcome='observing' if audit['status'] == 'accepted' else 'failed',
+                receipt={'result_id': payload['result_id'], 'audit_status': audit['status']}):
+            continue
         _record_result_audit(conn, payload["result_id"], audit)
         wakeup.consume_wakeups_for_results(
             conn,
@@ -7144,6 +7209,7 @@ def _publish_ready_actions_for_repo(
     repo_id,
     repo_count,
     limit=None,
+    config_result=None,
 ):
     kwargs = {
         "dry_run": dry_run,
@@ -7151,6 +7217,9 @@ def _publish_ready_actions_for_repo(
     }
     if limit is not None:
         kwargs["limit"] = limit
+    from robert_agent import supervision_publication
+    if supervision_publication.needs_config(config_result):
+        kwargs['config'] = config_result
     return publish.publish_ready_actions(db_path, **kwargs)
 
 
@@ -7429,6 +7498,7 @@ def _run_repo_pipeline(
                         repo_id,
                         repo_count,
                         limit=publish_limit,
+                        config_result=config_result,
                     )
                 except Exception as exc:
                     publish_result = _safe_publish_error(exc)
@@ -8267,7 +8337,7 @@ def run_once(
         execution_store.require_migrated(guard)
     from robert_agent.worker.result import replay_pending_results
     if not dry_run:
-        replay_pending_results(db_path)
+        replay_pending_results(db_path, config=config_result)
     run_id = _id("run")
     try:
         executor_identity = worker_identity.capture_process_identity(os.getpid())

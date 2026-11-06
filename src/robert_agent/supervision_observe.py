@@ -113,6 +113,7 @@ def _task_page(conn, now, cursor, limit, config):
         EXISTS(SELECT 1 FROM work_items wi WHERE wi.workstream_id=w.workstream_id AND wi.canceled_at IS NOT NULL) AS canceled,
         {execution_store.runnable_sql()} AS runnable,
         json_extract(t.metadata_json,'$.supervision_lineage_key') AS lineage_key,
+        json_extract(t.metadata_json,'$.audit_retry_required') AS audit_retry_required,
         json_extract(t.metadata_json,'$.dispatch_wait') AS dispatch_wait,
         json_extract(t.metadata_json,'$.wait_state.lease_expires_at') AS repository_busy_until,
         json_extract(t.metadata_json,'$.pending_handoff') AS pending_handoff
@@ -127,13 +128,15 @@ def _task_page(conn, now, cursor, limit, config):
 
 def _attempt_facts(conn, task_id):
     return conn.execute("""SELECT a.attempt_id,a.status AS attempt_status,a.started_at,a.heartbeat_at,a.finished_at,
-        a.worktree_path,
+        a.worktree_path,json_extract(a.failure_json,'$.status') AS attempt_failure,
         json_extract(a.metadata_json,'$.dispatch') AS dispatch,
         json_extract(a.metadata_json,'$.process_stopped_at') AS process_stopped_at,
         json_extract(a.metadata_json,'$.resume.not_before_at') AS dispatch_not_before,
         wr.result_id,wr.output_type,wr.created_at AS result_created_at,
         json_extract(wr.metadata_json,'$.audit.status') AS audit_status,
         json_extract(wr.metadata_json,'$.audit.audited_at') AS audited_at,
+        json_extract(wr.metadata_json,'$.audit.reason_code') AS audit_reason,
+        json_extract(wr.metadata_json,'$.audit_observation.retryable') AS audit_retryable,
         json_extract(wr.metadata_json,'$.audit.action_scope') AS audited_scope,
         json_extract(wr.metadata_json,'$.normalized_payload.planned_github_actions') AS planned_actions,
         json_extract(wr.metadata_json,'$.audit_observation.next_retry_at') AS audit_retry_at
@@ -144,8 +147,12 @@ def _attempt_facts(conn, task_id):
 def _publication_facts(conn, facts, now):
     actions = conn.execute(f"""SELECT a.action_id,a.task_id,a.action_type,a.audit_status,a.publish_status,a.created_at,
         a.external_id,a.target_url,a.metadata_json,
-        pi.status AS intent_status,json_extract(pi.remote_evidence_json,'$.receipt') AS intent_receipt,
+        pi.status AS intent_status,pi.started_at AS intent_started_at,
+        json_extract(pi.remote_evidence_json,'$.receipt') AS intent_receipt,
         json_extract(a.metadata_json,'$.publish.next_retry_at') AS retry_at,
+        json_extract(a.metadata_json,'$.publish.retryable') AS retryable,
+        json_extract(a.metadata_json,'$.publish.reconcile_required') AS reconcile_required,
+        json_extract(a.metadata_json,'$.publish.reason_code') AS publish_reason,
         json_extract(a.metadata_json,'$.publish.published_at') AS published_at,
         {retry_policy.publication_ready_sql('a')} AS eligible
         FROM github_actions a LEFT JOIN publication_intents pi ON pi.action_id=a.action_id
@@ -157,6 +164,9 @@ def _publication_facts(conn, facts, now):
         relevant = (action['retry_at'], facts.get('process_stopped_at'), facts.get('audited_at'), action['created_at'])
         eligible_at = max(filter(None, map(supervision_rules.timestamp, relevant)), default=None)
         facts.update(pending_action_id=action['action_id'], intent_status=action['intent_status'],
+                     intent_started_at=action['intent_started_at'], publish_reason=action['publish_reason'],
+                     publication_terminal_failure=action['intent_status'] == 'attention' or (
+                         action['retryable'] == 0 and not action['reconcile_required']),
                      publication_eligible=bool(action['eligible']), publication_retry_at=action['retry_at'],
                      action_created_at=action['created_at'],
                      action_eligible_at=eligible_at.isoformat() if eligible_at else None)
@@ -231,11 +241,12 @@ def _checkpoints(conn, scope_type, scope_id):
     return {row['rule_id']: {'evidence': _object(row['evidence_json']), 'eligible_since': row['eligible_since']} for row in rows}
 
 
-def _task_facts(conn, row, controller_wait, now, capacity):
+def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
     facts = dict(row)
     if not facts['repo_enabled']:
         facts['runnable'] = False
     facts.update(controller_wait)
+    facts['local_completed_at'] = consumer_completed(facts['repo_id'], 'github_route')
     facts['checkpoints'] = _checkpoints(conn, 'task', facts['task_id'])
     if supervision_rules._future(supervision_rules.timestamp(now), facts['repository_busy_until']):
         facts['local_wait'] = 'repository_busy'
@@ -450,7 +461,8 @@ def _spool_facts(db_path, task_id, attempt_id):
         record = json.loads(raw)
         result_spool._validate_record(record)
         if record['payload'].get('task_id') == task_id and record['payload'].get('attempt_id') == attempt_id:
-            return {'spool_status': 'saved', 'spool_saved_at': record.get('saved_at')}
+            return {'spool_status': 'saved', 'spool_saved_at': record.get('saved_at'),
+                    'spool_fingerprint': record['fingerprint']}
     except FileNotFoundError:
         return {'spool_status': 'missing'}
     except (OSError, ValueError, RecursionError):
@@ -516,8 +528,10 @@ def collect(db_path, *, now, limit=100, config=None, cursor=''):
             if controllers[0]['status'] != 'fresh' and config:
                 controller_wait.update(local_wait='controller_unavailable', publish_wait='controller_unavailable')
             for facts in controllers[1:]:
+                lane = facts['scope_id'].split(':', 1)[1]
+                if facts.get('completed_at') and lane == 'publish':
+                    controller_wait['publish_completed_at'] = facts['completed_at']
                 if facts['status'] == 'attention':
-                    lane = facts['scope_id'].split(':', 1)[1]
                     controller_wait[lane + '_wait'] = 'controller_lane_latched'
                     if facts.get('cause') == 'blocked_result_contract_cutover':
                         controller_wait.update(local_wait='result_contract_cutover', publish_wait='result_contract_cutover')
@@ -554,7 +568,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=''):
                     WHERE repo_id=? AND step_key='route' AND status='succeeded'""", (repo_id,)).fetchone()
                 return row[0]
 
-            candidates = [(kind, _task_facts(conn, row, controller_wait, now.isoformat(), capacity)
+            candidates = [(kind, _task_facts(conn, row, controller_wait, now.isoformat(), capacity, consumer_completed)
                            if kind == 'task' else _receipt_facts(conn, row, consumer_completed, controller_wait.get('local_wait')))
                           for kind, row in _mix_pages(pages, positions['next'], limit)]
     except sqlite3.Error as exc:

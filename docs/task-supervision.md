@@ -99,3 +99,34 @@ evidence identifiers. The bounded, redacted bundle and outcome remain in the
 analysis checkpoint. Invalid or stale output cannot authorize business actions.
 Model failure does not stop deterministic observations. `check` never calls the
 model; the resident `run` loop schedules and reaps diagnosis asynchronously.
+
+## Known recovery paths
+
+Recovery requires both `mode: recover_known` and an explicit repository/action
+allowlist. For example:
+
+```yaml
+supervision:
+  mode: recover_known
+  recovery:
+    repositories: [example/project]
+    allowed_actions: [spool_replay, audit_retry, handoff_resume, publication_reconcile, publication_retry]
+```
+
+The existing consumers claim an exact attempt, result, parent task or action.
+They retain their original locks, ownership, cancellation checks, audit gates
+and retry deadlines. One automatic recovery is allowed per lineage/stage and
+three across the lineage. The separate read-only publication reconciliation
+stage does not grant permission to repeat a remote effect. Native retries on
+these integrated paths use the same ledger; their stricter limits still apply.
+Requests and budgets survive restarts and replacement tasks. Unknown lineage
+gets no additional automatic authority. The audit Retry command's budget reset
+is never used by supervision.
+
+A successful consumer return enters verification. Exact persisted domain
+receipts must satisfy the expected progress before the incident closes. Unknown
+or overdue effects retain their scope and charged budget, and require attention.
+Disabling recovery does not remove those guards. A rejected request for the same
+generation is not automatically queued forever. Worker replacement and new
+native review rounds continue their existing controls; supervision cannot grant
+additional attempts for them.

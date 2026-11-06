@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 
-from robert_agent import notify, redaction, supervision_config, supervision_diagnose, supervision_observe, supervision_store
+from robert_agent import notify, redaction, supervision_actions, supervision_config, supervision_diagnose, supervision_observe, supervision_store
 
 
 def utc_now():
@@ -140,6 +140,7 @@ def check(config, *, record=False, now=None):
         sampled = supervision_observe.collect(config['db_path'], now=now, limit=settings['batch_size'], config=config, cursor=cursor)
         observations = [_safe_observation(item) for item in sampled['observations']]
         changes = []
+        recovery = []
         if record:
             with closing(connect(config['db_path'])) as conn, conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -147,9 +148,12 @@ def check(config, *, record=False, now=None):
                 changes = supervision_store.apply_observations(conn, observations, now)
                 supervision_store.update_checkpoint(conn, 'service', 'supervisor', 'cursor', now=now,
                                                      metadata={'cursor': sampled.get('cursor', '')})
-                _notify_changes(conn, changes, now)
+                supervision_actions.verify(conn, observations=observations, now=now)
+                recovery = supervision_actions.plan(conn, observations=observations, now=now, config=config)
+                queued_incidents = {item.get('incident_id') for item in recovery}
+                _notify_changes(conn, [change for change in changes if change['incident']['incident_id'] not in queued_incidents], now)
         result = {'ok': True, 'status': 'observed', 'checked_at': now, 'observations': observations,
-                  'changes': changes, 'coverage_complete': sampled.get('coverage_complete', False)}
+                  'changes': changes, 'recovery_requests': len(recovery), 'coverage_complete': sampled.get('coverage_complete', False)}
     except (OSError, sqlite3.Error, ValueError) as exc:
         result = {'ok': False, 'status': 'unobservable', 'checked_at': now,
                   'error_class': type(exc).__name__, 'safe_error': 'Observation unavailable; inspect the database and supervision schema.'}

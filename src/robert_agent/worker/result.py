@@ -240,13 +240,14 @@ def record_result(db_path, payload, *, notifier=None):
                 "safe_error": "Submission must contain valid JSON values."}
 
 
-def replay_pending_results(db_path, limit=100):
+def replay_pending_results(db_path, limit=100, *, config=None, attempt_id=None):
     def ingest(path, payload, *, notifier=None):
-        return _record_result_db(path, payload, notifier=notifier, busy_timeout_ms=100)
-    return result_spool.replay(db_path, ingest, limit)
+        return _record_result_db(path, payload, notifier=notifier, busy_timeout_ms=100,
+                                 replay=True, recovery_config=config)
+    return result_spool.replay(db_path, ingest, limit, attempt_id=attempt_id)
 
 
-def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
+def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, replay=False, recovery_config=None):
     if payload.get("_result_contract") != result_contract.CONTRACT_ID:
         return {"ok": False, "status": "unsupported_contract"}
     if "planned_github_actions" not in payload:
@@ -358,6 +359,15 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
             if error:
                 return {"ok": False, "status": "failed_validation", "reason_code": "question_not_deliverable",
                         "safe_error": error, "required_action": "Correct the question and submit again in this attempt."}
+        claim = None
+        if replay:
+            from robert_agent import supervision_actions
+            gate = supervision_actions.begin(conn, task_id=payload['task_id'], kind='spool_replay',
+                target_id=payload['attempt_id'], generation=metadata['submission_fingerprint'],
+                now=result_created_at, config=recovery_config, native_retry=True)
+            if gate['status'] == 'blocked':
+                return {'ok': True, 'status': 'replay_blocked'}
+            claim = gate.get('claim')
         conn.execute(
             """
             INSERT INTO worker_results(
@@ -422,6 +432,11 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000):
             conn.rollback()
             return {"ok": False, "status": "rejected_by_supervisor", "result_id": result_id}
         _insert_worker_result_wakeup(conn, payload, result_id, result_created_at)
+        if claim and not supervision_actions.finish(conn, claim, outcome='observing',
+                receipt={'attempt_id': payload['attempt_id'], 'result_id': result_id,
+                         'fingerprint': metadata['submission_fingerprint']}, now=result_created_at):
+            conn.rollback()
+            return {'ok': True, 'status': 'replay_blocked'}
     wakeup_notifier.notify(db_path, sender=notifier)
     return {"ok": True, "status": "recorded", "result_id": result_id}
 
