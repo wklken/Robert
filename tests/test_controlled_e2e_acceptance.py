@@ -21,18 +21,30 @@ class ControlledEndToEndAcceptanceTests(unittest.TestCase):
         self.source_data_dir = self.root / "source-data"
         self.config_path = self.root / "config.yml"
         self.config_path.write_text(
-            f"""data_dir: {self.source_data_dir}
+            f"""version: 2
+data_dir: {self.source_data_dir}
 database: dd.sqlite3
-max_concurrency: 1
-worker_startup_grace_seconds: 1
+github:
+  account: robot
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: cbc
+    model: gpt-5.4
+    effort: high
+scheduler:
+  max_concurrency: 1
+supervision:
+  startup_grace_seconds: 1
 repos:
-  - full_name: example/repo
-    github_account: robot
-    trusted_actors:
-      - wklken
-    default_base_branch: main
-    repo_root: {self.source_repo}
-    worktree_root: {self.source_repo / ".worktrees"}
+- full_name: example/repo
+  github_account: robot
+  trusted_actors:
+  - wklken
+  checkout: {self.source_repo}
+  worktrees: {self.source_repo / '.worktrees'}
+  default_branch: main
 """,
             encoding="utf-8",
         )

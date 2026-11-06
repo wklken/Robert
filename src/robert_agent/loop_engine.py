@@ -123,8 +123,8 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             timeout = None
         status = supervise.classify_attempt(
             heartbeat_at, started_at, now=now_dt,
-            stale_after_minutes=config.get('stale_after_minutes', 20),
-            hard_timeout_minutes=config.get('hard_timeout_minutes', 45),
+            heartbeat_stale_seconds=config.get('heartbeat_stale_seconds', 1200),
+            global_timeout_seconds=config.get('hard_timeout_seconds', 2700),
             hard_timeout_seconds=timeout,
         )
         process = run_once_module._dispatch_process_status(metadata)

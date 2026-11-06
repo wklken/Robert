@@ -147,15 +147,14 @@ with the [configuration reference](reference.md#configuration):
 - `workers` is a named mapping. Verify `adapter`, executable `command`, model,
   and effort. `init --worker` only auto-selects `codex`, `tcodex`, or `cbc`;
   for Claude, OpenCode, and custom commands, correct the adapter explicitly.
-- `routes` selects Worker/Skill policy; `route_worker_models` supplies route
-  model/effort overrides. Do not put those model keys into `routes`.
-- SQLite is the only execution engine. Old DBOS `active`/`shadow` deployments
-  must complete the [offline upgrade](sqlite-state-machine-upgrade.md)
-  before starting this version. An absent block or `mode: sqlite` needs no
-  external database; `legacy` is a deprecated compatibility alias.
-- Preserve the nested `daemon` section and its retention defaults. Enable
-  per-repository `pr_automation` only when requested; CI also needs a non-empty
-  `check_allowlist`.
+- `routes` selects workers, skills and ordinary automatic model/effort overrides.
+  Set the required `default_worker` name explicitly; native model participants
+  use their own worker settings.
+- Only `version: 2` is accepted. Use the [configuration upgrade guide](config-v2-upgrade.md)
+  for older files. SQLite is the only execution engine; no engine block exists.
+- Keep GitHub polling in `github`, capacity in `scheduler`, timeouts in
+  `supervision`, and retention in `maintenance`. Enable repository PR automation
+  only when requested; CI requires a nonempty check_allowlist.
 - Keep `data_dir` consistent between daemon and web. Web options are command
   flags, not YAML keys. Do not copy internal normalized validation output back
   into the public configuration.

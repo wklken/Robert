@@ -1,4 +1,5 @@
 """Regressions for the October lifecycle audit, using production entrypoints."""
+from tests.support import DAEMON_DEFAULTS
 
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -105,14 +106,14 @@ class LifecycleFollowupTests(unittest.TestCase):
     def test_repository_at_capacity_does_not_starve_other_repository(self):
         f = self.fixture(board_fixture.BoardControlIntegrationTests)
         cfg = json.loads(f.config_path.read_text())
-        cfg["max_concurrency"] = 3
+        cfg.setdefault("scheduler", {})["max_concurrency"] = 3
         cfg["repos"][0]["max_concurrency"] = 1
         cfg["repos"].append(
             {**cfg["repos"][0], "full_name": "example/healthy", "max_concurrency": 2}
         )
         f.config_path.write_text(json.dumps(cfg))
         tasks = {}
-        for repo, count in zip(cfg["repos"], (3, 1)):
+        for repo, count in zip(validate_config.validate_config(f.config_path)["repos"], (3, 1)):
             with closing(sqlite3.connect(f.db_path)) as conn, conn:
                 rid = run_once._upsert_repo(conn, repo)
             tasks[rid] = [
@@ -191,7 +192,7 @@ class LifecycleFollowupTests(unittest.TestCase):
         created = self.create(f, routing_mode="manual", requested_worker="reviewer")
         f._run_local_cycle()
         cfg = json.loads(f.config_path.read_text())
-        cfg["workers"] = [cfg["workers"][0]]
+        cfg["workers"].pop("reviewer")
         f.config_path.write_text(json.dumps(cfg))
         config = validate_config.validate_config(f.config_path, skip_external=True)
         with (
@@ -368,7 +369,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             f.db_path,
             f.repo_id,
             2,
-            dict(validate_config.DAEMON_DEFAULTS),
+            dict(DAEMON_DEFAULTS),
             owner,
             "lease",
         )
@@ -395,7 +396,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             f.db_path,
             f.repo_id,
             2,
-            dict(validate_config.DAEMON_DEFAULTS),
+            dict(DAEMON_DEFAULTS),
             owner,
             "lease",
         )
@@ -418,7 +419,7 @@ class LifecycleFollowupTests(unittest.TestCase):
         config = json.loads(f.config_path.read_text())
         config["repos"].append({**config["repos"][0], "full_name": "example/healthy"})
         f.config_path.write_text(json.dumps(config))
-        for repo in config["repos"]:
+        for repo in validate_config.validate_config(f.config_path)["repos"]:
             with closing(sqlite3.connect(f.db_path)) as conn, conn:
                 repo_id = run_once._upsert_repo(conn, repo)
             self.create(f, repo_id=repo_id, key=repo_id)
@@ -492,7 +493,7 @@ class LifecycleFollowupTests(unittest.TestCase):
         with closing(daemon_state.connect(f.db_path)) as conn, conn:
             owner = daemon_state.start_daemon_run(conn, config_path=str(f.config_path), owner_id='exception')['daemon_run_id']
         context = daemon.DaemonContext(str(f.config_path), None, f.db_path, f.repo_id, 2,
-            dict(validate_config.DAEMON_DEFAULTS), owner, 'lease')
+            dict(DAEMON_DEFAULTS), owner, 'lease')
         with mock.patch.object(run_once, '_audit_completed_results', side_effect=TypeError('controller invariant')):
             for _ in range(3):
                 failed = run_once.run_once(f.config_path, fixture_path=f.empty_fixture,

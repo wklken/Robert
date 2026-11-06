@@ -52,33 +52,11 @@ def init_config(
         else "codex"
     )
     config = {
-        "version": 1,
+        "version": 2,
         "data_dir": str(default_data_dir()),
         "database": "robert.sqlite3",
-        "github": {
-            "account": values["github_account"],
-            "poll_seconds": 300,
-        },
-        "skills": {"search_paths": []},
-        "daemon": {
-            "enabled": True,
-            "local_poll_seconds": 5,
-            "github_poll_seconds": 300,
-            "github_poll_when_full_seconds": 600,
-            "rate_limit_cache_seconds": 300,
-            "min_search_remaining": 10,
-            "min_core_remaining": 500,
-            "live_run_timeout_seconds": 300,
-            "local_drain_timeout_seconds": 180,
-            "event_retention_days": 7,
-            "maintenance_enabled": True,
-            "maintenance_interval_seconds": 300,
-            "maintenance_batch_size": 100,
-            "run_retention_days": 7,
-            "failed_run_retention_days": 30,
-            "run_on_start": False,
-        },
-        "workflow_engine": {"mode": "sqlite"},
+        "github": {"account": values["github_account"]},
+        "default_worker": "default",
         "workers": {
             "default": {
                 "adapter": adapter,

@@ -6,7 +6,8 @@ Robert 内建多模型审查流程：准备上下文、独立审查、验证汇�
 在现有配置中声明两个 worker，再覆盖 `review-pr` 路由：
 
 ```yaml
-review_max_concurrency: 4
+scheduler:
+  model_max_concurrency: 4
 
 workers:
   codex_reviewer:
@@ -37,11 +38,11 @@ routes:
 
 ## 并发额度
 
-`model_max_concurrency` 是共享模型额度的新名称，`review_max_concurrency` 保留为兼容别名；同时配置时必须相同。
+`scheduler.model_max_concurrency` 控制共享模型额度，不接受旧别名。
 开启 [多 Agent 投票](multi-agent-vote.md) 后，两种内建流程共享该额度，避免各自启动一个独立池。
 
-`max_concurrency` 继续限制任务数，一轮多模型 review 从准备到汇总仍算一个任务。
-顶层 `review_max_concurrency` 单独限制实际运行的 review 模型子进程，默认 `4`，必须是正整数，
+`scheduler.max_concurrency` 继续限制任务数，一轮多模型 review 从准备到汇总仍算一个任务。
+`scheduler.model_max_concurrency` 单独限制实际运行的 review 模型子进程，默认 `4`，必须是正整数，
 不支持 repository 或 route 覆盖。同一 Robert 数据库/数据目录下的所有仓库和轮次共享这个上限；
 旧单模型路径继续使用原有任务并发，不进入这个子进程池。
 
@@ -52,7 +53,7 @@ routes:
 
 额度与 run 状态保存在 SQLite，启动前原子认领，避免不同协调器同时超额启动。
 等待额度不计入 worker 的 `timeout_seconds`，父任务总时限仍然生效。
-新的 `review_max_concurrency` 在下一次加载该配置的运行中应用到共享池；降低上限保留已运行的进程，
+新的 `scheduler.model_max_concurrency` 在下一次加载该配置的运行中应用到共享池；降低上限保留已运行的进程，
 新进程等待占用降到新上限以下；提高上限后等待者继续申请。
 
 同轮重试复用已验证成功的结果，只有需要执行的阶段重新申请额度。

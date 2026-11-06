@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from tests.support import PACKAGE_ROOT
+from tests.support import PACKAGE_ROOT, init_test_checkout
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +19,7 @@ class LiveWorkerAcceptanceTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.repo_root = self.root / "repo"
         self.repo_root.mkdir()
-        (self.repo_root / ".git").mkdir()
+        init_test_checkout(self.repo_root, 'main')
         self.worktree_root = self.repo_root / ".worktrees"
         self.worktree_root.mkdir()
         self.source_data_dir = self.root / "source-data"
@@ -75,19 +75,30 @@ raise SystemExit(0 if record["ok"] else 1)
         os.chmod(self.worker_command, 0o755)
         self.config_path = self.root / "config.yml"
         self.config_path.write_text(
-            f"""data_dir: {self.source_data_dir}
+            f"""version: 2
+data_dir: {self.source_data_dir}
 database: dd.sqlite3
-worker_command: {self.worker_command}
-max_concurrency: 1
-worker_startup_grace_seconds: 1
+github:
+  account: robot
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: {self.worker_command}
+    model: gpt-5.4
+    effort: high
+scheduler:
+  max_concurrency: 1
+supervision:
+  startup_grace_seconds: 1
 repos:
-  - full_name: example/repo
-    github_account: robot
-    trusted_actors:
-      - wklken
-    default_base_branch: main
-    repo_root: {self.repo_root}
-    worktree_root: {self.worktree_root}
+- full_name: example/repo
+  github_account: robot
+  trusted_actors:
+  - wklken
+  checkout: {self.repo_root}
+  worktrees: {self.worktree_root}
+  default_branch: main
 """,
             encoding="utf-8",
         )
@@ -124,30 +135,58 @@ repos:
         self.assertEqual(attempt_status, "completed")
         self.assertEqual(action_status, ("accepted", "not_published"))
 
+    def test_remote_only_base_reports_local_snapshot_prerequisite(self):
+        import subprocess
+        from robert_agent import live_worker_acceptance
+        for args in (['update-ref', 'refs/remotes/upstream/main', 'HEAD'],
+                     ['checkout', '--detach'], ['branch', '-D', 'main']):
+            subprocess.run(['git', '-C', str(self.repo_root), *args], check=True, capture_output=True)
+        workspace = self.root / 'remote-only'
+        workspace.mkdir()
+        result = live_worker_acceptance._isolated_config(self.config_path, workspace)
+        self.assertFalse(result['ok'], result)
+        self.assertEqual(result['status'], 'failed_workspace')
+        self.assertIn('local branch main', result['safe_error'])
+
+    def test_isolated_workspace_does_not_reset_source_analysis_worktree(self):
+        import subprocess
+        from robert_agent import live_worker_acceptance, validate_config, worktree
+
+        def git(*args):
+            return subprocess.run(['git', '-C', str(self.repo_root), *args], check=True,
+                                  capture_output=True, text=True).stdout.strip()
+
+        source_tree = self.worktree_root / 'analysis-77'
+        git('worktree', 'add', '--detach', str(source_tree), 'HEAD')
+        old_head = git('-C', str(source_tree), 'rev-parse', 'HEAD')
+        git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+            'commit', '--allow-empty', '-m', 'Advance source')
+        before = git('worktree', 'list', '--porcelain')
+        workspace = self.root / 'isolated'
+        workspace.mkdir()
+        prepared = live_worker_acceptance._isolated_config(self.config_path, workspace)
+        self.assertTrue(prepared['ok'], prepared)
+        config = validate_config.validate_config(prepared['config_path'], skip_external=True)
+        self.assertTrue(config['ok'], config)
+        repo = config['repos'][0]
+        result = worktree.plan_analysis_worktree(
+            repo_root=repo['repo_root'], worktree_root=repo['worktree_root'],
+            source_number=77, base_branch='main', dry_run=False)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(git('-C', str(source_tree), 'rev-parse', 'HEAD'), old_head)
+        self.assertEqual(git('worktree', 'list', '--porcelain'), before)
+        self.assertTrue(Path(repo['repo_root']).is_relative_to(workspace))
+        self.assertTrue(Path(result['worktree_path']).is_relative_to(workspace))
+
     def test_isolated_config_preserves_named_workers_and_route_selection(self):
         from robert_agent import live_worker_acceptance
-        self.config_path.write_text(
-            self.config_path.read_text(encoding="utf-8").replace(
-                f"worker_command: {self.worker_command}",
-                "workers:\n"
-                "  - name: default\n"
-                "    agent: cbc\n"
-                f"    command: {self.worker_command}\n"
-                "    default_model: gpt-5.4\n"
-                "    fallback_model: gpt-5.6-sol\n"
-                "    default_effort: high\n"
-                "  - name: reviewer\n"
-                "    agent: codex\n"
-                "    command: /opt/bin/review-codex\n"
-                "    default_model: gpt-5.6-sol\n"
-                "    default_effort: xhigh\n"
-                "route_worker_models:\n"
-                "  review-pr:\n"
-                "    worker: reviewer\n"
-                "    effort: high",
-            ),
-            encoding="utf-8",
-        )
+        import yaml
+        document = yaml.safe_load(self.config_path.read_text())
+        document['workers']['default']['fallback_model'] = 'gpt-5.6-sol'
+        document['workers']['reviewer'] = {'adapter': 'codex', 'command': '/opt/bin/review-codex',
+                                            'model': 'gpt-5.6-sol', 'effort': 'xhigh'}
+        document['routes'] = {'review-pr': {'worker': 'reviewer', 'effort': 'high'}}
+        self.config_path.write_text(yaml.safe_dump(document))
         workspace_dir = (self.root / "isolated-config").resolve()
         workspace_dir.mkdir()
 
@@ -158,14 +197,13 @@ repos:
 
         self.assertTrue(result["ok"], result)
         isolated = json.loads(Path(result["config_path"]).read_text(encoding="utf-8"))
-        self.assertEqual([worker["name"] for worker in isolated["workers"]], ["default", "reviewer"])
-        self.assertEqual(isolated["workers"][0]["fallback_model"], "gpt-5.6-sol")
-        self.assertEqual(isolated["workers"][1]["agent"], "codex")
+        self.assertEqual(list(isolated["workers"]), ["default", "reviewer"])
+        self.assertEqual(isolated["workers"]["default"]["fallback_model"], "gpt-5.6-sol")
+        self.assertEqual(isolated["workers"]["reviewer"]["adapter"], "codex")
         self.assertEqual(
-            isolated["route_worker_models"]["review-pr"],
+            isolated["routes"]["review-pr"],
             {
                 "worker": "reviewer",
-                "model": "gpt-5.6-sol",
                 "effort": "high",
             },
         )

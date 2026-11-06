@@ -28,38 +28,27 @@ class BoardControlIntegrationTests(unittest.TestCase):
         self.config_path = self.root / "config.json"
         self.config_path.write_text(
             json.dumps(
-                {
-                    "data_dir": str(self.data_dir),
-                    "database": "dd.sqlite3",
-                    "max_concurrency": 2,
-                    "workers": [
-                        {
-                            "name": "default",
-                            "agent": "cbc",
-                            "command": "cbc",
-                            "default_model": "default-model",
-                            "default_effort": "medium",
-                        },
-                        {
-                            "name": "reviewer",
-                            "agent": "codex",
-                            "command": "codex",
-                            "default_model": "review-model",
-                            "default_effort": "high",
-                        },
-                    ],
-                    "repos": [
-                        {
-                            "full_name": "example/repo",
-                            "github_account": "robot",
-                            "trusted_actors": ["owner"],
-                            "default_base_branch": "main",
-                            "repo_root": str(self.repo_root),
-                            "worktree_root": str(self.worktree_root),
-                            "max_concurrency": 2,
-                        }
-                    ],
-                }
+                {'version': 2,
+ 'data_dir': str(self.data_dir),
+ 'database': 'dd.sqlite3',
+ 'github': {'account': 'robot'},
+ 'default_worker': 'default',
+ 'workers': {'default': {'adapter': 'cbc',
+                         'command': 'cbc',
+                         'model': 'default-model',
+                         'effort': 'medium'},
+             'reviewer': {'adapter': 'codex',
+                          'command': 'codex',
+                          'model': 'review-model',
+                          'effort': 'high'}},
+ 'scheduler': {'max_concurrency': 2},
+ 'repos': [{'full_name': 'example/repo',
+            'github_account': 'robot',
+            'trusted_actors': ['owner'],
+            'max_concurrency': 2,
+            'checkout': str(self.repo_root),
+            'worktrees': str(self.worktree_root),
+            'default_branch': 'main'}]}
             ),
             encoding="utf-8",
         )

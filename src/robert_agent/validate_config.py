@@ -1,872 +1,252 @@
 #!/usr/bin/env python3
+"""Strict v2 configuration boundary; internal normalized values are not inputs."""
 import argparse
+from copy import deepcopy
+import json
+import math
 from pathlib import Path
 import sys
 
 import yaml
 
-from robert_agent import worker_adapters
+from robert_agent import supervision_config, worker_adapters
 from robert_agent.common import emit
-from robert_agent.route_config import (
-    load_route_policies,
-    resolve_route_config,
-)
+from robert_agent.resource_files import resource
+from robert_agent.route_config import load_route_policies, resolve_route_config
+
+
+class _ConfigLoader(yaml.SafeLoader):
+    pass
+
+
+def _mapping(loader, node):
+    result = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        if not isinstance(key, str):
+            raise ValueError('configuration keys must be strings')
+        if key in result:
+            raise ValueError(f'duplicate configuration key: {key}')
+        result[key] = loader.construct_object(value_node, deep=True)
+    return result
+
+
+_ConfigLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
 
 def load_config(path):
-    config_path = Path(path).expanduser()
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = yaml.load(Path(path).expanduser().read_text(encoding='utf-8'), Loader=_ConfigLoader)
     if not isinstance(data, dict):
-        raise ValueError("config root must be a mapping")
+        raise ValueError('config root must be a mapping')
     return data
 
 
-def _normalize_workers(config):
-    raw_workers = config.get("workers")
-    legacy_fields = {"worker_agent", "worker_command"} & set(config)
-    if raw_workers not in (None, "") and legacy_fields:
-        raise ValueError(
-            "workers cannot be combined with legacy fields: "
-            f"{', '.join(sorted(legacy_fields))}"
-        )
+def _schema_value(value, spec, schema, path):
+    """Apply the subset used by our packaged config schema, including defaults.
 
-    if raw_workers in (None, ""):
-        worker_config = worker_adapters.normalize_worker_agent_config(config)
-        return [
-            {
-                "name": "default",
-                **worker_config,
-                "default_model": "gpt-5.4",
-                "fallback_model": None,
-                "default_effort": "high",
-            }
-        ]
-    if isinstance(raw_workers, dict):
-        normalized = []
-        for name, raw_worker in raw_workers.items():
-            if not isinstance(raw_worker, dict):
-                raise ValueError(f"workers.{name} must be a mapping")
-            unsupported_fields = sorted(
-                set(raw_worker)
-                - {
-                    "adapter",
-                    "command",
-                    "model",
-                    "fallback_model",
-                    "effort",
-                    "prompt_transport",
-                    "timeout_seconds",
-                    "environment_allowlist",
-                }
-            )
-            if unsupported_fields:
-                raise ValueError(
-                    f"workers.{name} contains unsupported fields: "
-                    f"{', '.join(unsupported_fields)}"
-                )
-            worker_name = str(name).strip()
-            if not worker_name:
-                raise ValueError("worker name must not be empty")
-            command = raw_worker.get("command", "")
-            default_model = str(raw_worker.get("model", "")).strip()
-            raw_fallback_model = raw_worker.get("fallback_model")
-            fallback_model = (
-                None
-                if raw_fallback_model is None
-                else str(raw_fallback_model).strip()
-            )
-            default_effort = str(raw_worker.get("effort", "")).strip()
-            if not str(command).strip():
-                raise ValueError(f"workers.{name}.command must not be empty")
-            if not default_model:
-                raise ValueError(f"workers.{name}.model must not be empty")
-            if raw_fallback_model is not None and not fallback_model:
-                raise ValueError(
-                    f"workers.{name}.fallback_model must not be empty"
-                )
-            if not default_effort:
-                raise ValueError(f"workers.{name}.effort must not be empty")
-            worker = worker_adapters.normalize_worker_agent_config(
-                {
-                    "worker_agent": raw_worker.get("adapter", ""),
-                    "worker_command": command,
-                    "prompt_transport": raw_worker.get(
-                        "prompt_transport",
-                        "stdin",
-                    ),
-                    "timeout_seconds": raw_worker.get(
-                        "timeout_seconds",
-                        5400,
-                    ),
-                    "environment_allowlist": raw_worker.get(
-                        "environment_allowlist",
-                        [],
-                    ),
-                }
-            )
-            normalized.append(
-                {
-                    "name": worker_name,
-                    **worker,
-                    "default_model": default_model,
-                    "fallback_model": fallback_model,
-                    "default_effort": default_effort,
-                }
-            )
-        if not normalized:
-            raise ValueError("workers must contain at least one named worker")
-        return normalized
-    if not isinstance(raw_workers, list) or not raw_workers:
-        raise ValueError("workers must contain at least one worker")
-
-    normalized = []
-    seen_names = set()
-    for index, raw_worker in enumerate(raw_workers):
-        if not isinstance(raw_worker, dict):
-            raise ValueError(f"workers[{index}] must be a mapping")
-        unsupported_fields = sorted(
-            set(raw_worker)
-            - {
-                "name",
-                "agent",
-                "command",
-                "default_model",
-                "fallback_model",
-                "default_effort",
-                "prompt_transport",
-                "timeout_seconds",
-                "environment_allowlist",
-            }
-        )
-        if unsupported_fields:
-            raise ValueError(
-                f"workers[{index}] contains unsupported fields: "
-                f"{', '.join(unsupported_fields)}"
-            )
-        name = str(raw_worker.get("name", "")).strip()
-        if not name:
-            raise ValueError(f"workers[{index}].name must not be empty")
-        if name in seen_names:
-            raise ValueError(f"duplicate worker name: {name}")
-        seen_names.add(name)
-
-        default_model = str(raw_worker.get("default_model", "")).strip()
-        raw_fallback_model = raw_worker.get("fallback_model")
-        fallback_model = (
-            None
-            if raw_fallback_model is None
-            else str(raw_fallback_model).strip()
-        )
-        default_effort = str(raw_worker.get("default_effort", "")).strip()
-        command = raw_worker.get("command", "")
-        if not str(command).strip():
-            raise ValueError(f"workers[{index}].command must not be empty")
-        if not default_model:
-            raise ValueError(f"workers[{index}].default_model must not be empty")
-        if raw_fallback_model is not None and not fallback_model:
-            raise ValueError(
-                f"workers[{index}].fallback_model must not be empty"
-            )
-        if not default_effort:
-            raise ValueError(f"workers[{index}].default_effort must not be empty")
-
-        adapter_config = {
-            "worker_agent": raw_worker.get("agent", ""),
-            "worker_command": command,
-            "prompt_transport": raw_worker.get(
-                "prompt_transport",
-                "stdin",
-            ),
-            "timeout_seconds": raw_worker.get(
-                "timeout_seconds",
-                5400,
-            ),
-            "environment_allowlist": raw_worker.get(
-                "environment_allowlist",
-                [],
-            ),
-        }
-        worker_config = worker_adapters.normalize_worker_agent_config(adapter_config)
-        normalized.append(
-            {
-                "name": name,
-                **worker_config,
-                "default_model": default_model,
-                "fallback_model": fallback_model,
-                "default_effort": default_effort,
-            }
-        )
-    return normalized
-
-
-def _normalize_route_worker_models(config, workers):
-    raw = config.get("route_worker_models", {})
-    if raw in (None, ""):
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError("route_worker_models must be a mapping of route id to model configuration")
-    workers_by_name = {worker["name"]: worker for worker in workers}
-    default_worker = workers[0]
-    normalized = {}
-    for route_id, route_config in raw.items():
-        route_id = str(route_id).strip()
-        if not route_id:
-            raise ValueError("route_worker_models route id must not be empty")
-        if not isinstance(route_config, dict):
-            raise ValueError(
-                f"route_worker_models.{route_id} must be a worker configuration"
-            )
-        unsupported_fields = sorted(set(route_config) - {"worker", "model", "effort"})
-        if unsupported_fields:
-            raise ValueError(
-                f"route_worker_models.{route_id} contains unsupported fields: "
-                f"{', '.join(unsupported_fields)}"
-            )
-        worker_name = str(route_config.get("worker", default_worker["name"])).strip()
-        if not worker_name:
-            raise ValueError(f"route_worker_models.{route_id}.worker must not be empty")
-        worker = workers_by_name.get(worker_name)
-        if worker is None:
-            raise ValueError(
-                f"route_worker_models.{route_id} references unknown worker: {worker_name}"
-            )
-        model = str(route_config.get("model", worker["default_model"])).strip()
-        effort = str(route_config.get("effort", worker["default_effort"])).strip()
-        if not model:
-            raise ValueError(f"route_worker_models.{route_id}.model must not be empty")
-        if not effort:
-            raise ValueError(f"route_worker_models.{route_id}.effort must not be empty")
-        normalized[route_id] = {
-            "worker": worker_name,
-            "model": model,
-            "effort": effort,
-        }
-    return normalized
-
-
-DAEMON_DEFAULTS = {
-    "enabled": True,
-    "local_poll_seconds": 5,
-    "github_poll_seconds": 300,
-    "github_poll_when_full_seconds": 600,
-    "rate_limit_cache_seconds": 300,
-    "min_search_remaining": 10,
-    "min_core_remaining": 500,
-    "live_run_timeout_seconds": 300,
-    "local_drain_timeout_seconds": 180,
-    "event_retention_days": 7,
-    "maintenance_enabled": True,
-    "maintenance_interval_seconds": 300,
-    "maintenance_batch_size": 100,
-    "run_retention_days": 7,
-    "failed_run_retention_days": 30,
-    "run_on_start": False,
-}
-DAEMON_FIELDS = set(DAEMON_DEFAULTS)
-DAEMON_LEGACY_FIELDS = {
-    f"daemon_{key}": key
-    for key in DAEMON_FIELDS
-}
-DAEMON_BOOLEAN_FIELDS = {"enabled", "run_on_start", "maintenance_enabled"}
-
-WORKFLOW_ENGINE_DEFAULTS = {
-    "mode": "sqlite",
-    "system_database_url_env": "ROBERT_DBOS_SYSTEM_DATABASE_URL",
-}
-WORKFLOW_ENGINE_MODES = {"sqlite", "legacy", "shadow", "active"}
-
-
-def _normalize_workflow_engine(config, environ=None):
-    raw = config.get("workflow_engine")
-    if raw in (None, ""):
-        raw = {}
-    if not isinstance(raw, dict):
-        raise ValueError("workflow_engine must be a mapping")
-    unsupported_fields = sorted(set(raw) - set(WORKFLOW_ENGINE_DEFAULTS))
-    if unsupported_fields:
-        raise ValueError(
-            "workflow_engine contains unsupported fields: "
-            + ", ".join(
-                f"workflow_engine.{field}" for field in unsupported_fields
-            )
-        )
-
-    mode = str(raw.get("mode", WORKFLOW_ENGINE_DEFAULTS["mode"])).strip()
-    if mode not in WORKFLOW_ENGINE_MODES:
-        raise ValueError(
-            "workflow_engine.mode must be sqlite or the deprecated legacy alias; active/shadow require offline migration"
-        )
-    env_name = str(
-        raw.get(
-            "system_database_url_env",
-            WORKFLOW_ENGINE_DEFAULTS["system_database_url_env"],
-        )
-    ).strip()
-    if not env_name:
-        raise ValueError("workflow_engine.system_database_url_env must not be empty")
-    if mode in {"sqlite", "legacy"}:
-        return {
-            "mode": "sqlite",
-            "system_database_url_env": env_name,
-            "system_database_scheme": None,
-            "configured": False,
-        }
-
-    raise ValueError("DBOS active/shadow execution was removed; stop the old service and run robert migrate dbos --db PATH --dry-run before setting workflow_engine.mode to sqlite or omitting workflow_engine")
-
-
-PR_AUTOMATION_DEFAULTS = {
-    "conflict": {
-        "enabled": False,
-        "max_attempts": 2,
-        "max_wall_minutes": 60,
-    },
-    "ci": {
-        "enabled": False,
-        "check_allowlist": [],
-        "max_attempts": 2,
-        "max_wall_minutes": 120,
-        "max_total_tokens": 200000,
-        "max_cost_usd": 10.0,
-        "max_failure_summary_chars": 12000,
-    },
-}
-PR_AUTOMATION_BOOLEAN_FIELDS = {"enabled"}
-PR_AUTOMATION_INTEGER_FIELDS = {
-    "max_attempts",
-    "max_wall_minutes",
-    "max_total_tokens",
-    "max_failure_summary_chars",
-}
-
-
-def _normalize_daemon_config(config):
-    raw_daemon = config.get("daemon")
-    legacy_fields = sorted(set(config) & set(DAEMON_LEGACY_FIELDS))
-    if raw_daemon not in (None, ""):
-        if legacy_fields:
-            raise ValueError(
-                "daemon cannot be combined with legacy fields: "
-                f"{', '.join(legacy_fields)}"
-            )
-        if not isinstance(raw_daemon, dict):
-            raise ValueError("daemon must be a mapping")
-        unsupported_fields = sorted(set(raw_daemon) - DAEMON_FIELDS)
-        if unsupported_fields:
-            raise ValueError(
-                "daemon contains unsupported fields: "
-                + ", ".join(f"daemon.{name}" for name in unsupported_fields)
-            )
-        daemon_source = raw_daemon
-        field_labels = {key: f"daemon.{key}" for key in DAEMON_FIELDS}
-    else:
-        daemon_source = {
-            DAEMON_LEGACY_FIELDS[field]: config[field]
-            for field in legacy_fields
-        }
-        field_labels = {
-            DAEMON_LEGACY_FIELDS[field]: field
-            for field in legacy_fields
-        }
-
-    daemon = {}
-    for key, default in DAEMON_DEFAULTS.items():
-        raw_value = daemon_source.get(key, default)
-        if key in DAEMON_BOOLEAN_FIELDS:
-            if not isinstance(raw_value, bool):
-                label = field_labels.get(key, f"daemon.{key}")
-                raise ValueError(f"{label} must be a boolean")
-            daemon[key] = raw_value
-        else:
-            value = int(raw_value)
-            if key == "maintenance_batch_size" and value > 500:
-                raise ValueError("daemon.maintenance_batch_size must be at most 500")
-            if value < 1:
-                label = field_labels.get(key, f"daemon.{key}")
-                raise ValueError(f"{label} must be at least 1")
-            daemon[key] = value
-    return daemon
-
-
-def _normalize_pr_automation(raw, repo_index):
-    label = f"repos[{repo_index}].pr_automation"
-    if raw in (None, ""):
-        raw = {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"{label} must be a mapping")
-    unsupported_sections = sorted(set(raw) - set(PR_AUTOMATION_DEFAULTS))
-    if unsupported_sections:
-        raise ValueError(
-            f"{label} contains unsupported fields: "
-            + ", ".join(unsupported_sections)
-        )
-
-    normalized = {}
-    for section, defaults in PR_AUTOMATION_DEFAULTS.items():
-        raw_section = raw.get(section, {})
-        section_label = f"{label}.{section}"
-        if not isinstance(raw_section, dict):
-            raise ValueError(f"{section_label} must be a mapping")
-        unsupported_fields = sorted(set(raw_section) - set(defaults))
-        if unsupported_fields:
-            raise ValueError(
-                f"{section_label} contains unsupported fields: "
-                + ", ".join(unsupported_fields)
-            )
-        values = {}
-        for field, default in defaults.items():
-            value = raw_section.get(field, default)
-            field_label = f"{section_label}.{field}"
-            if field in PR_AUTOMATION_BOOLEAN_FIELDS:
-                if not isinstance(value, bool):
-                    raise ValueError(f"{field_label} must be a boolean")
-            elif field in PR_AUTOMATION_INTEGER_FIELDS:
-                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                    raise ValueError(f"{field_label} must be at least 1")
-            elif field == "max_cost_usd":
-                if (
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or value <= 0
-                ):
-                    raise ValueError(f"{field_label} must be greater than 0")
-                value = float(value)
-            elif field == "check_allowlist":
-                if not isinstance(value, list):
-                    raise ValueError(f"{field_label} must be a list")
-                checks = []
-                for check in value:
-                    check_name = str(check).strip()
-                    if not check_name:
-                        raise ValueError(
-                            f"{field_label} entries must not be empty"
-                        )
-                    checks.append(check_name)
-                if len(checks) != len(set(checks)):
-                    raise ValueError(
-                        f"{field_label} entries must be unique"
-                    )
-                value = checks
-            values[field] = value
-        normalized[section] = values
-
-    if (
-        normalized["ci"]["enabled"]
-        and not normalized["ci"]["check_allowlist"]
-    ):
-        raise ValueError(
-            f"{label}.ci.check_allowlist must not be empty when CI automation is enabled"
-        )
-    return normalized
-
-
-def _placeholder_fields(repo):
-    placeholders = {
-        "full_name": {"OWNER/REPO"},
-        "github_account": {"robot-user"},
-        "repo_root": {"/absolute/path/to/local/repo"},
-        "worktree_root": {"/absolute/path/to/local/repo/.worktrees"},
+    This is not a general JSON Schema implementation or an external schema API.
+    The packaged schema is the single source of structural rules and defaults.
+    """
+    if '$ref' in spec:
+        spec = schema['$defs'][spec['$ref'].rsplit('/', 1)[1]]
+    if 'oneOf' in spec:
+        for alternative in spec['oneOf']:
+            try:
+                return _schema_value(value, alternative, schema, path)
+            except ValueError:
+                pass
+        raise ValueError(f'{path} must be a command string or nonempty argv list')
+    kind = spec.get('type')
+    valid = {
+        'object': isinstance(value, dict), 'array': isinstance(value, list),
+        'string': isinstance(value, str), 'integer': type(value) is int,
+        'number': type(value) is int or (type(value) is float and math.isfinite(value)),
+        'boolean': type(value) is bool, 'null': value is None,
     }
-    fields = [
-        key
-        for key, values in placeholders.items()
-        if str(repo.get(key, "")) in values
-    ]
-    trusted_actors = repo.get("trusted_actors") or []
-    if "your-github-login" in trusted_actors:
-        fields.append("trusted_actors")
-    return fields
+    if isinstance(kind, list):
+        matches = [candidate for candidate in kind if valid[candidate]]
+        if not matches:
+            raise ValueError(f'{path} must be one of {kind}')
+        kind = matches[0]
+    if kind == 'null':
+        return None
+    if kind and not valid[kind]:
+        raise ValueError(f'{path} must be {kind}')
+    if 'const' in spec and (type(value) is not type(spec['const']) or value != spec['const']):
+        raise ValueError(f'{path} must be {spec["const"]}; see docs/config-v2-upgrade.md')
+    if 'enum' in spec and value not in spec['enum']:
+        raise ValueError(f'{path} must be one of {spec["enum"]}')
+    if kind == 'object':
+        properties = spec.get('properties', {})
+        for name in spec.get('required', []):
+            if name not in value:
+                raise ValueError(f'{path}.{name} is required')
+        if len(value) < spec.get('minProperties', 0):
+            raise ValueError(f'{path} must not be empty')
+        result = {}
+        for name in value:
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f'{path} keys must be nonempty strings')
+            child = properties.get(name, spec.get('additionalProperties', False))
+            if child is False:
+                raise ValueError(f'unsupported config field: {path}.{name}')
+            result[name] = _schema_value(value[name], child, schema, f'{path}.{name}')
+        for name, child in properties.items():
+            resolved = schema['$defs'][child['$ref'].rsplit('/', 1)[1]] if '$ref' in child else child
+            if name not in result and 'default' in resolved:
+                result[name] = _schema_value(deepcopy(resolved['default']), child, schema, f'{path}.{name}')
+        return result
+    if kind == 'array':
+        if len(value) < spec.get('minItems', 0):
+            raise ValueError(f'{path} must contain at least {spec["minItems"]} items')
+        if 'maxItems' in spec and len(value) > spec['maxItems']:
+            raise ValueError(f'{path} must contain at most {spec["maxItems"]} items')
+        if spec.get('uniqueItems') and len({json.dumps(v, sort_keys=True) for v in value}) != len(value):
+            raise ValueError(f'{path} entries must be unique')
+        return [_schema_value(item, spec['items'], schema, f'{path}[{index}]') for index, item in enumerate(value)]
+    if kind == 'string' and len(value.strip()) < spec.get('minLength', 0):
+        raise ValueError(f'{path} must not be empty')
+    for bound, failed in (
+        ('minimum', lambda n: value < n), ('maximum', lambda n: value > n),
+        ('exclusiveMinimum', lambda n: value <= n),
+    ):
+        if bound in spec and failed(spec[bound]):
+            raise ValueError(f'{path} violates {bound} {spec[bound]}')
+    return value
+
+
+def _workers(config):
+    result = []
+    credentials = {'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'}
+    for name, raw in config['workers'].items():
+        if name != name.strip():
+            raise ValueError(f'workers.{name} name must not contain surrounding whitespace')
+        if credentials.intersection(name.strip() for name in raw['environment_allowlist']):
+            raise ValueError(f'workers.{name}.environment_allowlist must not include GitHub credentials')
+        normalized = worker_adapters.normalize_worker_agent_config({
+            'worker_agent': raw['adapter'], 'worker_command': raw['command'],
+            'timeout_seconds': raw['timeout_seconds'], 'environment_allowlist': raw['environment_allowlist'],
+        })
+        result.append({'name': name, **normalized, 'default_model': raw['model'].strip(),
+                       'default_effort': raw['effort'].strip(),
+                       'fallback_model': raw['fallback_model'].strip() if 'fallback_model' in raw else None})
+    return result
+
+
+def _normalize(config, path, skip_external):
+    schema = json.loads(resource('schemas/config.schema.json').read_text(encoding='utf-8'))
+    config = _schema_value(config, schema, schema, 'config')
+    data_dir = Path(config['data_dir']).expanduser()
+    database = config['database'].strip()
+    if Path(database).name != database or database in {'.', '..'}:
+        raise ValueError(f'database must be a filename, not a path: {database}')
+    if data_dir.exists() and not data_dir.is_dir():
+        raise ValueError(f'data_dir is not a directory: {data_dir}')
+    config['github']['account'] = config['github']['account'].strip()
+    workers = _workers(config)
+    by_name = {w['name']: w for w in workers}
+    if config['default_worker'] not in by_name:
+        raise ValueError('default_worker must reference a configured worker')
+    default_worker = by_name[config['default_worker']]
+    scheduler = config['scheduler']
+    supervision = config['supervision']
+    daemon = config['daemon']
+    polling = config['github']['polling']
+    result = {
+        'ok': True, 'status': 'valid', 'version': 2, 'config_path': str(path),
+        'data_dir': str(data_dir), 'db_path': str(data_dir / database),
+        'github': config['github'], 'github_account': config['github']['account'],
+        'workers': workers, 'default_worker': default_worker,
+        'worker_agent': default_worker['agent'], 'worker_command': default_worker['command'],
+        'worker_agent_config': default_worker,
+        'python_bin': config.get('python_bin', sys.executable or 'python3').strip(),
+        'max_concurrency': scheduler['max_concurrency'],
+        'model_max_concurrency': scheduler['model_max_concurrency'],
+        'lease_ttl_seconds': scheduler['lease_ttl_seconds'],
+        'heartbeat_stale_seconds': supervision['heartbeat_stale_seconds'],
+        'hard_timeout_seconds': supervision['hard_timeout_seconds'],
+        'worker_startup_grace_seconds': supervision['startup_grace_seconds'],
+        'routes': config['routes'], 'repos': [],
+        'skills': {'search_paths': [str(Path(p).expanduser()) for p in config['skills']['search_paths']]},
+        'maintenance': config['maintenance'],
+        'supervision': supervision_config.normalize({
+            key: value for key, value in supervision.items() if key in supervision_config.DEFAULTS
+        }),
+        # Runtime control-loop names; only the schema above defines accepted YAML.
+        'daemon': {
+            'enabled': daemon['enabled'], 'run_on_start': daemon['scan_on_start'],
+            'local_poll_seconds': scheduler['local_poll_seconds'],
+            'github_poll_seconds': polling['fallback_seconds'],
+            'github_poll_when_full_seconds': polling['synchronous']['full_capacity_seconds'],
+            'rate_limit_cache_seconds': polling['synchronous']['rate_limit_cache_seconds'],
+            **config['github']['rate_limit'],
+            'live_run_timeout_seconds': daemon['control_timeouts']['github_scan_seconds'],
+            'local_drain_timeout_seconds': daemon['control_timeouts']['local_cycle_seconds'],
+        },
+        'skip_external': bool(skip_external),
+    }
+    known_routes = {p['id']: p for p in load_route_policies()}
+    seen = set()
+    for index, raw in enumerate(config['repos']):
+        name = raw['full_name'].strip()
+        if name in seen:
+            raise ValueError(f'duplicate repo full_name: {name}')
+        seen.add(name)
+        if name == 'OWNER/REPO' or 'your-github-login' in raw['trusted_actors']:
+            raise ValueError(f'repos[{index}] contains placeholder values')
+        checkout = Path(raw['checkout']).expanduser()
+        if not checkout.exists() or not (checkout / '.git').exists():
+            raise ValueError(f'repos[{index}].checkout is not a git checkout: {checkout}')
+        limit = raw.get('max_concurrency', scheduler['max_concurrency'])
+        if limit > scheduler['max_concurrency']:
+            raise ValueError(f'repos[{index}].max_concurrency exceeds global max_concurrency')
+        if raw['pr_automation']['ci']['enabled'] and not raw['pr_automation']['ci']['check_allowlist']:
+            raise ValueError(f'repos[{index}].pr_automation.ci.check_allowlist must not be empty when enabled')
+        ci = raw['pr_automation']['ci']
+        ci['check_allowlist'] = [check.strip() for check in ci['check_allowlist']]
+        if len(ci['check_allowlist']) != len(set(ci['check_allowlist'])):
+            raise ValueError(f'repos[{index}].pr_automation.ci.check_allowlist entries must be unique')
+        result['repos'].append({**raw, 'full_name': name, 'repo_root': str(checkout),
+            'worktree_root': str(Path(raw['worktrees']).expanduser()),
+            'default_base_branch': raw['default_branch'], 'max_concurrency': limit,
+            'github_account': raw.get('github_account', config['github']['account']).strip()})
+    for label, routes in [('routes', config['routes']), *[(f'repos[{i}].routes', r.get('routes', {})) for i, r in enumerate(result['repos'])]]:
+        unknown = set(routes) - set(known_routes)
+        if unknown:
+            raise ValueError(f'{label} contains unknown route: {sorted(unknown)[0]}')
+        # Validate raw references even when repository overrides shadow them.
+        # Native first-worker rules apply to the actual merged repository route.
+        for route_id, override in routes.items():
+            names = [override['worker']] if 'worker' in override else []
+            for field, allowed_route in (('multi_agent_review', 'review-pr'), ('multi_agent_vote', 'vote')):
+                if field in override:
+                    if route_id != allowed_route:
+                        raise ValueError(f'{field} is only supported by {allowed_route}')
+                    names.extend(override[field].get('workers', []))
+            for name in names:
+                if name not in by_name:
+                    raise ValueError(f'{label}.{route_id} references unknown worker: {name}')
+    for repo in result['repos']:
+        for policy in known_routes.values():
+            resolve_route_config(result, repo, policy)
+    return result
 
 
 def validate_config(config_path, skip_external=False):
     try:
-        config = load_config(config_path)
-        public_config = "version" in config
-        if public_config and config.get("version") != 1:
-            raise ValueError("version must be 1")
-        github_config = config.get("github")
-        if public_config:
-            if not isinstance(github_config, dict):
-                raise ValueError("github must be a mapping")
-            unsupported_github = sorted(
-                set(github_config) - {"account", "poll_seconds"}
-            )
-            if unsupported_github:
-                raise ValueError(
-                    "unsupported github fields: "
-                    + ", ".join(
-                        f"github.{name}"
-                        for name in unsupported_github
-                    )
-                )
-            github_account = str(github_config.get("account", "")).strip()
-            github_poll_seconds = int(github_config.get("poll_seconds", 300))
-            if github_poll_seconds < 1:
-                raise ValueError("github.poll_seconds must be at least 1")
-            if "github_account" in config:
-                raise ValueError(
-                    "unsupported public config field: github_account"
-                )
-        else:
-            github_account = str(config.get("github_account", "")).strip()
-            github_poll_seconds = 300
-        data_dir = Path(str(config["data_dir"])).expanduser()
-        database = (
-            ""
-            if config["database"] is None
-            else str(config["database"]).strip()
-        )
-        repos = config["repos"]
-        stale_after_minutes = int(config.get("stale_after_minutes", 20))
-        hard_timeout_minutes = int(config.get("hard_timeout_minutes", 45))
-        worker_startup_grace_seconds = int(config.get("worker_startup_grace_seconds", 300))
-        lease_ttl_minutes = int(config.get("lease_ttl_minutes", 9))
-        max_concurrency = int(config.get("max_concurrency", 3))
-        for field in ('model_max_concurrency', 'review_max_concurrency'):
-            if field in config and (type(config[field]) is not int or config[field] < 1):
-                raise ValueError(f'{field} must be a positive integer')
-        review_max_concurrency = config.get("model_max_concurrency", config.get("review_max_concurrency", 4))
-        if ("model_max_concurrency" in config and "review_max_concurrency" in config
-                and config["model_max_concurrency"] != config["review_max_concurrency"]):
-            raise ValueError("model_max_concurrency and review_max_concurrency disagree")
-        if type(review_max_concurrency) is not int or review_max_concurrency < 1:
-            raise ValueError("review_max_concurrency must be a positive integer")
-        python_bin_value = config.get("python_bin", sys.executable or "python3")
-        python_bin = (
-            ""
-            if python_bin_value is None
-            else str(python_bin_value).strip()
-        )
-        workers = _normalize_workers(config)
-        github_credentials = {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
-        for worker in workers:
-            if github_credentials.intersection(worker["environment_allowlist"]):
-                raise ValueError("worker environment_allowlist must not include GitHub credentials")
-        default_worker = workers[0]
-        route_worker_models = _normalize_route_worker_models(config, workers)
-        from robert_agent.supervision_config import normalize as normalize_supervision
-        supervision_config = normalize_supervision(config.get("supervision"))
-        daemon_config = _normalize_daemon_config(config)
-        workflow_engine = _normalize_workflow_engine(config)
-        skills_config = config.get("skills", {"search_paths": []})
-        if not isinstance(skills_config, dict):
-            raise ValueError("skills must be a mapping")
-        skill_search_paths = skills_config.get("search_paths", [])
-        if not isinstance(skill_search_paths, list):
-            raise ValueError("skills.search_paths must be a list")
-        routes_config = config.get("routes", {})
-        if not isinstance(routes_config, dict):
-            raise ValueError("routes must be a mapping")
+        return _normalize(load_config(config_path), config_path, skip_external)
     except (KeyError, OSError, TypeError, ValueError, yaml.YAMLError) as exc:
-        error = str(exc)
-        safe_error = (
-            error
-            if error.startswith(
-                (
-                    "unsupported worker_agent:",
-                    "worker_agent must ",
-                    "worker_command must ",
-                )
-            )
-            else f"invalid config: {error}"
-        )
-        return {
-            "ok": False,
-            "status": "failed_config",
-            "safe_error": safe_error,
-        }
-
-    worker_agent_config = {
-        "agent": default_worker["agent"],
-        "command": default_worker["command"],
-        "command_argv": default_worker["command_argv"],
-    }
-    worker_agent = default_worker["agent"]
-    worker_command = default_worker["command"]
-
-    if not python_bin:
-        return {
-            "ok": False,
-            "status": "failed_config",
-            "safe_error": "python_bin must not be empty",
-        }
-    if not database:
-        return {
-            "ok": False,
-            "status": "failed_config",
-            "safe_error": "database must not be empty",
-        }
-    if Path(database).name != database:
-        return {
-            "ok": False,
-            "status": "failed_config",
-            "safe_error": f"database must be a filename, not a path: {database}",
-        }
-    if data_dir.exists() and not data_dir.is_dir():
-        return {
-            "ok": False,
-            "status": "failed_config",
-            "safe_error": f"data_dir is not a directory: {data_dir}",
-        }
-    positive_integer_fields = {
-        "max_concurrency": max_concurrency,
-        "stale_after_minutes": stale_after_minutes,
-        "hard_timeout_minutes": hard_timeout_minutes,
-        "worker_startup_grace_seconds": worker_startup_grace_seconds,
-        "lease_ttl_minutes": lease_ttl_minutes,
-    }
-    for field, value in positive_integer_fields.items():
-        if value < 1:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"{field} must be at least 1",
-            }
-
-    if not isinstance(repos, list) or not repos:
-        return {
-            "ok": False,
-            "status": "failed_config",
-            "safe_error": "repos must contain at least one repository",
-        }
-
-    seen_repo_names = set()
-    normalized_repos = []
-    for index, repo in enumerate(repos):
-        if not isinstance(repo, dict):
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"repos[{index}] must be a mapping",
-            }
-        repo_full_name = str(repo.get("full_name", "")).strip()
-        if repo_full_name in seen_repo_names:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"duplicate repo full_name: {repo_full_name}",
-            }
-        if repo_full_name:
-            seen_repo_names.add(repo_full_name)
-
-        effective_github_account = str(repo.get("github_account") or github_account).strip()
-        if not effective_github_account:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"repos[{index}].github_account must not be empty",
-            }
-        if "review_max_concurrency" in repo or "model_max_concurrency" in repo:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"repos[{index}].review_max_concurrency is global-only",
-            }
-        if public_config:
-            unsupported_repo_fields = sorted(
-                set(repo)
-                & {
-                    "repo_root",
-                    "worktree_root",
-                    "default_base_branch",
-                }
-            )
-            if unsupported_repo_fields:
-                return {
-                    "ok": False,
-                    "status": "failed_config",
-                    "safe_error": (
-                        f"repos[{index}] contains unsupported public fields: "
-                        f"{', '.join(unsupported_repo_fields)}"
-                    ),
-                }
-            repo = {
-                **repo,
-                "full_name": repo_full_name,
-                "github_account": effective_github_account,
-                "repo_root": repo.get("checkout"),
-                "worktree_root": repo.get("worktrees"),
-                "default_base_branch": repo.get("default_branch"),
-            }
-        else:
-            repo = {
-                **repo,
-                "full_name": repo_full_name,
-                "github_account": effective_github_account,
-                "repo_root": repo.get("repo_root", repo.get("checkout")),
-                "worktree_root": repo.get(
-                    "worktree_root",
-                    repo.get("worktrees"),
-                ),
-                "default_base_branch": repo.get(
-                    "default_base_branch",
-                    repo.get("default_branch"),
-                ),
-            }
-        trusted_actors = repo.get("trusted_actors")
-        if not isinstance(trusted_actors, list) or any(
-            not isinstance(actor, str) or not actor.strip()
-            for actor in trusted_actors
-        ):
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"repos[{index}].trusted_actors must be a list of nonempty strings",
-            }
-        if not trusted_actors:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"repos[{index}].trusted_actors must not be empty",
-            }
-        required_keys = [
-            "full_name",
-            "github_account",
-            "default_base_branch",
-            "repo_root",
-            "worktree_root",
-        ]
-        missing = [key for key in required_keys if not repo.get(key)]
-        if missing:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"repos[{index}] missing required keys: {', '.join(missing)}",
-            }
-
-        placeholder_fields = _placeholder_fields(repo)
-        if placeholder_fields:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": (
-                    f"repos[{index}] contains placeholder values: "
-                    f"{', '.join(placeholder_fields)}"
-                ),
-            }
-
-        repo_root = Path(str(repo["repo_root"])).expanduser()
-        if not repo_root.exists() or not (repo_root / ".git").exists():
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"repos[{index}].repo_root is not a git checkout: {repo_root}",
-            }
-
-        worktree_root = Path(str(repo["worktree_root"])).expanduser()
-        try:
-            pr_automation = _normalize_pr_automation(
-                repo.get("pr_automation"),
-                index,
-            )
-        except ValueError as exc:
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": f"invalid config: {exc}",
-            }
-        repo_max_concurrency = repo.get("max_concurrency", max_concurrency)
-        if (
-            isinstance(repo_max_concurrency, bool)
-            or not isinstance(repo_max_concurrency, int)
-            or repo_max_concurrency < 1
-            or repo_max_concurrency > max_concurrency
-        ):
-            return {
-                "ok": False,
-                "status": "failed_config",
-                "safe_error": (
-                    f"repos[{index}].max_concurrency must be an integer between "
-                    f"1 and global max_concurrency ({max_concurrency})"
-                ),
-            }
-        normalized_repos.append(
-            {
-                **repo,
-                "trusted_actors": list(trusted_actors),
-                "repo_root": str(repo_root),
-                "worktree_root": str(worktree_root),
-                "max_concurrency": repo_max_concurrency,
-                "pr_automation": pr_automation,
-            }
-        )
-
-    route_validation_config = {
-        "workers": workers,
-        "routes": routes_config,
-    }
-    try:
-        for repo in normalized_repos:
-            for policy in load_route_policies():
-                route_config = resolve_route_config(
-                    route_validation_config,
-                    repo,
-                    policy,
-                )
-                if route_config["worker"] not in {
-                    worker["name"]
-                    for worker in workers
-                }:
-                    raise ValueError(
-                        f"route {route_config['id']} references unknown "
-                        f"worker: {route_config['worker']}"
-                    )
-    except ValueError as exc:
-        return {
-            "ok": False,
-            "status": "failed_config",
-            "safe_error": f"invalid config: {exc}",
-        }
-
-    return {
-        "ok": True,
-        "status": "valid",
-        "config_path": str(Path(config_path)),
-        "data_dir": str(data_dir),
-        "db_path": str(data_dir / database),
-        "version": config.get("version"),
-        "github": {
-            "account": github_account,
-            "poll_seconds": github_poll_seconds,
-        },
-        "github_account": github_account,
-        "repos": normalized_repos,
-        "stale_after_minutes": stale_after_minutes,
-        "hard_timeout_minutes": hard_timeout_minutes,
-        "worker_startup_grace_seconds": worker_startup_grace_seconds,
-        "lease_ttl_minutes": lease_ttl_minutes,
-        "max_concurrency": max_concurrency,
-        "review_max_concurrency": review_max_concurrency,
-        "model_max_concurrency": review_max_concurrency,
-        "python_bin": python_bin,
-        "worker_agent": worker_agent,
-        "worker_command": worker_command,
-        "worker_agent_config": worker_agent_config,
-        "workers": workers,
-        "default_worker": default_worker,
-        "route_worker_models": route_worker_models,
-        "routes": routes_config,
-        "skills": {
-            "search_paths": [
-                str(Path(path).expanduser())
-                for path in skill_search_paths
-            ],
-        },
-        "daemon": daemon_config,
-        "supervision": supervision_config,
-        "workflow_engine": workflow_engine,
-        "skip_external": bool(skip_external),
-    }
+        return {'ok': False, 'status': 'failed_config', 'safe_error': f'invalid config: {exc}'}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--skip-external", action="store_true")
+    parser.add_argument('--config', required=True)
+    parser.add_argument('--skip-external', action='store_true')
     args = parser.parse_args(argv)
     result = validate_config(args.config, skip_external=args.skip_external)
-    return emit(result, 0 if result["ok"] else 3)
+    return emit(result, 0 if result['ok'] else 3)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

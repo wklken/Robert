@@ -1,96 +1,106 @@
-version: 1
+version: 2
+
 data_dir: ~/.local/share/robert
 database: robert.sqlite3
-hard_timeout_minutes: 45
-# Global model-process limit shared by native review and vote across all repos.
-# Each round still counts as one task against max_concurrency.
-# review_max_concurrency remains a compatible alias; if both are set they must match.
-model_max_concurrency: 4
+# 可选高级设置；默认使用运行 Robert 的解释器，通常应省略。
+# python_bin: /srv/robert/.venv/bin/python3
+
+# 必填名称引用，不再隐含使用 workers 第一项。
+default_worker: coder
 
 github:
   account: robert-bot
-  poll_seconds: 300
+  polling:
+    # 常驻启动/扫描失败回退；同时用于同步路径的正常间隔。
+    # 扫描成功后仍遵循服务端提示和扫描返回值。
+    fallback_seconds: 300
+    # 以下仅用于 daemon --once 同步诊断路径。
+    synchronous:
+      full_capacity_seconds: 600
+      rate_limit_cache_seconds: 300
+  rate_limit:
+    min_search_remaining: 10
+    min_core_remaining: 500
 
-skills:
-  search_paths: []
-
-daemon:
-  enabled: true
+scheduler:
+  max_concurrency: 3
+  # 原生 review/vote 共享模型池；每轮仍占一个任务槽位。
+  model_max_concurrency: 4
   local_poll_seconds: 5
-  github_poll_seconds: 300
-  github_poll_when_full_seconds: 600
-  rate_limit_cache_seconds: 300
-  min_search_remaining: 10
-  min_core_remaining: 500
-  live_run_timeout_seconds: 300
-  local_drain_timeout_seconds: 180
-  event_retention_days: 7
-  maintenance_enabled: true
-  maintenance_interval_seconds: 300
-  maintenance_batch_size: 100
-  run_retention_days: 7
-  failed_run_retention_days: 30
-  run_on_start: false
+  lease_ttl_seconds: 540
 
-workflow_engine:
-  mode: sqlite
-
-workers:
-  default:
-    adapter: codex
-    command: codex
-    model: default
-    fallback_model: gpt-5.6-sol
-    effort: default
-
-routes: {}
-repos: []
-
-# Per-repository PR automation is opt-in. Add this block to a repository entry:
-#
-# pr_automation:
-#   conflict:
-#     enabled: false
-#     max_attempts: 2
-#     max_wall_minutes: 60
-#   ci:
-#     enabled: false
-#     check_allowlist: []
-#     max_attempts: 2
-#     max_wall_minutes: 120
-#     max_total_tokens: 200000
-#     max_cost_usd: 10.0
-#     max_failure_summary_chars: 12000
-
-# Native multi-model review (see docs/multi-model-review.md). Define each worker
-# above first; the first reviewer must equal routes.review-pr.worker.
-# routes:
-#   review-pr:
-#     worker: default
-#     multi_agent_review:
-#       enabled: true
-#       workers: [default, claude_reviewer]
-#       author_allowlist: [your-github-login]
-
-# Explicit trusted @ requests for multi-Agent voting (docs/multi-agent-vote.md).
-# Merge this vote entry into routes and define claude_voter under workers first.
-# routes:
-#   vote:
-#     worker: default
-#     multi_agent_vote:
-#       enabled: true
-#       workers: [default, claude_voter]
-
-# Independent task observation; recovery remains opt-in.
 supervision:
+  # Independent observation service; recovery and diagnosis remain opt-in.
   mode: observe
   poll_seconds: 60
   batch_size: 100
   stall_seconds: 300
-  # Administrator-owned, no-tool model wrapper; see docs/task-supervision.md.
   diagnosis: null
-  # Explicit known-recovery allowlist; null grants no additional retries.
   recovery: null
-  # Maintenance target/profile and deployment proof are independently opt-in.
   repair: null
   build_manifest: null
+  heartbeat_stale_seconds: 1200
+  hard_timeout_seconds: 2700
+  startup_grace_seconds: 300
+
+daemon:
+  enabled: true
+  scan_on_start: false
+  control_timeouts:
+    github_scan_seconds: 300
+    # 同时限制本地 drain 和常驻 publisher 控制子进程。
+    local_cycle_seconds: 180
+
+maintenance:
+  enabled: true
+  interval_seconds: 300
+  batch_size: 100
+  retention:
+    runs_days: 7
+    failed_runs_days: 30
+    daemon_events_days: 7
+
+workers:
+  coder:
+    adapter: codex
+    command: codex
+    model: default
+    effort: default
+    # 可选；如已有配置应保留实际值，不要照抄未验证模型名。
+    # fallback_model: YOUR_SUPPORTED_FALLBACK_MODEL
+    timeout_seconds: 5400
+    environment_allowlist: []
+  reviewer:
+    adapter: claude
+    command: claude
+    model: default
+    effort: default
+    timeout_seconds: 5400
+    environment_allowlist: []
+
+skills:
+  search_paths: []
+
+routes:
+  new-pr:
+    worker: coder
+    # 可选，覆盖普通自动执行；省略时继承所选 worker。
+    model: default
+    effort: default
+    required_skills: []
+    recommended_skills: []
+  review-pr:
+    worker: coder
+    multi_agent_review:
+      enabled: false
+      workers: [coder, reviewer]
+      author_allowlist: []
+  vote:
+    worker: coder
+    multi_agent_vote:
+      enabled: false
+      workers: [coder, reviewer]
+
+# Add a real repository before running config validate or starting Robert.
+# See docs/config-v2-upgrade.md for a complete repository example.
+repos: []

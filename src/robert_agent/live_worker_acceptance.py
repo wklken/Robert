@@ -3,6 +3,7 @@ import argparse
 from contextlib import closing
 import json
 import sqlite3
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -58,29 +59,37 @@ def _isolated_config(source_config, workspace_dir):
     config = validate_config.validate_config(source_config, skip_external=True)
     if not config["ok"]:
         return config
-    workers = [
-        {
-            "name": worker["name"],
-            "agent": worker["agent"],
-            "command": worker["command"],
-            "default_model": worker["default_model"],
-            "fallback_model": worker.get("fallback_model"),
-            "default_effort": worker["default_effort"],
-        }
-        for worker in config["workers"]
-    ]
-    isolated = {
-        "data_dir": str(workspace_dir / "data"),
-        "database": "dd.sqlite3",
-        "workers": workers,
-        "route_worker_models": config.get("route_worker_models", {}),
-        "max_concurrency": 1,
-        "stale_after_minutes": config.get("stale_after_minutes", 20),
-        "hard_timeout_minutes": config.get("hard_timeout_minutes", 45),
-        "worker_startup_grace_seconds": config.get("worker_startup_grace_seconds", 300),
-        "lease_ttl_minutes": config.get("lease_ttl_minutes", 9),
-        "repos": config["repos"],
-    }
+    isolated = validate_config.load_config(source_config)
+    isolated["data_dir"] = str(workspace_dir / "data")
+    isolated["database"] = "dd.sqlite3"
+    isolated.setdefault("scheduler", {})["max_concurrency"] = 1
+    checkout_root = Path(tempfile.mkdtemp(prefix="checkouts-", dir=workspace_dir))
+    for index, repo in enumerate(isolated["repos"]):
+        checkout = checkout_root / str(index)
+        source = str(Path(repo["checkout"]).expanduser().resolve())
+        try:
+            base_branch = repo["default_branch"]
+            available = subprocess.run(
+                ["git", "-C", source, "show-ref", "--verify", "--quiet", f"refs/heads/{base_branch}"],
+                capture_output=True, timeout=120,
+            )
+            if available.returncode:
+                return {"ok": False, "status": "failed_workspace",
+                        "safe_error": f"Isolated acceptance requires local branch {base_branch} "
+                                      f"in {repo['full_name']}; prepare a committed local snapshot first"}
+            # Copy committed objects and refs into independent Git metadata.
+            # Upstream is the local source, so fetch reads it without changing
+            # its remote refs, worktree registrations or checked-out files.
+            subprocess.run(
+                ["git", "clone", "--no-local", "--origin", "upstream", "--", source, str(checkout)],
+                check=True, capture_output=True, text=True, timeout=120,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return {"ok": False, "status": "failed_workspace",
+                    "safe_error": f"Could not clone repository {repo['full_name']} for isolated acceptance"}
+        repo["checkout"] = str(checkout)
+        repo["worktrees"] = str(checkout_root / f"{index}-worktrees")
+        repo["max_concurrency"] = 1
     config_path = workspace_dir / "config.json"
     _write_json(config_path, isolated)
     return {

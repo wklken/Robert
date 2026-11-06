@@ -59,7 +59,7 @@ class NativeAdmissionPolicyTests(unittest.TestCase):
                 self.assertTrue(queue)
                 with mock.patch.object(run_once.dispatch, 'dispatch_worker') as launch:
                     run_once._dispatch_queued(fixture.db, ['repo:example/backend'], queue, True, 3,
-                        current['workers'], current['default_worker'], current.get('route_worker_models'), current)
+                        current['workers'], current['default_worker'], current)
                     launch.assert_not_called()
                 with closing(sqlite3.connect(fixture.db)) as conn:
                     self.assertEqual(conn.execute('SELECT status FROM attempts').fetchone()[0], 'canceled')

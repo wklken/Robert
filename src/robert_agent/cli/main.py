@@ -10,7 +10,7 @@ import sys
 from robert_agent import __version__
 from robert_agent import daemon
 from robert_agent import diagnostics
-from robert_agent import migrate, sqlite_migration, execution_store
+from robert_agent import sqlite_migration, execution_store
 from robert_agent import retention
 from robert_agent import run_once
 from robert_agent import status
@@ -22,7 +22,7 @@ from robert_agent.cli.output import emit_result
 from robert_agent.doctor import doctor
 from robert_agent.init_config import init_config
 from robert_agent.integrations import openclaw
-from robert_agent.paths import default_config_path, default_data_dir
+from robert_agent.paths import default_config_path
 from robert_agent.resource_files import resource
 
 
@@ -191,17 +191,6 @@ def build_parser() -> argparse.ArgumentParser:
         dest="migrate_command",
         required=True,
     )
-    migrate_command = migration_commands.add_parser("dd-github-agent")
-    migrate_command.add_argument(
-        "--source",
-        default="~/.agents/data/dd-github-agent",
-    )
-    migrate_command.add_argument(
-        "--target",
-        default=str(default_data_dir()),
-    )
-    migrate_command.add_argument("--dry-run", action="store_true")
-    _add_output_argument(migrate_command)
 
     sqlite_command = migration_commands.add_parser(
         "dbos", help="Preview or apply an offline DBOS-to-SQLite handoff."
@@ -425,18 +414,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 doctor(args.config, skip_external=args.skip_external),
                 args.output,
             )
-        if (
-            args.command == "migrate"
-            and args.migrate_command == "dd-github-agent"
-        ):
-            return _emit_and_code(
-                migrate.migrate_legacy(
-                    args.source,
-                    args.target,
-                    dry_run=args.dry_run,
-                ),
-                args.output,
-            )
         if args.command == "migrate" and args.migrate_command == "dbos":
             return _emit_and_code(
                 sqlite_migration.run(
@@ -505,14 +482,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             validated = validate_config.validate_config(args.config, skip_external=True)
             if not validated.get("ok"):
                 return _emit_and_code(validated, args.output)
-            config = validated["daemon"]
+            config = validated["maintenance"]
             result = retention.prune_database(
                 validated["db_path"], apply=args.apply,
-                batch_size=args.batch_size if args.batch_size is not None else config["maintenance_batch_size"],
+                batch_size=args.batch_size if args.batch_size is not None else config["batch_size"],
                 max_batches=args.batches,
-                run_retention_days=config["run_retention_days"],
-                failed_run_retention_days=config["failed_run_retention_days"],
-                event_retention_days=config["event_retention_days"],
+                run_retention_days=config["retention"]["runs_days"],
+                failed_run_retention_days=config["retention"]["failed_runs_days"],
+                event_retention_days=config["retention"]["daemon_events_days"],
             )
             emit_result(result, output=args.output)
             if result["ok"]:
@@ -626,6 +603,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.output,
                 )
             validated = _validated_config(args)
+            if args.config_command == "show":
+                from robert_agent.route_config import load_route_policies, resolve_route_config
+                validated["effective_routes"] = {
+                    repo["full_name"]: {
+                        policy["id"]: resolve_route_config(validated, repo, policy)
+                        for policy in load_route_policies()
+                    } for repo in validated["repos"]
+                }
+                validated["model_scope"] = "Route model/effort apply to ordinary automatic execution only; manual and native multi-model execution use each named worker's own settings."
             return _emit_and_code(validated, args.output)
         if args.command == "run" and args.run_command == "once":
             return run_once.main(_run_once_argv(args))

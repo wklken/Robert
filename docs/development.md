@@ -230,8 +230,7 @@ Commands:
   src/robert_agent/paths.py \
   src/robert_agent/route_config.py \
   src/robert_agent/skills.py \
-  src/robert_agent/service.py \
-  src/robert_agent/migrate.py
+  src/robert_agent/service.py
 /tmp/robert-dev-check/bin/python -B -m unittest discover -s tests
 /tmp/robert-dev-check/bin/python -B -m compileall -q src
 /tmp/robert-dev-check/bin/python -m build

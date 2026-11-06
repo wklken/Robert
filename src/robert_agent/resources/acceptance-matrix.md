@@ -90,9 +90,13 @@ database. It runs the live assigned issue search, mention search, notification
 lookup, and event normalization path, then reports counts and sample normalized
 events without authorizing, routing, or dispatching work.
 
-Use `scripts/live_worker_acceptance.py --config <config>` after preflight to
+Use `python -m robert_agent.live_worker_acceptance --config <config>` after preflight to
 prove the configured worker command can run against an isolated control-plane
-database. The script creates a temporary config/data directory, dispatches a
+database. It also clones committed source repositories into independent local
+checkouts and uses separate worktree directories; uncommitted source edits are
+not included. The configured default branch must exist as a local branch in
+the source checkout; a remote-tracking ref alone is insufficient. Preparation
+reports this prerequisite before launching a worker. The script creates a temporary config/data directory, dispatches a
 safe analysis fixture through the real worker command, waits for a structured
 worker result, then runs audit and publication in dry-run mode. This covers live
 worker launch plus dry-run-safe publication evidence without modifying the

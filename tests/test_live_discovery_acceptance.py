@@ -22,16 +22,26 @@ class LiveDiscoveryAcceptanceTests(unittest.TestCase):
         self.data_dir = self.root / "data"
         self.config_path = self.root / "config.yml"
         self.config_path.write_text(
-            f"""data_dir: {self.data_dir}
+            f"""version: 2
+data_dir: {self.data_dir}
 database: dd.sqlite3
+github:
+  account: robot
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: cbc
+    model: gpt-5.4
+    effort: high
 repos:
-  - full_name: example/repo
-    github_account: robot
-    trusted_actors:
-      - wklken
-    default_base_branch: main
-    repo_root: {self.repo_root}
-    worktree_root: {self.worktree_root}
+- full_name: example/repo
+  github_account: robot
+  trusted_actors:
+  - wklken
+  checkout: {self.repo_root}
+  worktrees: {self.worktree_root}
+  default_branch: main
 """,
             encoding="utf-8",
         )

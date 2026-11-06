@@ -14,7 +14,7 @@ from robert_agent.route_config import resolve_route_config, review_workers_for_a
 class MultiReviewConfigTests(unittest.TestCase):
     def setUp(self):
         self.policy = {'id': 'review-pr', 'worker': 'codex'}
-        self.config = {'workers': {'codex': {}, 'claude': {}}, 'routes': {
+        self.config = {'default_worker': 'codex', 'workers': {'codex': {}, 'claude': {}}, 'routes': {
             'review-pr': {'multi_agent_review': {
                 'enabled': True, 'workers': ['codex', 'claude'],
                 'author_allowlist': ['Alice']}}}}
@@ -58,8 +58,8 @@ class ReviewConcurrencyConfigTests(unittest.TestCase):
         (checkout / '.git').mkdir()
         self.path = self.root / 'config.yml'
         self.config = {
-            'version': 1, 'data_dir': str(self.root / 'data'), 'database': 'robert.sqlite3',
-            'github': {'account': 'robert-bot'}, 'max_concurrency': 1,
+            'version': 2, 'default_worker': 'codex', 'data_dir': str(self.root / 'data'), 'database': 'robert.sqlite3',
+            'github': {'account': 'robert-bot'}, 'scheduler': {'max_concurrency': 1},
             'workers': {'codex': {'adapter': 'codex', 'command': 'codex', 'model': 'default', 'effort': 'default'}},
             'repos': [{'full_name': 'example/backend', 'checkout': str(checkout),
                        'worktrees': str(self.root / 'worktrees'), 'default_branch': 'main',
@@ -73,41 +73,41 @@ class ReviewConcurrencyConfigTests(unittest.TestCase):
     def test_defaults_to_four_without_changing_task_concurrency(self):
         result = self.validate(self.config)
         self.assertTrue(result['ok'], result)
-        self.assertEqual(result['review_max_concurrency'], 4)
+        self.assertEqual(result['model_max_concurrency'], 4)
         self.assertEqual(result['max_concurrency'], 1)
         self.assertEqual(result['repos'][0]['max_concurrency'], 1)
 
     def test_accepts_independent_global_review_limit(self):
-        result = self.validate({**self.config, 'review_max_concurrency': 19})
+        result = self.validate({**self.config, 'scheduler': {'max_concurrency': 1, 'model_max_concurrency': 19}})
         self.assertTrue(result['ok'], result)
-        self.assertEqual(result['review_max_concurrency'], 19)
+        self.assertEqual(result['model_max_concurrency'], 19)
         self.assertEqual(result['max_concurrency'], 1)
 
     def test_review_limit_requires_a_positive_integer(self):
         for value in (True, False, 0, -1, 1.5, '2', None, [], {}):
             with self.subTest(value=value):
-                result = self.validate({**self.config, 'review_max_concurrency': value})
+                result = self.validate({**self.config, 'scheduler': {'model_max_concurrency': value}})
                 self.assertFalse(result['ok'], result)
                 self.assertEqual(result['status'], 'failed_config')
-                self.assertIn('review_max_concurrency', result['safe_error'])
+                self.assertIn('model_max_concurrency', result['safe_error'])
 
     def test_review_limit_cannot_be_overridden_by_repository_or_route(self):
         for location in ('repository', 'global-route', 'repository-route'):
             config = copy.deepcopy(self.config)
             if location == 'repository':
-                config['repos'][0]['review_max_concurrency'] = 2
+                config['repos'][0]['model_max_concurrency'] = 2
             elif location == 'global-route':
-                config['routes'] = {'review-pr': {'review_max_concurrency': 2}}
+                config['routes'] = {'review-pr': {'model_max_concurrency': 2}}
             else:
-                config['repos'][0]['routes'] = {'review-pr': {'review_max_concurrency': 2}}
+                config['repos'][0]['routes'] = {'review-pr': {'model_max_concurrency': 2}}
             with self.subTest(location=location):
                 result = self.validate(config)
                 self.assertFalse(result['ok'], result)
-                self.assertIn('review_max_concurrency', result['safe_error'])
+                self.assertIn('model_max_concurrency', result['safe_error'])
 
     def test_schema_exposes_review_limit_only_at_root(self):
         schema = json.loads(resource('schemas/config.schema.json').read_text(encoding='utf-8'))
-        self.assertEqual(schema['properties']['review_max_concurrency'],
+        self.assertEqual(schema['properties']['scheduler']['properties']['model_max_concurrency'],
                          {'type': 'integer', 'minimum': 1, 'default': 4})
-        self.assertNotIn('review_max_concurrency', schema['properties']['repos']['items']['properties'])
-        self.assertNotIn('review_max_concurrency', schema['$defs']['routeOverride']['properties'])
+        self.assertNotIn('model_max_concurrency', schema['properties']['repos']['items']['properties'])
+        self.assertNotIn('model_max_concurrency', schema['$defs']['routeOverride']['properties'])

@@ -29,7 +29,7 @@ class VoteRoutingTests(unittest.TestCase):
         self.assertNotEqual(discover.infer_intent('投票 A/B', '@robert-bot explain this', 'comment', 'robert-bot'), 'vote')
 
     def test_vote_configuration_requires_multiple_known_workers_and_main_first(self):
-        config = {'workers': {'one': {}, 'two': {}}, 'routes': {'vote': {
+        config = {"default_worker": 'one', 'workers': {'one': {}, 'two': {}}, 'routes': {'vote': {
             'worker': 'one', 'multi_agent_vote': {'enabled': True, 'workers': ['one', 'two']}}}}
         policy = {'id': 'vote', 'expected_output': 'multi_agent_vote_report'}
         result = route_config.resolve_route_config(config, {}, policy)
@@ -41,18 +41,16 @@ class VoteRoutingTests(unittest.TestCase):
 
 
 class VoteConfigLimitTests(unittest.TestCase):
-    def test_new_and_legacy_model_limit_aliases(self):
+    def test_only_nested_model_limit_is_accepted(self):
         from tests import test_multi_review_config as config_fixture
         fixture = config_fixture.ReviewConcurrencyConfigTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        for update, expected in [({'model_max_concurrency': 2}, 2),
-                                 ({'review_max_concurrency': 3}, 3),
-                                 ({'review_max_concurrency': 2, 'model_max_concurrency': 2}, 2)]:
-            result = fixture.validate({**fixture.config, **update})
-            self.assertTrue(result['ok'], result)
-            self.assertEqual(result['model_max_concurrency'], expected)
-        self.assertFalse(fixture.validate({**fixture.config, 'model_max_concurrency': 2, 'review_max_concurrency': 3})['ok'])
+        result = fixture.validate({**fixture.config, 'scheduler': {'model_max_concurrency': 2}})
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['model_max_concurrency'], 2)
+        for field in ('model_max_concurrency', 'review_max_concurrency'):
+            self.assertFalse(fixture.validate({**fixture.config, field: 2})['ok'])
 
     def test_aliases_cannot_hide_an_invalid_boolean_legacy_limit(self):
         from tests import test_multi_review_config as config_fixture

@@ -126,13 +126,13 @@ confirmation wherever the guide requires it.
 PR self-healing is disabled by default. Enable `pr_automation` on an individual
 repository; CI automation also requires a non-empty `check_allowlist`.
 
-Robert uses `version: 1` YAML at `~/.config/robert/config.yml`. The main sections
-are `github`, `workers`, `skills`, `routes`, `route_worker_models`, `repos`,
-`daemon`, and optional `workflow_engine`. SQLite is the only execution engine;
-`legacy` is accepted as a deprecated alias. Existing DBOS deployments must follow
-the [offline upgrade procedure](docs/sqlite-state-machine-upgrade.md) before switching.
-See the [configuration reference](docs/reference.md#configuration) for structure,
-defaults, and older configuration updates, and [guides](docs/guides.md) for examples.
+Robert accepts only `version: 2` YAML at `~/.config/robert/config.yml`.
+Named workers and an explicit default_worker define execution; routes select
+workers and ordinary model/effort overrides. GitHub scanning, scheduling,
+supervision and maintenance have separate sections. SQLite is the only engine.
+Follow the [configuration upgrade guide](docs/config-v2-upgrade.md); old formats
+and aliases are rejected. See the [reference](docs/reference.md#configuration)
+for defaults and [guides](docs/guides.md) for setup.
 Workers may define `fallback_model`. After two consecutive `failed_timeout`
 attempts in the same workstream, the third run uses that model without changing
 the reasoning effort. The default hard timeout is 45 minutes.
@@ -204,14 +204,8 @@ commands. It never schedules or starts Robert.
 
 ## Migration
 
-Preview and import legacy state:
-
-```bash
-robert migrate dd-github-agent --dry-run
-robert migrate dd-github-agent
-```
-
-Migration creates a separate backup and preserves legacy deduplication markers.
+Convert configuration manually using the [v2 upgrade guide](docs/config-v2-upgrade.md).
+There is no legacy configuration import command.
 
 ## Troubleshooting
 

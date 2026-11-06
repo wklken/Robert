@@ -870,10 +870,10 @@ def _upsert_repo(conn, repo):
     return repo_id
 
 
-def _acquire_agent_lease(conn, repo_id, run_id, run_now, ttl_minutes):
+def _acquire_agent_lease(conn, repo_id, run_id, run_now, ttl_seconds):
     resource_key = repo_id
     now_dt = _parse_time(run_now)
-    expires_at = (now_dt + timedelta(minutes=ttl_minutes)).isoformat()
+    expires_at = (now_dt + timedelta(seconds=ttl_seconds)).isoformat()
     # Acquire SQLite's writer lock before inspecting/inserting the unique lease.
     # Expiry is a scheduling hint, not proof that its process has stopped.
     conn.execute(
@@ -1069,8 +1069,8 @@ def _supervise_running_attempts(conn, repo_id, config_result, run_now, data_dir=
                 heartbeat_at=heartbeat_at,
                 started_at=started_at,
                 now=now_dt,
-                stale_after_minutes=config_result.get("stale_after_minutes", 20),
-                hard_timeout_minutes=config_result.get("hard_timeout_minutes", 45),
+                heartbeat_stale_seconds=config_result.get("heartbeat_stale_seconds", 1200),
+                global_timeout_seconds=config_result.get("hard_timeout_seconds", 2700),
                 hard_timeout_seconds=worker_timeout_seconds,
             )
         process_status = {"status": "not_checked"}
@@ -3694,7 +3694,7 @@ def _effective_route(config_result, repo, event, route_id=None):
         "route_id": resolved["id"],
         "confidence": base_route.get("confidence", "low"),
         "needs_worktree": base_route.get("needs_worktree", False),
-        "enforce_workspace_policy": config_result.get("version") == 1,
+        "enforce_workspace_policy": True,
         "required_skills": required_skills,
         "skill_status": skill_status,
     }
@@ -5547,7 +5547,7 @@ def _model_for_dispatch(
 
 
 def _dispatch_queued(db_path, repo_ids, dispatch_queue, dry_run, max_concurrency,
-                     workers=None, default_worker=None, route_worker_models=None, config_result=None):
+                     workers=None, default_worker=None, config_result=None):
     # The process-owned task lock covers target validation, spawn and PID
     # persistence. Cancellation/publication take this same lock.
     with task_publication_lock(db_path,'dispatch-admission') as admission:
@@ -5561,7 +5561,7 @@ def _dispatch_queued(db_path, repo_ids, dispatch_queue, dry_run, max_concurrency
             with task_publication_lock(db_path,item['task_info']['task_id']) as acquired:
                 if acquired:
                     results.extend(_dispatch_queued_locked(db_path,repo_ids,[item],dry_run,max_concurrency,
-                        workers,default_worker,route_worker_models,config_result))
+                        workers,default_worker,config_result))
         return results
 
 
@@ -5589,7 +5589,6 @@ def _dispatch_queued_locked(
     max_concurrency,
     workers=None,
     default_worker=None,
-    route_worker_models=None,
     config_result=None,
 ):
     cutover = result_cutover.check(db_path)
@@ -5626,7 +5625,7 @@ def _dispatch_queued_locked(
                 conn.execute("PRAGMA busy_timeout = 5000")
                 if not _execution_task_active(conn, task_info["task_id"]):
                     continue
-        route_worker_config = (route_worker_models or {}).get(task_info.get("route_id"))
+        effective_route = None
         selected_worker = default_worker
         if task_info.get("routing_mode") == "manual":
             selected_worker = workers_by_name.get(task_info.get("requested_worker"))
@@ -5655,7 +5654,7 @@ def _dispatch_queued_locked(
                     conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.dispatch_wait','manual_worker_unavailable') WHERE task_id=?",
                                  (task_info['task_id'],))
                 continue
-        elif config_result and config_result.get("version") == 1:
+        elif config_result:
             policy = ROUTE_POLICIES.get(task_info.get("route_id"))
             if policy:
                 effective_route = route_config.resolve_route_config(
@@ -5666,11 +5665,9 @@ def _dispatch_queued_locked(
                 selected_worker = workers_by_name[
                     effective_route["worker"]
                 ]
-        elif route_worker_config:
-            selected_worker = workers_by_name[route_worker_config["worker"]]
         primary_model = (
-            route_worker_config["model"]
-            if route_worker_config and task_info.get("routing_mode") != "manual"
+            effective_route["model"]
+            if effective_route and task_info.get("routing_mode") != "manual"
             else selected_worker["default_model"]
         )
         with closing(sqlite3.connect(db_path)) as conn:
@@ -5691,8 +5688,8 @@ def _dispatch_queued_locked(
             "worker_agent_config": selected_worker,
             "model": model,
             "reasoning_effort": (
-                route_worker_config["effort"]
-                if route_worker_config and task_info.get("routing_mode") != "manual"
+                effective_route["effort"]
+                if effective_route and task_info.get("routing_mode") != "manual"
                 else selected_worker["default_effort"]
             ),
             "dry_run": dry_run,
@@ -7357,7 +7354,7 @@ def _run_repo_pipeline(
             repo_id,
             run_id,
             run_now,
-            config_result.get("lease_ttl_minutes", 9),
+            config_result.get("lease_ttl_seconds", 540),
         )
         summary["lease_status"] = lease_result["status"]
         if not lease_result["ok"]:
@@ -8373,7 +8370,7 @@ def run_once(
     if not cutover["ok"]:
         return cutover
     with closing(sqlite3.connect(db_path)) as pool_conn, pool_conn:
-        review_store.configure_process_pool(pool_conn, config_result['review_max_concurrency'])
+        review_store.configure_process_pool(pool_conn, config_result['model_max_concurrency'])
     with closing(sqlite3.connect(db_path)) as guard:
         execution_store.require_migrated(guard)
     from robert_agent.worker.result import replay_pending_results
@@ -8548,7 +8545,7 @@ def run_once(
                     dispatch_results.extend(_dispatch_queued(
                         db_path, repo_ids, dispatch_queue, dry_run, max_concurrency,
                         config_result.get('workers'), config_result.get('default_worker'),
-                        config_result.get('route_worker_models'), config_result,
+                        config_result,
                     ))
                 except Exception as exc:
                     dispatch_error = _safe_dispatch_error(exc)
@@ -8753,7 +8750,6 @@ def run_once(
             max_concurrency,
             config_result.get("workers"),
             config_result.get("default_worker"),
-            config_result.get("route_worker_models"),
             config_result,
         ))
     except Exception as exc:

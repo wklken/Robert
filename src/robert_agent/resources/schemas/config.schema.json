@@ -6,22 +6,38 @@
     "routeOverride": {
       "type": "object",
       "properties": {
-        "worker": {"type": "string", "minLength": 1},
+        "worker": {
+          "type": "string",
+          "minLength": 1
+        },
         "required_skills": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1}
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "recommended_skills": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1}
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "multi_agent_vote": {
           "type": "object",
           "properties": {
-            "enabled": {"type": "boolean"},
+            "enabled": {
+              "type": "boolean"
+            },
             "workers": {
-              "type": "array", "minItems": 2, "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1}
+              "type": "array",
+              "minItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "additionalProperties": false
@@ -29,16 +45,37 @@
         "multi_agent_review": {
           "type": "object",
           "properties": {
-            "enabled": {"type": "boolean"},
+            "enabled": {
+              "type": "boolean"
+            },
             "workers": {
-              "type": "array", "minItems": 1, "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1}
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "author_allowlist": {
-              "type": "array", "items": {"type": "string", "minLength": 1}
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "additionalProperties": false
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Override ordinary automatic execution only; native multi-model stages use their named workers."
+        },
+        "effort": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Override ordinary automatic execution only; native multi-model stages use their named workers."
         }
       },
       "additionalProperties": false
@@ -49,164 +86,256 @@
         "conflict": {
           "type": "object",
           "properties": {
-            "enabled": {"type": "boolean"},
-            "max_attempts": {"type": "integer", "minimum": 1},
-            "max_wall_minutes": {"type": "integer", "minimum": 1}
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2
+            },
+            "max_wall_minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 60
+            }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "default": {}
         },
         "ci": {
           "type": "object",
           "properties": {
-            "enabled": {"type": "boolean"},
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
             "check_allowlist": {
               "type": "array",
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1}
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "default": []
             },
-            "max_attempts": {"type": "integer", "minimum": 1},
-            "max_wall_minutes": {"type": "integer", "minimum": 1},
-            "max_total_tokens": {"type": "integer", "minimum": 1},
-            "max_cost_usd": {"type": "number", "exclusiveMinimum": 0},
-            "max_failure_summary_chars": {"type": "integer", "minimum": 1}
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2
+            },
+            "max_wall_minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 120
+            },
+            "max_total_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 200000
+            },
+            "max_cost_usd": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 10.0
+            },
+            "max_failure_summary_chars": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 12000
+            }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "default": {}
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "default": {}
     }
   },
-  "required": ["version", "github", "workers", "repos"],
+  "required": [
+    "version",
+    "data_dir",
+    "database",
+    "github",
+    "default_worker",
+    "workers",
+    "repos"
+  ],
   "properties": {
-    "supervision": {
-      "type": "object",
-      "properties": {
-        "mode": {"enum": ["off", "observe", "recover_known"], "default": "observe"},
-        "poll_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
-        "batch_size": {"type": "integer", "minimum": 1, "maximum": 500},
-        "stall_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
-        "build_manifest": {"type": ["string", "null"]},
-        "repair": {
-          "type": ["object", "null"],
-          "properties": {
-            "mode": {"enum": ["backlog", "auto"]},
-            "repository": {"type": "string"}, "worker": {"type": ["string", "null"]},
-            "allowed_actions": {"type": "array", "items": {"enum": ["push_existing_pr", "open_pr"]}},
-            "launcher": {"type": "array", "items": {"type": "string"}},
-            "verification_commands": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-            "max_repairs_per_day": {"type": "integer", "minimum": 1, "maximum": 20}
-          },
-          "required": ["repository"], "additionalProperties": false
-        },
-        "recovery": {
-          "type": ["object", "null"],
-          "properties": {
-            "allowed_actions": {"type": "array", "minItems": 1, "items": {"enum": ["spool_replay", "audit_retry", "handoff_resume", "publication_retry", "publication_reconcile"]}},
-            "repositories": {"type": "array", "minItems": 1, "items": {"type": "string"}}
-          },
-          "required": ["allowed_actions", "repositories"], "additionalProperties": false
-        },
-        "diagnosis": {
-          "type": ["object", "null"],
-          "properties": {
-            "command": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string"}},
-            "environment_allowlist": {"type": "array", "maxItems": 32, "items": {"type": "string"}},
-            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
-            "cooldown_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
-            "max_calls_per_hour": {"type": "integer", "minimum": 1, "maximum": 60}
-          },
-          "required": ["command"],
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
+    "version": {
+      "const": 2
     },
-    "version": {"const": 1},
-    "data_dir": {"type": "string", "minLength": 1},
-    "database": {"type": "string", "minLength": 1},
-    "model_max_concurrency": {"type": "integer", "minimum": 1},
-    "review_max_concurrency": {"type": "integer", "minimum": 1, "default": 4},
+    "data_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "database": {
+      "type": "string",
+      "minLength": 1
+    },
     "github": {
       "type": "object",
-      "required": ["account"],
       "properties": {
-        "account": {"type": "string", "minLength": 1},
-        "poll_seconds": {"type": "integer", "minimum": 1}
+        "account": {
+          "type": "string",
+          "minLength": 1
+        },
+        "polling": {
+          "type": "object",
+          "properties": {
+            "fallback_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 300
+            },
+            "synchronous": {
+              "type": "object",
+              "properties": {
+                "full_capacity_seconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 600
+                },
+                "rate_limit_cache_seconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 300
+                }
+              },
+              "additionalProperties": false,
+              "default": {}
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "rate_limit": {
+          "type": "object",
+          "properties": {
+            "min_search_remaining": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 10
+            },
+            "min_core_remaining": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 500
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "account"
+      ]
     },
     "skills": {
       "type": "object",
       "properties": {
         "search_paths": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "default": {}
     },
     "daemon": {
       "type": "object",
       "properties": {
-        "enabled": {"type": "boolean"},
-        "local_poll_seconds": {"type": "integer", "minimum": 1},
-        "github_poll_seconds": {"type": "integer", "minimum": 1},
-        "github_poll_when_full_seconds": {"type": "integer", "minimum": 1},
-        "rate_limit_cache_seconds": {"type": "integer", "minimum": 1},
-        "min_search_remaining": {"type": "integer", "minimum": 1},
-        "min_core_remaining": {"type": "integer", "minimum": 1},
-        "live_run_timeout_seconds": {"type": "integer", "minimum": 1},
-        "local_drain_timeout_seconds": {"type": "integer", "minimum": 1},
-        "event_retention_days": {"type": "integer", "minimum": 1},
-        "maintenance_enabled": {"type": "boolean"},
-        "maintenance_interval_seconds": {"type": "integer", "minimum": 1},
-        "maintenance_batch_size": {"type": "integer", "minimum": 1, "maximum": 500},
-        "run_retention_days": {"type": "integer", "minimum": 1},
-        "failed_run_retention_days": {"type": "integer", "minimum": 1},
-        "run_on_start": {"type": "boolean"}
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "scan_on_start": {
+          "type": "boolean",
+          "default": false
+        },
+        "control_timeouts": {
+          "type": "object",
+          "properties": {
+            "github_scan_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 300
+            },
+            "local_cycle_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 180
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        }
       },
-      "additionalProperties": false
-    },
-    "workflow_engine": {
-      "type": "object",
-      "properties": {
-        "mode": {"type": "string", "enum": ["sqlite", "legacy"]},
-        "system_database_url_env": {"type": "string", "minLength": 1}
-      },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "default": {}
     },
     "workers": {
       "type": "object",
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
-        "required": ["adapter", "command", "model", "effort"],
+        "required": [
+          "adapter",
+          "command",
+          "model",
+          "effort"
+        ],
         "properties": {
-          "adapter": {"type": "string", "minLength": 1},
+          "adapter": {
+            "type": "string",
+            "minLength": 1
+          },
           "command": {
             "oneOf": [
-              {"type": "string", "minLength": 1},
+              {
+                "type": "string",
+                "minLength": 1
+              },
               {
                 "type": "array",
                 "minItems": 1,
-                "items": {"type": "string", "minLength": 1}
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
               }
             ]
           },
-          "model": {"type": "string", "minLength": 1},
-          "fallback_model": {"type": "string", "minLength": 1},
-          "effort": {"type": "string", "minLength": 1},
-          "prompt_transport": {
+          "model": {
             "type": "string",
-            "enum": ["stdin"]
+            "minLength": 1
+          },
+          "fallback_model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effort": {
+            "type": "string",
+            "minLength": 1
           },
           "timeout_seconds": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "default": 5400
           },
           "environment_allowlist": {
             "type": "array",
-            "items": {"type": "string", "minLength": 1}
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": []
           }
         },
         "additionalProperties": false
@@ -216,7 +345,8 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/routeOverride"
-      }
+      },
+      "default": {}
     },
     "repos": {
       "type": "array",
@@ -230,18 +360,41 @@
           "trusted_actors"
         ],
         "properties": {
-          "full_name": {"type": "string", "minLength": 1},
-          "github_account": {"type": "string", "minLength": 1},
-          "checkout": {"type": "string", "minLength": 1},
-          "worktrees": {"type": "string", "minLength": 1},
-          "default_branch": {"type": "string", "minLength": 1},
+          "full_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "github_account": {
+            "type": "string",
+            "minLength": 1
+          },
+          "checkout": {
+            "type": "string",
+            "minLength": 1
+          },
+          "worktrees": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default_branch": {
+            "type": "string",
+            "minLength": 1
+          },
           "trusted_actors": {
             "type": "array",
             "minItems": 1,
-            "items": {"type": "string", "minLength": 1}
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           },
-          "max_concurrency": {"type": "integer", "minimum": 1},
-          "pr_automation": {"$ref": "#/$defs/prAutomation"},
+          "max_concurrency": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pr_automation": {
+            "$ref": "#/$defs/prAutomation"
+          },
           "routes": {
             "type": "object",
             "additionalProperties": {
@@ -250,8 +403,270 @@
           }
         },
         "additionalProperties": false
-      }
+      },
+      "minItems": 1
+    },
+    "default_worker": {
+      "type": "string",
+      "minLength": 1
+    },
+    "python_bin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scheduler": {
+      "type": "object",
+      "properties": {
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3
+        },
+        "model_max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4
+        },
+        "local_poll_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5
+        },
+        "lease_ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 540
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "supervision": {
+      "type": "object",
+      "properties": {
+        "heartbeat_stale_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1200
+        },
+        "hard_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2700
+        },
+        "startup_grace_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 300
+        },
+        "mode": {
+          "enum": [
+            "off",
+            "observe",
+            "recover_known"
+          ],
+          "default": "observe"
+        },
+        "poll_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "stall_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "build_manifest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repair": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "backlog",
+                "auto"
+              ]
+            },
+            "repository": {
+              "type": "string"
+            },
+            "worker": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "allowed_actions": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "push_existing_pr",
+                  "open_pr"
+                ]
+              }
+            },
+            "launcher": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "verification_commands": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "max_repairs_per_day": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "required": [
+            "repository"
+          ],
+          "additionalProperties": false
+        },
+        "recovery": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "allowed_actions": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "enum": [
+                  "spool_replay",
+                  "audit_retry",
+                  "handoff_resume",
+                  "publication_retry",
+                  "publication_reconcile"
+                ]
+              }
+            },
+            "repositories": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "allowed_actions",
+            "repositories"
+          ],
+          "additionalProperties": false
+        },
+        "diagnosis": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "command": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "string"
+              }
+            },
+            "environment_allowlist": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "cooldown_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400
+            },
+            "max_calls_per_hour": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "maintenance": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 300
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 100,
+          "maximum": 500
+        },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "runs_days": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 7
+            },
+            "failed_runs_days": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30
+            },
+            "daemon_events_days": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 7
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
     }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

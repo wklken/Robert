@@ -23,18 +23,31 @@ class SchedulerRemediationTests(unittest.TestCase):
         (self.repo / '.git').mkdir()
         self.config = self.root / 'config.yml'
         self.data = self.root / 'data'
-        self.config.write_text(f'''data_dir: {self.data}
+        self.config.write_text(f"""version: 2
+data_dir: {self.data}
 database: runtime.sqlite3
-max_concurrency: 3
-hard_timeout_minutes: 90
+github:
+  account: robot
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: cbc
+    model: gpt-5.4
+    effort: high
+scheduler:
+  max_concurrency: 3
+supervision:
+  hard_timeout_seconds: 5400
 repos:
-  - full_name: example/repo
-    github_account: robot
-    trusted_actors: [maintainer]
-    default_base_branch: main
-    repo_root: {self.repo}
-    worktree_root: {self.repo}/.worktrees
-''')
+- full_name: example/repo
+  github_account: robot
+  trusted_actors:
+  - maintainer
+  checkout: {self.repo}
+  worktrees: {self.repo}/.worktrees
+  default_branch: main
+""")
         self.db = self.data / 'runtime.sqlite3'
         storage.init_database(self.db)
         self.now = datetime.now(timezone.utc)
@@ -200,13 +213,13 @@ repos:
         db, repos, config = loop_engine.load_config_scope(self.config, skip_external=True, include_config=True)
         self.assertEqual(db, self.db)
         self.assertEqual(repos, ['repo:example/repo'])
-        self.assertEqual(config['hard_timeout_minutes'], 90)
+        self.assertEqual(config['hard_timeout_seconds'], 5400)
 
     def test_launch_specific_timeout_and_supplied_observation_time_are_respected(self):
         with self.connect() as conn:
             identity = {**self.identity, 'worker_launch': {'timeout_seconds': 30}}
             conn.execute('UPDATE attempts SET metadata_json=?', (json.dumps({'dispatch': identity}),))
-        self.assertTrue(self.runnable(config_result={'hard_timeout_minutes': 90},
+        self.assertTrue(self.runnable(config_result={'hard_timeout_seconds': 5400},
                                       now=self.now + timedelta(seconds=31)))
 
     def test_completed_result_without_owned_process_can_advance(self):

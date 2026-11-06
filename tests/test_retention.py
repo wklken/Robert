@@ -9,7 +9,7 @@ from unittest import mock
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent import daemon, daemon_state, run_once, status, storage, web
-from robert_agent.validate_config import DAEMON_DEFAULTS
+from tests.support import DAEMON_DEFAULTS, maintenance_config
 
 
 NOW = '2026-10-23T00:00:00+00:00'
@@ -31,7 +31,7 @@ class RetentionTests(unittest.TestCase):
             conn.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('task','ws','running',?,?)", (OLD, OLD))
             conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at) VALUES ('attempt','task',1,'running',?)", (OLD,))
             conn.execute("INSERT INTO audit_events(audit_id,task_id,event_type,created_at,payload_json) VALUES ('audit','task','accepted',?,'{}')", (OLD,))
-        self.context = daemon.DaemonContext(config_path='/config.yml', workflow_path=None, db_path=self.db, repo_id='repo', max_concurrency=3, daemon_config=dict(DAEMON_DEFAULTS), daemon_run_id='daemon', lease_id=self.lease)
+        self.context = daemon.DaemonContext(config_path='/config.yml', workflow_path=None, db_path=self.db, repo_id='repo', max_concurrency=3, daemon_config=dict(DAEMON_DEFAULTS), daemon_run_id='daemon', lease_id=self.lease, runtime_config={'maintenance': maintenance_config()})
 
     def connect(self):
         conn = sqlite3.connect(self.db)
@@ -190,7 +190,7 @@ class RetentionTests(unittest.TestCase):
         with self.connect() as conn:
             self.assertIsNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='another-old'").fetchone())
         self.add_run('disabled')
-        self.context.daemon_config['maintenance_enabled'] = False
+        self.context.runtime_config['maintenance']['enabled'] = False
         with mock.patch('robert_agent.daemon.time.monotonic', return_value=20000):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
@@ -221,7 +221,7 @@ class RetentionTests(unittest.TestCase):
         self.add_run('old-a')
         self.add_run('old-b')
         self.add_run('latest', when=NOW)
-        validated = {'ok': True, 'db_path': str(self.db), 'daemon': dict(DAEMON_DEFAULTS)}
+        validated = {'ok': True, 'db_path': str(self.db), 'maintenance': maintenance_config()}
         before = self.db.read_bytes()
         with mock.patch('robert_agent.cli.main.validate_config.validate_config', return_value=validated) as validate:
             output = io.StringIO()

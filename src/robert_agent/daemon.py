@@ -575,21 +575,21 @@ def _reconcile_abandoned_executors(context):
 
 
 def _maybe_prune(context, *, now):
-    if not context.daemon_config.get("maintenance_enabled", True):
+    if not context.runtime_config["maintenance"]["enabled"]:
         return
     current = time.monotonic()
     if current < context.next_maintenance_at:
         return
-    config = context.daemon_config
+    config = context.runtime_config["maintenance"]
     result = retention.prune_database(
         context.db_path, apply=True, now=now,
-        batch_size=config.get("maintenance_batch_size", 100),
+        batch_size=config["batch_size"],
         max_batches=3, max_seconds=1,
-        run_retention_days=config.get("run_retention_days", 7),
-        failed_run_retention_days=config.get("failed_run_retention_days", 30),
-        event_retention_days=config.get("event_retention_days", 7),
+        run_retention_days=config["retention"]["runs_days"],
+        failed_run_retention_days=config["retention"]["failed_runs_days"],
+        event_retention_days=config["retention"]["daemon_events_days"],
     )
-    delay = config["local_poll_seconds"] if result["status"] == "busy" or result.get('more_work') else config.get("maintenance_interval_seconds", 300)
+    delay = context.daemon_config["local_poll_seconds"] if result["status"] == "busy" or result.get('more_work') else config["interval_seconds"]
     context.next_maintenance_at = current + delay
     if result['status'] != 'busy':
         try:
@@ -599,19 +599,19 @@ def _maybe_prune(context, *, now):
         except sqlite3.OperationalError:
             pass
     if result['status'] != 'busy' and current >= context.next_health_at:
-        context.next_health_at = current + config.get('maintenance_interval_seconds', 300)
+        context.next_health_at = current + config['interval_seconds']
         try:
             from robert_agent import reliability_health, supervisor
             health_options = {'supervision_owns_alerts': True} if supervisor.owns_health_alerts(context.runtime_config, now) else {}
             health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id], **health_options)
             if not health.get('alerts_persisted', True):
-                context.next_health_at = current + config['local_poll_seconds']
+                context.next_health_at = current + context.daemon_config['local_poll_seconds']
                 context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
                 conn.execute("PRAGMA busy_timeout=100")
                 daemon_state.record_event(conn, context.daemon_run_id, "reliability_health", "ok", health, now=now)
         except sqlite3.OperationalError:
-            context.next_health_at = current + config['local_poll_seconds']
+            context.next_health_at = current + context.daemon_config['local_poll_seconds']
             context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
     if any(result["counts"].values()) or (not result["ok"] and result["status"] != "busy"):
         try:

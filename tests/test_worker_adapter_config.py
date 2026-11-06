@@ -5,7 +5,6 @@ from pathlib import Path
 
 from robert_agent.dispatch import _worker_environment
 from robert_agent.dispatch import dispatch_worker
-from robert_agent.validate_config import _normalize_workers
 from robert_agent.worker_adapters import normalize_worker_agent_config
 
 
@@ -27,20 +26,14 @@ class WorkerEnvironmentTests(unittest.TestCase):
         self.assertNotIn("SECRET_TOKEN", result)
 
     def test_worker_config_rejects_working_directory(self):
-        with self.assertRaisesRegex(ValueError, "working_directory"):
-            _normalize_workers(
-                {
-                    "workers": {
-                        "default": {
-                            "adapter": "codex",
-                            "command": "codex",
-                            "model": "default",
-                            "effort": "default",
-                            "working_directory": "/repo",
-                        }
-                    }
-                }
-            )
+        from tests.test_config_v2 import ConfigV2Tests
+        fixture = ConfigV2Tests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.config['workers']['a']['working_directory'] = '/repo'
+        result = fixture.validate()
+        self.assertFalse(result['ok'])
+        self.assertIn('working_directory', result['safe_error'])
 
     def test_command_adapter_requires_command_sequence(self):
         with self.assertRaisesRegex(ValueError, "YAML sequence"):

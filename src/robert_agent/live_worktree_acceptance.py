@@ -110,24 +110,18 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         return source_config
     repo = source_config["repos"][0]
     controlled = {
-        "data_dir": str(workspace_dir / "data"),
-        "database": "dd.sqlite3",
-        "worker_command": str(worker),
-        "max_concurrency": 1,
-        "worker_startup_grace_seconds": 30,
-        "stale_after_minutes": source_config.get("stale_after_minutes", 20),
-        "hard_timeout_minutes": source_config.get("hard_timeout_minutes", 45),
-        "lease_ttl_minutes": source_config.get("lease_ttl_minutes", 9),
-        "repos": [
-            {
-                "full_name": repo["full_name"],
-                "github_account": repo["github_account"],
-                "trusted_actors": repo["trusted_actors"],
-                "default_base_branch": "main",
-                "repo_root": str(checkout["repo_root"]),
-                "worktree_root": str(checkout["worktree_root"]),
-            }
-        ],
+        "version": 2, "default_worker": "default",
+        "data_dir": str(workspace_dir / "data"), "database": "dd.sqlite3",
+        "github": {"account": repo["github_account"]},
+        "workers": {"default": {"adapter": "cbc", "command": str(worker),
+                    "model": "default", "effort": "default"}},
+        "scheduler": {"max_concurrency": 1, "lease_ttl_seconds": source_config["lease_ttl_seconds"]},
+        "supervision": {"startup_grace_seconds": 30,
+            "heartbeat_stale_seconds": source_config["heartbeat_stale_seconds"],
+            "hard_timeout_seconds": source_config["hard_timeout_seconds"]},
+        "repos": [{"full_name": repo["full_name"], "trusted_actors": repo["trusted_actors"],
+                  "default_branch": "main", "checkout": str(checkout["repo_root"]),
+                  "worktrees": str(checkout["worktree_root"])}],
     }
     config_path = workspace_dir / "config.json"
     _write_json(config_path, controlled)
@@ -136,7 +130,7 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "status": "prepared",
         "config_path": config_path,
         "db_path": workspace_dir / "data" / "dd.sqlite3",
-        "repo": controlled["repos"][0],
+        "repo": repo | {"repo_root": str(checkout["repo_root"]), "worktree_root": str(checkout["worktree_root"])},
     }
 
 

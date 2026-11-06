@@ -5,9 +5,10 @@ import subprocess
 import tempfile
 import time
 import unittest
+import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from tests.support import PACKAGE_ROOT
+from tests.support import PACKAGE_ROOT, init_test_checkout
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -64,26 +65,37 @@ class RunOnceDryRunTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.repo_root = self.root / "blueking-apigateway"
         self.repo_root.mkdir()
-        (self.repo_root / ".git").mkdir()
+        init_test_checkout(self.repo_root, 'master')
         self.worktree_root = self.repo_root / ".worktrees"
         self.worktree_root.mkdir()
         self.data_dir = self.root / "data"
         self.config_path = self.root / "config.yml"
         self.config_path.write_text(
-            f"""data_dir: {self.data_dir}
+            f"""version: 2
+data_dir: {self.data_dir}
 database: dd.sqlite3
-max_concurrency: 3
-stale_after_minutes: 20
-hard_timeout_minutes: 90
-default_max_retries: 0
+github:
+  account: robert-bot
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: cbc
+    model: gpt-5.4
+    effort: high
+scheduler:
+  max_concurrency: 3
+supervision:
+  heartbeat_stale_seconds: 1200
+  hard_timeout_seconds: 5400
 repos:
   - full_name: example/backend
     github_account: robert-bot
     trusted_actors:
-      - wklken
-    default_base_branch: master
-    repo_root: {self.repo_root}
-    worktree_root: {self.worktree_root}
+    - wklken
+    checkout: {self.repo_root}
+    worktrees: {self.worktree_root}
+    default_branch: master
 """,
             encoding="utf-8",
         )
@@ -201,6 +213,10 @@ repos:
                 (len(failures) + 1 if same_task else 1,),
             )
 
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET metadata_json=? WHERE task_id=?",
+                         (json.dumps({"trigger_work_item_event_id": "local-request"}), "task-current"))
+
         worker = {
             "name": "default",
             "agent": "codex",
@@ -239,13 +255,13 @@ repos:
                 1,
                 workers=[worker],
                 default_worker=worker,
-                route_worker_models={
+                config_result={"default_worker": worker, "workers": [worker], "routes": {
                     "new-pr": {
                         "worker": "default",
                         "model": "route-model",
                         "effort": "high",
                     }
-                },
+                }},
             )
         finally:
             run_once.dispatch.dispatch_worker = original
@@ -662,6 +678,10 @@ repos:
                 "INSERT INTO artifacts(artifact_id, task_id, attempt_id, artifact_type, path, created_at) VALUES ('artifact-1', 'task-1', 'attempt-1', 'prompt', ?, ?)",
                 (str(prompt_path), now),
             )
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("UPDATE tasks SET metadata_json=? WHERE task_id=?",
+                         (json.dumps({"trigger_work_item_event_id": "local-request"}), "task-1"))
+
         workers = [
             {
                 "name": "default", "agent": "cbc", "command": "cbc",
@@ -701,7 +721,7 @@ repos:
                 1,
                 workers=workers,
                 default_worker=workers[0],
-                route_worker_models={"local-result": {"worker": "default", "model": "route-model", "effort": "low"}},
+                config_result={"default_worker": workers[0], "workers": workers, "routes": {"local-result": {"worker": "default", "model": "route-model", "effort": "low"}}},
             )
         finally:
             run_once.dispatch.dispatch_worker = original
@@ -767,9 +787,9 @@ repos:
     github_account: robot-other
     trusted_actors:
       - other-maintainer
-    default_base_branch: main
-    repo_root: {repo_b}
-    worktree_root: {worktree_b}
+    default_branch: main
+    checkout: {repo_b}
+    worktrees: {worktree_b}
 """,
             encoding="utf-8",
         )
@@ -857,9 +877,9 @@ repos:
     github_account: robot-other
     trusted_actors:
       - other-maintainer
-    default_base_branch: main
-    repo_root: {repo_b}
-    worktree_root: {worktree_b}
+    default_branch: main
+    checkout: {repo_b}
+    worktrees: {worktree_b}
 """,
             encoding="utf-8",
         )
@@ -919,9 +939,9 @@ repos:
     github_account: robot-other
     trusted_actors:
       - other-maintainer
-    default_base_branch: main
-    repo_root: {repo_b}
-    worktree_root: {worktree_b}
+    default_branch: main
+    checkout: {repo_b}
+    worktrees: {worktree_b}
 """,
             encoding="utf-8",
         )
@@ -1086,9 +1106,9 @@ repos:
     github_account: robot-other
     trusted_actors:
       - other-maintainer
-    default_base_branch: main
-    repo_root: {repo_b}
-    worktree_root: {worktree_b}
+    default_branch: main
+    checkout: {repo_b}
+    worktrees: {worktree_b}
 """,
             encoding="utf-8",
         )
@@ -5468,8 +5488,8 @@ repos:
                     "repo:example/backend",
                     {
                         "worker_startup_grace_seconds": 300,
-                        "stale_after_minutes": 20,
-                        "hard_timeout_minutes": 90,
+                        "heartbeat_stale_seconds": 1200,
+                        "hard_timeout_seconds": 5400,
                     },
                     now,
                 )
@@ -5549,8 +5569,8 @@ repos:
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace(
-                "hard_timeout_minutes: 90",
-                "hard_timeout_minutes: 90\nworker_startup_grace_seconds: 30",
+                "  hard_timeout_seconds: 5400",
+                "  hard_timeout_seconds: 5400\n  startup_grace_seconds: 30",
             ),
             encoding="utf-8",
         )
@@ -5905,8 +5925,8 @@ repos:
                     "repo:example/backend",
                     {
                         "worker_startup_grace_seconds": 300,
-                        "stale_after_minutes": 20,
-                        "hard_timeout_minutes": 90,
+                        "heartbeat_stale_seconds": 1200,
+                        "hard_timeout_seconds": 5400,
                     },
                     now,
                     data_dir=self.data_dir,
@@ -7041,8 +7061,8 @@ time.sleep(.3)
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace(
-                "hard_timeout_minutes: 90",
-                "hard_timeout_minutes: 90\nworker_startup_grace_seconds: 30",
+                "  hard_timeout_seconds: 5400",
+                "  hard_timeout_seconds: 5400\n  startup_grace_seconds: 30",
             ),
             encoding="utf-8",
         )
@@ -7760,13 +7780,9 @@ time.sleep(.3)
 
     def test_live_run_passes_configured_worker_command_to_dispatch(self):
         from robert_agent import run_once
-        self.config_path.write_text(
-            self.config_path.read_text(encoding="utf-8").replace(
-                "database: dd.sqlite3",
-                "database: dd.sqlite3\nworker_agent: codex\nworker_command: /opt/homebrew/bin/codex",
-            ),
-            encoding="utf-8",
-        )
+        config = yaml.safe_load(self.config_path.read_text())
+        config['workers']['default'].update(adapter='codex', command='/opt/homebrew/bin/codex')
+        self.config_path.write_text(yaml.safe_dump(config))
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7815,28 +7831,12 @@ time.sleep(.3)
 
     def test_classification_result_uses_selected_worker_defaults_and_route_override(self):
         from robert_agent import run_once
-        self.config_path.write_text(
-            self.config_path.read_text(encoding="utf-8").replace(
-                "database: dd.sqlite3",
-                "database: dd.sqlite3\n"
-                "workers:\n"
-                "  - name: default\n"
-                "    agent: cbc\n"
-                "    command: cbc\n"
-                "    default_model: gpt-5.4\n"
-                "    default_effort: high\n"
-                "  - name: classifier\n"
-                "    agent: codex\n"
-                "    command: /opt/homebrew/bin/codex\n"
-                "    default_model: gpt-5.6-sol\n"
-                "    default_effort: medium\n"
-                "route_worker_models:\n"
-                "  classification-result:\n"
-                "    worker: classifier\n"
-                "    effort: xhigh",
-            ),
-            encoding="utf-8",
-        )
+        config = yaml.safe_load(self.config_path.read_text())
+        config['workers']['classifier'] = {
+            'adapter': 'codex', 'command': '/opt/homebrew/bin/codex',
+            'model': 'gpt-5.6-sol', 'effort': 'medium'}
+        config['routes'] = {'classification-result': {'worker': 'classifier', 'effort': 'xhigh'}}
+        self.config_path.write_text(yaml.safe_dump(config))
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -8137,13 +8137,9 @@ raise SystemExit(0 if record["ok"] else 1)
             encoding="utf-8",
         )
         os.chmod(worker_command, 0o755)
-        self.config_path.write_text(
-            self.config_path.read_text(encoding="utf-8").replace(
-                "database: dd.sqlite3",
-                f"database: dd.sqlite3\nworker_command: {worker_command}",
-            ),
-            encoding="utf-8",
-        )
+        config = yaml.safe_load(self.config_path.read_text())
+        config['workers']['default'].update(adapter='cbc', command=str(worker_command))
+        self.config_path.write_text(yaml.safe_dump(config))
 
         first = run_once.run_once(
             self.config_path,
@@ -9234,7 +9230,7 @@ raise SystemExit(0 if record["ok"] else 1)
             run_once._prepare_worktree = original_prepare_worktree
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(prepare_calls, [False])
+        self.assertEqual(prepare_calls, [False, False])
         self.assertEqual(len(dispatch_calls), 1)
         self.assertEqual(dispatch_calls[0]["worktree_path"], str(new_worktree_path))
         with closing(sqlite3.connect(db_path)) as conn, conn:

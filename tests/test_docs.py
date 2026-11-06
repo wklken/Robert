@@ -37,8 +37,10 @@ class DocumentationTests(unittest.TestCase):
 
     def test_docs_use_public_config_and_skill_examples(self):
         text = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
-        self.assertIn("daemon:", text)
-        self.assertNotIn("daemon_", text)
+        self.assertIn("`daemon`", text)
+        self.assertIn("`scheduler`", text)
+        self.assertIn("config-v2-upgrade.md", text)
+        self.assertNotIn("daemon_local_poll_seconds", text)
         public_docs = [
             ROOT / "docs" / "concepts.md",
             ROOT / "docs" / "guides.md",

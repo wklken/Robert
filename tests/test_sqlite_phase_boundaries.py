@@ -204,7 +204,17 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                 {
                     "data_dir": fixture.tmp.name,
                     "database": fixture.db_path.name,
-                    "repos": [fixture.repo],
+                    "version": 2, "github": {"account": fixture.repo["github_account"]},
+                    "default_worker": "default",
+                    "workers": {"default": {"adapter": "cbc", "command": "cbc",
+                                            "model": "default", "effort": "default"}},
+                    "repos": [{"full_name": fixture.repo["full_name"],
+                               "github_account": fixture.repo["github_account"],
+                               "trusted_actors": fixture.repo["trusted_actors"],
+                               "checkout": fixture.repo["repo_root"],
+                               "worktrees": fixture.repo["worktree_root"],
+                               "default_branch": fixture.repo["default_base_branch"],
+                               "pr_automation": fixture.repo["pr_automation"]}],
                     "skills": {"search_paths": [str(skill_root)]},
                 }
             )

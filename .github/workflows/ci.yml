@@ -49,7 +49,6 @@ jobs:
           src/robert_agent/route_config.py
           src/robert_agent/skills.py
           src/robert_agent/service.py
-          src/robert_agent/migrate.py
       - run: python -B -m unittest discover -s tests
       - run: python -m compileall -q src
       - run: python -m build

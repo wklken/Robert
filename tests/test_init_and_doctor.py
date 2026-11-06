@@ -35,7 +35,8 @@ class InitAndDoctorTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"])
         self.assertIn("account: robert-bot", config.read_text())
-        self.assertIn("workflow_engine:\n  mode: sqlite", config.read_text())
+        self.assertEqual(yaml.safe_load(config.read_text())["version"], 2)
+        self.assertNotIn("workflow_engine", config.read_text())
 
     def test_doctor_reports_missing_worker_command(self):
         config = self.root / "config.yml"
@@ -56,15 +57,12 @@ class InitAndDoctorTests(unittest.TestCase):
 
     def test_config_rejects_github_token_fields(self):
         config = self.root / "config.yml"
-        config.write_text(
-            "version: 1\n"
-            "github:\n"
-            "  account: robert-bot\n"
-            "  token: must-not-be-stored\n"
-            "workers: {}\n"
-            "repos: []\n",
-            encoding="utf-8",
-        )
+        init_config(config, {"repo": "example/backend", "repo_path": str(self.repo),
+                             "worker": "codex", "github_account": "robert-bot",
+                             "trusted_actor": "maintainer"}, non_interactive=True)
+        document = yaml.safe_load(config.read_text())
+        document["github"]["token"] = "must-not-be-stored"
+        config.write_text(yaml.safe_dump(document))
         result = doctor(config, skip_external=True)
         self.assertFalse(result["ok"])
         self.assertIn("github.token", result["safe_error"])

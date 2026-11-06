@@ -15,7 +15,7 @@ from tests import test_daemon as daemon_fixture
 from tests import test_retention as retention_fixture
 from tests import test_operational_commands as publication_fixture
 from robert_agent import daemon, daemon_state, discover, notify, publish, result_spool, route, run_once, storage
-from robert_agent.validate_config import DAEMON_DEFAULTS
+from tests.support import DAEMON_DEFAULTS
 
 
 class ControlplaneRemediationTests(unittest.TestCase):

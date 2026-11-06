@@ -11,7 +11,7 @@ from unittest import mock
 
 from robert_agent import common, daemon, publish, run_once, worktree
 from tests import test_publication_reconcile as publication_fixture
-from robert_agent.validate_config import DAEMON_DEFAULTS
+from tests.support import DAEMON_DEFAULTS
 
 
 class DeadlineRemediationTests(unittest.TestCase):
