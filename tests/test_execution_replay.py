@@ -1,7 +1,9 @@
 from contextlib import closing
 import json
 import sqlite3
+import subprocess
 import unittest
+from unittest.mock import patch
 
 from robert_agent import (
     execution_store,
@@ -29,8 +31,8 @@ class ExecutionReplayTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.db = self.fixture.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            self.task, self.attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
+            self.task, self.attempt, self.attempt_metadata = conn.execute(
+                "SELECT task_id,attempt_id,metadata_json FROM attempts"
             ).fetchone()
             self.event = json.loads(
                 conn.execute(
@@ -119,6 +121,75 @@ class ExecutionReplayTests(unittest.TestCase):
                     conn, repo_id="repo:example/backend"
                 )
             )
+
+    def test_migrated_facts_wait_after_audit_retry_exhaustion(self):
+        from robert_agent.worker import result as worker_result
+
+        self.migrate_replies()
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle='running'")
+            conn.execute("UPDATE workstreams SET lifecycle='active'")
+            conn.execute("UPDATE attempts SET status='prepared',metadata_json=?",
+                         (self.attempt_metadata,))
+        with patch.object(worker_result.action_scope, 'observe_worktree_status', return_value='clean'), \
+             patch.object(worker_result.action_scope, 'observe_head', return_value='saved-head'):
+            receipt = worker_result.record_result(self.db, {
+                'task_id': self.task, 'attempt_id': self.attempt, 'output_type': 'new_pr',
+                'submission': {'planned_github_actions': test_run_once._new_pr_actions(),
+                               'consumed_event_fingerprints': [self.event['event_fingerprint']],
+                               'verification': [test_run_once._verification_evidence()],
+                               'used_skills': [], 'handoff': 'ready'},
+            })
+        self.assertTrue(receipt['ok'], receipt)
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            # Exhaust the real audit budget; only the external Git observation fails.
+            for now in ('2026-11-06T00:00:00+00:00', '2026-11-06T00:00:10+00:00',
+                        '2026-11-06T00:00:30+00:00'):
+                with patch.object(run_once.result_scope, 'for_result',
+                                  side_effect=subprocess.TimeoutExpired(['git', 'status'], 1)):
+                    run_once._audit_completed_results(
+                        conn, 'repo:example/backend', self.fixture.data_dir, self.db,
+                        {}, 'audit-replay-test', now, True, [], {},
+                    )
+            metadata = json.loads(conn.execute('SELECT metadata_json FROM tasks').fetchone()[0])
+            self.assertEqual(metadata['audit_retry_required'], receipt['result_id'])
+            self.assertEqual(execution_store.get_binding(conn, 'task', self.task)['binding_status'],
+                             'active')
+            conn.execute("UPDATE wakeups SET status='consumed'")
+            facts = conn.execute('SELECT * FROM execution_pending_facts').fetchall()
+            self.assertEqual(len(facts), 3)
+        for _ in range(2):
+            # A new connection models repeated daemon observations after restart.
+            with closing(sqlite3.connect(self.db)) as conn:
+                conn.execute('PRAGMA query_only=ON')
+                self.assertFalse(loop_engine.has_runnable_local_work(
+                    conn, repo_id='repo:example/backend', now=now,
+                ))
+                self.assertEqual(conn.execute('SELECT * FROM execution_pending_facts').fetchall(), facts)
+                self.assertIsNone(conn.execute(
+                    'SELECT consumed_at FROM execution_pending_facts LIMIT 1').fetchone()[0])
+        loop = loop_engine.run_loop(self.fixture.config_path, dry_run=True,
+                                    skip_external=True, skip_publish=True)
+        self.assertEqual(loop['cycles'], 0)
+        self.assertEqual(loop['stop_reason'], 'no_runnable_work')
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            # Once explicit recovery clears the fence, the same facts become runnable.
+            conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.audit_retry_required')")
+            self.assertTrue(loop_engine.has_runnable_local_work(
+                conn, repo_id='repo:example/backend', now=now,
+            ))
+
+    def test_migrated_facts_resume_when_task_attention_is_cleared(self):
+        self.migrate_replies()
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE wakeups SET status='consumed'")
+            conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.execution_attention',json(?))",
+                         (json.dumps({'reason_code': 'source_context_missing'}),))
+            facts = conn.execute('SELECT * FROM execution_pending_facts').fetchall()
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_id='repo:example/backend'))
+            conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.execution_attention')")
+            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_id='repo:example/backend'))
+            self.assertEqual(conn.execute('SELECT * FROM execution_pending_facts').fetchall(), facts)
 
     def test_untrusted_reply_stops_with_actionable_attention_without_busy_loop(self):
         self.migrate_replies(trusted=False)
