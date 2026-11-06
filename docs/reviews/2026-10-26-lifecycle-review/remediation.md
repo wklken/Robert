@@ -132,7 +132,7 @@ healthy-worker 回归另验证 `run_loop.cycles == 0`、`agent_runs == 0`；不�
 
 代码/测试：`model_execution.py / runtime:busy_heartbeat_write,non_contention_heartbeat_errors,cancellation_is_checked`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/model_execution.py](../../../src/robert_agent/model_execution.py)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
+[src/robert_agent/model_execution.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/model_execution.py)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
 
 <a id="change-r05"></a>
 ### R05 · fixed
@@ -240,7 +240,7 @@ search 低配额不再把仅用 core 的本地 publication 全部关闭；core �
 
 代码/测试：`model_execution.py / runtime:repeated_activity_checks,parent_heartbeat_refreshes`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/model_execution.py](../../../src/robert_agent/model_execution.py)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
+[src/robert_agent/model_execution.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/model_execution.py)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
 
 <a id="change-r17"></a>
 ### R17 · fixed
