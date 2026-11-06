@@ -24,6 +24,23 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip setuptools certifi
       - run: python -m pip install -e '.[dev]'
+      - name: Restrict the disposable CI interpreter for maintenance tests
+        shell: python
+        run: |
+          import os, stat, subprocess, sys
+          from pathlib import Path
+          executable = Path(sys.executable).resolve()
+          info = executable.stat()
+          print(f"Maintenance interpreter: {executable}; mode={stat.S_IMODE(info.st_mode):04o}; owner={info.st_uid}; runner={os.geteuid()}", flush=True)
+          # The production maintenance policy rejects group/world-writable
+          # executables. Hosted tool caches can ship with broader permissions.
+          if info.st_mode & 0o022:
+              if info.st_uid == 0 and os.geteuid() != 0:
+                  subprocess.run(['sudo', '-n', 'chmod', 'go-w', str(executable)], check=True)
+              else:
+                  executable.chmod(stat.S_IMODE(info.st_mode) & ~0o022)
+          from robert_agent.supervision_repair import _fingerprint_file
+          _fingerprint_file(executable)
       - run: python -m ruff check src tests
       - run: >-
           python -m mypy

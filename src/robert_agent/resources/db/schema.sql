@@ -679,3 +679,91 @@ CREATE TABLE IF NOT EXISTS github_scan_reads (
   observed_at REAL NOT NULL,
   PRIMARY KEY(repo_id,command_key)
 );
+
+-- Supervision records supplement the business state and do not own tasks.
+CREATE TABLE IF NOT EXISTS supervision_checkpoints (
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  lineage_key TEXT NOT NULL DEFAULT '',
+  classification TEXT CHECK (classification IN ('healthy','expected_wait','suspect','confirmed','unobservable')),
+  reason_code TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  progress_token TEXT,
+  last_progress_at TEXT,
+  eligible_since TEXT,
+  next_check_at TEXT,
+  updated_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (scope_type, scope_id, rule_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_supervision_checkpoints_due
+ON supervision_checkpoints(next_check_at, scope_type, scope_id, rule_id)
+WHERE next_check_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS supervision_incidents (
+  incident_id TEXT PRIMARY KEY,
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  lineage_key TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('open','diagnosing','recovering','verifying','needs_attention','resolved','dismissed')),
+  reason_code TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  expected_progress_json TEXT NOT NULL,
+  first_observed_at TEXT NOT NULL,
+  last_observed_at TEXT NOT NULL,
+  next_check_at TEXT,
+  prior_incident_id TEXT REFERENCES supervision_incidents(incident_id) ON DELETE SET NULL,
+  resolved_at TEXT,
+  resolved_by TEXT,
+  resolution_evidence_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_supervision_incidents_active
+ON supervision_incidents(scope_type, scope_id, rule_id, lineage_key)
+WHERE status NOT IN ('resolved','dismissed');
+CREATE INDEX IF NOT EXISTS idx_supervision_incidents_scope_history
+ON supervision_incidents(scope_type, scope_id, rule_id, lineage_key, first_observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_supervision_incidents_recency
+ON supervision_incidents(last_observed_at DESC, incident_id DESC);
+
+CREATE TABLE IF NOT EXISTS supervision_recovery_actions (
+  action_id TEXT PRIMARY KEY,
+  incident_id TEXT REFERENCES supervision_incidents(incident_id),
+  lineage_key TEXT NOT NULL,
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  stage_family TEXT NOT NULL,
+  action_kind TEXT NOT NULL,
+  recovery_ordinal INTEGER NOT NULL CHECK (recovery_ordinal > 0),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  target_id TEXT NOT NULL,
+  target_generation TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('proposed','requested','applying','observing','succeeded','failed','rejected','unknown')),
+  budget_cost INTEGER NOT NULL DEFAULT 0 CHECK (budget_cost >= 0),
+  claim_owner TEXT,
+  claim_generation INTEGER NOT NULL DEFAULT 0 CHECK (claim_generation >= 0),
+  claim_expires_at TEXT,
+  preconditions_json TEXT NOT NULL DEFAULT '{}',
+  expected_progress_json TEXT NOT NULL DEFAULT '{}',
+  receipt_json TEXT NOT NULL DEFAULT '{}',
+  verification_evidence_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  next_check_at TEXT,
+  UNIQUE (lineage_key, scope_type, scope_id, action_kind, recovery_ordinal)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_supervision_recovery_active_scope
+ON supervision_recovery_actions(scope_type, scope_id)
+WHERE status IN ('requested','applying','observing','unknown');
+CREATE INDEX IF NOT EXISTS idx_supervision_recovery_due
+ON supervision_recovery_actions(status, next_check_at);
+CREATE INDEX IF NOT EXISTS idx_supervision_recovery_budget
+ON supervision_recovery_actions(lineage_key, stage_family);

@@ -2,6 +2,7 @@
 
 const translations = {
   en: {
+    supervision: "Task supervision", noIncidents: "No recorded supervision incidents.",
     pageTitle: "Robert Task Board",
     productSubtitle: "Your Repo Teammate",
     filtersToggle: "Filters",
@@ -110,6 +111,7 @@ const translations = {
     boardStartupFailed: "Board startup failed: {message}",
   },
   zh: {
+    supervision: "任务监督", noIncidents: "没有已记录的监督异常。",
     pageTitle: "Robert 任务看板",
     productSubtitle: "Your Repo Teammate",
     boardTitle: "仓库任务看板",
@@ -1157,6 +1159,30 @@ function renderExecutionHistory(detail) {
   });
   return history;
 }
+function renderSupervision(detail) {
+  const panel = node("details", "detail-block disclosure");
+  panel.id = "detail-supervision";
+  const incidents = detail.supervision_incidents || [];
+  panel.append(node("summary", "", `${t("supervision")} (${incidents.length})`));
+  if (!incidents.length) panel.append(node("p", "", t("noIncidents")));
+  incidents.forEach(incident => {
+    const entry = node("section", "execution-history-task");
+    entry.append(node("p", "", `${incident.status} · ${incident.reason_code}`));
+    entry.append(node("p", "", `${incident.scope_id} · ${incident.last_observed_at}`));
+    if (incident.diagnosis?.expected_progress)
+      entry.append(node("p", "", incident.diagnosis.expected_progress));
+    (incident.recovery_actions || []).forEach(action =>
+      entry.append(node("p", "", `${action.action_kind}: ${action.status} (${action.budget_cost})`)));
+    if (incident.repair_work_item_id) {
+      entry.append(node("p", "", incident.repair_work_item_id));
+      Object.entries(incident.repair_verification || {}).forEach(([stage, status]) =>
+        entry.append(node("p", "", `${stage}: ${status}`)));
+    }
+    panel.append(entry);
+  });
+  return panel;
+}
+
 function renderDetail(detail, { preserve = false } = {}) {
   state.detail = detail;
   $("#drawer-title").textContent = detail.title;
@@ -1174,6 +1200,10 @@ function renderDetail(detail, { preserve = false } = {}) {
     const openAttempts = new Set([...previousHistory.querySelectorAll("details")].filter(el => el.open).map(el => el.dataset.attemptId));
     nextHistory.querySelectorAll("details").forEach(el => { el.open = openAttempts.has(el.dataset.attemptId); });
     previousHistory.replaceWith(nextHistory);
+    const previousSupervision = $("#detail-supervision");
+    const nextSupervision = renderSupervision(detail);
+    nextSupervision.open = previousSupervision?.open || false;
+    previousSupervision?.replaceWith(nextSupervision);
     updateComposerState(detail);
     return;
   }
@@ -1227,6 +1257,7 @@ function renderDetail(detail, { preserve = false } = {}) {
     renderActions(detail),
     composer,
     renderJourney(detail),
+    renderSupervision(detail),
     description,
     renderExecutionHistory(detail),
     activity,

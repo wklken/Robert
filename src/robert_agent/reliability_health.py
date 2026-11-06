@@ -46,7 +46,7 @@ def _control_failure_snapshot(conn, limit):
     return streaks, recovered
 
 
-def _persist_control_failure_alerts(conn, now, streaks, recovered):
+def _persist_control_failure_alerts(conn, now, streaks, recovered, *, supervision_owns_alerts=False):
     for lane in {'scan', 'local', 'publish', 'context_refresh', 'executor'}:
         failures = streaks.get(lane, [])
         existing = conn.execute(
@@ -57,7 +57,7 @@ def _persist_control_failure_alerts(conn, now, streaks, recovered):
         if not failures and lane in recovered:
             for (identifier,) in existing:
                 conn.execute("UPDATE notifications SET status='resolved' WHERE notification_id=?", (identifier,))
-        elif len(failures) >= 3 and not existing:
+        elif len(failures) >= 3 and not existing and not (supervision_owns_alerts and lane in {'scan', 'local', 'publish'}):
             conn.execute(
                 """INSERT OR IGNORE INTO notifications(notification_id,notification_type,
                     channel,status,created_at,metadata_json)
@@ -70,7 +70,7 @@ def _persist_control_failure_alerts(conn, now, streaks, recovered):
             )
 
 
-def collect(db_path, *, now, repo_ids, limit=100):
+def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False):
     if not repo_ids:
         return {}
     placeholders = ",".join("?" for _ in repo_ids)
@@ -108,8 +108,8 @@ def collect(db_path, *, now, repo_ids, limit=100):
     alerts_persisted = True
     try:
         with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
-            _persist_control_failure_alerts(conn, now, streaks, recovered)
-            for task_id, reason in delayed:
+            _persist_control_failure_alerts(conn, now, streaks, recovered, supervision_owns_alerts=supervision_owns_alerts)
+            for task_id, reason in ([] if supervision_owns_alerts else delayed):
                 conn.execute(
                     """INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json)
                     VALUES (?,?,'execution_delayed','local','recorded',?,?)""",

@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import shutil
 import subprocess
 
@@ -96,4 +97,5 @@ def doctor(config_path, skip_external=False):
         "ok": ok,
         "status": "ready" if ok else "failed",
         "checks": checks,
+        "supervision": {"mode": validated["supervision"]["mode"], "notification_delivery": "configured" if os.environ.get("ROBERT_NOTIFICATION_COMMAND") else "not_configured"},
     }

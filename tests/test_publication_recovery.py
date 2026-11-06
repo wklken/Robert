@@ -15,6 +15,16 @@ def completed(stdout=''):
     return SimpleNamespace(returncode=0, stdout=stdout, stderr='')
 
 
+def save_audited_scope(conn, scope):
+    conn.executescript('''
+        CREATE TABLE worker_results(result_id TEXT, task_id TEXT, attempt_id TEXT, metadata_json TEXT);
+        CREATE TABLE tasks(task_id TEXT, metadata_json TEXT);
+        CREATE TABLE attempts(attempt_id TEXT, task_id TEXT, metadata_json TEXT);
+    ''')
+    conn.execute('INSERT INTO worker_results(result_id,metadata_json) VALUES (?,?)',
+                 ('r', json.dumps({'audit': {'status': 'accepted', 'action_scope': scope}})))
+
+
 class PublicationRecoveryTests(unittest.TestCase):
     def test_new_branch_push_uses_fully_qualified_destination_ref(self):
         scope = {
@@ -22,11 +32,7 @@ class PublicationRecoveryTests(unittest.TestCase):
             "sources": [{"source_type": "issue", "number": 37}],
         }
         with closing(sqlite3.connect(":memory:")) as conn:
-            conn.execute("CREATE TABLE worker_results(result_id TEXT, metadata_json TEXT)")
-            conn.execute(
-                "INSERT INTO worker_results VALUES (?, ?)",
-                ("r", json.dumps({"audit": {"status": "accepted", "action_scope": scope}})),
-            )
+            save_audited_scope(conn, scope)
             action = {
                 "result_id": "r",
                 "target_url": "",
@@ -114,9 +120,7 @@ class PublicationRecoveryTests(unittest.TestCase):
     def test_leased_push_without_result_revision_fails_before_writing(self):
         scope = {"existing_pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         with closing(sqlite3.connect(":memory:")) as conn:
-            conn.execute("CREATE TABLE worker_results(result_id TEXT, metadata_json TEXT)")
-            conn.execute("INSERT INTO worker_results VALUES (?,?)",
-                         ("r", json.dumps({"audit": {"status": "accepted", "action_scope": scope}})))
+            save_audited_scope(conn, scope)
             action = {"result_id": "r", "target_url": "", "metadata_json": json.dumps(
                 {"worktree_path": "/assigned", "branch": "codex/fix"})}
             writes = []
@@ -131,9 +135,7 @@ class PublicationRecoveryTests(unittest.TestCase):
 
     def test_legacy_new_pr_push_without_result_revision_fails(self):
         with closing(sqlite3.connect(":memory:")) as conn:
-            conn.execute("CREATE TABLE worker_results(result_id TEXT, metadata_json TEXT)")
-            conn.execute("INSERT INTO worker_results VALUES (?,?)",
-                         ("r", json.dumps({"audit": {"status": "accepted", "action_scope": {"repo": "x/y"}}})))
+            save_audited_scope(conn, {"repo": "x/y"})
             action = {"result_id": "r", "target_url": "", "metadata_json": json.dumps(
                 {"worktree_path": "/assigned", "branch": "codex/fix"})}
             from unittest.mock import Mock

@@ -5,3 +5,7 @@
 
 # Synthetic Issue URL in the archived lifecycle reproducer, not a live reference.
 ^https://github\.com/example/backend/issues/16$
+
+# This specific DeepSeek research article returns HTTP 403 to the CI checker
+# (run 42163247878). Keep the source link for manual browser access.
+^https://zhuanlan\.zhihu\.com/p/2099987320443237060$

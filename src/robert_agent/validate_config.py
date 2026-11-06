@@ -544,6 +544,8 @@ def validate_config(config_path, skip_external=False):
                 raise ValueError("worker environment_allowlist must not include GitHub credentials")
         default_worker = workers[0]
         route_worker_models = _normalize_route_worker_models(config, workers)
+        from robert_agent.supervision_config import normalize as normalize_supervision
+        supervision_config = normalize_supervision(config.get("supervision"))
         daemon_config = _normalize_daemon_config(config)
         workflow_engine = _normalize_workflow_engine(config)
         skills_config = config.get("skills", {"search_paths": []})
@@ -851,6 +853,7 @@ def validate_config(config_path, skip_external=False):
             ],
         },
         "daemon": daemon_config,
+        "supervision": supervision_config,
         "workflow_engine": workflow_engine,
         "skip_external": bool(skip_external),
     }

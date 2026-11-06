@@ -18,12 +18,15 @@ def directory(db_path):
     return Path(db_path).resolve().parent / (Path(db_path).name + ".results")
 
 
+def _record_path(db_path, attempt_id):
+    key = hashlib.sha256(str(attempt_id).encode()).hexdigest()
+    return directory(db_path) / (key + '.json')
+
+
 @contextmanager
 def locked_record(db_path, attempt_id, *, blocking=True):
-    root = directory(db_path)
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    key = hashlib.sha256(str(attempt_id).encode()).hexdigest()
-    path = root / (key + ".json")
+    path = _record_path(db_path, attempt_id)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with _locked_path(path, blocking=blocking):
         yield path
 
@@ -73,6 +76,7 @@ def _validate_record(record):
             or not isinstance(record.get("fingerprint"), str)
             or record["payload"].get("_submission_fingerprint") != record["fingerprint"]
             or record["payload"].get("_result_contract") != result_contract.CONTRACT_ID
+            or not isinstance(record["payload"].get("attempt_id"), str)
             or not record["payload"].get("attempt_id")):
         raise ValueError("unsupported or invalid result spool contract")
 
@@ -89,7 +93,8 @@ def _ingest(db_path, path, record, writer, notifier, *, defer_database_errors=Fa
         wakeup_notifier.notify(db_path, sender=notifier)
         return {"ok": True, "status": "deferred", "safe_error": "Result durably saved; waiting for ingestion."}
     if response["ok"]:
-        path.unlink(missing_ok=True)
+        if response['status'] not in {'deferred', 'replay_blocked'}:
+            path.unlink(missing_ok=True)
     else:
         _archive_rejected(path, {**record, "status": "rejected", "reason": response["status"]})
     return response
@@ -132,12 +137,15 @@ def _notify_rejection(db_path, path, reason):
         pass  # The preserved file remains authoritative diagnostic evidence.
 
 
-def replay(db_path, writer, limit=100):
+def replay(db_path, writer, limit=100, *, attempt_id=None):
     counts = {"recorded": 0, "deferred": 0, "rejected": 0}
     deadline = time.monotonic() + 2
-    for path in sorted(directory(db_path).glob("*.json"))[:limit]:
+    paths = sorted(directory(db_path).glob('*.json')) if attempt_id is None else [_record_path(db_path, attempt_id)]
+    for path in paths[:limit]:
         if time.monotonic() >= deadline:
             break
+        if not path.exists():
+            continue
         try:
             with _locked_path(path):
                 if not path.exists():
@@ -145,8 +153,7 @@ def replay(db_path, writer, limit=100):
                 try:
                     record = json.loads(path.read_text())
                     _validate_record(record)
-                    expected = hashlib.sha256(record["payload"]["attempt_id"].encode()).hexdigest() + ".json"
-                    if path.name != expected:
+                    if path != _record_path(db_path, record['payload']['attempt_id']):
                         raise ValueError("spool identity differs from its path")
                 except (ValueError, OSError, TypeError):
                     if path.exists():
@@ -171,6 +178,9 @@ def replay(db_path, writer, limit=100):
         if response["status"] == "deferred":
             counts["deferred"] += 1
             break
+        if response['status'] == 'replay_blocked':
+            counts['deferred'] += 1
+            continue
         if response["ok"]:
             counts["recorded"] += 1
         else:
@@ -181,8 +191,7 @@ def replay(db_path, writer, limit=100):
 
 def saved_at(db_path, attempt_id):
     """Read the timestamp while submit owns this attempt's spool lock."""
-    key = hashlib.sha256(str(attempt_id).encode()).hexdigest()
     try:
-        return json.loads((directory(db_path) / (key + ".json")).read_text()).get("saved_at")
+        return json.loads(_record_path(db_path, attempt_id).read_text()).get("saved_at")
     except (OSError, ValueError):
         return None

@@ -161,6 +161,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wait for another daemon's lease instead of exiting (used by service managers).",
     )
 
+    supervisor_parser = subparsers.add_parser("supervisor", help="Independently supervise task progress.")
+    supervisor_commands = supervisor_parser.add_subparsers(dest="supervisor_command", required=True)
+    for name in ("run", "check", "status"):
+        sub = supervisor_commands.add_parser(name)
+        _add_config_argument(sub)
+        _add_output_argument(sub)
+        if name == "run":
+            sub.add_argument("--once", action="store_true")
+
+    manifest = supervisor_commands.add_parser("build-manifest", help="Bind a built wheel to clean Git source.")
+    manifest.add_argument("--repo", required=True)
+    manifest.add_argument("--wheel", required=True)
+    manifest.add_argument("--output-file", required=True)
+    _add_output_argument(manifest)
+    for name in ("repair-propose", "repair-status", "repair-verify"):
+        repair = supervisor_commands.add_parser(name)
+        _add_config_argument(repair)
+        _add_output_argument(repair)
+        repair.add_argument("--incident-id", required=True)
+        if name == "repair-verify":
+            repair.add_argument("--checkout", required=True)
+
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Migrate legacy Robert state.",
@@ -217,6 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     ]:
         command_parser = service_subparsers.add_parser(name)
         command_parser.add_argument("--dry-run", action="store_true")
+        command_parser.add_argument("--target", choices=["all", "daemon", "supervisor"], default="all")
         _add_output_argument(command_parser)
         if name == "install":
             _add_config_argument(command_parser)
@@ -421,6 +444,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 args.output,
             )
+        if args.command == "supervisor":
+            from robert_agent import supervisor
+            if args.supervisor_command == "build-manifest":
+                from robert_agent import runtime_identity
+                manifest = runtime_identity.build_manifest(args.repo, args.wheel)
+                supervisor.atomic_json(Path(args.output_file).expanduser(), manifest)
+                return _emit_and_code({"ok": True, "status": "recorded", "manifest": manifest}, args.output)
+            validated = validate_config.validate_config(args.config, skip_external=True)
+            if not validated.get("ok"):
+                return _emit_and_code(validated, args.output)
+            if args.supervisor_command == "run":
+                result = supervisor.run(validated, once=args.once)
+            elif args.supervisor_command == "check":
+                result = supervisor.check(validated)
+            elif args.supervisor_command.startswith("repair-"):
+                from robert_agent import supervision_repair
+                if args.supervisor_command == "repair-propose":
+                    result = supervision_repair.propose(validated, args.incident_id)
+                elif args.supervisor_command == "repair-verify":
+                    result = supervision_repair.verify(validated, args.incident_id, checkout=args.checkout,
+                                                       runtime=supervisor.runtime_status(validated))
+                else:
+                    result = supervision_repair.status(validated, args.incident_id)
+            else:
+                result = supervisor.status(validated)
+            return _emit_and_code(result, args.output)
         if args.command == "service":
             platform_name = (
                 "darwin"
@@ -436,17 +485,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     executable,
                     args.config,
                     dry_run=args.dry_run,
+                    **({"target": args.target} if args.target != "all" else {}),
                 )
             elif args.service_command == "uninstall":
                 result = service.uninstall_service(
                     platform_name,
                     dry_run=args.dry_run,
+                    **({"target": args.target} if args.target != "all" else {}),
                 )
             else:
                 result = service.control_service(
                     platform_name,
                     args.service_command,
                     dry_run=args.dry_run,
+                    **({"target": args.target} if args.target != "all" else {}),
                 )
             return _emit_and_code(result, args.output)
         if args.command == "maintenance" and args.maintenance_command == "prune":

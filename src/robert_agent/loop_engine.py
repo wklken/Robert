@@ -220,29 +220,32 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
           AND (? OR reason!='publish_retry_ready')
           {wakeup_repo_clause}
           {waiting_clause}
-          AND (reason!='worker_result_ready' OR EXISTS (
-            SELECT 1 FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
-            JOIN tasks t ON t.task_id=a.task_id
-            WHERE (wr.result_id=wakeups.result_id OR a.attempt_id=wakeups.attempt_id)
-              AND a.status='completed' AND NOT COALESCE({supervise.occupied_attempt_sql()},0)
-              AND t.lifecycle IN ('queued','running') AND {execution_store.runnable_sql()}
-              AND (json_extract(wr.metadata_json,'$.audit_observation.next_retry_at') IS NULL
-                   OR julianday(json_extract(wr.metadata_json,'$.audit_observation.next_retry_at'))<=julianday(?))))
+          AND reason!='worker_result_ready'
         LIMIT 1
         """,
-        [now, now, include_publication] + wakeup_repo_params + waiting_ids + [now],
+        [now, now, include_publication] + wakeup_repo_params + waiting_ids,
     ).fetchone()
-    # Durable results remain runnable after a lost/consumed wakeup or audit retry.
+    if pending_wakeup:
+        return True
+    # Test the exact durable result once for both regular wakeups and lost
+    # wakeups. A fenced audit cannot drive repeated empty local cycles.
+    from robert_agent import supervision_actions
     result_clause, result_params = _repo_filter('w', repo_ids)
-    unaudited = conn.execute(f"""SELECT 1 FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
+    unaudited = conn.execute(f"""SELECT wr.result_id,wr.task_id,
+        json_extract(wr.metadata_json,'$.audit_observation.attempt_count')
+        FROM worker_results wr JOIN attempts a ON a.attempt_id=wr.attempt_id
         JOIN tasks t ON t.task_id=wr.task_id JOIN workstreams w ON w.workstream_id=t.workstream_id
         WHERE t.lifecycle IN ('queued','running') AND a.status='completed'
           AND NOT COALESCE({supervise.occupied_attempt_sql()},0)
           AND json_extract(wr.metadata_json,'$.audit') IS NULL AND {execution_store.runnable_sql()}
           AND (json_extract(wr.metadata_json,'$.audit_observation.next_retry_at') IS NULL
                OR julianday(json_extract(wr.metadata_json,'$.audit_observation.next_retry_at'))<=julianday(?))
-          {result_clause} LIMIT 1""", [now, *result_params]).fetchone()
-    if pending_wakeup or unaudited or _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
+          {result_clause}""", [now, *result_params])
+    if any(not supervision_actions.blocks_consumer(conn, task_id=task_id, kind='audit_retry',
+                   target_id=result_id, now=now, config=config_result, native_retry=bool(retries))
+           for result_id, task_id, retries in unaudited):
+        return True
+    if _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
         return True
     fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
     fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
@@ -259,7 +262,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
     if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
         return True
     scoped_repos = repo_ids or [row[0] for row in conn.execute('SELECT repo_id FROM repos')]
-    if pending_handoff.ready_rows(conn, scoped_repos, now):
+    if pending_handoff.ready_rows(conn, scoped_repos, now, config=config_result):
         return True
     if run_once_module.has_orphaned_classification_result(conn, scoped_repos, now):
         return True

@@ -32,6 +32,9 @@ RECOMMENDED_SKILLS_MIGRATION_NAME = "robert-route-recommended-skills-v1"
 RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(
     RECOMMENDED_SKILLS_MIGRATION_NAME.encode("utf-8")
 ).hexdigest()
+SUPERVISION_MIGRATION_VERSION = 6
+SUPERVISION_MIGRATION_NAME = "robert-supervision-v1"
+SUPERVISION_MIGRATION_CHECKSUM = hashlib.sha256(SUPERVISION_MIGRATION_NAME.encode("utf-8")).hexdigest()
 
 
 def _data_migration_pending(conn, name, checksum):
@@ -551,7 +554,8 @@ def schema_sql() -> str:
 def init_database(db_path, schema_path=None):
     db_path = Path(db_path).expanduser()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if schema_path is None:
+    built_in_schema = schema_path is None
+    if built_in_schema:
         schema = schema_sql()
         schema_path = SCHEMA_RESOURCE
     else:
@@ -582,6 +586,8 @@ def init_database(db_path, schema_path=None):
         review_store.initialize(conn)
         from robert_agent import vote_store
         vote_store.initialize(conn)
+        if built_in_schema and _data_migration_pending(conn, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM):
+            pending.append((SUPERVISION_MIGRATION_VERSION, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM))
         # Keep data conversions before work-item backfill, but record their
         # success only after all initialization completes. This preserves old
         # work-item/workflow ordinals and leaves failed upgrades retryable.

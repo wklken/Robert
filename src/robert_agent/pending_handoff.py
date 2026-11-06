@@ -2,11 +2,12 @@
 from robert_agent import execution_store, result_contract
 
 
-def ready_rows(conn, repo_ids, now):
+def ready_rows(conn, repo_ids, now, *, config=None):
     if not repo_ids:
         return []
     placeholders = ','.join('?' for _ in repo_ids)
-    return conn.execute(f"""SELECT t.task_id,t.workstream_id FROM tasks t
+    rows = conn.execute(f"""SELECT t.task_id,t.workstream_id,
+        json_extract(t.metadata_json,'$.pending_handoff.attempt_count') FROM tasks t
         JOIN workstreams w ON w.workstream_id=t.workstream_id
         JOIN attempts a ON a.task_id=t.task_id
         JOIN worker_results wr ON wr.attempt_id=a.attempt_id
@@ -34,3 +35,7 @@ def ready_rows(conn, repo_ids, now):
                                AND owner.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))))
           AND {execution_store.runnable_sql()}
         ORDER BY t.created_at,t.task_id""", [*repo_ids, result_contract.CONTRACT_ID, now]).fetchall()
+    from robert_agent import supervision_actions
+    return [(task_id, workstream_id) for task_id, workstream_id, retries in rows
+            if not supervision_actions.blocks_consumer(conn, task_id=task_id, kind='handoff_resume',
+                target_id=task_id, now=now, config=config, native_retry=bool(retries))]
