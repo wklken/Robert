@@ -536,6 +536,10 @@ def _create_task(
         "origin_type": item["origin_type"],
         "work_item_id": item["work_item_id"],
     }
+    repair = (_decode_json(item['metadata_json'], {}) or {}).get('supervision_repair')
+    if repair and repair.get('automatic') is True:
+        routing_mode, requested_worker = 'manual', repair['worker']
+        metadata['supervision_repair'] = repair
     if trigger_event_id:
         metadata["trigger_work_item_event_id"] = trigger_event_id
     if lineage_key:
@@ -818,6 +822,59 @@ def _activate(conn, item, context, idempotency_key, now, *, initial_version=None
     return result
 
 
+def _insert_work_item(conn, *, context, repo_id, title, description, priority,
+                      routing_mode, requested_worker, start, idempotency_key, now, metadata=None):
+    metadata = dict(metadata or {})
+    work_item_id = f"wi-{uuid4().hex}"
+    conn.execute(
+        """
+        INSERT INTO work_items(
+          work_item_id, repo_id, title, description, priority,
+          origin_type, routing_mode, requested_worker,
+          creation_idempotency_key, created_by, version,
+          created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, 1, ?, ?, ?)
+        """,
+        (work_item_id, repo_id, title, description, priority, routing_mode, requested_worker,
+         idempotency_key, context.actor_identity, now, now, json.dumps(metadata, sort_keys=True)),
+    )
+    _insert_event(conn, work_item_id, event_type='created', actor_kind=context.actor_kind,
+                  actor_identity=context.actor_identity, idempotency_key=f'create:{idempotency_key}', now=now)
+    item = _load_item(conn, work_item_id)
+    if start:
+        result = _activate(conn, item, context, f'start:{idempotency_key}', now, initial_version=1)
+        result['command'] = 'create_and_start'
+    else:
+        result = {'ok': True, 'command': 'create', 'item': _item_from_row(item)}
+    metadata['command_result'] = result
+    conn.execute('UPDATE work_items SET metadata_json=? WHERE work_item_id=?',
+                 (json.dumps(metadata, ensure_ascii=False, sort_keys=True), work_item_id))
+    return result
+
+
+def create_supervision_repair(conn, *, repo_id, title, description, repair, now, idempotency_key):
+    """Caller-owned transaction for a policy-authorized system maintenance item."""
+    _validate_idempotency_key(idempotency_key)
+    title = _validate_text(title, 'title', MAX_TITLE, required=True)
+    description = _validate_text(description, 'description', MAX_DESCRIPTION)
+    if not conn.execute('SELECT 1 FROM repos WHERE repo_id=? AND enabled=1', (repo_id,)).fetchone():
+        raise WorkItemValidationError('maintenance repository is not enabled')
+    existing = conn.execute('SELECT * FROM work_items WHERE creation_idempotency_key=?', (idempotency_key,)).fetchone()
+    if existing:
+        metadata = _decode_json(existing['metadata_json'], {}) or {}
+        if (existing['repo_id'] != repo_id or existing['created_by'] != 'system:supervisor'
+                or (metadata.get('supervision_repair') or {}).get('root_key') != repair['root_key']):
+            raise WorkItemConflictError('maintenance item idempotency key conflicts')
+        return metadata['command_result'], False
+    start = repair.get('automatic') is True
+    worker = repair.get('worker') if start else None
+    context = CommandContext('system', 'system:supervisor', frozenset({repo_id}), frozenset({worker} if worker else ()))
+    routing_mode, worker = _validate_routing(context, 'manual' if start else 'auto', worker)
+    return _insert_work_item(conn, context=context, repo_id=repo_id, title=title, description=description,
+                             priority='P2', routing_mode=routing_mode, requested_worker=worker, start=start,
+                             idempotency_key=idempotency_key, now=now, metadata={'supervision_repair': repair}), True
+
+
 def create_work_item(
     db_path,
     *,
@@ -865,60 +922,9 @@ def create_work_item(
                 result = {"ok": True, "command": "create", "item": _item_from_row(existing)}
                 return _commit_result(conn, db_path, result, notifier)
 
-            now = utc_now()
-            work_item_id = f"wi-{uuid4().hex}"
-            conn.execute(
-                """
-                INSERT INTO work_items(
-                  work_item_id, repo_id, title, description, priority,
-                  origin_type, routing_mode, requested_worker,
-                  creation_idempotency_key, created_by, version,
-                  created_at, updated_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, 1, ?, ?, '{}')
-                """,
-                (
-                    work_item_id,
-                    repo_id,
-                    title,
-                    description,
-                    priority,
-                    routing_mode,
-                    requested_worker,
-                    idempotency_key,
-                    context.actor_identity,
-                    now,
-                    now,
-                ),
-            )
-            _insert_event(
-                conn,
-                work_item_id,
-                event_type="created",
-                actor_kind=context.actor_kind,
-                actor_identity=context.actor_identity,
-                idempotency_key=f"create:{idempotency_key}",
-                now=now,
-            )
-            item = _load_item(conn, work_item_id)
-            if start:
-                result = _activate(
-                    conn,
-                    item,
-                    context,
-                    f"start:{idempotency_key}",
-                    now,
-                    initial_version=1,
-                )
-                result["command"] = "create_and_start"
-            else:
-                result = {"ok": True, "command": "create", "item": _item_from_row(item)}
-            conn.execute(
-                "UPDATE work_items SET metadata_json = ? WHERE work_item_id = ?",
-                (
-                    json.dumps({"command_result": result}, ensure_ascii=False, sort_keys=True),
-                    work_item_id,
-                ),
-            )
+            result = _insert_work_item(conn, context=context, repo_id=repo_id, title=title, description=description,
+                                       priority=priority, routing_mode=routing_mode, requested_worker=requested_worker,
+                                       start=start, idempotency_key=idempotency_key, now=utc_now())
             return _commit_result(conn, db_path, result, notifier)
         except Exception:
             conn.rollback()

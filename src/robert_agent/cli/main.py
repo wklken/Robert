@@ -170,6 +170,19 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "run":
             sub.add_argument("--once", action="store_true")
 
+    manifest = supervisor_commands.add_parser("build-manifest", help="Bind a built wheel to clean Git source.")
+    manifest.add_argument("--repo", required=True)
+    manifest.add_argument("--wheel", required=True)
+    manifest.add_argument("--output-file", required=True)
+    _add_output_argument(manifest)
+    for name in ("repair-propose", "repair-status", "repair-verify"):
+        repair = supervisor_commands.add_parser(name)
+        _add_config_argument(repair)
+        _add_output_argument(repair)
+        repair.add_argument("--incident-id", required=True)
+        if name == "repair-verify":
+            repair.add_argument("--checkout", required=True)
+
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Migrate legacy Robert state.",
@@ -433,6 +446,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "supervisor":
             from robert_agent import supervisor
+            if args.supervisor_command == "build-manifest":
+                from robert_agent import runtime_identity
+                manifest = runtime_identity.build_manifest(args.repo, args.wheel)
+                supervisor.atomic_json(Path(args.output_file).expanduser(), manifest)
+                return _emit_and_code({"ok": True, "status": "recorded", "manifest": manifest}, args.output)
             validated = validate_config.validate_config(args.config, skip_external=True)
             if not validated.get("ok"):
                 return _emit_and_code(validated, args.output)
@@ -440,6 +458,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result = supervisor.run(validated, once=args.once)
             elif args.supervisor_command == "check":
                 result = supervisor.check(validated)
+            elif args.supervisor_command.startswith("repair-"):
+                from robert_agent import supervision_repair
+                if args.supervisor_command == "repair-propose":
+                    result = supervision_repair.propose(validated, args.incident_id)
+                elif args.supervisor_command == "repair-verify":
+                    result = supervision_repair.verify(validated, args.incident_id, checkout=args.checkout,
+                                                       runtime=supervisor.runtime_status(validated))
+                else:
+                    result = supervision_repair.status(validated, args.incident_id)
             else:
                 result = supervisor.status(validated)
             return _emit_and_code(result, args.output)

@@ -85,6 +85,19 @@
         "poll_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
         "batch_size": {"type": "integer", "minimum": 1, "maximum": 500},
         "stall_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "build_manifest": {"type": ["string", "null"]},
+        "repair": {
+          "type": ["object", "null"],
+          "properties": {
+            "mode": {"enum": ["backlog", "auto"]},
+            "repository": {"type": "string"}, "worker": {"type": ["string", "null"]},
+            "allowed_actions": {"type": "array", "items": {"enum": ["push_existing_pr", "open_pr"]}},
+            "launcher": {"type": "array", "items": {"type": "string"}},
+            "verification_commands": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+            "max_repairs_per_day": {"type": "integer", "minimum": 1, "maximum": 20}
+          },
+          "required": ["repository"], "additionalProperties": false
+        },
         "recovery": {
           "type": ["object", "null"],
           "properties": {

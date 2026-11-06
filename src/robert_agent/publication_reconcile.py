@@ -11,7 +11,7 @@ import json
 import re
 from urllib.parse import urlparse
 
-from robert_agent import pr_health, review_publish, vote_publish
+from robert_agent import pr_health, review_publish, supervision_git, vote_publish
 
 
 COMMENT_MARKER_RE = re.compile(
@@ -38,6 +38,8 @@ _SCOPE_KEYS = {
     "pr_number",
     "observed_head_sha",
     "observed_base_sha",
+    "repair_git",
+    "supervision_repair",
 }
 
 
@@ -155,6 +157,9 @@ def _scope_projection(action_scope):
                 for item in value
                 if isinstance(item, dict)
             ]
+        elif key == "repair_git" and isinstance(value, dict):
+            projected[key] = {name: value[name] for name in ("branch", "base_sha", "remote", "worktree", "private_root")
+                              if isinstance(value.get(name), str)}
         elif isinstance(value, (str, int, bool)) or value is None:
             projected[key] = value
     if not projected:
@@ -369,9 +374,13 @@ def _remote_branch(action, action_scope, run_command):
     branch = metadata.get("branch") or metadata.get("head") or scope.get("branch_name")
     if not worktree or not branch:
         return _result("unknown", "push_scope_incomplete")
-    command = ["git", "ls-remote", "--heads", remote, branch]
     try:
-        completed = run_command(command, cwd=worktree, capture_output=True, text=True)
+        if scope.get("supervision_repair"):
+            branch = supervision_git.binding(scope)["branch"]
+            completed = supervision_git.remote_branch(scope, runner=run_command)
+        else:
+            command = ["git", "ls-remote", "--heads", remote, branch]
+            completed = run_command(command, cwd=worktree, capture_output=True, text=True)
     except Exception as exc:
         return _result("unknown", "remote_branch_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "remote_branch_query_failed"):

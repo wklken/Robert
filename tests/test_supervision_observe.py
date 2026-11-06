@@ -38,8 +38,9 @@ class SupervisionObservationTests(unittest.TestCase):
 
     def test_missing_database_is_not_created(self):
         absent = self.db.with_name('absent.db')
-        with self.assertRaises(supervision_observe.ObservationUnavailable):
+        with self.assertRaises(supervision_observe.ObservationUnavailable) as caught:
             supervision_observe.collect(absent, now=NOW)
+        self.assertEqual(caught.exception.reason_code, 'database_unavailable')
         self.assertFalse(absent.exists())
 
     def test_corrupt_database_has_an_explicit_error(self):
@@ -48,6 +49,24 @@ class SupervisionObservationTests(unittest.TestCase):
         with self.assertRaises(supervision_observe.ObservationUnavailable) as caught:
             supervision_observe.collect(broken, now=NOW)
         self.assertEqual(caught.exception.reason_code, 'database_corrupt')
+
+    def test_database_error_reasons_without_sqlite_errorname(self):
+        cases = {
+            'file is not a database': 'database_corrupt',
+            'database disk image is malformed': 'database_corrupt',
+            'database is locked': 'database_busy',
+            'database table is locked: leases': 'database_busy',
+            'interrupted': 'database_observation_deadline',
+            'no such table: leases': 'database_schema_incompatible',
+            'no such column: private_column': 'database_schema_incompatible',
+            'disk I/O error': 'database_unavailable',
+        }
+        for message, reason in cases.items():
+            with self.subTest(message=message), patch.object(sqlite3, 'connect', side_effect=sqlite3.DatabaseError(message)):
+                with self.assertRaises(supervision_observe.ObservationUnavailable) as caught:
+                    supervision_observe.collect(self.db, now=NOW)
+                self.assertEqual(caught.exception.reason_code, reason)
+                self.assertEqual(str(caught.exception), reason)
 
     def test_task_pages_cover_stable_ids_without_repeating_tasks(self):
         for name in ('c', 'a', 'b'):

@@ -19,6 +19,7 @@ from robert_agent import (
     retry_policy,
     execution_operations,
     execution_store,
+    supervision_git,
     supervision_publication,
 )
 from robert_agent.common import emit, run_command as control_command
@@ -464,6 +465,8 @@ def _trusted_head_owner_for_intent(conn, action, action_scope, run_command):
     )
     if isinstance(scoped_owner, str) and scoped_owner:
         return scoped_owner
+    if isinstance(action_scope, dict) and action_scope.get("supervision_repair"):
+        return ""
     metadata = _decode_json(action.get("metadata_json"))
     head = _metadata_value(metadata, "head", "head_branch", "branch")
     if ":" in head:
@@ -606,6 +609,28 @@ def _publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD",
     if action_scope and not result_head_sha:
         return {"ok": False, "status": "publish_failed",
                 "safe_error": "audited result SHA is missing; retry the task to obtain a new audited result"}
+    if action_scope.get("supervision_repair"):
+        blocked = None
+
+        def before_push():
+            nonlocal blocked
+            blocked = _publication_scope_guard(conn, action, recovery_guard)
+            return blocked is None
+
+        try:
+            completed = supervision_git.push(action_scope, result_head_sha, before_push=before_push, runner=run_command)
+        except (OSError, subprocess.SubprocessError):
+            return {"ok": False, "status": "publish_failed", "safe_error": "Maintenance Git push unavailable"}
+        if blocked:
+            return blocked
+        safe_error = _command_failure(completed, "Maintenance Git push failed")
+        if safe_error:
+            return {"ok": False, "status": "publish_failed", "safe_error": safe_error}
+        return {
+            "ok": True, "status": "published", "external_id": action_scope["branch_name"],
+            "target_url": action.get("target_url"), "result_head_sha": result_head_sha,
+            "response": {},
+        }
     if expected_remote_sha:
         lookup_command = ["git", "ls-remote", "--heads", remote, branch]
         lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
@@ -708,14 +733,23 @@ def _trusted_action_scope(conn, action):
     if not conn or not action.get("result_id"):
         return None
     row = conn.execute(
-        "SELECT metadata_json FROM worker_results WHERE result_id = ?",
+        """SELECT wr.metadata_json, t.metadata_json, a.metadata_json
+           FROM worker_results wr LEFT JOIN tasks t ON t.task_id = wr.task_id
+           LEFT JOIN attempts a ON a.attempt_id = wr.attempt_id AND a.task_id = wr.task_id
+           WHERE wr.result_id = ?""",
         (action["result_id"],),
     ).fetchone()
     metadata = _decode_json(row[0] if row else None)
     audit = metadata.get("audit")
     if not isinstance(audit, dict) or audit.get("status") != "accepted":
         return None
-    return audit.get("action_scope")
+    scope = audit.get("action_scope")
+    if isinstance(scope, dict) and row and "supervision_repair" in _decode_json(row[1]):
+        attempt = _decode_json(row[2])
+        if scope.get("repair_git") != attempt.get("repair_git"):
+            return {**scope, "supervision_repair": True, "repair_git": None}
+        return {**scope, "supervision_repair": True}
+    return scope
 
 
 def _publish_scope_violation(conn, action):
@@ -738,6 +772,11 @@ def _publication_scope_guard(conn, action, recovery_guard=None):
     if conn is None:
         return None
     scope = _trusted_action_scope(conn, action)
+    if isinstance(scope, dict) and scope.get("supervision_repair"):
+        try:
+            supervision_git.binding(scope)
+        except OSError:
+            return {'ok': False, 'status': 'publish_failed', 'safe_error': 'Maintenance Git binding unavailable'}
     if scope is None or execution_operations.publication_scope_is_current(
         conn, action.get("task_id"), scope
     ):
@@ -995,6 +1034,8 @@ def _derive_push_source_sha(action, action_scope, run_command):
     scope = dict(action_scope or {})
     if scope.get("result_head_sha"):
         return scope, scope.get("result_head_sha")
+    if scope.get("supervision_repair"):
+        return scope, None
     metadata = _decode_json(action.get("metadata_json"))
     worktree_path = _metadata_value(metadata, "worktree_path") or scope.get("worktree_path")
     source_ref = _metadata_value(metadata, "source_ref") or "HEAD"
@@ -1093,6 +1134,11 @@ def _prepare_publication_intent(db_path, action_id, run_command):
             return {"state": "missing", "action": action, "intent": None, "scope": None}
         scope = _trusted_action_scope(conn, action)
         intent = _load_intent(conn, action_id)
+    if isinstance(scope, dict) and scope.get("supervision_repair"):
+        try:
+            supervision_git.binding(scope)
+        except OSError:
+            return {"state": "scope_missing", "action": action, "intent": intent, "scope": scope}
     source_sha = None
     head_owner = None
     if intent is None and (scope is None or not isinstance(scope, dict)):
@@ -1441,6 +1487,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
             "skipped_count": 0,
             "failed_count": 0,
         }
+    deferred_count = 0
     published_count = 0
     deduplicated_count = 0
     skipped_count = 0
@@ -1455,6 +1502,17 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
         with task_publication_lock(db_path, action["task_id"]) as acquired:
             if not acquired:
                 busy_task_ids.add(action["task_id"])
+                continue
+            # A failed remediation push retires its following comment even
+            # when that failure has already made the execution non-runnable.
+            if action['result_id'] in failed_remediation_result_ids:
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.row_factory = sqlite3.Row
+                    latest = conn.execute('SELECT * FROM github_actions WHERE action_id=?', (action['action_id'],)).fetchone()
+                    if latest and latest['publish_status'] not in {'published', 'skipped'}:
+                        _mark_skipped(conn, dict(latest), {'ok': False, 'status': 'publish_failed',
+                            'safe_error': 'skipped because the preceding remediation push failed'}, _now())
+                        skipped_count += 1
                 continue
             # The selection page predates this lock. Another publisher may
             # already have completed the action or changed its eligibility.
@@ -1504,7 +1562,14 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                         if result_id:
                             failed_result_ids.add(result_id)
                         continue
-                supervision = supervision_publication.begin(db_path, action, config, now)
+                try:
+                    supervision = supervision_publication.begin(db_path, action, config, now)
+                except sqlite3.Error:
+                    # No remote effect or publication attempt has started. Leave
+                    # this task's ordered actions pending and try other tasks.
+                    deferred_count += 1
+                    busy_task_ids.add(action['task_id'])
+                    continue
                 if supervision['status'] == 'blocked':
                     if result_id:
                         failed_result_ids.add(result_id)
@@ -1908,6 +1973,7 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
         "status": "published" if failed_count == 0 else "publish_failed",
         "pending_count": len(actions),
         "published_count": published_count,
+        "deferred_count": deferred_count,
         "deduplicated_count": deduplicated_count,
         "skipped_count": skipped_count,
         "failed_count": failed_count,

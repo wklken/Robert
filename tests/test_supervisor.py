@@ -71,14 +71,39 @@ class SupervisorTests(unittest.TestCase):
     def test_database_outage_notice_is_durable_and_deduplicated(self):
         from robert_agent import supervisor
         self.config['db_path'] = str(self.root / 'missing.sqlite3')
-        supervisor.check(self.config, record=True)
+        supervisor.check(self.config, record=True, now="2026-11-06T00:00:00+00:00")
         calls = []
         def sent(argv, **kwargs):
             calls.append(json.loads(kwargs['input']))
             return subprocess.CompletedProcess(argv, 0)
         with patch.dict('os.environ', {'ROBERT_NOTIFICATION_COMMAND': 'notify-fixture'}):
             supervisor.deliver_health(self.config['db_path'], supervisor.health_path(self.config), runner=sent)
+            self.assertEqual(calls, [])
+            supervisor.check(self.config, record=True, now='2026-11-06T00:00:59+00:00')
+            supervisor.deliver_health(self.config['db_path'], supervisor.health_path(self.config), runner=sent)
+            self.assertEqual(calls, [])
+            supervisor.check(self.config, record=True, now='2026-11-06T00:01:00+00:00')
+            supervisor.deliver_health(self.config['db_path'], supervisor.health_path(self.config), runner=sent)
             supervisor.deliver_health(self.config['db_path'], supervisor.health_path(self.config), runner=sent)
         self.assertEqual(len(calls), 1)
         self.assertIn('delivery_id', calls[0])
         self.assertFalse(Path(self.config['db_path']).exists())
+
+    def test_brief_writer_collision_records_health_without_notice_and_resets_episode(self):
+        from robert_agent import supervisor
+        calls = []
+        def sent(argv, **kwargs):
+            calls.append(json.loads(kwargs['input']))
+            return subprocess.CompletedProcess(argv, 0)
+        with patch.dict('os.environ', {'ROBERT_NOTIFICATION_COMMAND': 'notify-fixture'}):
+            for minute in (0, 2):
+                with closing(sqlite3.connect(self.db)) as writer:
+                    writer.execute('BEGIN IMMEDIATE')
+                    result = supervisor.check(self.config, record=True, now=f'2026-11-06T00:0{minute}:00+00:00')
+                    self.assertFalse(result['ok'])
+                    supervisor.deliver_health(self.db, supervisor.health_path(self.config), runner=sent)
+                    self.assertEqual(calls, [])
+                result = supervisor.check(self.config, record=True, now=f'2026-11-06T00:0{minute}:01+00:00')
+                self.assertTrue(result['ok'])
+                self.assertNotIn('first_failed_at', json.loads(supervisor.health_path(self.config).read_text()))
+        self.assertEqual(calls, [])

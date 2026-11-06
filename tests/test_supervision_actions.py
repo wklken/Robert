@@ -2,11 +2,17 @@ from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import yaml
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent import storage, supervision_actions as actions
+from robert_agent.validate_config import validate_config
 
 
 NOW = '2026-11-06T10:00:00+00:00'
@@ -107,25 +113,103 @@ class SupervisionActionTests(unittest.TestCase):
         actions.verify(self.conn, observations=[], now=RECHECK_AGAIN)
         self.assertEqual(self.conn.execute('SELECT status,budget_cost FROM supervision_recovery_actions').fetchone(), ('succeeded', 1))
 
-    def test_native_retry_consumes_same_lineage_stage_budget(self):
-        for task_id in ('task', 'replacement'):
-            if task_id != 'task':
-                self.task(task_id, 'lineage', 'completed')
-            self.conn.execute('UPDATE attempts SET status=? WHERE task_id=?', ('completed', task_id))
-            self.conn.execute("INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES(?,?,?,'comment_analysis',?,?)",
-                              ('result-' + task_id, task_id, 'attempt-' + task_id, NOW,
-                               json.dumps({'audit_observation': {'attempt_count': 1, 'retryable': True}})))
-        first = actions.begin(self.conn, task_id='task', kind='audit_retry', target_id='result-task',
-                              config=self.config, now=NOW, native_retry=True)
-        self.assertEqual(first['status'], 'claimed')
-        actions.finish(self.conn, first['claim'], outcome='failed', receipt={}, now=NOW)
-        next_attempt = actions.begin(self.conn, task_id='replacement', kind='audit_retry', target_id='result-replacement',
-                                     config=self.config, now=NOW, native_retry=True)
-        self.assertEqual(next_attempt['status'], 'blocked')
-        self.assertEqual(next_attempt['reason_code'], 'recovery_budget_exhausted')
+    def test_native_retries_preserve_domain_budgets_without_supervisor_request(self):
+        self.conn.commit()
+        for kind in actions.STAGES:
+            with self.subTest(kind=kind), patch('robert_agent.validate_config.validate_config') as validate:
+                config = {**self.config, 'config_path': '/fixture/unused.yml'}
+                for _ in range(3):
+                    self.assertFalse(actions.blocks_consumer(self.conn, task_id='task', kind=kind,
+                        target_id='native-target', now=NOW, config=config, native_retry=True))
+                    self.assertEqual(actions.begin(self.conn, task_id='task', kind=kind,
+                        target_id='native-target', now=NOW, config=config, native_retry=True)['status'], 'legacy')
+                    self.assertFalse(self.conn.in_transaction)
+                validate.assert_not_called()
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM supervision_recovery_actions').fetchone()[0], 0)
+
+    def test_requested_consumer_hint_does_not_reload_policy_but_claim_does(self):
+        self.plan()
+        self.conn.commit()
+        config = {**self.config, 'config_path': '/fixture/unavailable.yml'}
+        with patch('robert_agent.validate_config.validate_config', return_value={'ok': False}) as validate:
+            for _ in range(3):
+                self.assertFalse(actions.blocks_consumer(self.conn, task_id='task', kind='spool_replay',
+                    target_id='attempt-task', now=NOW, config=config, native_retry=True))
+            validate.assert_not_called()
+            self.assertEqual(self.begin(config=config)['reason_code'], 'recovery_policy_unavailable')
+            validate.assert_called_once()
 
     def test_cancellation_after_claim_prevents_later_application(self):
         self.plan()
         claim = self.begin()['claim']
         self.conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id='task'")
         self.assertFalse(actions.current(self.conn, claim, config=self.config, now=NOW, generation='fingerprint'))
+
+    def test_killed_audit_claim_releases_scope_without_refunding_budget(self):
+        self.conn.execute("UPDATE attempts SET status='completed'")
+        self.conn.execute("""INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json)
+            VALUES('result','task','attempt-task','comment_analysis',?,?)""", (NOW, json.dumps({
+                'submission_fingerprint': 'fingerprint', 'audit_observation': {'attempt_count': 1, 'retryable': True}})))
+        actions.plan(self.conn, observations=[{**self.observation(), 'reason_code': 'result_waiting_audit',
+            'evidence': {'result_id': 'result'}}], config=self.config, now=NOW)
+        self.conn.commit()
+        child_script = '''
+import json, sqlite3, sys, time
+from robert_agent import supervision_actions as actions
+db, raw_config, now = sys.argv[1:]
+with sqlite3.connect(db) as conn:
+    verdict = actions.begin(conn, task_id='task', kind='audit_retry', target_id='result',
+                            config=json.loads(raw_config), now=now, native_retry=True)
+print(json.dumps(verdict), flush=True)
+time.sleep(30)
+'''
+        with subprocess.Popen([sys.executable, '-B', '-c', child_script, str(self.db), json.dumps(self.config), NOW],
+                              stdout=subprocess.PIPE, text=True) as child:
+            try:
+                verdict = json.loads(child.stdout.readline())
+                self.assertEqual(verdict['status'], 'claimed')
+            finally:
+                child.kill()
+                child.wait(timeout=10)
+        with closing(sqlite3.connect(self.db)) as restarted, restarted:
+            actions.verify(restarted, observations=[], now=LATER)
+        self.assertEqual(self.conn.execute('SELECT status,budget_cost FROM supervision_recovery_actions').fetchone(), ('failed', 1))
+        self.assertIsNone(self.conn.execute("SELECT json_extract(metadata_json,'$.audit') FROM worker_results").fetchone()[0])
+        self.assertEqual(actions.begin(self.conn, task_id='task', kind='audit_retry', target_id='result',
+                                       config=self.config, now=LATER)['status'], 'legacy')
+        self.assertFalse(actions.current(self.conn, verdict['claim'], config=self.config, now=LATER))
+
+    def test_disk_policy_changes_fence_stale_config(self):
+        root = self.db.parent
+        (root / '.git').mkdir()
+        trees = root / 'trees'
+        trees.mkdir()
+        path = root / 'robert.yml'
+        raw = {'data_dir': str(root), 'database': self.db.name, 'repos': [{
+            'full_name': 'example/repo', 'github_account': 'default', 'trusted_actors': ['owner'],
+            'default_base_branch': 'main', 'repo_root': str(root), 'worktree_root': str(trees),
+        }], 'supervision': self.config['supervision']}
+
+        def save():
+            path.write_text(yaml.safe_dump(raw), encoding='utf-8')
+
+        save()
+        startup = validate_config(path, skip_external=True)
+        self.assertTrue(startup['ok'], startup)
+        self.assertEqual(len(self.plan(config=startup)), 1)
+        claim = self.begin(config=startup)['claim']
+        self.assertTrue(actions.current(self.conn, claim, config=startup, now=NOW, generation='fingerprint'))
+        raw['supervision'] = {'mode': 'observe'}
+        save()
+        self.assertFalse(actions.current(self.conn, claim, config=startup, now=NOW, generation='fingerprint'))
+        self.task('replacement', 'fresh-lineage')
+        fresh = {**self.observation('replacement'), 'lineage_key': 'fresh-lineage'}
+        self.assertEqual(actions.plan(self.conn, observations=[fresh], now=NOW, config=startup), [])
+        raw['supervision'] = self.config['supervision']
+        save()
+        self.assertEqual(len(actions.plan(self.conn, observations=[fresh], now=NOW, config=startup)), 1)
+        raw['database'] = 'other.db'
+        save()
+        native = actions.begin(self.conn, task_id='replacement', kind='spool_replay', target_id='attempt-replacement',
+                               config=startup, now=NOW, generation='fingerprint', native_retry=True)
+        self.assertEqual(native.get('reason_code'), 'recovery_policy_unavailable')

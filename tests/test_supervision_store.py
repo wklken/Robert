@@ -60,16 +60,19 @@ class SupervisionStoreTests(unittest.TestCase):
                 self.assertEqual(self.apply(observation(classification=status), now=LATER), [])
                 self.assertEqual(len(supervision_store.list_incidents(self.conn, status='active')), 1)
         self.assertEqual(self.apply(observation(
-            classification='healthy', lineage_key='request-two', positive_evidence={'audit': 'accepted'},
+            classification='healthy', lineage_key='request-two', positive_evidence={'audit': 'accepted', 'occurred_at': LATER},
+        ), now=LATER), [])
+        self.assertEqual(self.apply(observation(
+            classification='healthy', positive_evidence={'audit': 'accepted'},
         ), now=LATER), [])
         self.assertEqual(self.apply(now=LATER), [])
         self.assertEqual(len(supervision_store.list_incidents(self.conn, status='active')), 1)
         resolved, = self.apply(observation(
-            classification='healthy', positive_evidence={'audit': 'accepted', 'result_id': 'result-one'},
+            classification='healthy', positive_evidence={'audit': 'accepted', 'result_id': 'result-one', 'occurred_at': LATER},
         ), now=LATER)
         self.assertEqual(resolved['transition'], 'resolved')
         self.assertEqual(resolved['incident']['incident_id'], opened['incident']['incident_id'])
-        self.assertEqual(resolved['incident']['resolution_evidence'], {'audit': 'accepted', 'result_id': 'result-one'})
+        self.assertEqual(resolved['incident']['resolution_evidence'], {'audit': 'accepted', 'result_id': 'result-one', 'occurred_at': LATER})
         self.assertEqual(resolved['incident']['resolved_by'], 'natural')
         self.assertEqual(supervision_store.list_incidents(self.conn, status='active'), [])
         recurrence, = self.apply(observation(), now=LATER)

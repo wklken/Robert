@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, supervision_observe, supervision_rules
+from robert_agent import storage, supervision_observe, supervision_rules, supervisor
 
 
 NOW = datetime(2026, 11, 6, 10, tzinfo=timezone.utc)
@@ -69,7 +69,7 @@ class SupervisionProgressRulesTests(unittest.TestCase):
         self.assertNotIn('positive_evidence', result)
 
 
-class SupervisionAdmissionObservationTests(unittest.TestCase):
+class _SupervisionDatabaseFixture(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -88,6 +88,8 @@ class SupervisionAdmissionObservationTests(unittest.TestCase):
         self.execute("INSERT INTO supervision_checkpoints(scope_type,scope_id,rule_id,lineage_key,updated_at,metadata_json) VALUES('github_event',?,'admission','lineage',?,?)",
                      (key, OLD, json.dumps(metadata)))
 
+
+class SupervisionAdmissionObservationTests(_SupervisionDatabaseFixture):
     def test_missing_and_deferred_dispositions_are_distinct_and_never_claim_progress(self):
         self.receipt('missing')
         self.receipt('deferred', disposition='deferred', consumer='github_route', due_at=LATER)
@@ -126,3 +128,114 @@ class SupervisionAdmissionObservationTests(unittest.TestCase):
             WHERE scope_type='github_event' AND scope_id='missing' AND rule_id='admission'""")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertFalse(supervision_observe.is_current(conn, row))
+
+
+class SupervisionClosureTests(_SupervisionDatabaseFixture):
+    def task(self, key, lifecycle, *, parent=None, lineage='lineage'):
+        self.execute("INSERT INTO workstreams(workstream_id,repo_id,active_task_id,created_at,updated_at) VALUES(?,'repo',?,?,?)",
+                     ('stream-' + key, key, OLD, OLD))
+        self.execute("""INSERT INTO tasks(task_id,workstream_id,lifecycle,parent_task_id,route_id,expected_output,
+            created_at,updated_at,metadata_json) VALUES(?,?,?,?,'local-result','local_result',?,?,json_object('supervision_lineage_key',?))""",
+                     (key, 'stream-' + key, lifecycle, parent, OLD, OLD, lineage))
+
+    def check(self, now, **config):
+        return supervisor.check({'db_path': str(self.db), 'data_dir': str(self.db.parent),
+                                 'repos': [{'full_name': 'example/repo'}], **config}, record=True, now=now)
+
+    def daemon(self):
+        self.execute("INSERT INTO daemon_runs(daemon_run_id,owner_id,config_path,status,started_at) VALUES('run','run','config','running',?)", (OLD,))
+        self.execute("""INSERT INTO leases(lease_id,resource_type,resource_key,owner_id,status,acquired_at,expires_at,heartbeat_at)
+            VALUES('lease','daemon',?,'run','active',?,'2026-11-06T20:00:00+00:00',?)""",
+                     ('database:' + str(self.db.resolve()), OLD, NOW.isoformat()))
+
+    def successful_local(self):
+        self.execute("INSERT INTO daemon_events(daemon_event_id,daemon_run_id,event_type,status,created_at) VALUES('local','run','local_drain_completed','ok','2026-11-06T10:15:00+00:00')")
+
+    def incidents(self):
+        with closing(sqlite3.connect(self.db)) as conn:
+            return conn.execute("SELECT scope_id,rule_id,status,resolution_evidence_json FROM supervision_incidents ORDER BY scope_id").fetchall()
+
+    def test_ready_queue_opens_incident_and_notice_only_after_current_local_opportunity(self):
+        self.daemon()
+        self.task('queued', 'queued')
+        self.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('attempt','queued',1,'prepared')")
+        self.execute("INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at) VALUES('prompt','queued','attempt','prompt',?,?)",
+                     (str(self.db.parent / 'prompt'), OLD))
+        self.assertTrue(self.check(NOW.isoformat())['ok'])
+        self.assertTrue(self.check('2026-11-06T10:10:00+00:00')['ok'])
+        self.assertEqual(self.incidents(), [])
+        self.successful_local()
+        self.assertTrue(self.check(LATER)['ok'])
+        self.assertEqual(self.incidents(), [('queued', 'ready_not_dispatched', 'open', '{}')])
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM notifications WHERE task_id='queued' AND notification_type='supervision_incident'").fetchone()[0], 1)
+
+    def test_ready_incident_closes_when_exact_attempt_completes_between_checks(self):
+        self.daemon()
+        self.task('queued', 'queued')
+        self.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('attempt','queued',1,'prepared')")
+        self.execute("""INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at)
+            VALUES('prompt','queued','attempt','prompt','/tmp/fixture',?)""", (OLD,))
+        self.assertTrue(self.check(NOW.isoformat())['ok'])
+        self.successful_local()
+        self.assertTrue(self.check(LATER)['ok'])
+        self.assertEqual(self.incidents(), [('queued', 'ready_not_dispatched', 'open', '{}')])
+
+        self.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id='queued'")
+        self.execute("UPDATE attempts SET status='completed' WHERE attempt_id='attempt'")
+        self.execute("""INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json)
+            VALUES('result','queued','attempt','local_result',?,json_object('audit',json_object('status','accepted'),
+            'normalized_payload',json_object('planned_github_actions',json_array())))""", (LATER,))
+        self.assertTrue(self.check('2026-11-06T11:10:00+00:00')['ok'])
+        self.assertEqual(self.incidents(), [('queued', 'ready_not_dispatched', 'open', '{}')])
+
+        occurred_at = '2026-11-06T11:15:00+00:00'
+        self.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('other','queued',2,'completed')")
+        self.execute("""UPDATE worker_results SET attempt_id='other',
+            metadata_json=json_set(metadata_json,'$.audit.audited_at',?) WHERE result_id='result'""", (occurred_at,))
+        self.assertTrue(self.check('2026-11-06T11:20:00+00:00')['ok'])
+        self.assertEqual(self.incidents(), [('queued', 'ready_not_dispatched', 'open', '{}')])
+
+        self.execute("UPDATE worker_results SET attempt_id='attempt' WHERE result_id='result'")
+        self.execute("DELETE FROM attempts WHERE attempt_id='other'")
+        self.assertTrue(self.check('2026-11-06T11:30:00+00:00')['ok'])
+        [(scope, rule, state, evidence)] = self.incidents()
+        self.assertEqual((scope, rule, state), ('queued', 'ready_not_dispatched', 'resolved'))
+        self.assertEqual(json.loads(evidence)['attempt_id'], 'attempt')
+        self.assertEqual(json.loads(evidence)['result_id'], 'result')
+        self.assertEqual(json.loads(evidence)['occurred_at'], occurred_at)
+
+    def test_ready_queue_capacity_wait_is_not_reported_as_stall(self):
+        self.daemon()
+        self.task('queued', 'queued')
+        self.task('occupies', 'running')
+        self.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('attempt','queued',1,'prepared'),('worker','occupies',1,'running')")
+        self.execute("INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at) VALUES('prompt','queued','attempt','prompt','/tmp/fixture',?)", (OLD,))
+        self.assertTrue(self.check(NOW.isoformat(), max_concurrency=1)['ok'])
+        self.successful_local()
+        self.assertTrue(self.check(LATER, max_concurrency=1)['ok'])
+        self.assertEqual(self.incidents(), [])
+
+    def test_failure_resolves_only_from_bound_completed_successor_with_domain_time(self):
+        self.task('failed', 'failed')
+        self.assertTrue(self.check(NOW.isoformat())['ok'])
+        self.assertEqual(self.incidents(), [('failed', 'execution_failed', 'open', '{}')])
+        self.task('unrelated', 'completed')
+        self.task('successor', 'completed', parent='failed')
+        for key in ('unrelated', 'successor'):
+            self.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES(?,?,1,'completed')", (key, key))
+            self.execute("""INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json)
+                VALUES(?,?,?,'local_result',?,json_object('audit',json_object('status','accepted'),
+                    'normalized_payload',json_object('planned_github_actions',json_array())))""", (key, key, key, OLD))
+        occurred_at = '2026-11-06T10:25:00+00:00'
+        self.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.audited_at',?) WHERE result_id='unrelated'", (occurred_at,))
+        self.assertTrue(self.check('2026-11-06T10:35:00+00:00')['ok'])
+        self.assertEqual(self.incidents(), [('failed', 'execution_failed', 'open', '{}')])
+        self.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.audited_at',?) WHERE result_id='successor'", (occurred_at,))
+        self.assertTrue(self.check(LATER)['ok'])
+        [(scope, rule, state, evidence)] = self.incidents()
+        self.assertEqual((scope, rule, state), ('failed', 'execution_failed', 'resolved'))
+        self.assertEqual(json.loads(evidence)['successor_task_id'], 'successor')
+        self.assertEqual(json.loads(evidence)['occurred_at'], occurred_at)
+        self.assertTrue(self.check('2026-11-06T11:05:00+00:00')['ok'])
+        self.assertEqual(self.incidents(), [(scope, rule, state, evidence)])

@@ -5,11 +5,11 @@ import json
 from pathlib import Path
 import sqlite3
 
-from robert_agent import supervision_actions, supervision_store, validate_config
+from robert_agent import supervision_actions, supervision_store
 
 
 def _connect(db):
-    conn = sqlite3.connect(db, timeout=.1)
+    conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -21,6 +21,7 @@ def needs_config(config):
 
 def fresh_config(config, db=None):
     if config and config.get('config_path'):
+        from robert_agent import validate_config
         current = validate_config.validate_config(config['config_path'], skip_external=True)
         if not current.get('ok') or (db and Path(current['db_path']).resolve() != Path(db).resolve()):
             return {}
@@ -29,7 +30,14 @@ def fresh_config(config, db=None):
 
 
 def _repair_allowed(conn, action, config):
-    return False, True
+    from robert_agent import supervision_repair
+    repair = supervision_repair.repair_task(conn, action['task_id'])
+    if not repair:
+        return False, True
+    repo = conn.execute('''SELECT w.repo_id FROM workstreams w JOIN tasks t ON t.workstream_id=w.workstream_id
+        WHERE t.task_id=?''', (action['task_id'],)).fetchone()
+    return True, bool(repo and supervision_repair.authorized_repair(
+        conn, action['task_id'], config, repo[0], action_type=action['action_type']))
 
 
 def begin(db, action, config, now):
@@ -47,11 +55,6 @@ def begin(db, action, config, now):
         executing = intent and intent['status'] == 'executing'
         evidence = json.loads(intent['remote_evidence_json'] or '{}') if intent else {}
         needs_claim = bool(evidence.get('supervision_retry_required'))
-        write_managed = False
-        if executing and needs_config(config):
-            task = supervision_actions._task(conn, action['task_id'])
-            write_managed = bool(task and task['lineage_key']
-                                 and supervision_actions._policy(config, task['repo'], 'publication_retry'))
         kind = 'publication_reconcile' if executing else 'publication_retry'
         native_retry = bool(executing or needs_claim or (json.loads(action['metadata_json'] or '{}').get('publish') or {}).get('attempt_count'))
         if not native_retry and supervision_store.has_schema(conn) and conn.execute("""SELECT 1
@@ -74,7 +77,7 @@ def begin(db, action, config, now):
         if needs_claim and not executing and verdict['status'] != 'claimed':
             return {'status': 'blocked', 'reason_code': verdict.get('reason_code', 'recovery_policy_required')}
     return {**verdict, 'guard_required': repair or verdict['status'] == 'claimed',
-            'reconcile_only': bool(executing and (needs_claim or write_managed or verdict['status'] == 'claimed'))}
+            'reconcile_only': bool(executing and (needs_claim or verdict['status'] == 'claimed'))}
 
 
 def guard(db, action, state, config, now):

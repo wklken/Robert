@@ -530,6 +530,8 @@ def _terminal_transport_failure(logs):
 
 
 def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
+    from robert_agent import supervision_repair
+
     review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
     if review:
         row = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
@@ -546,7 +548,7 @@ def _inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         }
     commands = _attempt_command_records(conn, attempt_id, task_id, persist=False)
     logs = _attempt_log_tails(conn, attempt_id)
-    git_summary = _git_recovery_summary(worktree_path)
+    git_summary = {} if conn is not None and supervision_repair.repair_task(conn, task_id) else _git_recovery_summary(worktree_path)
     _backfill_command_phases(conn, attempt_id, commands)
     phases = _latest_worker_phases(conn, attempt_id)
     signals = []
@@ -3769,14 +3771,28 @@ def _prepare_detected_local_tasks(
             for event_row in event_rows
         ]
         event_ids = [event["work_item_event_id"] for event in local_events]
+        from robert_agent import supervision_git, supervision_repair
+        maintenance = supervision_repair.repair_task(conn, task_id)
+        forced_route = supervision_repair.preparation_route(conn, task_id, config_result, repo) if maintenance else None
         normalized = {
             "origin_type": "web",
-            "intent": discover.infer_intent(title, description, "manual_operator_request"),
+            "intent": "bug_fix" if maintenance else discover.infer_intent(title, description, "manual_operator_request"),
             "event_type": "manual_operator_request",
             "title": title,
             "body": description,
         }
-        route_result = _effective_route(config_result, repo, normalized)
+        route_result = _effective_route(config_result, repo, normalized, route_id=forced_route) if not maintenance or forced_route else None
+        if maintenance:
+            if (not route_result or route_result['expected_output'] != supervision_repair.OUTPUT_TYPE
+                    or not route_result['needs_worktree'] or route_result.get('workspace_mode', 'new_branch') != 'new_branch'
+                    or not set(supervision_repair.ACTIONS).issubset(route_result['allowed_github_actions'])):
+                _finalize_failed_task(conn, task_id, workstream_id, run_now, {'status': 'maintenance_route_rejected'})
+                work_items.record_system_event(conn, work_item_id, event_type='execution_failed',
+                    idempotency_key='prepare:' + task_id, body='The current maintenance policy cannot prepare this repair.',
+                    metadata={'task_id': task_id}, now=run_now)
+                conn.execute("UPDATE wakeups SET status='consumed',updated_at=? WHERE task_id=? AND status='pending'", (run_now, task_id))
+                continue
+            route_result['allowed_github_actions'] = list(supervision_repair.ACTIONS)
         source_reference = work_item_id.removeprefix("wi-")[:12]
         worktree_event = {
             "number": source_reference,
@@ -3785,7 +3801,10 @@ def _prepare_detected_local_tasks(
         }
         conn.commit()  # External Git I/O must not retain the SQLite writer lock.
         try:
-            worktree_result = _prepare_worktree(repo, worktree_event, route_result, dry_run)
+            worktree_result = (
+                supervision_git.prepare(repo, task_id, data_dir, dry_run=dry_run) if maintenance
+                else _prepare_worktree(repo, worktree_event, route_result, dry_run)
+            )
         except ControlDeadlineExceeded:
             raise
         except (OSError, subprocess.SubprocessError) as exc:
@@ -3905,7 +3924,10 @@ def _prepare_detected_local_tasks(
                 (worktree_result or {}).get("branch_name"),
                 run_now,
                 run_now,
-                json.dumps({"origin_type": "web", "work_item_id": work_item_id, "result_contract": result_contract.CONTRACT_ID}),
+                json.dumps({"origin_type": "web", "work_item_id": work_item_id,
+                            "result_contract": result_contract.CONTRACT_ID,
+                            **({"repair_git": worktree_result["repair_git"]}
+                               if worktree_result and "repair_git" in worktree_result else {})}),
             ),
         )
         _insert_file_artifact(conn, task_id, attempt_id, "task_context", context_path, run_now)
@@ -5703,6 +5725,25 @@ def _dispatch_queued_locked(
                     _insert_notification(conn, 'native_request_canceled', 'recorded', now,
                         {'task_id': task_info['task_id'], 'round_id': native_review['round_id'], 'reason_code': 'current_policy_rejected'})
             continue
+        if config_result and not native_review:
+            from robert_agent import supervision_repair
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.row_factory = sqlite3.Row
+                if supervision_repair.repair_task(conn, task_info['task_id']):
+                    repair_authorization = supervision_repair.authorized_repair(
+                        conn, task_info['task_id'], config_result, repo['repo_id'] if 'repo_id' in repo else
+                        conn.execute('SELECT repo_id FROM workstreams WHERE workstream_id=?',
+                                     (task_info['workstream_id'],)).fetchone()[0])
+                    if not repair_authorization:
+                        now = _now()
+                        conn.execute("UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=? AND status='prepared'",
+                                     (now, task_info['attempt_id']))
+                        _finalize_failed_task(conn, task_info['task_id'], task_info['workstream_id'], now,
+                                              {'status': 'maintenance_policy_rejected'})
+                        continue
+                    from robert_agent import supervision_repair_worker
+                    worker_kwargs['worker_agent_config'] = supervision_repair_worker.launch_profile(
+                        config_result, task_info['task_id'], task_info['attempt_id'], repair_authorization['worker'])
         if native_review:
             configured = native_review["request"]["workers"]
             timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600

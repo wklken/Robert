@@ -4,6 +4,7 @@ import json
 from uuid import uuid4
 
 from robert_agent import storage
+from robert_agent.supervision_rules import timestamp
 
 
 _ACTIVE = "status NOT IN ('resolved','dismissed')"
@@ -122,8 +123,8 @@ def apply_observations(conn, observations, now):
 
     The caller holds a writer transaction from revalidation through commit.
     Evidence must already be bounded and redacted. A rule can resolve an
-    incident with `healthy` and a nonempty `positive_evidence` mapping for
-    the same scope, rule and lineage. Omitting an observation does nothing.
+    incident with `healthy` and timestamped positive domain evidence for the
+    same scope, rule and lineage. Omitting an observation does nothing.
     """
     changes = []
     for observation in observations:
@@ -132,17 +133,24 @@ def apply_observations(conn, observations, now):
         _record_observation(conn, key, observation, now)
         classification = observation['classification']
         positive = observation.get('positive_evidence')
-        can_resolve = classification == 'healthy' and isinstance(positive, dict) and bool(positive)
+        occurred_at = timestamp(positive.get('occurred_at')) if isinstance(positive, dict) else None
+        can_resolve = classification == 'healthy' and occurred_at is not None and occurred_at <= timestamp(now)
         if classification != 'confirmed' and not can_resolve:
             continue
-        active = conn.execute(f'''SELECT incident_id,status FROM supervision_incidents
-            WHERE {_SCOPE} AND lineage_key=? AND {_ACTIVE}''', key).fetchone()
+        active = conn.execute(f'''SELECT incident_id,status,expected_progress_json,first_observed_at
+            FROM supervision_incidents WHERE {_SCOPE} AND lineage_key=? AND {_ACTIVE}''', key).fetchone()
         if classification == 'confirmed':
             incident_id = _confirmed(conn, key, observation, active, now)
             if incident_id is None:
                 continue
             transition = 'opened'
         elif active and active[1] in {'open', 'diagnosing', 'needs_attention'}:
+            if observation['rule_id'] == 'ready_not_dispatched':
+                expected_attempt = json.loads(active[2]).get('attempt_id')
+                opened_at = timestamp(active[3])
+                if (not expected_attempt or positive.get('attempt_id') != expected_attempt
+                        or not opened_at or occurred_at < opened_at):
+                    continue
             incident_id = active[0]
             conn.execute('''UPDATE supervision_incidents SET status='resolved',resolved_by='natural',
                 resolved_at=?,last_observed_at=?,next_check_at=NULL,resolution_evidence_json=? WHERE incident_id=?''',

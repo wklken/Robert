@@ -1,6 +1,6 @@
 """Validated, bounded settings for the independent observation service."""
 
-DEFAULTS = {'mode': 'observe', 'poll_seconds': 60, 'batch_size': 100, 'stall_seconds': 300, 'diagnosis': None, 'recovery': None}
+DEFAULTS = {'mode': 'observe', 'poll_seconds': 60, 'batch_size': 100, 'stall_seconds': 300, 'diagnosis': None, 'recovery': None, 'repair': None, 'build_manifest': None}
 
 
 def normalize(raw):
@@ -31,4 +31,8 @@ def normalize(raw):
         if set(recovery['allowed_actions']) - set(STAGES):
             raise ValueError('supervision.recovery contains an unsupported action')
         result['recovery'] = {key: sorted(set(value)) for key, value in recovery.items()}
+    from robert_agent.supervision_repair import normalize_repair
+    result['repair'] = normalize_repair(result['repair'])
+    if result['build_manifest'] is not None and (not isinstance(result['build_manifest'], str) or not result['build_manifest'].strip()):
+        raise ValueError('supervision.build_manifest must be a nonempty path')
     return result

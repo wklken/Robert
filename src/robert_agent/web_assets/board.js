@@ -1169,6 +1169,15 @@ function renderSupervision(detail) {
     const entry = node("section", "execution-history-task");
     entry.append(node("p", "", `${incident.status} · ${incident.reason_code}`));
     entry.append(node("p", "", `${incident.scope_id} · ${incident.last_observed_at}`));
+    if (incident.diagnosis?.expected_progress)
+      entry.append(node("p", "", incident.diagnosis.expected_progress));
+    (incident.recovery_actions || []).forEach(action =>
+      entry.append(node("p", "", `${action.action_kind}: ${action.status} (${action.budget_cost})`)));
+    if (incident.repair_work_item_id) {
+      entry.append(node("p", "", incident.repair_work_item_id));
+      Object.entries(incident.repair_verification || {}).forEach(([stage, status]) =>
+        entry.append(node("p", "", `${stage}: ${status}`)));
+    }
     panel.append(entry);
   });
   return panel;

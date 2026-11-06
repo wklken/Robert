@@ -110,6 +110,32 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
             self.assertEqual(status, 'observing')
             self.assertEqual(json.loads(encoded), {'attempt_id': attempt_id, 'result_id': result_id, 'fingerprint': fingerprint})
 
+    def test_two_native_spool_deferrals_in_one_lineage_both_ingest(self):
+        from tests import test_compact_result
+        from robert_agent.worker import result
+        fixture = self.fixture(test_compact_result.CompactResultTests)
+        db, task_id, attempt_id, _, _ = fixture.prepare('comment')
+        config = self.config(fixture.config_path, 'spool_replay')
+        for number in (1, 2):
+            if number == 2:
+                with closing(sqlite3.connect(db)) as conn, conn:
+                    columns = [row[1] for row in conn.execute('PRAGMA table_info(attempts)')]
+                    previous = dict(zip(columns, conn.execute('SELECT * FROM attempts WHERE attempt_id=?',
+                                                             (attempt_id,)).fetchone()))
+                    attempt_id += '-successor'
+                    previous.update(attempt_id=attempt_id, attempt_no=2, status='running')
+                    conn.execute(f"INSERT INTO attempts({','.join(previous)}) VALUES ({','.join('?' for _ in previous)})",
+                                 list(previous.values()))
+                    conn.execute("UPDATE tasks SET lifecycle='running' WHERE task_id=?", (task_id,))
+            with patch.object(result, '_record_result_db', side_effect=sqlite3.OperationalError('database is locked')):
+                saved = result.record_result(db, fixture.envelope(task_id, attempt_id))
+            self.assertEqual(saved['status'], 'deferred')
+            self.assertEqual(result.replay_pending_results(db, config=config)['recorded'], 1)
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM worker_results').fetchone()[0], 2)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM supervision_recovery_actions').fetchone()[0], 0)
+        self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])
+
     def test_audit_refuses_stale_request_when_operator_cancels_during_inspection(self):
         from tests import test_compact_result
         from robert_agent import run_once

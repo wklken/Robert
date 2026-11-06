@@ -3,6 +3,7 @@
 from datetime import timedelta
 import hashlib
 import json
+from pathlib import Path
 from uuid import uuid4
 
 from robert_agent import execution_store, redaction, retry_policy, supervision_store
@@ -59,17 +60,36 @@ def _action_payload_digest(metadata):
     return _digest(body)
 
 
-def _policy(config, repo, kind):
+def _authoritative_config(conn, config):
     config = config or {}
+    config_path = config.get('config_path')
+    if not config_path or (config.get('supervision') or {}).get('mode') != 'recover_known':
+        # Explicit local observe/off gates also serve paused consumers.
+        return config
+    try:
+        from robert_agent.validate_config import validate_config
+        current = validate_config(config_path, skip_external=True)
+        main_path = next((row[2] for row in conn.execute('PRAGMA database_list') if row[1] == 'main'), '')
+        if current['ok'] and main_path and Path(current['db_path']).resolve() == Path(main_path).resolve():
+            return current
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return None
+
+
+def _policy(config, repo, kind):
     settings = config.get('supervision', {})
     recovery = settings.get('recovery') or {}
     allowed = recovery.get('allowed_actions', ())
     repositories = recovery.get('repositories', ())
-    configured = {item['full_name'] for item in config.get('repos', ())}
+    configured = next((item for item in config.get('repos', ()) if item['full_name'] == repo), None)
     if (settings.get('mode') != 'recover_known' or not config.get('daemon', {}).get('enabled', True)
-            or kind not in STAGES or kind not in allowed or repo not in repositories or repo not in configured):
+            or kind not in STAGES or kind not in allowed or repo not in repositories
+            or not configured or not configured.get('enabled', True)):
         return None
-    return _digest(['supervision-recovery-v1', sorted(allowed), sorted(repositories)])
+    return _digest(['supervision-recovery-v1', sorted(allowed), sorted(repositories),
+                    configured.get('github_account'), configured.get('default_base_branch'),
+                    sorted(configured.get('trusted_actors', ()))])
 
 
 def _task(conn, task_id):
@@ -218,7 +238,8 @@ def _reserve(conn, task, kind, target_id, target, policy, now, *, expected=None,
 
 def plan(conn, *, observations, now, config, limit=8):
     """Reserve at most ``limit`` requests. The caller owns a short writer transaction."""
-    if (config.get('supervision') or {}).get('mode') != 'recover_known':
+    config = _authoritative_config(conn, config)
+    if not config or (config.get('supervision') or {}).get('mode') != 'recover_known':
         return []
     if not conn.in_transaction:
         conn.execute('BEGIN IMMEDIATE')
@@ -283,11 +304,9 @@ def blocks_consumer(conn, *, task_id, kind, target_id, now, config, native_retry
         if tuple(active[:2]) == (kind, target_id):
             return active[2] != 'requested'
         return active[2] in {'applying', 'unknown'} or native_retry
-    if not native_retry:
-        return False
-    task = _task(conn, task_id)
-    return bool(task and task['lineage_key'] and _policy(config, task['repo'], kind)
-                and _budget_block(conn, task['lineage_key'], STAGES[kind]))
+    # Scheduling is advisory. Native retries retain their own policy, and
+    # actual supervised claims revalidate configuration at the effect boundary.
+    return False
 
 
 def begin(conn, *, task_id, kind, target_id, now, config, generation=None, native_retry=False):
@@ -299,6 +318,11 @@ def begin(conn, *, task_id, kind, target_id, now, config, generation=None, nativ
     if kind not in STAGES:
         raise ValueError('unsupported supervision recovery action')
     if not supervision_store.has_schema(conn):
+        return {'status': 'legacy'}
+    # Ordinary domain work must not acquire a new writer or spend a recovery
+    # budget. Only a previously planned supervision action grants extra work.
+    if not _one(conn, f"""SELECT action_id FROM supervision_recovery_actions WHERE scope_type='task'
+            AND scope_id=? AND {_ACTIVE}""", (task_id,)):
         return {'status': 'legacy'}
     # Caller may already own a write transaction in atomic consumers.
     if not conn.in_transaction:
@@ -314,27 +338,19 @@ def begin(conn, *, task_id, kind, target_id, now, config, generation=None, nativ
         return _blocked('recovery_scope_occupied')
     if action and action['status'] != 'requested':
         return _blocked('recovery_already_active')
-    if not action and not native_retry:
+    if not action:
         return {'status': 'legacy'}
     task = _task(conn, task_id)
+    config = _authoritative_config(conn, config)
+    if config is None:
+        return _blocked('recovery_policy_unavailable')
     policy = _policy(config, task['repo'], kind) if task else None
     target = _target(conn, task, kind, target_id, now, generation) if policy else None
-    if action:
-        if (not target or policy != action['policy_version'] or _generation(task, target) != action['target_generation']
-                or _due(now, _after(action['created_at'], ACTION_TIMEOUT_SECONDS))):
-            conn.execute("""UPDATE supervision_recovery_actions SET status='rejected',budget_cost=0,finished_at=?,next_check_at=NULL
-                WHERE action_id=? AND status='requested'""", (now, action['action_id']))
-            return _blocked('recovery_precondition_changed')
-    else:
-        if not policy or not task['lineage_key']:
-            return {'status': 'legacy'}
-        if not target:
-            return _blocked('recovery_precondition_changed')
-        action, reason = _reserve(conn, task, kind, target_id, target, policy, now)
-        if not action:
-            if reason == 'recovery_budget_exhausted':
-                _budget_notice(conn, task, kind, now)
-            return _blocked(reason)
+    if (not target or policy != action['policy_version'] or _generation(task, target) != action['target_generation']
+            or _due(now, _after(action['created_at'], ACTION_TIMEOUT_SECONDS))):
+        conn.execute("""UPDATE supervision_recovery_actions SET status='rejected',budget_cost=0,finished_at=?,next_check_at=NULL
+            WHERE action_id=? AND status='requested'""", (now, action['action_id']))
+        return _blocked('recovery_precondition_changed')
     owner = 'consumer-' + uuid4().hex
     changed = conn.execute('''UPDATE supervision_recovery_actions SET status='applying',claim_owner=?,
         claim_generation=claim_generation+1,claim_expires_at=?,started_at=?,next_check_at=?
@@ -356,7 +372,8 @@ def _fenced(conn, claim, config, now):
     if not row or _due(now, row['claim_expires_at']):
         return None, None
     task = _task(conn, row['scope_id'])
-    if not task or _policy(config, task['repo'], row['action_kind']) != row['policy_version']:
+    config = _authoritative_config(conn, config)
+    if not task or config is None or _policy(config, task['repo'], row['action_kind']) != row['policy_version']:
         return None, None
     return row, task
 
@@ -438,26 +455,29 @@ def _verified(conn, action):
     if not task or task['canceled'] or task['lifecycle'] in {'canceled', 'ignored'} or task['lineage_key'] != action['lineage_key']:
         return None
     if kind == 'spool_replay':
-        result = _one(conn, """SELECT wr.result_id FROM worker_results wr WHERE wr.task_id=? AND wr.attempt_id=?
+        result = _one(conn, """SELECT wr.result_id,wr.created_at FROM worker_results wr WHERE wr.task_id=? AND wr.attempt_id=?
             AND json_extract(wr.metadata_json,'$.submission_fingerprint')=?
             AND (json_extract(wr.metadata_json,'$.audit.status')='accepted' OR EXISTS(
               SELECT 1 FROM wakeups wu WHERE wu.result_id=wr.result_id AND wu.attempt_id=wr.attempt_id
                 AND wu.reason='worker_result_ready'))""", (task_id, target_id, facts.get('spool_fingerprint')))
-        return {'result_id': result['result_id'], 'attempt_id': target_id} if result else None
+        return {'result_id': result['result_id'], 'attempt_id': target_id, 'occurred_at': result['created_at']} if result else None
     if kind == 'audit_retry':
-        row = conn.execute("""SELECT 1 FROM worker_results WHERE task_id=? AND result_id=? AND attempt_id=?
+        row = conn.execute("""SELECT json_extract(metadata_json,'$.audit.audited_at') FROM worker_results
+            WHERE task_id=? AND result_id=? AND attempt_id=?
             AND json_extract(metadata_json,'$.audit.status')='accepted'
             AND json_extract(metadata_json,'$.submission_fingerprint') IS ?""",
             (task_id, target_id, facts.get('attempt_id'), facts.get('submission_fingerprint'))).fetchone()
-        return {'result_id': target_id, 'audit_status': 'accepted'} if row else None
+        return {'result_id': target_id, 'audit_status': 'accepted', 'occurred_at': row[0]} if row else None
     if kind == 'handoff_resume':
         child = (json.loads(task['metadata_json']).get('pending_handoff') or {}).get('child_task_id')
         if not child:
             return None
-        row = conn.execute('''SELECT te.event_id FROM tasks t JOIN task_events te ON te.task_id=t.task_id
+        row = conn.execute('''SELECT te.event_id,te.created_at FROM tasks t JOIN task_events te ON te.task_id=t.task_id
             WHERE t.task_id=? AND t.parent_task_id=? AND t.workstream_id=? AND t.lifecycle NOT IN ('canceled','ignored')
             AND te.relationship='trigger' LIMIT 1''', (child, task_id, facts.get('workstream_id'))).fetchone()
-        return {'successor_task_id': child, 'event_id': row[0]} if row and row[0] in facts.get('event_ids', ()) else None
+        if row and row[0] in facts.get('event_ids', ()):
+            return {'successor_task_id': child, 'event_id': row[0], 'occurred_at': row[1]}
+        return None
     return _verified_publication(conn, action, facts)
 
 
@@ -483,8 +503,25 @@ def _verified_publication(conn, action, facts):
     from robert_agent.supervision_observe import _receipt_matches
     if _receipt_matches(facts, {**row, 'intent_receipt': _encode(evidence.get('receipt'))},
                         json.loads(row['audited_scope']), receipt):
-        return {'action_id': row['action_id'], 'publication_id': row['publication_id'], 'effect': 'confirmed_effect'}
+        return {'action_id': row['action_id'], 'publication_id': row['publication_id'], 'effect': 'confirmed_effect',
+                'occurred_at': receipt['confirmed_at']}
     return None
+
+
+def _unapplied_audit(conn, action, now):
+    # Audit inspection is read-only. Its domain write and finish share one
+    # transaction after fence validation, so an expired claim with neither
+    # write can release the scope while keeping its budget charged.
+    expires = timestamp(action['claim_expires_at'])
+    if (action['action_kind'] != 'audit_retry' or action['status'] != 'applying'
+            or not action['claim_owner'] or action['claim_generation'] < 1
+            or expires is None or expires > timestamp(now) or json.loads(action['receipt_json']) != {}):
+        return False
+    facts = json.loads(action['preconditions_json'])
+    return conn.execute("""SELECT 1 FROM worker_results WHERE task_id=? AND result_id=? AND attempt_id=?
+        AND json_extract(metadata_json,'$.audit') IS NULL
+        AND json_extract(metadata_json,'$.submission_fingerprint') IS ?""",
+        (action['scope_id'], action['target_id'], facts.get('attempt_id'), facts.get('submission_fingerprint'))).fetchone() is not None
 
 
 def verify(conn, *, observations, now, limit=32):
@@ -516,12 +553,17 @@ def verify(conn, *, observations, now, limit=32):
         deadline = (action['claim_expires_at'] if state == 'applying' else
                     _after(action['finished_at'] or action['created_at'], ACTION_TIMEOUT_SECONDS))
         if state in {'requested', 'applying', 'observing'} and _due(now, deadline):
-            outcome = 'rejected' if state == 'requested' else 'unknown'
+            if state == 'requested':
+                outcome, reason = 'rejected', 'recovery_request_expired'
+            elif _unapplied_audit(conn, action, now):
+                outcome, reason = 'failed', 'recovery_audit_claim_expired_without_effect'
+            else:
+                outcome, reason = 'unknown', 'recovery_verification_overdue'
             conn.execute('''UPDATE supervision_recovery_actions SET status=?,next_check_at=?,finished_at=?,
                 budget_cost=CASE WHEN ?='rejected' THEN 0 ELSE budget_cost END WHERE action_id=? AND status=?''',
                 (outcome, _after(now, RECHECK_SECONDS) if outcome == 'unknown' else None, now,
                  outcome, action['action_id'], state))
-            _attention(conn, action, 'recovery_request_expired' if outcome == 'rejected' else 'recovery_verification_overdue', now)
+            _attention(conn, action, reason, now)
             changes.append({'action_id': action['action_id'], 'status': outcome})
         else:
             conn.execute('UPDATE supervision_recovery_actions SET next_check_at=? WHERE action_id=?',

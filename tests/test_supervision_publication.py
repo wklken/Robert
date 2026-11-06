@@ -2,6 +2,8 @@ from contextlib import closing
 from datetime import timedelta
 import json
 import sqlite3
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -57,11 +59,81 @@ class SupervisedPublicationTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             return supervision_actions.verify(conn, observations=[], now=self.now.isoformat())
 
+    def request(self, kind, seconds=0):
+        self.now += timedelta(seconds=seconds)
+        reconcile = kind == 'publication_reconcile'
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            requested = supervision_actions.plan(conn, config=self.config, now=self.now.isoformat(), observations=[{
+                'scope_type': 'task', 'scope_id': 't', 'lineage_key': 'lineage', 'classification': 'confirmed',
+                'rule_id': 'publication_stalled',
+                'reason_code': 'publication_effect_unresolved' if reconcile else 'publication_waiting_consumer',
+                'evidence': {'action_id': 'push', 'intent_status': 'executing' if reconcile else 'confirmed_absent'},
+            }])
+        self.assertEqual(len(requested), 1)
+
+    def test_native_publication_preserves_original_retry_budget(self):
+        for seconds in (0, 60, 180, 600):
+            self.cycle(seconds, self.config)
+        self.assertEqual(self.commands.count(['git', 'push']), 3)
+        self.assertEqual(self.actions(), [])
+
+    def test_unmanaged_gate_does_not_take_a_writer_lock(self):
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.row_factory = sqlite3.Row
+            action = dict(conn.execute('SELECT * FROM github_actions').fetchone())
+        ready, release = threading.Event(), threading.Event()
+        def hold():
+            with closing(sqlite3.connect(self.db)) as writer:
+                writer.execute('BEGIN IMMEDIATE')
+                ready.set()
+                release.wait(5)
+                writer.rollback()
+        thread = threading.Thread(target=hold)
+        thread.start()
+        self.assertTrue(ready.wait(5))
+        try:
+            started = time.monotonic()
+            verdict = supervision_publication.begin(self.db, action, None, self.now.isoformat())
+            self.assertEqual(verdict['status'], 'legacy')
+            self.assertLess(time.monotonic() - started, 1)
+        finally:
+            release.set()
+            thread.join(5)
+
+    def test_gate_database_error_defers_without_charging_and_continues_other_task(self):
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            for table, old, new, key in [('workstreams','ws','ws2','workstream_id'), ('tasks','t','t2','task_id'), ('attempts','a','a2','attempt_id'),
+                                        ('worker_results','r','r2','result_id'), ('github_actions','push','push2','action_id')]:
+                columns = [row[1] for row in conn.execute(f'PRAGMA table_info({table})')]
+                row = dict(zip(columns, conn.execute(f'SELECT * FROM {table} WHERE {key}=?', (old,)).fetchone()))
+                row[key] = new
+                for field, value in [('task_id','t2'), ('workstream_id','ws2'), ('attempt_id','a2'), ('result_id','r2'), ('active_task_id','t2')]:
+                    if field in row:
+                        row[field] = value
+                conn.execute(f"INSERT INTO {table}({','.join(row)}) VALUES ({','.join('?' for _ in row)})", list(row.values()))
+        original = supervision_publication.begin
+        def gate(db, action, config, now):
+            if action['task_id'] == 't':
+                raise sqlite3.OperationalError('database is locked')
+            return original(db, action, config, now)
+        self.error = ''
+        with mock.patch.object(supervision_publication, 'begin', side_effect=gate):
+            report = self.cycle()
+        self.assertEqual(report['failed_count'], 0)
+        self.assertEqual(report['deferred_count'], 1)
+        self.assertEqual(report['published_count'], 1)
+        with closing(sqlite3.connect(self.db)) as conn:
+            state, raw = conn.execute("SELECT publish_status,metadata_json FROM github_actions WHERE action_id='push'").fetchone()
+            self.assertEqual(state, 'not_published')
+            self.assertNotIn('publish', json.loads(raw))
+            self.assertFalse(conn.execute("SELECT 1 FROM publication_intents WHERE action_id='push'").fetchone())
+
     def test_absence_reconciliation_never_writes_until_new_claim(self):
         self.cycle()
         self.assertEqual(self.commands.count(['git', 'push']), 1)
         self.error = ''
-        self.cycle(60, self.config)
+        self.request('publication_reconcile', 60)
+        self.cycle(config=self.config)
         self.assertEqual(self.commands.count(['git', 'push']), 1)
         status, evidence = self.intent()
         self.assertEqual(status, 'confirmed_absent')
@@ -72,6 +144,7 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.verify()
         self.cycle()  # Legacy invocation cannot bypass the durable retry fence.
         self.assertEqual(self.commands.count(['git', 'push']), 1)
+        self.request('publication_retry')
         self.cycle(config=self.config)
         self.assertEqual(self.commands.count(['git', 'push']), 2)
         self.assertEqual(self.intent()[0], 'published')
@@ -81,7 +154,8 @@ class SupervisedPublicationTests(unittest.TestCase):
     def test_confirmed_remote_effect_repairs_receipt_without_duplicate_push(self):
         self.cycle()
         self.remote = 'b' * 40 + '\trefs/heads/codex/fix\n'
-        self.cycle(60, self.config)
+        self.request('publication_reconcile', 60)
+        self.cycle(config=self.config)
         self.assertEqual(self.commands.count(['git', 'push']), 1)
         self.assertEqual(self.intent()[0], 'published')
         self.verify()
@@ -89,9 +163,11 @@ class SupervisedPublicationTests(unittest.TestCase):
 
     def test_recovery_config_revoked_after_claim_prevents_push(self):
         self.cycle()
-        self.cycle(60, self.config)
+        self.request('publication_reconcile', 60)
+        self.cycle(config=self.config)
         self.verify()
         self.error = ''
+        self.request('publication_retry')
         original = supervision_publication.guard
         with mock.patch.object(supervision_publication, 'guard', side_effect=lambda db, action, state, config, now:
                 original(db, action, state, {}, now)):
@@ -102,8 +178,10 @@ class SupervisedPublicationTests(unittest.TestCase):
 
     def test_crashed_claim_reconciles_same_action_and_retains_write_budget(self):
         self.cycle()
-        self.cycle(60, self.config)
+        self.request('publication_reconcile', 60)
+        self.cycle(config=self.config)
         self.verify()
+        self.request('publication_retry')
         original = self.runner
 
         def crash(command, **kwargs):
@@ -124,13 +202,11 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.cycle(config=self.config)
         self.assertEqual(self.commands.count(['git', 'push']), 2)
 
-    def test_mutation_only_policy_cannot_bypass_claim_via_legacy_reconciliation(self):
+    def test_unrequested_native_reconciliation_keeps_original_retry_authority(self):
         self.cycle()
         self.error = ''
         self.config['supervision']['recovery']['allowed_actions'] = ['publication_retry']
         self.cycle(60, self.config)
-        self.assertEqual(self.commands.count(['git', 'push']), 1)
-        self.assertTrue(self.intent()[1]['supervision_retry_required'])
-        self.cycle(config=self.config)
         self.assertEqual(self.commands.count(['git', 'push']), 2)
-        self.assertEqual(self.actions(), [('publication_retry', 'observing', 1)])
+        self.assertEqual(self.intent()[0], 'published')
+        self.assertEqual(self.actions(), [])

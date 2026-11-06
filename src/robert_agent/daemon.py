@@ -60,6 +60,7 @@ class DaemonContext:
     control_failures: dict = field(default_factory=dict)
     control_retry_at: dict = field(default_factory=dict)
     control_attention: dict = field(default_factory=dict)
+    runtime_identity: dict | None = None
 
 
 def _script_path(name):
@@ -489,6 +490,7 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
         startup_live_poll_pending=daemon_config.get("run_on_start", False),
         runtime_config=config_result,
     )
+    _record_runtime_tick(context, now=now)
     _reconcile_abandoned_executors(context)
     return context, None
 
@@ -599,8 +601,9 @@ def _maybe_prune(context, *, now):
     if result['status'] != 'busy' and current >= context.next_health_at:
         context.next_health_at = current + config.get('maintenance_interval_seconds', 300)
         try:
-            from robert_agent import reliability_health
-            health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+            from robert_agent import reliability_health, supervisor
+            health_options = {'supervision_owns_alerts': True} if supervisor.owns_health_alerts(context.runtime_config, now) else {}
+            health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id], **health_options)
             if not health.get('alerts_persisted', True):
                 context.next_health_at = current + config['local_poll_seconds']
                 context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
@@ -982,6 +985,28 @@ def _background_decision(context, *, now, child_runner=run_child_json):
     return {'ok': True, 'decision': 'idle'}
 
 
+def _record_runtime_tick(context, *, status='running', now=None):
+    # This marker proves a controller opportunity, never task progress. Keep a
+    # startup snapshot so an on-disk upgrade cannot relabel a running process.
+    config = context.runtime_config
+    if not config or not config.get('data_dir'):
+        return
+    from robert_agent import runtime_identity, supervisor
+    observed_at = now or daemon_state.utc_now()
+    if context.runtime_identity is None:
+        with closing(daemon_state.connect(context.db_path)) as conn:
+            run = conn.execute('SELECT started_at FROM daemon_runs WHERE daemon_run_id=?', (context.daemon_run_id,)).fetchone()
+        context.runtime_identity = runtime_identity.runtime_snapshot(
+            run_id=context.daemon_run_id, started_at=run[0] if run else observed_at,
+            manifest_path=config.get('supervision', {}).get('build_manifest'))
+    try:
+        supervisor.atomic_json(supervisor.runtime_dir(config) / 'daemon.json',
+            {**context.runtime_identity, 'observed_at': observed_at, 'status': status,
+             'lease_id': context.lease_id})
+    except OSError:
+        print('Robert daemon: runtime identity marker unavailable', file=sys.stderr)
+
+
 def _finish_context(context, status, *, summary=None, error=None, now=None):
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.release_daemon_lease(conn, context.lease_id, now=now)
@@ -993,12 +1018,14 @@ def _finish_context(context, status, *, summary=None, error=None, now=None):
             error=error,
             now=now,
         )
+    _record_runtime_tick(context, status=status, now=now)
 
 
 def _heartbeat(context, now=None):
     ttl_seconds = _lease_ttl_seconds(context.daemon_config)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.heartbeat_daemon_lease(conn, context.lease_id, ttl_seconds, now=now)
+    _record_runtime_tick(context, now=now)
 
 
 

@@ -131,18 +131,21 @@ def _cooldown_key(target):
     return 'diagnostic', _digest(target['lineage']), 'cooldown'
 
 
-def _targets(conn):
+def _targets(conn, now):
+    cutoff = now.astimezone(timezone.utc).isoformat()
     incidents = conn.execute('''SELECT i.incident_id,i.scope_type,i.scope_id,i.rule_id,i.lineage_key
         FROM supervision_incidents i LEFT JOIN supervision_checkpoints c
           ON c.scope_type='diagnosis' AND c.scope_id=i.incident_id AND c.rule_id='analysis'
         WHERE i.status IN ('open','needs_attention','diagnosing')
-        ORDER BY COALESCE(c.updated_at,''),i.first_observed_at,i.incident_id LIMIT 32''').fetchall()
+          AND COALESCE(json_extract(c.metadata_json,'$.evidence_retry_at'),'') <= ?
+        ORDER BY COALESCE(c.updated_at,''),i.first_observed_at,i.incident_id LIMIT 32''', (cutoff,)).fetchall()
     candidates = conn.execute('''SELECT c.scope_type,c.scope_id,c.rule_id,c.lineage_key
         FROM supervision_checkpoints c JOIN tasks t ON t.task_id=c.scope_id
         LEFT JOIN supervision_checkpoints d ON d.scope_type='diagnosis'
           AND d.scope_id='candidate:' || c.scope_id || ':' || c.rule_id AND d.rule_id='analysis'
         WHERE c.scope_type='task' AND c.classification='suspect' AND t.lifecycle='running'
-        ORDER BY COALESCE(d.updated_at,''),c.last_progress_at,c.scope_id,c.rule_id LIMIT 32''').fetchall()
+          AND COALESCE(json_extract(d.metadata_json,'$.evidence_retry_at'),'') <= ?
+        ORDER BY COALESCE(d.updated_at,''),c.last_progress_at,c.scope_id,c.rule_id LIMIT 32''', (cutoff,)).fetchall()
     return [_target(row, 'incident') for row in incidents] + [_target(row, 'checkpoint') for row in candidates]
 
 
@@ -260,7 +263,7 @@ def _set_claim(db_path, claim, now):
     return True
 
 
-def _complete(db_path, claim, now, status, diagnosis=None, *, stopped=True):
+def _complete(db_path, claim, now, status, diagnosis=None, *, stopped=True, provider_error=None):
     target = claim['target']
     with _write(db_path) as conn:
         runner = _checkpoint(conn, _RUNNER)
@@ -274,6 +277,11 @@ def _complete(db_path, claim, now, status, diagnosis=None, *, stopped=True):
         record.update(status=status, observed_at=now.isoformat())
         if diagnosis is not None:
             record['diagnosis'] = diagnosis
+        if provider_error is not None:
+            delay = max(claim['cooldown_seconds'], provider_error.get('retry_after_seconds', 0))
+            retry_at = (now + timedelta(seconds=delay)).isoformat()
+            record['provider_error'] = {**provider_error, 'retry_at': retry_at}
+            runner['provider_not_before'] = retry_at
         _put(conn, _analysis_key(target), record, now)
         _put(conn, _RUNNER, {**runner, 'claim': None if stopped else {**claim, 'status': 'attention'}}, now)
     return _status(status, target, ok=status in {'succeeded', 'interrupted', 'stopped', 'stale_evidence'})
@@ -287,10 +295,18 @@ def _validate_output(raw, claim):
         return result
 
     output = json.loads(raw.decode('utf-8'), object_pairs_hook=unique_object)
-    if not isinstance(output, dict) or set(output) != _OUTPUT_FIELDS:
+    if not isinstance(output, dict) or set(output) not in (_OUTPUT_FIELDS, {'bundle_id', 'bundle_sha256', 'error'}):
         raise ValueError('wrong diagnosis fields')
     if output['bundle_id'] != claim['bundle_id'] or output['bundle_sha256'] != claim['bundle_sha256']:
         raise ValueError('diagnosis references a different bundle')
+    if 'error' in output:
+        error = output['error']
+        if (not isinstance(error, dict) or set(error) - {'code', 'retry_after_seconds'}
+                or error.get('code') != 'rate_limited'
+                or type(error.get('retry_after_seconds', 0)) is not int
+                or not 0 <= error.get('retry_after_seconds', 0) <= 86400):
+            raise ValueError('invalid provider rate limit')
+        return output
     for key, values in (('diagnosis_class', _DIAGNOSIS_CLASSES), ('recommended_action', _RECOMMENDATIONS)):
         if not isinstance(output[key], str) or output[key] not in values:
             raise ValueError('unsupported diagnosis class or recommendation')
@@ -305,6 +321,7 @@ def _validate_output(raw, claim):
     safe = redaction.redact_text(expected)
     if not safe['ok']:
         raise ValueError('diagnosis contains sensitive text')
+    safe['text'].encode('utf-8')  # JSON escapes can still decode to invalid Unicode.
     return {**output, 'expected_progress': safe['text']}
 
 
@@ -355,13 +372,14 @@ def _stable_identity(proc, stop):
     return None
 
 
-def _run(db_path, claim, packet, profile, now, stop):
+def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
     started = time.monotonic()
     status, diagnosis, proc, stopped = 'stopped', None, None, True
+    provider_error = None
     try:
         directory = tempfile.TemporaryDirectory(prefix='robert-diagnosis-', ignore_cleanup_errors=True)
     except OSError:
-        return _complete(db_path, claim, now, 'launch_failed')
+        return _PendingCompletion(db_path, claim, now, 'launch_failed', None, True)
     with directory as root:
         try:
             cwd = Path(root).resolve()
@@ -372,7 +390,7 @@ def _run(db_path, claim, packet, profile, now, stop):
                 'environment_allowlist': profile['environment_allowlist'], 'timeout_seconds': profile['timeout_seconds'],
             })
         except (OSError, ValueError):
-            return _complete(db_path, claim, now, 'launch_failed')
+            return _PendingCompletion(db_path, claim, now, 'launch_failed', None, True)
         environment = {name: os.environ[name] for name in launch.environment_allowlist if name in os.environ}
         environment.update(HOME=str(cwd), TMPDIR=str(cwd), PATH=os.defpath)
         if not stop.is_set():
@@ -387,12 +405,17 @@ def _run(db_path, claim, packet, profile, now, stop):
                     if not _set_claim(db_path, claim, now):
                         raise ValueError('diagnosis claim changed during spawn')
                 status, output = _output(proc, started + launch.timeout_seconds, stop)
-                if status == 'read':
+                if status in {'read', 'exited'} and output:
                     try:
-                        diagnosis = _validate_output(output, claim)
-                        status = 'succeeded'
+                        validated = _validate_output(output, claim)
+                        if 'error' in validated:
+                            status, provider_error = 'provider_rate_limited', validated['error']
+                        elif status == 'read':
+                            status, diagnosis = 'succeeded', validated
                     except (ValueError, RecursionError):
                         status = 'invalid_output'
+                elif status == 'read':
+                    status = 'invalid_output'
             except (OSError, sqlite3.Error, ValueError, worker_identity.IdentityReadError):
                 status = 'launch_failed' if proc is None else 'process_attention'
             finally:
@@ -405,9 +428,9 @@ def _run(db_path, claim, packet, profile, now, stop):
                     if not stopped:
                         stopped = worker_identity.cleanup_new_process(proc, wait_timeout=.5)
             if not stopped:
-                status, diagnosis = 'process_attention', None
-    finished = now + timedelta(seconds=time.monotonic() - started)
-    return _complete(db_path, claim, finished, status, diagnosis, stopped=stopped)
+                status, diagnosis, provider_error = 'process_attention', None, None
+    finished = now + timedelta(seconds=time.monotonic() - observed_monotonic)
+    return _PendingCompletion(db_path, claim, finished, status, diagnosis, stopped, provider_error=provider_error)
 
 
 def _recover_previous(db_path, claim, now, stop):
@@ -430,6 +453,27 @@ def _recover_previous(db_path, claim, now, stop):
     return _status('process_attention', target, ok=False)
 
 
+class _PendingCompletion:
+    """Keep an already reaped outcome until its durable write succeeds."""
+
+    def __init__(self, db_path, claim, now, status, diagnosis, stopped, *, provider_error=None):
+        self.provider_error = provider_error
+        self.arguments = (db_path, claim, now, status, diagnosis)
+        self.stopped = stopped
+
+    def persist(self):
+        return _complete(*self.arguments, stopped=self.stopped, provider_error=self.provider_error)
+
+
+def _persist_job(job):
+    if isinstance(job.result, _PendingCompletion):
+        try:
+            job.result = job.result.persist()
+        except (OSError, sqlite3.Error):
+            return _status('completion_pending', ok=False)
+    return job.result or _status('unavailable', ok=False)
+
+
 class _Job:
     def __init__(self, callback):
         self.stop = threading.Event()
@@ -445,11 +489,18 @@ class _Job:
         self.thread.start()
 
 
-def _claim(db_path, profile, target, packet, now):
+def _provider_wait(runner, now):
+    deadline = supervision_rules.timestamp(runner.get('provider_not_before'))
+    return deadline is not None and now < deadline
+
+
+def _claim(db_path, profile, target, packet, packet_bytes, now):
     with _write(db_path) as conn:
         runner = _checkpoint(conn, _RUNNER)
         if runner.get('claim'):
             return None, 'claim_exists'
+        if _provider_wait(runner, now):
+            return None, 'provider_cooldown'
         hour_ago = now - timedelta(hours=1)
         recent = [stamp for stamp in runner.get('hourly_calls', [])
                   if (parsed := supervision_rules.timestamp(stamp)) is not None and parsed > hour_ago]
@@ -459,15 +510,30 @@ def _claim(db_path, profile, target, packet, now):
         last = supervision_rules.timestamp(_checkpoint(conn, key).get('claimed_at'))
         if last is not None and now < last + timedelta(seconds=profile['cooldown_seconds']):
             return None, 'cooldown'
+        analysis_key = _analysis_key(target)
+        retry_at = supervision_rules.timestamp(_checkpoint(conn, analysis_key).get('evidence_retry_at'))
+        if retry_at is not None and now < retry_at:
+            return None, 'cooldown'
         if _digest(_snapshot(conn, target)) != packet['input_generation']:
             return None, 'stale_evidence'
+        if packet_bytes > _MAX_BUNDLE:
+            # This rejection belongs to one target. No wrapper ran, so it
+            # does not spend a call or cool down the rest of the lineage.
+            retry_at = now + timedelta(seconds=profile['cooldown_seconds'])
+            _put(conn, analysis_key, {
+                'status': 'evidence_too_large', 'observed_at': now.isoformat(),
+                'input_generation': packet['input_generation'], 'bundle_bytes': packet_bytes,
+                'byte_limit': _MAX_BUNDLE, 'evidence_retry_at': retry_at.astimezone(timezone.utc).isoformat(),
+            }, now)
+            return None, 'evidence_too_large'
         claim = {key: packet[key] for key in ('bundle_id', 'bundle_sha256', 'input_generation')}
         claim.update(job_id=packet['bundle_id'], status='reserved', target=target, claimed_at=now.isoformat(),
                      deadline_at=(now + timedelta(seconds=profile['timeout_seconds'])).isoformat(),
-                     evidence_ids=[item['id'] for item in packet['evidence']])
-        _put(conn, _RUNNER, {'claim': claim, 'hourly_calls': [*recent, now.isoformat()]}, now)
+                     evidence_ids=[item['id'] for item in packet['evidence']],
+                     cooldown_seconds=profile['cooldown_seconds'])
+        _put(conn, _RUNNER, {**runner, 'claim': claim, 'hourly_calls': [*recent, now.isoformat()]}, now)
         _put(conn, key, {'claimed_at': now.isoformat()}, now)
-        _put(conn, _analysis_key(target), {'status': 'reserved', 'claimed_at': now.isoformat(), 'bundle': packet,
+        _put(conn, analysis_key, {'status': 'reserved', 'claimed_at': now.isoformat(), 'bundle': packet,
                                           'bundle_id': claim['bundle_id'], 'bundle_sha256': claim['bundle_sha256'],
                                           'input_generation': claim['input_generation']}, now)
     return claim, 'launched'
@@ -479,6 +545,7 @@ def poll(config, *, now=None):
     profile = normalize_diagnosis(settings.get('diagnosis'))
     if settings.get('mode') == 'off' or profile is None:
         return _status('disabled')
+    observed_monotonic = time.monotonic()
     current = supervision_rules.timestamp(now) if now is not None else datetime.now(timezone.utc)
     if current is None:
         raise ValueError('invalid diagnosis clock')
@@ -487,37 +554,47 @@ def poll(config, *, now=None):
         if job := _JOBS.get(db_path):
             if job.thread.is_alive():
                 return _status('running')
-            del _JOBS[db_path]
-            return job.result or _status('unavailable', ok=False)
+            result = _persist_job(job)
+            if result['status'] != 'completion_pending':
+                del _JOBS[db_path]
+            return result
         try:
             with closing(_connect(db_path, readonly=True)) as conn:
                 conn.execute('BEGIN')
                 if not supervision_store.has_schema(conn):
                     return _status('unavailable', ok=False)
-                if previous := _checkpoint(conn, _RUNNER).get('claim'):
+                runner = _checkpoint(conn, _RUNNER)
+                if previous := runner.get('claim'):
                     if not previous.get('process_identity'):
                         return _status('process_attention', previous['target'], ok=False)
                     _JOBS[db_path] = _Job(lambda stop: _recover_previous(db_path, previous, current, stop))
                     return _status('checking_previous', previous['target'])
-                targets = _targets(conn)
-                candidate = None
-                for target in targets:
+                if _provider_wait(runner, current):
+                    return {**_status('provider_cooldown'), 'retry_at': runner['provider_not_before']}
+                targets = _targets(conn, current)
+            rejected = None
+            for target in targets:
+                with closing(_connect(db_path, readonly=True)) as conn:
+                    conn.execute('BEGIN')
                     last = supervision_rules.timestamp(_checkpoint(conn, _cooldown_key(target)).get('claimed_at'))
-                    if last is None or current >= last + timedelta(seconds=profile['cooldown_seconds']):
-                        snapshot = _snapshot(conn, target)
-                        if snapshot is not None:
-                            candidate = target, snapshot
-                            break
-            if candidate is None:
-                return _status('cooldown' if targets else 'idle')
-            target, snapshot = candidate
-            packet = _bundle(snapshot, target, 'diagnosis-' + uuid4().hex)
-            if len(_json(packet).encode()) > _MAX_BUNDLE:
-                return _status('evidence_too_large', target, ok=False)
-            claim, status = _claim(db_path, profile, target, packet, current)
-            if claim is not None:
-                _JOBS[db_path] = _Job(lambda stop: _run(db_path, claim, packet, profile, current, stop))
-            return _status(status, target)
+                    if last is not None and current < last + timedelta(seconds=profile['cooldown_seconds']):
+                        continue
+                    snapshot = _snapshot(conn, target)
+                if snapshot is None:
+                    continue
+                packet = _bundle(snapshot, target, 'diagnosis-' + uuid4().hex)
+                packet_bytes = len(_json(packet).encode('utf-8'))
+                claim, status = _claim(db_path, profile, target, packet, packet_bytes, current)
+                if status == 'evidence_too_large':
+                    # Keep scanning the bounded batch even if this target's
+                    # cooldown expires before the next resident poll.
+                    rejected = _status(status, target, ok=False)
+                    continue
+                if claim is not None:
+                    _JOBS[db_path] = _Job(lambda stop: _run(db_path, claim, packet, profile, current, stop,
+                                                          observed_monotonic=observed_monotonic))
+                return _status(status, target)
+            return rejected or _status('cooldown' if targets else 'idle')
         except (OSError, sqlite3.Error, ValueError, RecursionError):
             return _status('unavailable', ok=False)
 
@@ -534,6 +611,7 @@ def shutdown(config):
     with _JOBS_LOCK:
         if job.thread.is_alive():
             return _status('process_attention', ok=False)
-        if _JOBS.get(db_path) is job:
+        result = _persist_job(job)
+        if result['status'] != 'completion_pending' and _JOBS.get(db_path) is job:
             del _JOBS[db_path]
-    return job.result or _status('unavailable', ok=False)
+    return result

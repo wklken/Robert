@@ -89,3 +89,8 @@ supervision:
   stall_seconds: 300
   # Administrator-owned, no-tool model wrapper; see docs/task-supervision.md.
   diagnosis: null
+  # Explicit known-recovery allowlist; null grants no additional retries.
+  recovery: null
+  # Maintenance target/profile and deployment proof are independently opt-in.
+  repair: null
+  build_manifest: null

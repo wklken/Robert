@@ -44,13 +44,28 @@ def _object(value):
 
 def _database_error(exc):
     name = getattr(exc, 'sqlite_errorname', '')
+    message = str(exc)
+    if not name:
+        # Python 3.10 exposes SQLite's message but no symbolic error name.
+        name = {
+            'database is locked': 'SQLITE_BUSY',
+            'database table is locked': 'SQLITE_LOCKED',
+            'database schema is locked': 'SQLITE_LOCKED',
+            'database disk image is malformed': 'SQLITE_CORRUPT',
+            'file is not a database': 'SQLITE_NOTADB',
+            'interrupted': 'SQLITE_INTERRUPT',
+        }.get(message, '')
+        if message.startswith(('database table is locked: ', 'database schema is locked: ')):
+            name = 'SQLITE_LOCKED'
+        elif message.startswith(('no such table: ', 'no such column: ')):
+            name = 'SQLITE_ERROR'
     if name.startswith(('SQLITE_BUSY', 'SQLITE_LOCKED')):
         return 'database_busy'
     if name.startswith(('SQLITE_CORRUPT', 'SQLITE_NOTADB')):
         return 'database_corrupt'
     if name == 'SQLITE_INTERRUPT':
         return 'database_observation_deadline'
-    if name == 'SQLITE_ERROR' and ('no such table' in str(exc) or 'no such column' in str(exc)):
+    if name == 'SQLITE_ERROR' and ('no such table' in message or 'no such column' in message):
         return 'database_schema_incompatible'
     return 'database_unavailable'
 
@@ -78,6 +93,7 @@ def _controller_facts(conn, db_path, now, config):
         heartbeat = supervision_rules.timestamp(lease['heartbeat_at'])
         acquired = supervision_rules.timestamp(lease['acquired_at'])
         controller['has_progress'] = bool(acquired and heartbeat and acquired < heartbeat <= now)
+        controller['heartbeat_at'] = lease['heartbeat_at']
     facts = [controller]
     for lane, event_types in LANE_COMPLETIONS.items():
         lane_fact = {'scope_id': 'daemon:' + lane, 'daemon_run_id': run_id,
@@ -129,6 +145,7 @@ def _task_page(conn, now, cursor, limit, config):
 def _attempt_facts(conn, task_id):
     return conn.execute("""SELECT a.attempt_id,a.status AS attempt_status,a.started_at,a.heartbeat_at,a.finished_at,
         a.worktree_path,json_extract(a.failure_json,'$.status') AS attempt_failure,
+        json_extract(a.metadata_json,'$.worker_started_at') AS worker_started_at,
         json_extract(a.metadata_json,'$.dispatch') AS dispatch,
         json_extract(a.metadata_json,'$.process_stopped_at') AS process_stopped_at,
         json_extract(a.metadata_json,'$.resume.not_before_at') AS dispatch_not_before,
@@ -211,14 +228,20 @@ def _delivery_facts(facts, actions):
     if any(a['publish_status'] != 'published' for a in actions):
         return outcome('inconsistent', 'completed_delivery_not_published')
     scope = _object(facts['audited_scope'])
+    confirmations = []
     for action, publish in zip(actions, publications):
         receipt = publish.get('receipt')
         if not isinstance(receipt, dict) or receipt.get('schema_version') != 1 or not scope or not action['intent_receipt']:
             return outcome('unknown', 'delivery_receipt_unverified')
         if not _receipt_matches(facts, action, scope, receipt):
             return outcome('inconsistent', 'delivery_receipt_binding_mismatch')
+        confirmations.append(supervision_rules.timestamp(receipt['confirmed_at']))
+    occurred_at = max(confirmations) if confirmations else supervision_rules.timestamp(facts.get('audited_at'))
+    if occurred_at is None:
+        return outcome('unknown', 'delivery_occurrence_time_unverified')
     return outcome('confirmed', 'delivery_verified' if actions else 'local_delivery_verified',
-                   {'result_id': facts['result_id'], 'action_ids': [a['action_id'] for a in actions]})
+                   {'result_id': facts['result_id'], 'action_ids': [a['action_id'] for a in actions],
+                    'occurred_at': occurred_at.isoformat()})
 
 
 def _receipt_matches(facts, action, scope, receipt):
@@ -239,6 +262,57 @@ def _checkpoints(conn, scope_type, scope_id):
     rows = conn.execute("""SELECT rule_id,evidence_json,eligible_since FROM supervision_checkpoints
         WHERE scope_type=? AND scope_id=? AND rule_id!='admission'""", (scope_type, scope_id)).fetchall()
     return {row['rule_id']: {'evidence': _object(row['evidence_json']), 'eligible_since': row['eligible_since']} for row in rows}
+
+
+def _execution_recovery(conn, facts, now):
+    """Find a completed retry of the same request through explicit inheritance."""
+    lineage = facts.get('lineage_key')
+    if not lineage or facts['lifecycle'] not in {'completed', 'failed'} or facts.get('canceled'):
+        return None
+    if not conn.execute("""SELECT 1 FROM supervision_incidents WHERE scope_type='task' AND scope_id=?
+        AND rule_id='execution_failed' AND lineage_key=? AND status!='dismissed'""",
+        (facts['task_id'], lineage)).fetchone():
+        return None
+    # Bounded traversal through durable parents. A separate request may share
+    # a repository or source without being a continuation of this failure.
+    candidates = conn.execute("""WITH RECURSIVE retries(task_id,depth) AS (
+        SELECT ?,0 UNION ALL SELECT child.task_id,retries.depth+1 FROM retries
+        JOIN tasks child ON child.parent_task_id=retries.task_id
+        JOIN workstreams w ON w.workstream_id=child.workstream_id AND w.repo_id=?
+        WHERE retries.depth<16 AND json_extract(child.metadata_json,'$.supervision_lineage_key')=?
+        LIMIT 64)
+        SELECT t.task_id,t.lifecycle,t.expected_output,t.parent_task_id FROM retries
+        JOIN tasks t ON t.task_id=retries.task_id
+        WHERE t.lifecycle='completed' AND NOT EXISTS(SELECT 1 FROM work_items wi
+            WHERE wi.workstream_id=t.workstream_id AND wi.canceled_at IS NOT NULL)
+        ORDER BY retries.depth DESC,t.task_id LIMIT 8""", (facts['task_id'], facts['repo_id'], lineage)).fetchall()
+    failed_at = supervision_rules.timestamp(facts.get('finished_at')) if facts['lifecycle'] == 'failed' else None
+    for candidate in candidates:
+        completed = _completed_execution(conn, candidate, now)
+        occurred_at = supervision_rules.timestamp((completed or {}).get('occurred_at'))
+        if occurred_at and (failed_at is None or occurred_at > failed_at):
+            return completed
+    return None
+
+
+def _completed_execution(conn, candidate, now):
+    attempt = _attempt_facts(conn, candidate['task_id'])
+    if not attempt or attempt['output_type'] in {'classification_result', 'waiting_for_user'}:
+        return None
+    proof = _completed_attempt_delivery(conn, candidate, attempt, now)
+    return ({**proof, 'successor_task_id': candidate['task_id'],
+             'successor_parent_task_id': candidate['parent_task_id']} if proof else None)
+
+
+def _completed_attempt_delivery(conn, candidate, attempt, now):
+    if not attempt or attempt['attempt_status'] != 'completed' or not attempt['result_id']:
+        return None
+    if type(_object(attempt['dispatch']).get('pid')) is int and not attempt['process_stopped_at']:
+        return None
+    evidence = {**dict(candidate), **dict(attempt)}
+    _publication_facts(conn, evidence, now)
+    proof = evidence.get('delivery_positive')
+    return {**proof, 'attempt_id': attempt['attempt_id']} if proof else None
 
 
 def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
@@ -266,14 +340,16 @@ def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
     facts['generation'] = {'kind': 'task', **{key: facts.get(key) for key in
                            ('lifecycle', 'task_updated_at', 'attempt_id', 'attempt_status', 'result_id', 'audit_status')}}
     if handoff:
-        child = conn.execute("SELECT task_id FROM tasks WHERE parent_task_id=? AND task_id=? AND lifecycle NOT IN ('canceled','ignored')",
+        child = conn.execute("SELECT task_id,created_at FROM tasks WHERE parent_task_id=? AND task_id=? AND lifecycle NOT IN ('canceled','ignored')",
                              (facts['task_id'], handoff.get('child_task_id'))).fetchone()
         facts.update(handoff_status=handoff.get('status'), handoff_retry_at=handoff.get('next_retry_at'),
                      successor_task_id=child['task_id'] if child else None,
+                     successor_occurred_at=child['created_at'] if child else None,
                      handoff_due_at=handoff.get('next_retry_at') or facts['task_updated_at'],
                      handoff_current=(facts['active_task_id'] == facts['task_id']
                                       and facts['stream_lifecycle'] == 'active'
                                       and handoff.get('retryable') is not False))
+    facts['execution_recovery_evidence'] = _execution_recovery(conn, facts, now)
     return facts
 
 
@@ -297,7 +373,7 @@ def _milestones(conn, facts):
 def _receipt_page(conn, now, position, limit, config):
     repos = [repo['full_name'] for repo in config.get('repos', ())]
     repo_filter = 'AND r.full_name IN (' + ','.join('?' for _ in repos) + ')' if repos else ''
-    return conn.execute(f"""SELECT c.scope_type,c.scope_id,c.lineage_key,c.metadata_json,
+    return conn.execute(f"""SELECT c.scope_type,c.scope_id,c.lineage_key,c.metadata_json,c.updated_at AS disposition_at,
         COALESCE(lower(gs.state)='closed',0) AS source_closed,r.enabled AS repo_enabled
         FROM supervision_checkpoints c
         JOIN repos r ON r.repo_id=json_extract(c.metadata_json,'$.repo_id')
@@ -315,7 +391,7 @@ def _receipt_page(conn, now, position, limit, config):
 
 def _receipt_facts(conn, row, consumer_completed, wait):
     facts = {**_object(row['metadata_json']), 'scope_type': row['scope_type'], 'scope_id': row['scope_id'],
-             'lineage_key': row['lineage_key'] or None}
+             'lineage_key': row['lineage_key'] or None, 'disposition_at': row['disposition_at']}
     scope, key = facts['scope_type'], facts['scope_id']
     facts['generation'] = {'kind': 'admission', 'metadata_digest': supervision_rules._digest(row['metadata_json'])}
     if row['source_closed'] or not row['repo_enabled']:
@@ -338,11 +414,17 @@ def _receipt_facts(conn, row, consumer_completed, wait):
             WHERE t.task_id=? AND w.repo_id=?""", (target_id, facts.get('repo_id'))).fetchone()
         facts['target_exists'] = bool(owner)
         if owner and disposition == 'linked_pending' and scope == 'github_event':
-            successor = conn.execute("""SELECT te.task_id FROM task_events te JOIN tasks t ON t.task_id=te.task_id
+            successor = conn.execute("""SELECT te.task_id,
+                CASE WHEN te.relationship='trigger' THEN te.created_at ELSE (
+                    SELECT MAX(wr.created_at) FROM worker_results wr JOIN github_events ge ON ge.event_id=te.event_id
+                    WHERE wr.task_id=te.task_id AND EXISTS(SELECT 1 FROM json_each(wr.consumed_event_fingerprints_json)
+                        WHERE value=ge.event_fingerprint)) END AS occurred_at
+                FROM task_events te JOIN tasks t ON t.task_id=te.task_id
                 WHERE te.event_id=? AND ((te.task_id=? AND te.relationship='consumed') OR
                     (t.parent_task_id=? AND te.relationship='trigger' AND t.lifecycle NOT IN ('canceled','ignored')))
                 LIMIT 1""", (key, target_id, target_id)).fetchone()
             facts['successor_task_id'] = successor['task_id'] if successor else None
+            facts['successor_occurred_at'] = successor['occurred_at'] if successor else None
             facts['pending_eligible'] = (owner['lifecycle'] == 'completed' and owner['active_task_id'] == target_id
                                          and owner['stream_lifecycle'] == 'active')
         elif owner and scope == 'work_item_event':
@@ -352,8 +434,11 @@ def _receipt_facts(conn, row, consumer_completed, wait):
                 if pending and not github_operator.blocked(conn, pending[0]):
                     observed, response = github_operator.source_read(conn, pending[0])
                     facts['operator_handoff_eligible'] = bool(observed and response)
-            elif conn.execute("SELECT 1 FROM attempts WHERE task_id=? LIMIT 1", (target_id,)).fetchone():
-                facts['successor_task_id'] = target_id
+            else:
+                attempt = conn.execute('SELECT started_at FROM attempts WHERE task_id=? ORDER BY attempt_no LIMIT 1',
+                                       (target_id,)).fetchone()
+                if attempt:
+                    facts.update(successor_task_id=target_id, successor_occurred_at=attempt['started_at'])
     if disposition in {None, 'deferred', 'linked_pending'} or facts.get('operator_handoff_eligible'):
         facts['consumer_completed_at'] = consumer_completed(facts.get('repo_id'), facts.get('consumer'))
     return facts
@@ -498,7 +583,34 @@ def is_current(conn, observation):
         FROM attempts a LEFT JOIN worker_results wr ON wr.task_id=a.task_id AND wr.attempt_id=a.attempt_id
         WHERE a.task_id=? ORDER BY a.attempt_no DESC LIMIT 1""", (scope,)).fetchone()
     current = tuple(attempt) if attempt else (None, None, None, None)
-    return current == tuple(generation[key] for key in ('attempt_id', 'attempt_status', 'result_id', 'audit_status'))
+    if current != tuple(generation[key] for key in ('attempt_id', 'attempt_status', 'result_id', 'audit_status')):
+        return False
+    rule = observation['rule_id']
+    if rule == 'ready_not_dispatched' and observation['classification'] == 'confirmed':
+        return bool(conn.execute("""SELECT 1 FROM leases l JOIN daemon_runs d ON d.daemon_run_id=l.owner_id
+            WHERE l.resource_type='daemon' AND l.status='active' AND d.status='running' AND l.owner_id=?""",
+            (observation['evidence'].get('local_daemon_run_id'),)).fetchone())
+    proof = observation.get('positive_evidence')
+    if not proof:
+        return True
+    if rule == 'ready_not_dispatched' and observation['reason_code'] == 'prepared_attempt_delivery_verified':
+        candidate = conn.execute("""SELECT t.task_id,t.lifecycle,t.expected_output FROM tasks t
+            WHERE t.task_id=? AND t.lifecycle='completed' AND NOT EXISTS (SELECT 1 FROM work_items wi
+                WHERE wi.workstream_id=t.workstream_id AND wi.canceled_at IS NOT NULL)""", (scope,)).fetchone()
+        return bool(candidate and _completed_attempt_delivery(
+            conn, candidate, _attempt_facts(conn, scope), proof['occurred_at']) == proof)
+    if rule != 'execution_failed':
+        return True
+    # Recheck the exact completed retry and the receipt version before closing
+    # the original incident. A changed result waits for the next observation.
+    cursor = conn.execute("""SELECT task_id,lifecycle,expected_output,parent_task_id FROM tasks
+        WHERE task_id=? AND lifecycle='completed' AND json_extract(metadata_json,'$.supervision_lineage_key')=?""",
+        (proof['successor_task_id'], observation['lineage_key']))
+    candidate = cursor.fetchone()
+    if candidate is None:
+        return False
+    facts = dict(zip((column[0] for column in cursor.description), candidate))
+    return _completed_execution(conn, facts, proof['occurred_at']) == proof
 
 
 def collect(db_path, *, now, limit=100, config=None, cursor=''):
@@ -529,6 +641,9 @@ def collect(db_path, *, now, limit=100, config=None, cursor=''):
                 controller_wait.update(local_wait='controller_unavailable', publish_wait='controller_unavailable')
             for facts in controllers[1:]:
                 lane = facts['scope_id'].split(':', 1)[1]
+                if lane == 'local':
+                    controller_wait.update(dispatch_consumer_run_id=facts.get('daemon_run_id'),
+                                           dispatch_completed_at=facts.get('completed_at'))
                 if facts.get('completed_at') and lane == 'publish':
                     controller_wait['publish_completed_at'] = facts['completed_at']
                 if facts['status'] == 'attention':

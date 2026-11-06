@@ -1,7 +1,7 @@
 """Independent, bounded task observation. Business mutations stay with their owners."""
 
 from contextlib import closing, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
 import json
@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from robert_agent import notify, redaction, supervision_actions, supervision_config, supervision_diagnose, supervision_observe, supervision_store
 
@@ -95,7 +96,13 @@ def _health(config, result, now):
             'error_class': result.get('error_class'), 'pid': os.getpid()}
     if not result['ok']:
         data['first_failed_at'] = previous.get('first_failed_at', now) if not previous.get('ok', True) else now
-        data['delivery'] = previous.get('delivery', {}) if not previous.get('ok', True) else {}
+        continuing = not previous.get('ok', True)
+        data['consecutive_failures'] = previous.get('consecutive_failures', 1) + 1 if continuing else 1
+        from robert_agent.supervision_rules import timestamp
+        first_failed = timestamp(data['first_failed_at'])
+        poll = config.get('supervision', {}).get('poll_seconds', supervision_config.DEFAULTS['poll_seconds'])
+        data['notification_eligible_at'] = (first_failed + timedelta(seconds=poll)).isoformat()
+        data['delivery'] = previous.get('delivery', {}) if continuing else {}
         data['delivery_id'] = 'supervisor-health-' + hashlib.sha256(
             (str(Path(config['db_path']).resolve()) + data['first_failed_at']).encode()).hexdigest()[:24]
     atomic_json(health_path(config), data)
@@ -166,6 +173,20 @@ def check(config, *, record=False, now=None):
     return result
 
 
+def owns_health_alerts(config, now):
+    if not config or config.get('supervision', {}).get('mode') == 'off':
+        return False
+    health = _read_health(config)
+    from robert_agent.supervision_rules import timestamp
+    current = timestamp(now)
+    checked = timestamp(health.get('checked_at'))
+    complete = timestamp(health.get('last_complete_check_at'))
+    poll = config.get('supervision', {}).get('poll_seconds', 60)
+    return bool(health.get('ok') and current and checked and complete
+                and 0 <= (current - checked).total_seconds() <= poll * 2 + 10
+                and 0 <= (current - complete).total_seconds() <= max(300, poll * 10))
+
+
 def status(config):
     try:
         with closing(connect(config['db_path'], readonly=True)) as conn:
@@ -174,6 +195,8 @@ def status(config):
             for incident in incidents:
                 analysis = supervision_store.get_checkpoint(conn, 'diagnosis', incident['incident_id'], 'analysis')
                 incident['diagnosis'] = (analysis or {}).get('metadata')
+                from robert_agent import supervision_repair
+                incident['repair'] = supervision_repair.status(config, incident['incident_id'])
         return {'ok': True, 'status': 'ready', 'health': _read_health(config), 'incidents': incidents}
     except (OSError, sqlite3.Error, ValueError):
         return {'ok': False, 'status': 'unobservable', 'health': _read_health(config), 'incidents': []}
@@ -201,6 +224,12 @@ def deliver_health(db_path, path, *, runner=subprocess.run):
                          state['created_at'], json.dumps({'delivery': state, 'reason_code': 'observation_unavailable'})))
             except (OSError, sqlite3.Error):
                 return
+        return
+    from robert_agent.supervision_rules import timestamp
+    checked = timestamp(health.get('checked_at'))
+    eligible = timestamp(health.get('notification_eligible_at'))
+    # A stale single failure is not an outage: require a later failed observation.
+    if health.get('consecutive_failures', 0) < 2 or not checked or not eligible or checked < eligible:
         return
     identifier = health.get('delivery_id')
     if not identifier:
@@ -244,6 +273,8 @@ def run(config, *, once=False, stop=None):
             for sig in (signal.SIGTERM, signal.SIGINT):
                 handlers[sig] = signal.signal(sig, lambda *_: stop.set())
         delivery = None
+        maintenance = None
+        maintenance_started = 0.0
         try:
             while not stop.is_set():
                 result = check(config, record=True)
@@ -256,12 +287,25 @@ def run(config, *, once=False, stop=None):
                     delivery = subprocess.Popen([sys.executable, '-m', 'robert_agent.supervisor',
                         '--deliver-once', str(config['db_path']), str(health_path(config))], stdin=subprocess.DEVNULL,
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                if maintenance is not None and maintenance.poll() is not None:
+                    maintenance.wait()
+                    maintenance = None
+                if maintenance is not None and time.monotonic() - maintenance_started > 360:
+                    _stop_child(maintenance)
+                    maintenance = None
+                if result['ok'] and settings.get('repair') and maintenance is None and not once:
+                    maintenance = subprocess.Popen([sys.executable, '-m', 'robert_agent.supervisor',
+                        '--repair-once', str(Path(config['config_path']).resolve())], stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    maintenance_started = time.monotonic()
                 if once:
                     return result
                 stop.wait(settings['poll_seconds'])
             return {'ok': True, 'status': 'stopped'}
         finally:
             supervision_diagnose.shutdown(config)
+            if maintenance is not None:
+                _stop_child(maintenance)
             if delivery is not None:
                 try:
                     delivery.wait(timeout=1)
@@ -276,8 +320,49 @@ def run(config, *, once=False, stop=None):
                 signal.signal(sig, handler)
 
 
+def _stop_child(proc):
+    if proc.poll() is not None:
+        proc.wait()
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
+
+
+def runtime_status(config):
+    try:
+        path = runtime_dir(config) / 'daemon.json'
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd) as stream:
+            import stat
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or info.st_uid not in {0, os.geteuid()}:
+                return None
+            value = json.loads(stream.read(32768))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _repair_once(config_path):
+    from robert_agent import supervision_repair, supervision_repair_followup, validate_config
+    def stopped(*_):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, stopped)
+    signal.signal(signal.SIGINT, stopped)
+    config = validate_config.validate_config(config_path, skip_external=True)
+    if config.get('ok'):
+        supervision_repair.poll(config)
+        supervision_repair_followup.poll(config, runtime=runtime_status(config))
+
+
 if __name__ == '__main__':
-    if len(sys.argv) == 4 and sys.argv[1] == '--deliver-once':
+    if len(sys.argv) == 3 and sys.argv[1] == '--repair-once':
+        _repair_once(sys.argv[2])
+    elif len(sys.argv) == 4 and sys.argv[1] == '--deliver-once':
         deliver_health(sys.argv[2], Path(sys.argv[3]))
         try:
             if Path(sys.argv[2]).is_file():

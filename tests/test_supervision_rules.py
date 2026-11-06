@@ -36,7 +36,7 @@ class SupervisionRulesTests(unittest.TestCase):
         self.assertEqual(row['evidence']['attempt_id'], 'attempt')
 
     def test_accepted_result_is_positive_only_after_process_cleanup(self):
-        facts = {'result_id': 'result', 'audit_status': 'accepted', 'result_created_at': OLD}
+        facts = {'result_id': 'result', 'audit_status': 'accepted', 'result_created_at': OLD, 'audited_at': OLD}
         row = self.observations(**facts)['result_not_consumed']
         self.assertEqual(row['classification'], 'expected_wait')
         self.assertNotIn('positive_evidence', row)
@@ -61,7 +61,7 @@ class SupervisionRulesTests(unittest.TestCase):
     def test_completed_handoff_requires_recorded_successor(self):
         row = self.observations(handoff_status='completed')['handoff_stalled']
         self.assertNotIn('positive_evidence', row)
-        row = self.observations(handoff_status='completed', successor_task_id='child')['handoff_stalled']
+        row = self.observations(handoff_status='completed', successor_task_id='child', successor_occurred_at=OLD)['handoff_stalled']
         self.assertEqual(row['positive_evidence']['successor_task_id'], 'child')
 
     def test_heartbeat_changes_do_not_change_progress_token(self):

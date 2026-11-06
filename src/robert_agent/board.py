@@ -522,7 +522,22 @@ def _supervision_incidents(conn, tasks, work_item_id):
         (scope_type='work_item_event' AND scope_id IN
           (SELECT event_id FROM work_item_events WHERE work_item_id=?))
         ORDER BY last_observed_at DESC LIMIT 50""", (*task_ids, work_item_id)).fetchall()
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        item = dict(row)
+        analysis = supervision_store.get_checkpoint(conn, 'diagnosis', row['incident_id'], 'analysis')
+        diagnosis = (analysis or {}).get('metadata', {}).get('diagnosis') or {}
+        item['diagnosis'] = {key: safe_text(diagnosis.get(key), 1000) for key in ('diagnosis_class', 'expected_progress')}
+        repair = supervision_store.get_checkpoint(conn, 'repair', row['incident_id'], 'engineering')
+        verification = supervision_store.get_checkpoint(conn, 'repair', row['incident_id'], 'verification')
+        item['repair_work_item_id'] = (repair or {}).get('metadata', {}).get('work_item_id')
+        item['repair_verification'] = {key: value.get('status') for key, value in
+            (verification or {}).get('metadata', {}).items() if isinstance(value, dict)}
+        item['recovery_actions'] = [dict(action) for action in conn.execute(
+            'SELECT action_kind,status,budget_cost FROM supervision_recovery_actions WHERE incident_id=? ORDER BY created_at DESC LIMIT 10',
+            (row['incident_id'],))]
+        result.append(item)
+    return result
 
 
 def get_work_item_detail(db_path, work_item_id):

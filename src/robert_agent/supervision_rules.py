@@ -33,6 +33,12 @@ def _future(now, value):
 def _observation(scope_type, scope_id, rule, facts, now, poll, classification, reason,
                  evidence, expected, *, next_at=None, positive=None, progress=None,
                  progress_at=None, eligible_since=None):
+    if positive:
+        occurred_at = timestamp(positive.get('occurred_at') or progress_at)
+        if occurred_at is None or occurred_at > now:
+            classification, reason, positive = 'unobservable', 'progress_occurrence_time_unverified', None
+        else:
+            positive = {**positive, 'occurred_at': occurred_at.isoformat()}
     row = {
         'scope_type': scope_type,
         'scope_id': scope_id,
@@ -97,7 +103,8 @@ def _worker(facts, emit, now, grace):
         if lifecycle in {'canceled', 'ignored'}:
             return emit('expected_wait', 'request_no_longer_active', evidence, expect)
         return emit('healthy', 'worker_stop_recorded', evidence, expect,
-                    positive={'attempt_id': facts['attempt_id'], 'process_stopped_at': facts['process_stopped_at']})
+                    positive={'attempt_id': facts['attempt_id'], 'process_stopped_at': facts['process_stopped_at']},
+                    progress_at=facts['process_stopped_at'])
     if process == 'alive_same':
         if lifecycle in TERMINAL_TASKS:
             if not _old_enough(now, facts.get('task_updated_at'), grace):
@@ -147,7 +154,7 @@ def _result(facts, emit, now, stall):
         return emit('expected_wait', 'result_waiting_worker_exit', evidence, expect)
     if facts.get('audit_status') == 'accepted':
         return emit('healthy', 'result_audit_accepted', evidence, expect,
-                    positive={'result_id': result_id, 'audit_status': 'accepted'})
+                    positive={'result_id': result_id, 'audit_status': 'accepted'}, progress_at=facts.get('audited_at'))
     if facts.get('audit_status') in {'failed', 'policy_violation'} or facts.get('audit_retry_required') == result_id or facts.get('audit_retryable') == 0:
         return emit('confirmed', 'result_audit_requires_attention',
                     {**evidence, 'audit_reason': facts.get('audit_reason')}, expect)
@@ -204,7 +211,7 @@ def _handoff(facts, emit, now, stall):
         return emit('expected_wait', 'request_no_longer_active', evidence, expect)
     if status == 'completed' and child:
         return emit('healthy', 'handoff_successor_recorded', evidence, expect,
-                    positive={'successor_task_id': child})
+                    positive={'successor_task_id': child}, progress_at=facts.get('successor_occurred_at'))
     if status == 'attention':
         return emit('confirmed', 'handoff_requires_attention', evidence, expect)
     if status == 'completed':
@@ -224,12 +231,19 @@ def _ready(facts, emit, now, stall):
     attempt = facts.get('attempt_id')
     evidence = {'attempt_id': attempt, 'attempt_status': facts.get('attempt_status')}
     expect = {'kind': 'attempt_dispatched', 'attempt_id': attempt}
+    if facts.get('canceled'):
+        return None
+    delivery = facts.get('delivery_positive')
+    if (facts['lifecycle'] == 'completed' and facts.get('attempt_status') == 'completed' and delivery
+            and (not facts.get('process_recorded') or facts.get('process_stopped_at'))):
+        return emit('healthy', 'prepared_attempt_delivery_verified', evidence, expect,
+                    positive={**delivery, 'attempt_id': attempt}, progress_at=delivery['occurred_at'])
     if facts['lifecycle'] not in ACTIVE_TASKS:
         return None
     if facts.get('attempt_status') in RUNNING_ATTEMPTS and facts.get('process_status') == 'alive_same':
+        started = facts.get('worker_started_at')
         return emit('healthy', 'prepared_attempt_dispatched', evidence, expect,
-                    positive={'attempt_id': attempt, 'worker_started_at': facts.get('started_at')},
-                    progress_at=facts.get('started_at'))
+                    positive={'attempt_id': attempt, 'worker_started_at': started}, progress_at=started)
     if facts.get('attempt_status') != 'prepared':
         return None
     wait = _stage_wait(facts, 'local') or facts.get('dispatch_block')
@@ -241,7 +255,10 @@ def _ready(facts, emit, now, stall):
     if not facts.get('has_prompt') or not facts.get('has_worktree'):
         return emit('unobservable', 'attempt_preparation_unverified', evidence, expect)
     return _eligible(facts, 'ready_not_dispatched', emit, now, stall, 'ready_attempt_waiting_dispatch',
-                     evidence, expect, [expect, facts.get('dispatch_not_before')])
+                     {**evidence, 'local_daemon_run_id': facts.get('dispatch_consumer_run_id'),
+                      'local_completed_at': facts.get('dispatch_completed_at')}, expect,
+                     [expect, facts.get('dispatch_not_before'), facts.get('dispatch_consumer_run_id')],
+                     consumer=facts.get('dispatch_completed_at'), confirm=True)
 
 
 def _worker_progress(facts, emit, now, stall):
@@ -283,6 +300,11 @@ def _delivery(facts, emit, _now, _stall):
 
 
 def _execution_failure(facts, emit, now, grace):
+    recovery = facts.get('execution_recovery_evidence')
+    if recovery and not facts.get('canceled') and facts['lifecycle'] in {'completed', 'failed'}:
+        evidence = {'previous_attempt_id': facts.get('attempt_id'), 'successor_task_id': recovery['successor_task_id']}
+        return emit('healthy', 'same_request_delivery_verified', evidence,
+                    {'kind': 'execution_progress_after_failure'}, positive=recovery)
     if (facts.get('canceled') or facts.get('source_closed') or facts['lifecycle'] != 'failed'
             or facts.get('audit_status') in {'failed', 'policy_violation'} or facts.get('audit_retry_required')
             or facts.get('publication_terminal_failure') or facts.get('handoff_status') == 'attention'):
@@ -335,10 +357,12 @@ def evaluate_admission(facts, *, now, poll_seconds=60, stall_seconds=300):
     disposition = facts.get('disposition')
     if disposition == 'explicitly_ignored':
         return [emit('healthy', 'admission_explicitly_disposed', evidence, expect,
-                     positive={'input_generation': facts['input_generation'], 'disposition': disposition})]
+                     positive={'input_generation': facts['input_generation'], 'disposition': disposition},
+                     progress_at=facts.get('disposition_at'))]
     if disposition in {'admitted_task', 'queued_native_round', 'linked_pending'} and facts.get('target_exists'):
         owned = emit('healthy', 'admission_owner_recorded', evidence, expect,
-                     positive={'input_generation': facts['input_generation'], 'target_id': facts['target_id']})
+                     positive={'input_generation': facts['input_generation'], 'target_id': facts['target_id']},
+                     progress_at=facts.get('disposition_at'))
         operator = facts['scope_type'] == 'work_item_event' and facts.get('operator_handoff')
         if disposition != 'linked_pending' and not operator:
             return [owned]
@@ -347,7 +371,8 @@ def evaluate_admission(facts, *, now, poll_seconds=60, stall_seconds=300):
         if facts.get('successor_task_id'):
             return [owned, emit('healthy', 'admission_consumed', evidence, expect,
                                 positive={'successor_task_id': facts['successor_task_id'],
-                                          'input_generation': facts['input_generation']})]
+                                          'input_generation': facts['input_generation']},
+                                progress_at=facts.get('successor_occurred_at'))]
         wait = facts.get('wait_reason')
         if wait or not (facts.get('pending_eligible') or facts.get('operator_handoff_eligible')):
             return [owned, emit('expected_wait', wait or 'admission_linked_pending', evidence, expect)]
@@ -393,4 +418,5 @@ def evaluate_controller(facts, *, now, poll_seconds=60):
         outcome = ('unobservable', 'controller_progress_unverified')
     positive = evidence if status == 'completed' or (status == 'fresh' and facts.get('has_progress')) else None
     return _observation('controller', scope_id, 'controller_or_notice_stalled', facts, now, poll_seconds,
-                        *outcome, evidence, expect, positive=positive)
+                        *outcome, evidence, expect, positive=positive,
+                        progress_at=facts.get('completed_at') or facts.get('heartbeat_at'))
