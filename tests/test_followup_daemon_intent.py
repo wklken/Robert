@@ -12,7 +12,7 @@ from unittest import mock
 
 from tests import test_daemon as daemon_fixture
 from robert_agent import daemon, daemon_state, discover, route, run_once, storage
-from robert_agent.validate_config import DAEMON_DEFAULTS
+from tests.support import DAEMON_DEFAULTS
 
 
 class FollowupDaemonTests(unittest.TestCase):

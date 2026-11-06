@@ -185,9 +185,13 @@ time.sleep(30)
         trees = root / 'trees'
         trees.mkdir()
         path = root / 'robert.yml'
-        raw = {'data_dir': str(root), 'database': self.db.name, 'repos': [{
+        raw = {'version': 2, 'data_dir': str(root), 'database': self.db.name,
+               'github': {'account': 'default'}, 'default_worker': 'default',
+               'workers': {'default': {'adapter': 'cbc', 'command': 'cbc',
+                                       'model': 'default', 'effort': 'default'}},
+               'repos': [{
             'full_name': 'example/repo', 'github_account': 'default', 'trusted_actors': ['owner'],
-            'default_base_branch': 'main', 'repo_root': str(root), 'worktree_root': str(trees),
+            'default_branch': 'main', 'checkout': str(root), 'worktrees': str(trees),
         }], 'supervision': self.config['supervision']}
 
         def save():

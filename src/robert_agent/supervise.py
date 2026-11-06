@@ -25,8 +25,8 @@ def classify_attempt(
     heartbeat_at,
     started_at,
     now=None,
-    stale_after_minutes=20,
-    hard_timeout_minutes=45,
+    heartbeat_stale_seconds=1200,
+    global_timeout_seconds=2700,
     hard_timeout_seconds=None,
 ):
     now = now or datetime.now(timezone.utc)
@@ -36,7 +36,6 @@ def classify_attempt(
     runtime_seconds = (now - started_at).total_seconds()
     heartbeat_age = heartbeat_age_seconds / 60
     runtime_age = runtime_seconds / 60
-    global_timeout_seconds = hard_timeout_minutes * 60
     timeout_seconds = global_timeout_seconds
     if hard_timeout_seconds is not None:
         timeout_seconds = min(global_timeout_seconds, hard_timeout_seconds)
@@ -53,7 +52,7 @@ def classify_attempt(
             "heartbeat_age_minutes": heartbeat_age,
             "runtime_minutes": runtime_age,
         }
-    if heartbeat_age >= stale_after_minutes:
+    if heartbeat_age_seconds >= heartbeat_stale_seconds:
         return {
             "ok": True,
             "status": "stale",
@@ -74,15 +73,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--heartbeat-at", required=True)
     parser.add_argument("--started-at", required=True)
-    parser.add_argument("--stale-after-minutes", type=int, default=20)
-    parser.add_argument("--hard-timeout-minutes", type=int, default=45)
+    parser.add_argument("--heartbeat-stale-seconds", type=int, default=1200)
+    parser.add_argument("--global-timeout-seconds", type=int, default=2700)
     args = parser.parse_args(argv)
     return emit(
         classify_attempt(
             heartbeat_at=args.heartbeat_at,
             started_at=args.started_at,
-            stale_after_minutes=args.stale_after_minutes,
-            hard_timeout_minutes=args.hard_timeout_minutes,
+            heartbeat_stale_seconds=args.heartbeat_stale_seconds,
+            global_timeout_seconds=args.global_timeout_seconds,
         )
     )
 

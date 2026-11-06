@@ -98,9 +98,19 @@ class WorkerRuntime:
                      'worktree_root': str(repo_root / '.worktrees')}
         (repo_root / '.worktrees').mkdir()
         config_path = root / 'config.json'
-        self.config = {'data_dir': str(self.data), 'database': self.db.name, 'repos': [self.repo],
-                       'max_concurrency': tasks, 'default_max_retries': 0}
-        config_path.write_text(json.dumps(self.config))
+        document = {
+            'version': 2, 'data_dir': str(self.data), 'database': self.db.name,
+            'github': {'account': 'robert-bot'}, 'default_worker': 'default',
+            'workers': {'default': {'adapter': 'cbc', 'command': 'cbc',
+                                    'model': 'default', 'effort': 'default'}},
+            'scheduler': {'max_concurrency': tasks},
+            'repos': [{'full_name': REPO_NAME, 'trusted_actors': ['operator'],
+                       'default_branch': 'main', 'checkout': str(repo_root),
+                       'worktrees': str(repo_root / '.worktrees')}],
+        }
+        config_path.write_text(json.dumps(document))
+        self.config = run_once.validate_config.validate_config(config_path, skip_external=True)
+        assert self.config['ok'], self.config
         discovery = root / 'discovery.json'
         discovery.write_text(json.dumps({'events': [
             {'id': f'comment-{number}', 'number': number, 'source_type': 'issue',

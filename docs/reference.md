@@ -5,162 +5,55 @@
 Default path: `~/.config/robert/config.yml`. Use `robert config path` to resolve
 `ROBERT_CONFIG`, or pass `--config` explicitly.
 
-The public configuration is `version: 1` YAML. `robert init` creates a starting
-file; the [packaged example](../src/robert_agent/resources/config.example.yml)
-and [schema](../src/robert_agent/resources/schemas/config.schema.json) describe
-the supported structure. The example has `repos: []` as a template: add at least
-one real local Git checkout before validation or operation.
+The only accepted configuration is `version: 2` YAML. Old versions, aliases,
+unknown fields, duplicate YAML keys and unknown route IDs are errors. Follow the
+[upgrade guide](config-v2-upgrade.md) to convert an existing file manually.
+`robert init` creates a minimal v2 file. The [packaged example](../src/robert_agent/resources/config.example.yml)
+lists optional settings with an empty repository list; add a real checkout first.
+The [schema](../src/robert_agent/resources/schemas/config.schema.json) defines
+structural validation and defaults. There is no engine selector or DBOS config.
 
 | Section | Purpose |
 | --- | --- |
-| `version`, `data_dir`, `database` | Format version, runtime directory, and SQLite filename. `database` must be a filename, not a path. |
-| `github` | Listening account and poll interval; uses the existing authenticated `gh` session. |
-| `workers` | Mapping of named adapters, commands, models, effort, timeouts, and environment allowlists. |
-| `skills` | Local skill search paths; Robert validates skills but does not install them. |
-| `routes` | Global worker and required/recommended skill overrides. |
-| `route_worker_models` | Per-route model/effort overrides, separate from route permissions. |
-| `repos` | Real checkouts, worktree roots, base branches, trusted actors, concurrency, route overrides, and opt-in PR automation. |
-| `daemon` | Local/GitHub polling, rate-limit thresholds, cycle timeouts, and diagnostic retention. |
-| `workflow_engine` | Optional compatibility configuration; execution uses `sqlite`. |
+| `version`, `data_dir`, `database`, `python_bin` | Format, runtime directory, SQLite filename, optional helper interpreter override. |
+| `default_worker` | Required worker name; mapping order does not select a default. |
+| `github` | Listening account, polling and API quota thresholds; no credentials. |
+| `scheduler` | Global task capacity, native model-process capacity, local polling and task leases. |
+| `supervision` | Independent observation/diagnosis/recovery settings plus heartbeat staleness, hard timeout and startup grace. |
+| `daemon` | Enablement, immediate startup scan, scan/local-cycle control timeouts. |
+| `maintenance` | Automatic pruning, interval, batch size and diagnostic retention days. |
+| `workers` | Named adapters, commands, model/effort, fallback, timeout and environment allowlist. |
+| `skills` | Skill search paths. |
+| `routes` | Worker, ordinary automatic model/effort overrides, skills, native review/vote settings. |
+| `repos` | Checkouts, worktrees, branch, trust, task capacity, route overrides and opt-in PR automation. |
 
-The following is an extended example, not the generated defaults. Replace the
-accounts, paths, branch names, commands, and model names for your environment.
-The example explicitly enables PR automation on `example/backend`; omit that
-block to keep automation disabled.
+See the [complete config.yaml example and field mapping](config-v2-upgrade.md#2-调整后的完整-configyaml-示例).
+Worker `adapter`, `command`, `model` and `effort` are required. The command
+adapter requires an argv list. Prompt transport is fixed to stdin.
 
-```yaml
-version: 1
-data_dir: ~/.local/share/robert
-database: robert.sqlite3
-# Omit python_bin to use the interpreter running Robert.
-# Set an override only when that interpreter can also import robert_agent.
-max_concurrency: 3
-stale_after_minutes: 20
-hard_timeout_minutes: 45
-worker_startup_grace_seconds: 300
-lease_ttl_minutes: 9
-github:
-  account: robert-bot
-  poll_seconds: 300
-skills:
-  search_paths:
-    - ~/.agents/skills
-daemon:
-  enabled: true
-  local_poll_seconds: 5
-  github_poll_seconds: 300
-  github_poll_when_full_seconds: 600
-  rate_limit_cache_seconds: 300
-  min_search_remaining: 10
-  min_core_remaining: 500
-  live_run_timeout_seconds: 300
-  local_drain_timeout_seconds: 180
-  event_retention_days: 7
-  maintenance_enabled: true
-  maintenance_interval_seconds: 300
-  maintenance_batch_size: 100
-  run_retention_days: 7
-  failed_run_retention_days: 30
-  run_on_start: false
-workflow_engine:
-  mode: sqlite
-workers:
-  default:
-    adapter: codex
-    command: codex
-    model: default
-    fallback_model: gpt-5.6-sol
-    effort: default
-    prompt_transport: stdin
-    timeout_seconds: 5400
-    environment_allowlist: []
-  reviewer:
-    adapter: command
-    command: [custom-reviewer, --batch]
-    model: default
-    effort: default
-    prompt_transport: stdin
-    timeout_seconds: 3600
-    environment_allowlist:
-      - CUSTOM_REVIEWER_HOME
-route_worker_models:
-  new-pr:
-    worker: default
-    model: gpt-5.4
-    effort: high
-routes:
-  new-pr:
-    worker: default
-    required_skills: []
-    recommended_skills: []
-  review-pr:
-    worker: reviewer
-    required_skills: []
-    recommended_skills: []
-repos:
-  - full_name: example/backend
-    checkout: /srv/repos/backend
-    worktrees: /srv/repos/backend/.worktrees
-    default_branch: main
-    github_account: robert-bot
-    trusted_actors:
-      - maintainer
-    max_concurrency: 2
-    pr_automation:
-      conflict:
-        enabled: true
-        max_attempts: 2
-        max_wall_minutes: 60
-      ci:
-        enabled: true
-        check_allowlist: [unit, lint]
-        max_attempts: 2
-        max_wall_minutes: 120
-        max_total_tokens: 200000
-        max_cost_usd: 10.0
-        max_failure_summary_chars: 12000
-    routes:
-      new-pr:
-        worker: default
-        required_skills: []
-        recommended_skills: []
-  - full_name: example/frontend
-    checkout: /srv/repos/frontend
-    worktrees: /srv/repos/frontend/.worktrees
-    default_branch: main
-    trusted_actors:
-      - maintainer
-```
+The existing [continuous supervision settings](task-supervision.md) remain under
+`supervision` alongside the worker timing fields. Observe mode and all opt-in
+diagnosis/recovery/repair permissions keep their existing defaults.
 
 ### Workers, routes, and repository overrides
 
-`workers` is a mapping keyed by worker name. Each entry defines `adapter`,
-`command`, `model`, and `effort`; optional fields are `fallback_model`,
-`prompt_transport` (only `stdin`), `timeout_seconds` (default 5400), and
-`environment_allowlist` (default empty). Built-in adapters are `codex`,
-`tcodex`, `claude`, `tclaude`, `opencode`, `cbc`, and `command`.
+Automatic execution selects the repository route worker, then the global route
+worker, then `default_worker`. Model and effort each use the repository route
+override, the global route override, or the selected worker's default.
+Explicit manual selection uses that worker's model/effort. Native multi-model
+review/vote use each participant's own model/effort; route overrides apply only
+to ordinary automatic execution. `config show` includes effective routes and
+explains this scope; its normalized output is not a round-trip YAML template.
 
-`github` accepts only `account` and `poll_seconds`; credentials are rejected.
-The `command` adapter requires a YAML sequence. Repository route overrides may
-set `worker`, `required_skills`, and `recommended_skills` only. They replace
-only fields explicitly supplied; a supplied skill list replaces that list.
-Repository overrides take precedence over global `routes`, then packaged
-policy defaults. With no selected worker, the first configured worker is used.
+Skill lists replace the corresponding inherited list; native review/vote
+settings replace their entire block. Null does not clear inherited settings.
+Existing packaged required-skill constraints still apply. The first native
+participant must equal the effective route worker. Trust checks and review
+PR-author eligibility are unchanged.
 
-Use `routes.<route>.worker` to select the worker for `version: 1`. Set
-`route_worker_models.<route>.model` and `.effort` for per-route model overrides;
-these do not belong inside `routes` or repository route overrides.
-`route_worker_models` also accepts `worker`, which supplies defaults when its
-model/effort are omitted; public versioned configuration still selects the
-executed worker through `routes`. For manual worker selection on a local task,
-the selected worker's own model/effort apply instead of the route model override.
-
-A repository's `github_account` overrides the global listening account without
-changing `gh` authentication. Its `max_concurrency` must be between 1 and the
-global `max_concurrency` (default 3). The checkout must already exist as a Git
-repository, `default_branch` must name its actual base branch, and
-`trusted_actors` must be a non-empty list of non-empty strings. Only these actors
-may drive workers, including follow-ups on existing PRs and workstreams.
+`repos[].github_account` overrides the listening account, not gh authentication.
+Repository max_concurrency cannot exceed scheduler.max_concurrency. Trusted
+actors must be nonempty; these remain repository-scoped authorization settings.
 
 The default hard worker timeout is 45 minutes. When a worker defines
 `fallback_model`, Robert uses it on the third run after the two immediately
@@ -182,75 +75,35 @@ requires a non-empty `check_allowlist`; its limits are per durable PR snapshot
 episode. Conflict remediation and CI publication use ordinary non-force pushes
 only after the current remote PR head and base match the audited snapshot.
 
-```bash
-robert config validate --config ~/.config/robert/config.yml --output json
-```
-
 ### Scheduling and timeout defaults
 
 | Setting | Default | Scope |
 | --- | --- | --- |
-| `max_concurrency` | 3 | Global active-worker limit. |
-| `model_max_concurrency` | 4 | Global model-process limit shared by native review and vote. `review_max_concurrency` remains a compatible alias; simultaneous values must match. |
-| `stale_after_minutes` | 20 | Worker heartbeat staleness threshold. |
-| `hard_timeout_minutes` | 45 | Supervision wall-time limit, independent of worker adapter timeout. |
-| `worker_startup_grace_seconds` | 300 | Grace period for a starting worker. |
-| `lease_ttl_minutes` | 9 | Task lease duration. |
-| `python_bin` | Interpreter running Robert (`sys.executable`) | Accepted for older configuration compatibility. Internal worker helpers always use the interpreter running Robert so an old environment cannot submit an incompatible result after an upgrade. |
-| `daemon.local_poll_seconds` | 5 | Local state/supervision polling. |
-| `daemon.github_poll_seconds` | 300 | Resident scanner startup/error fallback; `daemon --once` retains this polling interval. See [GitHub polling](github-polling.md). |
-| `daemon.github_poll_when_full_seconds` | 600 | Legacy synchronous polling while capacity is full; resident scanning ignores this slowdown. |
-| `daemon.rate_limit_cache_seconds` | 300 | Rate-limit cache duration for the synchronous diagnostic path; resident scans check their own budget. |
-| `daemon.min_search_remaining` / `min_core_remaining` | 10 / 500 | Minimum GitHub quota thresholds. |
-| `daemon.live_run_timeout_seconds` / `local_drain_timeout_seconds` | 300 / 180 | Bounded live-poll/local-drain child cycle timeouts. |
-| `daemon.enabled` / `run_on_start` | `true` / `false` | Daemon enablement and immediate startup poll. |
+| `scheduler.max_concurrency` | 3 | Global task slots. |
+| `scheduler.model_max_concurrency` | 4 | Shared native review/vote model pool; no aliases. |
+| `scheduler.local_poll_seconds` | 5 | Local polling and supervision cadence. |
+| `scheduler.lease_ttl_seconds` | 540 | Task lease. |
+| `supervision.heartbeat_stale_seconds` | 1200 | Heartbeat staleness. |
+| `supervision.hard_timeout_seconds` | 2700 | Global supervision wall-time ceiling. |
+| `supervision.startup_grace_seconds` | 300 | Starting worker grace. |
+| `github.polling.fallback_seconds` | 300 | Startup/error fallback; normal synchronous interval. |
+| `github.polling.synchronous.full_capacity_seconds` | 600 | Synchronous full-capacity interval only. |
+| `github.polling.synchronous.rate_limit_cache_seconds` | 300 | Synchronous quota cache only. |
+| `github.rate_limit.min_search_remaining` / `min_core_remaining` | 10 / 500 | API quota floors. |
+| `daemon.enabled` / `scan_on_start` | true / false | Service enablement and immediate scan. |
+| `daemon.control_timeouts.github_scan_seconds` / `local_cycle_seconds` | 300 / 180 | Scan and local-drain/publisher child deadlines. |
 
-Increasing only `workers.<name>.timeout_seconds` does not raise the global
-hard timeout. Retention defaults and protected history are described under
-[Diagnostic retention](#diagnostic-retention).
-
-### Workflow engine
-
-```yaml
-workflow_engine:
-  mode: sqlite
-```
-
-SQLite is the only execution engine and the default. The old `mode: legacy`
-input is accepted as a deprecated alias for SQLite. `active` and `shadow` are
-rejected with offline migration guidance; there is no implicit ownership transfer.
-No DBOS/PostgreSQL database URL is needed. See the
-[SQLite upgrade procedure](sqlite-state-machine-upgrade.md) before replacing
-an installation that has DBOS-owned tasks. The migration preserves historical
-IDs, attention, recovery budgets and unconsumed facts.
+The ordinary worker deadline remains the smaller of the supervision ceiling
+and its own timeout_seconds. PR automation's max_wall_minutes is a separate
+business-episode budget and keeps its existing unit. See [polling](github-polling.md)
+for server-directed intervals and [retention](#diagnostic-retention) for protected history.
 
 ### Updating an existing configuration
 
-Preserve the current file and runtime data before editing. `robert init` refuses
-to overwrite an existing file without `--force`; it does not migrate or merge
-custom settings. Prefer editing the existing YAML and validating it.
-
-For the public `version: 1` layout, use `github.account`, named `workers`,
-nested `daemon` settings, and repository keys `checkout`, `worktrees`, and
-`default_branch`. Do not combine named workers with old top-level
-`worker_agent` / `worker_command`, or copy normalized output keys such as
-`github_account`, `repo_root`, `worktree_root`, and `default_base_branch` into
-public configuration. Validation/show output includes internal normalized
-fields; it is not a round-trip configuration template.
-
-Missing `workflow_engine` defaults to `sqlite`, and omitted optional daemon
-settings receive their defaults. Keep PR automation disabled unless explicitly
-wanted. After editing:
-
-```bash
-robert config validate --config ~/.config/robert/config.yml --output json
-robert doctor --config ~/.config/robert/config.yml --output json
-```
-
-Then restart both daemon and web using the [Supervisor guide](guides.md#daemon-service).
-Supervisor process definitions, Web flags, and autostart belong in
-`supervisord.conf`, not in Robert YAML. Web bind/port/write settings are CLI
-flags, not a `web:` configuration section.
+Preserve the original file and database. Apply the [v2 field mapping and upgrade
+procedure](config-v2-upgrade.md), validate with the new binary, then restart daemon
+and web together. `robert init --force` is not a migration tool. SQLite state is
+unchanged; no old configuration reader or automatic conversion is provided.
 
 ### Skill examples
 
@@ -326,7 +179,6 @@ Integrations and migration:
 ```bash
 robert openclaw install
 robert openclaw status
-robert migrate dd-github-agent --dry-run
 ```
 
 ## Exit Codes
@@ -371,20 +223,20 @@ Diagnostics exports do not include the raw database.
 ### Diagnostic retention
 
 The daemon prunes diagnostic history on its first decision and every
-`maintenance_interval_seconds` (300 by default), including while it remains
-running. Set `maintenance_enabled: false` to disable automatic pruning. This
+`maintenance.interval_seconds` (300 by default), including while it remains
+running. Set `maintenance.enabled: false` to disable automatic pruning. This
 also disables daemon-event cleanup; the manual command remains available.
 
-Each transaction selects up to `maintenance_batch_size` (default 100, maximum
+Each transaction selects up to `maintenance.batch_size` (default 100, maximum
 500) records in each of these categories:
 
-- Completed/skipped `agent_runs` older than `run_retention_days` (7), or failed
-  runs older than `failed_run_retention_days` (30), measured from `finished_at`.
+- Completed/skipped `agent_runs` older than `maintenance.retention.runs_days` (7), or failed
+  runs older than `maintenance.retention.failed_runs_days` (30), measured from `finished_at`.
   Their global and repository steps are deleted in the same transaction.
-- Ordinary daemon events older than `event_retention_days` (7). Failed/degraded
-  events use the longer of this window and `failed_run_retention_days`.
-- Released leases older than `run_retention_days`, and expired leases older
-  than `failed_run_retention_days`, for agent runs and daemons only.
+- Ordinary daemon events older than `maintenance.retention.daemon_events_days` (7). Failed/degraded
+  events use the longer of this window and `maintenance.retention.failed_runs_days`.
+- Released leases older than `maintenance.retention.runs_days`, and expired leases older
+  than `maintenance.retention.failed_runs_days`, for agent runs and daemons only.
 
 Running or unfinished runs, the latest run, every run referenced by a wakeup,
 active leases, and leases owned by running agents/daemons are preserved. Task,
@@ -501,7 +353,7 @@ or resumed by later commands; completed items must be reopened first.
 ### Bounded recovery and delivery
 
 Each daemon control lane retries failures at most three times, with exponential
-backoff starting at `daemon.local_poll_seconds`. A successful cycle resets that
+backoff starting at `scheduler.local_poll_seconds`. A successful cycle resets that
 lane's budget. Exhaustion records a local operator notice and stops that lane;
 other lanes continue. The daemon stays resident and renews its lease so a service
 manager cannot turn a permanent failure into a restart loop. Repair the cause,

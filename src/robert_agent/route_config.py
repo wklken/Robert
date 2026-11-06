@@ -5,6 +5,8 @@ from robert_agent.resource_files import resource
 
 ALLOWED_ROUTE_OVERRIDE_FIELDS = {
     "worker",
+    "model",
+    "effort",
     "required_skills",
     "recommended_skills",
     "multi_agent_review",
@@ -55,12 +57,15 @@ def resolve_route_config(config, repo, route_policy):
         if field in repo_override:
             result[field] = repo_override[field]
     workers = config["workers"]
-    default_worker = (
-        next(iter(workers))
-        if isinstance(workers, dict)
-        else workers[0]["name"]
-    )
-    result.setdefault("worker", default_worker)
+    default_worker = config["default_worker"]
+    default_name = default_worker["name"] if isinstance(default_worker, dict) else default_worker
+    result.setdefault("worker", default_name)
+    by_name = workers if isinstance(workers, dict) else {w["name"]: w for w in workers}
+    if result["worker"] not in by_name:
+        raise ValueError(f"route {route_id} references unknown worker: {result['worker']}")
+    selected = by_name[result["worker"]]
+    result.setdefault("model", selected.get("default_model", selected.get("model", "default")))
+    result.setdefault("effort", selected.get("default_effort", selected.get("effort", "default")))
     result.setdefault("required_skills", [])
     result.setdefault("recommended_skills", [])
     if "multi_agent_review" in result:

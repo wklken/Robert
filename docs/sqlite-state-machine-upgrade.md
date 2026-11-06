@@ -144,11 +144,9 @@ are retired without canceling/completing the business Task. Unconsumed signals
 retain their payload/topic/dedupe identity in SQLite; delivery alone is never
 accepted as proof that the business event was consumed.
 
-Remove the old `workflow_engine` block or set `mode: sqlite`. The old
-`mode: legacy` input is accepted as a deprecated alias for SQLite; `active` and
-`shadow` are rejected with migration guidance. DBOS connection environment
-variables are no longer needed by the new runtime. Keep them with the offline
-old environment only while historical recovery/backup requires it.
+Remove the old `workflow_engine` block and convert the complete configuration
+using the [v2 configuration upgrade guide](config-v2-upgrade.md). No engine
+selector or legacy configuration alias is accepted.
 
 ```bash
 "$ROBERT_NEW" config validate --config "$ROBERT_CONFIG"

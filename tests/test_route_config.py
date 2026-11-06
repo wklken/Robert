@@ -16,6 +16,7 @@ from robert_agent.run_once import run_once
 class RouteConfigTests(unittest.TestCase):
     def test_repo_override_replaces_only_explicit_fields(self):
         config = {
+            "default_worker": "default",
             "workers": {"default": {}, "reviewer": {}},
             "routes": {
                 "new-pr": {

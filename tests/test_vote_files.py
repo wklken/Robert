@@ -15,7 +15,7 @@ class VoteFileTests(unittest.TestCase):
         self.root = Path(tmp.name).resolve()
         context = self.root / 'context'
         context.mkdir()
-        self.manifest = {'schema_version': 1, 'round_id': 'vote-test', 'snapshot_id': 'snapshot',
+        self.manifest = {"default_worker": 'one', 'schema_version': 1, 'round_id': 'vote-test', 'snapshot_id': 'snapshot',
             'artifact_root': str(self.root), 'context_dir': str(context), 'worktree_path': str(context),
             'workers': [{'name': 'one'}, {'name': 'two'}], 'sources': {'source-1': {'body': 'decision'}},
             'files': {}, 'frozen': False, 'source_type': 'issue'}

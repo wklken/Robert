@@ -27,10 +27,14 @@ class AttemptContextTests(unittest.TestCase):
         (Path(self.repo['repo_root']) / '.git').mkdir()
         Path(self.repo['worktree_root']).mkdir()
         config = self.root / 'config.yml'
-        config.write_text('data_dir: ' + str(self.data) + '\ndatabase: test.sqlite3\nrepos:\n' +
-                          ''.join('  - ' + key + ': ' + str(value) + '\n' if index == 0 else
-                                  '    ' + key + ': ' + str(value) + '\n'
-                                  for index, (key, value) in enumerate(self.repo.items())))
+        from robert_agent.init_config import init_config
+        import yaml
+        init_config(config, {"repo": self.repo['full_name'], "repo_path": self.repo['repo_root'],
+                    "worker": "cbc", "github_account": "robot", "trusted_actor": "human"})
+        document = yaml.safe_load(config.read_text())
+        document.update(data_dir=str(self.data), database="test.sqlite3")
+        document['repos'][0]['worktrees'] = self.repo['worktree_root']
+        config.write_text(yaml.safe_dump(document))
         fixture = self.root / 'events.json'
         fixture.write_text(json.dumps({'events': [{'id': '1', 'number': 1,
             'source_type': 'issue', 'event_type': 'comment', 'actor_login': 'human',

@@ -65,37 +65,22 @@ def _config_next_action(config_path, safe_error):
         return f"Replace placeholder values in {Path(config_path).expanduser().resolve()}"
     if "data_dir is not a directory" in safe_error:
         return f"Set data_dir to a directory path in {Path(config_path).expanduser().resolve()}"
-    if "database must not be empty" in safe_error or "database must be a filename" in safe_error:
+    if "config.database" in safe_error or "database must be a filename" in safe_error:
         return f"Set database to a SQLite filename in {Path(config_path).expanduser().resolve()}"
-    if "python_bin must not be empty" in safe_error:
+    if "config.python_bin" in safe_error:
         return f"Set python_bin to python3 or an absolute Python executable in {Path(config_path).expanduser().resolve()}"
-    if (
-        "workers" in safe_error
-        or "worker_agent must not be empty" in safe_error
-        or "unsupported worker_agent" in safe_error
-    ):
+    if "workers" in safe_error or "default_worker" in safe_error:
         return f"Fix the named worker definitions in {Path(config_path).expanduser().resolve()}"
-    if "worker_command must not be empty" in safe_error:
-        return f"Set the worker command to an agent launcher in {Path(config_path).expanduser().resolve()}"
-    if "route_worker_models" in safe_error:
-        return (
-            "Set each route_worker_models entry to a known worker and optional model/effort overrides in "
-            f"{Path(config_path).expanduser().resolve()}"
-        )
-    for field in [
-        "max_concurrency",
-        "stale_after_minutes",
-        "hard_timeout_minutes",
-        "worker_startup_grace_seconds",
-        "lease_ttl_minutes",
-    ]:
-        if f"{field} must be at least 1" in safe_error:
-            return f"Set {field} to a positive integer in {Path(config_path).expanduser().resolve()}"
-    if "repo_root is not a git checkout" in safe_error:
-        repo_match = re.search(r"\brepos\[(\d+)\]\.repo_root\b", safe_error)
+    if "routes" in safe_error:
+        return f"Fix route worker references and model/effort overrides in {Path(config_path).expanduser().resolve()}"
+    field = re.search(r"config\.([a-z_.]+) violates minimum 1", safe_error)
+    if field:
+        return f"Set {field.group(1)} to a positive integer in {Path(config_path).expanduser().resolve()}"
+    if ".checkout is not a git checkout" in safe_error:
+        repo_match = re.search(r"\brepos\[(\d+)\]\.checkout\b", safe_error)
         repo_index = repo_match.group(1) if repo_match else "0"
         return (
-            f"Set repos[{repo_index}].repo_root to a real local git checkout in "
+            f"Set repos[{repo_index}].checkout to a real local git checkout in "
             f"{Path(config_path).expanduser().resolve()}"
         )
     return "Fix robert config"
@@ -248,9 +233,9 @@ def acceptance_preflight(
                     None
                     if worktree_root_is_dir
                     else (
-                        f"Remove file or set repo {repo_name} worktree_root to a directory: {worktree_root}"
+                        f"Remove file or set repo {repo_name} worktrees to a directory: {worktree_root}"
                         if multi_repo
-                        else f"Remove file or set repos[0].worktree_root to a directory: {worktree_root}"
+                        else f"Remove file or set repos[0].worktrees to a directory: {worktree_root}"
                     )
                     if worktree_root_exists
                     else f"mkdir -p {shlex.quote(str(worktree_root))}"

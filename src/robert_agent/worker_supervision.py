@@ -39,7 +39,7 @@ def run(config_path):
                     continue
                 repo_id = row[0]
                 with conn:
-                    lease = run_once._acquire_agent_lease(conn, repo_id, run_id, now, config.get('lease_ttl_minutes', 9))
+                    lease = run_once._acquire_agent_lease(conn, repo_id, run_id, now, config.get('lease_ttl_seconds', 540))
                 if not lease['ok']:
                     continue
                 try:

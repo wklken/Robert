@@ -46,20 +46,31 @@ class WorkflowMatrixTests(unittest.TestCase):
         self.data_dir = self.root / "data"
         self.config_path = self.root / "config.yml"
         self.config_path.write_text(
-            f"""data_dir: {self.data_dir}
+            f"""version: 2
+data_dir: {self.data_dir}
 database: dd.sqlite3
-max_concurrency: 3
-stale_after_minutes: 20
-hard_timeout_minutes: 90
-default_max_retries: 0
+github:
+  account: robert-bot
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: cbc
+    model: gpt-5.4
+    effort: high
+scheduler:
+  max_concurrency: 3
+supervision:
+  heartbeat_stale_seconds: 1200
+  hard_timeout_seconds: 5400
 repos:
-  - full_name: example/backend
-    github_account: robert-bot
-    trusted_actors:
-      - wklken
-    default_base_branch: master
-    repo_root: {self.repo_root}
-    worktree_root: {self.worktree_root}
+- full_name: example/backend
+  github_account: robert-bot
+  trusted_actors:
+  - wklken
+  checkout: {self.repo_root}
+  worktrees: {self.worktree_root}
+  default_branch: master
 """,
             encoding="utf-8",
         )
@@ -181,7 +192,7 @@ repos:
                 "github:example/backend#101",
                 "comment-analysis",
                 "comment_analysis",
-                None,
+                str(self.worktree_root / "analysis-101"),
             ),
         )
         self.assertEqual(event_row, ("trigger", "assigned:assign-issue-101"))
@@ -415,7 +426,7 @@ repos:
                 "github:example/backend!707",
                 "review-comment",
                 "review_comment",
-                None,
+                str(self.worktree_root / "analysis-707"),
             ),
         )
         self.assertIn("allowed_github_actions: [\"comment\"]", prompt)
@@ -669,7 +680,7 @@ repos:
                 "github:example/backend!707",
                 "review-comment",
                 "review_comment",
-                None,
+                str(self.worktree_root / "analysis-707"),
             ),
         )
         self.assertIn("allowed_github_actions: [\"comment\"]", prompt)

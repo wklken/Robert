@@ -39,8 +39,8 @@ class ParallelReviewTests(unittest.TestCase):
 
     def configure(self, capacity):
         config = yaml.safe_load(self.fixture.config_path.read_text())
-        config['review_max_concurrency'] = capacity
-        config['max_concurrency'] = 1
+        config.setdefault("scheduler", {})["model_max_concurrency"] = capacity
+        config.setdefault("scheduler", {})["max_concurrency"] = 1
         self.fixture.config_path.write_text(yaml.safe_dump(config))
 
     def launcher(self, **kwargs):

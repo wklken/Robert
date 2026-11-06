@@ -33,6 +33,7 @@ class ReviewCoordinatorTests(unittest.TestCase):
         config = yaml.safe_load(self.config_path.read_text())
         config['data_dir'] = str(self.root / 'data')
         worker = next(iter(config['workers'].values()))
+        config['default_worker'] = 'codex'
         config['workers'] = {'codex': worker, 'claude': {**worker, 'adapter': 'claude', 'command': 'claude'}}
         config['routes'] = {'review-pr': {'worker': 'codex', 'multi_agent_review': {
             'enabled': True, 'workers': ['codex', 'claude'], 'author_allowlist': ['author']}}}
@@ -424,6 +425,8 @@ class ReviewCoordinatorTests(unittest.TestCase):
                 self.addCleanup(fixture.doCleanups)
                 config = yaml.safe_load(fixture.config_path.read_text())
                 config['workers']['claude'].update(model='primary-model', fallback_model=fallback)
+                if fallback is None:
+                    config['workers']['claude'].pop('fallback_model')
                 fixture.config_path.write_text(yaml.safe_dump(config))
                 fixture.cycle([fixture.event()])
                 driver = fixture.coordinator()

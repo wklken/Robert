@@ -114,20 +114,32 @@ class IsolatedDaemonTests(unittest.TestCase):
             conn.execute("UPDATE workstreams SET repo_id='repo:x/y',active_task_id='t'")
             execution_store.ensure_subject(conn, 'task', 't', 'human_request', fixture.now.isoformat())
             conn.execute("INSERT INTO notifications(notification_id,task_id,notification_type,channel,status,created_at) VALUES ('notice','t','isolated','local','recorded',?)",(fixture.now.isoformat(),))
-        (root/'daemon.yml').write_text(f'''data_dir: {root}
+        (root/'daemon.yml').write_text(f"""version: 2
+data_dir: {root}
 database: db
-max_concurrency: 1
-repos:
-  - full_name: x/y
-    github_account: isolated
-    trusted_actors: [isolated]
-    default_base_branch: main
-    repo_root: {root}
-    worktree_root: {root}/worktrees
+github:
+  account: isolated
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: cbc
+    model: gpt-5.4
+    effort: high
+scheduler:
+  max_concurrency: 1
+  local_poll_seconds: 1
 daemon:
   enabled: true
-  local_poll_seconds: 1
-''')
+repos:
+- full_name: x/y
+  github_account: isolated
+  trusted_actors:
+  - isolated
+  checkout: {root}
+  worktrees: {root}/worktrees
+  default_branch: main
+""")
         (root/'receiver.py').write_text('import sys,json\nfrom pathlib import Path\np=Path(__file__).with_name("deliveries.jsonl")\nv=json.load(sys.stdin)\nwith p.open("a") as f:f.write(json.dumps(v)+"\\n")\n')
         import shlex
         env = {**os.environ,

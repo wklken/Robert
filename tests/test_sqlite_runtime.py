@@ -8,15 +8,14 @@ from robert_agent import storage, validate_config
 
 
 class SQLiteRuntimeTests(unittest.TestCase):
-    def test_active_and_shadow_configs_do_not_silently_fall_back(self):
-        for mode in ("active", "shadow"):
-            with self.assertRaisesRegex(ValueError, "migrate dbos"):
-                validate_config._normalize_workflow_engine(
-                    {"workflow_engine": {"mode": mode}},
-                    environ={
-                        "ROBERT_DBOS_SYSTEM_DATABASE_URL": "postgresql://local/old"
-                    },
-                )
+    def test_engine_configuration_is_rejected(self):
+        from tests.test_config_v2 import ConfigV2Tests
+        fixture = ConfigV2Tests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        for mode in ('sqlite', 'legacy', 'active', 'shadow'):
+            fixture.config['workflow_engine'] = {'mode': mode}
+            self.assertIn('workflow_engine', fixture.validate()['safe_error'])
 
     def test_initialization_has_neutral_controls_without_dbos_ownership(self):
         with tempfile.TemporaryDirectory() as directory:

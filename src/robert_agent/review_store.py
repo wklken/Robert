@@ -175,7 +175,7 @@ def update_run(conn, run_id, **fields):
 
 def configure_process_pool(conn, limit):
     if type(limit) is not int or limit < 1:
-        raise ValueError('review_max_concurrency must be a positive integer')
+        raise ValueError('model_max_concurrency must be a positive integer')
     conn.execute('UPDATE review_process_pool SET max_concurrency=? WHERE singleton=1', (limit,))
 
 

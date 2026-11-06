@@ -20,11 +20,9 @@ FORBIDDEN = [
 ALLOWED_LEGACY_PATHS = {
     FORBIDDEN[0]: {
         "src/robert_agent/cli/main.py",
-        "src/robert_agent/migrate.py",
         "tests/test_migration.py",
     },
     FORBIDDEN[3]: {
-        "src/robert_agent/migrate.py",
         "tests/test_migration.py",
     },
     FORBIDDEN[4]: {

@@ -8,6 +8,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
@@ -834,13 +835,9 @@ class OperationalCommandTests(unittest.TestCase):
     def test_acceptance_preflight_checks_configured_worker_command(self):
         from robert_agent import acceptance
         config_path = self._write_acceptance_config()
-        config_path.write_text(
-            config_path.read_text(encoding="utf-8").replace(
-                "database: dd.sqlite3",
-                "database: dd.sqlite3\nworker_command: custom-cbc",
-            ),
-            encoding="utf-8",
-        )
+        document = yaml.safe_load(config_path.read_text())
+        document['workers']['default']['command'] = 'custom-cbc'
+        config_path.write_text(yaml.safe_dump(document))
         probed = []
 
         def command_exists(command):
@@ -872,13 +869,9 @@ class OperationalCommandTests(unittest.TestCase):
     def test_acceptance_preflight_checks_codex_worker_agent_command(self):
         from robert_agent import acceptance
         config_path = self._write_acceptance_config()
-        config_path.write_text(
-            config_path.read_text(encoding="utf-8").replace(
-                "database: dd.sqlite3",
-                "database: dd.sqlite3\nworker_agent: codex\nworker_command: /opt/homebrew/bin/codex",
-            ),
-            encoding="utf-8",
-        )
+        document = yaml.safe_load(config_path.read_text())
+        document['workers']['default'].update(adapter='codex', command='/opt/homebrew/bin/codex')
+        config_path.write_text(yaml.safe_dump(document))
         probed = []
 
         def command_exists(command):
@@ -909,24 +902,11 @@ class OperationalCommandTests(unittest.TestCase):
     def test_acceptance_preflight_checks_every_named_worker_command(self):
         from robert_agent import acceptance
         config_path = self._write_acceptance_config()
-        config_path.write_text(
-            config_path.read_text(encoding="utf-8").replace(
-                "database: dd.sqlite3",
-                "database: dd.sqlite3\n"
-                "workers:\n"
-                "  - name: default\n"
-                "    agent: cbc\n"
-                "    command: /opt/bin/cbc\n"
-                "    default_model: gpt-5.4\n"
-                "    default_effort: high\n"
-                "  - name: reviewer\n"
-                "    agent: codex\n"
-                "    command: /opt/bin/review-codex\n"
-                "    default_model: gpt-5.6-sol\n"
-                "    default_effort: xhigh",
-            ),
-            encoding="utf-8",
-        )
+        document = yaml.safe_load(config_path.read_text())
+        document['workers']['default']['command'] = '/opt/bin/cbc'
+        document['workers']['reviewer'] = {'adapter': 'codex', 'command': '/opt/bin/review-codex',
+                                           'model': 'gpt-5.6-sol', 'effort': 'xhigh'}
+        config_path.write_text(yaml.safe_dump(document))
         probed = []
 
         def command_exists(command):
@@ -1123,7 +1103,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(gates["worktree_root"]["summary"], "worktree_root is not a directory")
         self.assertEqual(gates["worktree_root"]["evidence"], str(worktree_root))
         self.assertIn(
-            f"Remove file or set repos[0].worktree_root to a directory: {worktree_root}",
+            f"Remove file or set repos[0].worktrees to a directory: {worktree_root}",
             result["next_actions"],
         )
 
@@ -1142,9 +1122,9 @@ class OperationalCommandTests(unittest.TestCase):
     github_account: robot
     trusted_actors:
       - alice
-    default_base_branch: main
-    repo_root: {repo_b}
-    worktree_root: {worktree_b}
+    default_branch: main
+    checkout: {repo_b}
+    worktrees: {worktree_b}
 """,
             encoding="utf-8",
         )
@@ -1162,7 +1142,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(gates["worktree_root:org/repo-b"]["summary"], "worktree_root is not a directory")
         self.assertEqual(gates["worktree_root:org/repo-b"]["evidence"], str(worktree_b))
         self.assertIn(
-            f"Remove file or set repo org/repo-b worktree_root to a directory: {worktree_b}",
+            f"Remove file or set repo org/repo-b worktrees to a directory: {worktree_b}",
             result["next_actions"],
         )
 
@@ -1199,7 +1179,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
         self.assertIn(
-            "repos must contain at least one repository",
+            "config.repos must contain at least 1 items",
             gates["config_valid"]["summary"],
         )
         self.assertEqual(
@@ -1249,7 +1229,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertEqual(gates["config_valid"]["summary"], "database must not be empty")
+        self.assertEqual(gates["config_valid"]["summary"], "invalid config: config.database must be string")
         self.assertEqual(
             result["next_actions"],
             [f"Set database to a SQLite filename in {config_path.resolve()}"],
@@ -1274,7 +1254,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(gates["config_valid"]["status"], "failed")
         self.assertEqual(
             gates["config_valid"]["summary"],
-            "database must be a filename, not a path: nested/dd.sqlite3",
+            "invalid config: database must be a filename, not a path: nested/dd.sqlite3",
         )
         self.assertEqual(
             result["next_actions"],
@@ -1287,7 +1267,7 @@ class OperationalCommandTests(unittest.TestCase):
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
                 "database: dd.sqlite3",
-                "database: dd.sqlite3\nmax_concurrency: 0",
+                "database: dd.sqlite3\nscheduler:\n  max_concurrency: 0",
             ),
             encoding="utf-8",
         )
@@ -1298,10 +1278,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertEqual(gates["config_valid"]["summary"], "max_concurrency must be at least 1")
+        self.assertEqual(gates["config_valid"]["summary"], "invalid config: config.scheduler.max_concurrency violates minimum 1")
         self.assertEqual(
             result["next_actions"],
-            [f"Set max_concurrency to a positive integer in {config_path.resolve()}"],
+            [f"Set scheduler.max_concurrency to a positive integer in {config_path.resolve()}"],
         )
 
     def test_acceptance_preflight_reports_nonpositive_runtime_threshold(self):
@@ -1310,7 +1290,7 @@ class OperationalCommandTests(unittest.TestCase):
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
                 "database: dd.sqlite3",
-                "database: dd.sqlite3\nstale_after_minutes: 0",
+                "database: dd.sqlite3\nsupervision:\n  heartbeat_stale_seconds: 0",
             ),
             encoding="utf-8",
         )
@@ -1321,10 +1301,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertEqual(gates["config_valid"]["summary"], "stale_after_minutes must be at least 1")
+        self.assertEqual(gates["config_valid"]["summary"], "invalid config: config.supervision.heartbeat_stale_seconds violates minimum 1")
         self.assertEqual(
             result["next_actions"],
-            [f"Set stale_after_minutes to a positive integer in {config_path.resolve()}"],
+            [f"Set supervision.heartbeat_stale_seconds to a positive integer in {config_path.resolve()}"],
         )
 
     def test_acceptance_preflight_reports_invalid_repo_root_path(self):
@@ -1333,8 +1313,8 @@ class OperationalCommandTests(unittest.TestCase):
         bad_repo_root = self.root / "missing-repo"
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
-                f"repo_root: {self.root / 'repo'}",
-                f"repo_root: {bad_repo_root}",
+                f"checkout: {self.root / 'repo'}",
+                f"checkout: {bad_repo_root}",
             ),
             encoding="utf-8",
         )
@@ -1348,7 +1328,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn(str(bad_repo_root), gates["config_valid"]["summary"])
         self.assertEqual(
             result["next_actions"],
-            [f"Set repos[0].repo_root to a real local git checkout in {config_path.resolve()}"],
+            [f"Set repos[0].checkout to a real local git checkout in {config_path.resolve()}"],
         )
 
     def test_acceptance_preflight_reports_invalid_second_repo_root_path(self):
@@ -1362,9 +1342,9 @@ class OperationalCommandTests(unittest.TestCase):
     github_account: robot
     trusted_actors:
       - alice
-    default_base_branch: main
-    repo_root: {bad_repo_root}
-    worktree_root: {bad_repo_root / ".worktrees"}
+    default_branch: main
+    checkout: {bad_repo_root}
+    worktrees: {bad_repo_root / ".worktrees"}
 """,
             encoding="utf-8",
         )
@@ -1375,10 +1355,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertIn("repos[1].repo_root is not a git checkout", gates["config_valid"]["summary"])
+        self.assertIn("repos[1].checkout is not a git checkout", gates["config_valid"]["summary"])
         self.assertEqual(
             result["next_actions"],
-            [f"Set repos[1].repo_root to a real local git checkout in {config_path.resolve()}"],
+            [f"Set repos[1].checkout to a real local git checkout in {config_path.resolve()}"],
         )
 
     def test_init_config_creates_public_config_and_refuses_overwrite(self):
@@ -1468,15 +1448,15 @@ class OperationalCommandTests(unittest.TestCase):
             heartbeat_at=now - timedelta(minutes=25),
             started_at=now - timedelta(minutes=30),
             now=now,
-            stale_after_minutes=20,
-            hard_timeout_minutes=90,
+            heartbeat_stale_seconds=1200,
+            global_timeout_seconds=5400,
         )
         timed_out = supervise.classify_attempt(
             heartbeat_at=now - timedelta(minutes=95),
             started_at=now - timedelta(minutes=95),
             now=now,
-            stale_after_minutes=20,
-            hard_timeout_minutes=90,
+            heartbeat_stale_seconds=1200,
+            global_timeout_seconds=5400,
         )
 
         self.assertEqual(stale["status"], "stale")
@@ -6970,16 +6950,26 @@ class OperationalCommandTests(unittest.TestCase):
         worktree_root.mkdir()
         config_path = self.root / "config.yml"
         config_path.write_text(
-            f"""data_dir: {self.root / "data"}
+            f"""version: 2
+data_dir: {self.root / 'data'}
 database: dd.sqlite3
+github:
+  account: robot
+default_worker: default
+workers:
+  default:
+    adapter: cbc
+    command: cbc
+    model: gpt-5.4
+    effort: high
 repos:
   - full_name: x/y
     github_account: robot
     trusted_actors:
-      - wklken
-    default_base_branch: master
-    repo_root: {repo_root}
-    worktree_root: {worktree_root}
+    - wklken
+    checkout: {repo_root}
+    worktrees: {worktree_root}
+    default_branch: master
 """,
             encoding="utf-8",
         )

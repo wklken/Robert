@@ -7,7 +7,8 @@
 在现有 `workers` 中配置模型，再开启独立的 `vote` 路由：
 
 ```yaml
-model_max_concurrency: 4
+scheduler:
+  model_max_concurrency: 4
 
 workers:
   codex_voter:
@@ -33,7 +34,7 @@ routes:
 
 repository 可以覆盖整个 `routes.vote.multi_agent_vote` 设置对象。只接受配置的 `trusted_actors` 明确提及机器人的请求；已有讨论参与者权限不扩大。PR review 的作者白名单继续只控制 review，不应用于投票。未开启时会解释缺少的配置，不把多模型请求变成一次单模型投票。
 
-全局 `model_max_concurrency` 默认 4，控制 review 和 vote 两种内建多模型流程的实际模型子进程总数。旧配置 `review_max_concurrency` 仍有效；两者同时配置时必须相同，且都是严格正整数，不允许 repository/route 覆盖。一轮投票仍占原有一个任务并发槽；准备、各 voter 和汇总分别申请一个模型额度，额度等待不消耗模型执行 timeout，父任务总时限仍生效。旧单模型路径保持原有并发规则。
+全局 `scheduler.model_max_concurrency` 默认 4，控制 review 和 vote 两种内建多模型流程的实际模型子进程总数。只接受严格正整数，不提供旧别名，不允许 repository/route 覆盖。一轮投票仍占原有一个任务并发槽；准备、各 voter 和汇总分别申请一个模型额度，额度等待不消耗模型执行 timeout，父任务总时限仍生效。旧单模型路径保持原有并发规则。
 
 ## 触发与澄清
 
