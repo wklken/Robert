@@ -250,7 +250,9 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
     fact_repo_clause,fact_repo_params=_repo_filter('f',repo_ids)
     fact=conn.execute(f"""SELECT 1 FROM execution_pending_facts f
       JOIN execution_subjects c ON c.subject_type=f.subject_type AND c.subject_id=f.subject_id
+      JOIN tasks t ON t.task_id=f.task_id
       WHERE f.consumed_at IS NULL AND c.binding_status='active'
+        AND {execution_store.runnable_sql()}
         AND julianday(f.not_before_at)<=julianday(?) {fact_repo_clause}
         AND (f.subject_type='task' OR f.topic!='remediation_decision' OR EXISTS (
           SELECT 1 FROM pr_remediation_episodes e WHERE e.episode_id=f.subject_id
