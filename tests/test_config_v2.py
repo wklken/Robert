@@ -101,6 +101,41 @@ class ConfigV2Tests(unittest.TestCase):
                     'enabled': True, 'workers': ['a', 'b']}
                 self.assertIn('missing', self.validate()['safe_error'])
 
+    def test_worker_deadlines_coexist_with_continuous_supervision_settings(self):
+        self.config['supervision'] = {
+            'mode': 'recover_known', 'poll_seconds': 17, 'batch_size': 7, 'stall_seconds': 91,
+            'heartbeat_stale_seconds': 31, 'hard_timeout_seconds': 121, 'startup_grace_seconds': 15,
+            'diagnosis': {'command': ['/usr/bin/false'], 'timeout_seconds': 20},
+            'recovery': {'allowed_actions': ['audit_retry'], 'repositories': ['example/test']},
+            'repair': {'repository': 'example/test', 'mode': 'backlog'},
+            'build_manifest': '/tmp/build.json',
+        }
+        result = self.validate()
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['heartbeat_stale_seconds'], 31)
+        self.assertEqual(result['hard_timeout_seconds'], 121)
+        self.assertEqual(result['worker_startup_grace_seconds'], 15)
+        settings = result['supervision']
+        self.assertEqual((settings['mode'], settings['poll_seconds'], settings['batch_size'],
+                          settings['stall_seconds']), ('recover_known', 17, 7, 91))
+        self.assertEqual(settings['diagnosis']['timeout_seconds'], 20)
+        self.assertEqual(settings['diagnosis']['cooldown_seconds'], 600)
+        self.assertEqual(settings['recovery']['allowed_actions'], ['audit_retry'])
+        self.assertEqual(settings['repair']['mode'], 'backlog')
+        self.assertEqual(settings['repair']['allowed_actions'], [])
+        self.assertEqual(settings['build_manifest'], '/tmp/build.json')
+        self.config['supervision']['diagnosis']['environment_allowlist'] = ['GH_TOKEN']
+        self.assertIn('prohibited', self.validate()['safe_error'])
+
+    def test_continuous_supervision_defaults_and_nullable_profiles_are_preserved(self):
+        from robert_agent.supervision_config import DEFAULTS
+        self.assertEqual(self.validate()['supervision'], DEFAULTS)
+        self.config['supervision'] = {'mode': 'off', 'diagnosis': None,
+                                      'repair': None, 'recovery': None, 'build_manifest': None}
+        self.assertEqual(self.validate()['supervision'], {**DEFAULTS, 'mode': 'off'})
+        self.config['supervision']['diagnosis'] = {'command': ['/usr/bin/false'] * 33}
+        self.assertIn('at most 32', self.validate()['safe_error'])
+
     def test_integer_schema_checks_do_not_coerce_to_float(self):
         from robert_agent.validate_config import _schema_value
         large = 10 ** 500

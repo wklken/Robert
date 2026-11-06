@@ -352,9 +352,9 @@ robert config show --config /absolute/path/config.v2.yaml --output json
 
 ### 第三步：停止写入并备份
 
-1. 使用部署现有的 Supervisor/systemd/launchd 等管理方式停止 daemon 和 web，防止服务管理器立即重启。
+1. 使用部署现有的 Supervisor/systemd/launchd 等管理方式停止 daemon、web 和独立的 supervisor 服务，防止服务管理器立即重启。
 2. 尽量等正在运行的 worker/原生多模型轮次结束；否则按现有停止与恢复流程确认相关进程身份和退出状态，不能只看主 daemon PID。
-3. 确认 scanner、publisher 和其他数据库写入者已经退出。无法证明清理完成时，不启动另一个实例争用同一份状态。
+3. 确认 scanner、publisher、supervisor 的诊断/修复子进程和其他数据库写入者已经退出。无法证明清理完成时，不启动另一个实例争用同一份状态。
 4. 保存旧程序制品、原配置及运行目录的一致性备份。SQLite 使用可靠的备份方式，不能在写入中只复制主数据库文件并漏掉 WAL。
 
 ### 第四步：成对切换与启动
@@ -362,7 +362,7 @@ robert config show --config /absolute/path/config.v2.yaml --output json
 1. 部署新制品，将服务配置指向已验证的 v2 文件。保持 data_dir/database、仓库和 worktree 路径不变。
 2. 按新服务账号执行 doctor，并确认所有配置 worker 的命令可用。
 3. 在已有受限容器内以 root 运行 Claude/tclaude 时，保留经确认的 `env IS_SANDBOX=1` 命令前缀；不要给非受限宿主机自动加这个变量。
-4. 启动 daemon 和 web。通过 config show 确认 version 为 2，启动日志无旧字段错误；确认连接的是旧数据库及旧工作项，而非空目录。
+4. 先启动 daemon 完成其他版本可能需要的附加数据库迁移，再启动 web 和原来启用的 supervisor。使用 `robert supervisor check --config <v2配置路径>` 验证监督服务。通过 config show 确认 version 为 2，启动日志无旧字段错误；确认连接的是旧数据库及旧工作项，而非空目录。
 5. 检查本地调度、GitHub 扫描、维护，以及已有待发布/待消费记录的恢复。保持原预算和幂等记录，不手动清表来“修复”启动。
 
 ### 第五步：运行验收
@@ -377,7 +377,7 @@ robert config show --config /absolute/path/config.v2.yaml --output json
 
 ## 5. 回滚
 
-1. 停止新 daemon/web，确认 worker 和控制子进程不再写入或执行外部操作。
+1. 停止新 daemon/web/supervisor，确认 worker、诊断/修复和控制子进程不再写入或执行外部操作。
 2. 成对恢复旧程序与原配置，不能让旧程序读取 v2，也不能让新程序读取旧配置。
 3. 本次没有数据库格式变更，正常回滚保留最新数据库与审计/幂等记录，不默认恢复升级前备份。该约定适用于数据库/worker 协议相同的两份程序；跨越其他版本的数据库或 worker 协议迁移时，还必须遵循对应迁移的回滚限制。
 4. 若升级期间已经发布 GitHub 结果，恢复旧数据库可能丢失已发布事实并造成重复动作；只有在单独核对这些外部事实后，才考虑异常数据恢复。

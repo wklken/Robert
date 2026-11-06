@@ -31,7 +31,7 @@ class RetentionTests(unittest.TestCase):
             conn.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('task','ws','running',?,?)", (OLD, OLD))
             conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at) VALUES ('attempt','task',1,'running',?)", (OLD,))
             conn.execute("INSERT INTO audit_events(audit_id,task_id,event_type,created_at,payload_json) VALUES ('audit','task','accepted',?,'{}')", (OLD,))
-        self.context = daemon.DaemonContext(config_path='/config.yml', workflow_path=None, db_path=self.db, repo_id='repo', max_concurrency=3, daemon_config=dict(DAEMON_DEFAULTS), daemon_run_id='daemon', lease_id=self.lease, runtime_config={'maintenance': maintenance_config()})
+        self.context = daemon.DaemonContext(config_path='/config.yml', workflow_path=None, db_path=self.db, repo_id='repo', max_concurrency=3, daemon_config=dict(DAEMON_DEFAULTS), daemon_run_id='daemon', lease_id=self.lease, runtime_config={'db_path': str(self.db), 'data_dir': str(self.db.parent), 'maintenance': maintenance_config()})
 
     def connect(self):
         conn = sqlite3.connect(self.db)
