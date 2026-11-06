@@ -66,3 +66,36 @@ monitoring is a separate deployment responsibility.
 
 The design and phased acceptance matrix are in
 [the implementation plan](superpowers/plans/2026-11-06-task-supervision-design.md).
+
+## Optional semantic diagnosis
+
+Configure a dedicated administrator-owned wrapper that accepts one JSON evidence
+bundle on stdin and returns the structured JSON described in
+`resources/supervision-diagnosis.md`. It must expose no model tools. The ordinary
+coding adapters are not a diagnosis profile. Example (replace the executable):
+
+```yaml
+supervision:
+  mode: observe
+  diagnosis:
+    command: [/opt/robert/bin/no-tool-model]
+    environment_allowlist: [MODEL_API_KEY]
+    timeout_seconds: 120
+    cooldown_seconds: 600
+    max_calls_per_hour: 6
+```
+
+Only explicitly named model environment variables reach the wrapper. Business
+credentials and runtime configuration variables are prohibited. Its private HOME
+and working directory reduce accidental configuration reuse; they are not an OS
+sandbox. The configured executable is trusted administration code, responsible
+for its model API and the no-tool contract.
+
+The supervisor diagnoses unresolved incidents and long-running suspect tasks.
+A persisted claim reserves one diagnostic slot and an hourly call before spawn.
+An unknown process identity retains the slot for attention instead of spawning
+a duplicate after restart. Output must cite the exact bundle/hash and known
+evidence identifiers. The bounded, redacted bundle and outcome remain in the
+analysis checkpoint. Invalid or stale output cannot authorize business actions.
+Model failure does not stop deterministic observations. `check` never calls the
+model; the resident `run` loop schedules and reaps diagnosis asynchronously.

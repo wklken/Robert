@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 
-from robert_agent import notify, redaction, supervision_config, supervision_observe, supervision_store
+from robert_agent import notify, redaction, supervision_config, supervision_diagnose, supervision_observe, supervision_store
 
 
 def utc_now():
@@ -99,6 +99,8 @@ def _health(config, result, now):
         data['delivery_id'] = 'supervisor-health-' + hashlib.sha256(
             (str(Path(config['db_path']).resolve()) + data['first_failed_at']).encode()).hexdigest()[:24]
     atomic_json(health_path(config), data)
+    if not result['ok'] and previous.get('ok', True):
+        print('Robert supervision: observation unavailable; health recorded independently of the database', file=sys.stderr)
 
 
 def _safe_observation(observation):
@@ -141,6 +143,7 @@ def check(config, *, record=False, now=None):
         if record:
             with closing(connect(config['db_path'])) as conn, conn:
                 conn.execute('BEGIN IMMEDIATE')
+                observations = [item for item in observations if supervision_observe.is_current(conn, item)]
                 changes = supervision_store.apply_observations(conn, observations, now)
                 supervision_store.update_checkpoint(conn, 'service', 'supervisor', 'cursor', now=now,
                                                      metadata={'cursor': sampled.get('cursor', '')})
@@ -164,6 +167,9 @@ def status(config):
         with closing(connect(config['db_path'], readonly=True)) as conn:
             _schema_ready(conn)
             incidents = supervision_store.list_incidents(conn, status='active')
+            for incident in incidents:
+                analysis = supervision_store.get_checkpoint(conn, 'diagnosis', incident['incident_id'], 'analysis')
+                incident['diagnosis'] = (analysis or {}).get('metadata')
         return {'ok': True, 'status': 'ready', 'health': _read_health(config), 'incidents': incidents}
     except (OSError, sqlite3.Error, ValueError):
         return {'ok': False, 'status': 'unobservable', 'health': _read_health(config), 'incidents': []}
@@ -237,6 +243,8 @@ def run(config, *, once=False, stop=None):
         try:
             while not stop.is_set():
                 result = check(config, record=True)
+                if result['ok']:
+                    result['diagnosis'] = supervision_diagnose.poll(config)
                 if delivery is not None and delivery.poll() is not None:
                     delivery.wait()
                     delivery = None
@@ -249,6 +257,7 @@ def run(config, *, once=False, stop=None):
                 stop.wait(settings['poll_seconds'])
             return {'ok': True, 'status': 'stopped'}
         finally:
+            supervision_diagnose.shutdown(config)
             if delivery is not None:
                 try:
                     delivery.wait(timeout=1)

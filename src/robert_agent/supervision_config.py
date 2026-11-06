@@ -1,6 +1,6 @@
 """Validated, bounded settings for the independent observation service."""
 
-DEFAULTS = {'mode': 'observe', 'poll_seconds': 60, 'batch_size': 100, 'stall_seconds': 300}
+DEFAULTS = {'mode': 'observe', 'poll_seconds': 60, 'batch_size': 100, 'stall_seconds': 300, 'diagnosis': None}
 
 
 def normalize(raw):
@@ -17,4 +17,6 @@ def normalize(raw):
     for key, maximum in (('poll_seconds', 3600), ('batch_size', 500), ('stall_seconds', 86400)):
         if type(result[key]) is not int or not 1 <= result[key] <= maximum:
             raise ValueError(f'supervision.{key} must be an integer between 1 and {maximum}')
+    from robert_agent.supervision_diagnose import normalize_diagnosis
+    result['diagnosis'] = normalize_diagnosis(result['diagnosis'])
     return result

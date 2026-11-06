@@ -87,3 +87,5 @@ supervision:
   poll_seconds: 60
   batch_size: 100
   stall_seconds: 300
+  # Administrator-owned, no-tool model wrapper; see docs/task-supervision.md.
+  diagnosis: null
