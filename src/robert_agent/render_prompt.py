@@ -13,7 +13,8 @@ def _planned_actions_example(route_result, runtime_context):
         return []
     if output == "new_pr":
         return [{"type": "push_existing_pr"}, {"type": "open_pr", "title": "<PR title>",
-                "body": "<PR description>", "issue_resolution": "complete"}]
+                "body": "<PR description>\n\n## Assumptions and decisions\n<Material assumptions and decisions, with basis and impact; explicitly state when none>",
+                "issue_resolution": "complete"}]
     if output == "update_existing_pr":
         return [{"type": "comment", "body": "<request outcome or review response>"}]
     if output in {"comment_analysis", "review_comment", "pr_review_comment", "waiting_for_user"}:
@@ -92,6 +93,8 @@ def _pr_review_guidance(route_result, runtime_context):
 - Start in worktree_path and verify the checked-out branch before reviewing.
 - Use fast-review-github-pr review discipline: inspect the PR source, compare the merge base against HEAD, and prioritize correctness, regressions, security, and missing tests.
 - Apply adversarial review: challenge the change's assumptions with counterexamples, boundary inputs, failure paths, and conflicting evidence; report only findings supported by source or test evidence.
+- Check declared assumptions and decisions against the original request and source, and look for material undisclosed decisions. A product tradeoff requiring human judgment is not a defect by itself; label it separately from evidence-backed defects.
+- State actual reviewed and unreviewed scope, checks performed and important verification limits, even when no defects are found. An all-clear conclusion applies only to that scope; do not infer human approval from a PR description or green checks.
 - Do not push branches, open PRs, submit GitHub PR reviews, or publish comments directly.
 - Record exactly one planned comment containing the actual review conclusion. Robert adds the trusted PR author mention.
 - Put any decision request and its decision-owner mention in that planned comment body; do not supply program-owned author fields.
@@ -192,9 +195,21 @@ def _unit_test_guidance(route_result):
         return ""
     return """Unit-test writing guidance:
 - When writing or updating unit tests, assert observable behavior, boundary cases, and meaningful failure paths.
+- For critical changed behavior, identify an input, state or failure that could disprove the implementation and exercise it with an appropriate check. Derive expected results from requirements or established contracts, not by duplicating implementation logic. Scale checks to actual risk.
 - Run affected tests and all applicable repository-required checks. Reuse evidence only while the relevant code, inputs and runtime are unchanged.
 - Only run mutation testing when explicitly requested by the task or required by applicable repository instructions. Keep mutations scoped, restore production code after each experiment, rerun affected tests, and report results or blockers.
 - Otherwise omit mutation testing without a skip explanation; do not search for mutation tooling."""
+
+
+def _collaboration_guidance(route_result):
+    if route_result["expected_output"] not in {"new_pr", "update_existing_pr"}:
+        return ""
+    return """Human collaboration:
+- For nontrivial work, briefly identify the original goal, confirmed constraints and observable acceptance criteria before implementation; do not invent requirements to fill gaps. Separate explicit requirements from your inferences and choose completion evidence before changing code. Continue under existing authorization; routine implementation choices do not require a new approval step.
+- If the current input corrects earlier work, explain what changed in your understanding, which behavior must change and which verification is now stale. Preserve still-valid work and evidence. If repeated corrections yield no new evidence or progress toward the goal, revisit the original request and acceptance criteria before another speculative edit.
+- Ask only about unresolved decisions that materially affect behavior, scope, compatibility or authority. Use waiting_for_user when blocked; state the exact decision, available options, their consequences and your recommendation with its basis. Do not ask the user to repeat an answered question.
+- In the PR body or outcome comment and handoff, connect each key acceptance criterion to actual evidence: what it proves and what it does not prove. Identify important unverified behavior; do not equate passing test counts or model agreement with complete validation. Keep raw logs in artifacts and publish only relevant redacted evidence.
+- For substantial behavior changes, provide a few review entry points: affected behavior/users, the relevant source path or flow, significant assumptions/tradeoffs and remaining blind spots. Keep routine deliveries concise; do not manufacture concerns or require a quiz or extra approval."""
 
 
 def _verification_example(route_result):
@@ -239,6 +254,12 @@ def _publication_guidance(route_result, runtime_context):
     if "open_pr" in allowed:
         sections.append("For open_pr supply type, title/body and issue_resolution for issue-sourced PRs. When selecting target_url, choose its source issue.")
         sections.append("Plan push_existing_pr before open_pr. Select issue_resolution=complete only when all requested scope is delivered. For intentional partial delivery set partial and provide nonempty remaining_scope. Robert generates the issue link; omit issue/PR closing or reference statements from body. Ordinary documentation links are allowed.")
+        sections.append("""PR body: assumptions and decisions
+- Every open_pr body must include a visible 'Assumptions and decisions' section ('假设与决策' for a Chinese PR), alongside the change summary and verification results. Put this context in the GitHub PR body itself, not only in handoff or local artifacts.
+- List material assumptions and discretionary decisions: defaults, scope exclusions, and tradeoffs between conflicting requirements. Distinguish user-confirmed requirements, source-backed facts, and unverified assumptions; do not present an agent choice as user approval.
+- For each item, state what was assumed or chosen, its basis/evidence, and its impact on behavior, compatibility or remaining scope. For meaningful tradeoffs, briefly name the alternatives and why this option was chosen. Give concise reviewable rationale, not an internal reasoning transcript.
+- If there are none, explicitly write 'No material assumptions or discretionary decisions' (or the equivalent in the PR language). Do not invent items or copy placeholders.
+- This disclosure does not authorize new scope or resolve missing authorization. If a material unresolved decision blocks execution, use waiting_for_user instead of silently deciding and treating the PR body as approval.""")
     if route_result["expected_output"] == "update_existing_pr":
         sections.append("Always plan a comment explaining the outcome. Only plan push_existing_pr when actual code changes require publication; otherwise submit a comment-only result. If pushing changes, place the comment after push_existing_pr.")
     return "\n".join(sections)
@@ -340,6 +361,7 @@ def render_prompt(
         _route_scope_guidance(route_result), _pr_review_guidance(route_result, runtime_context),
         _review_point_evaluation_guidance(route_result, task_kind, input_policy, runtime_context),
         _remediation_guidance(task, runtime_context, events), _unit_test_guidance(route_result),
+        _collaboration_guidance(route_result),
         _recovery_context(runtime_context), _input_context(runtime_context, events, origin_type),
     ])
     if runtime_knowledge:

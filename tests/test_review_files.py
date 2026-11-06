@@ -121,6 +121,52 @@ class ReviewFilesTests(unittest.TestCase):
             self.assertIn('<redacted>', prompt)
             self.assertIn('local absolute paths', prompt)
 
+    def test_merged_report_preserves_each_reviewers_coverage_even_without_findings(self):
+        self.result['findings'] = []
+        self.result['merge_recommendation'] = 'ready to merge'
+        self.result['coverage'] = {
+            'reviewed_paths': ['src/main.py'], 'unreviewed_paths': ['src/retry.py'],
+            'notes': '只读检查；未执行故障恢复测试；默认重试次数需产品确认。',
+        }
+        first = self.record('codex')
+        self.result['coverage'] = {
+            'reviewed_paths': ['src/retry.py'], 'unreviewed_paths': ['src/main.py'],
+            'notes': '检查了重试边界；未验证真实 GitHub 发布。',
+        }
+        second = self.record('claude')
+        report = review_files.render_merged(self.manifest, [first, second], {
+            'items': [], 'merge_recommendation': 'ready to merge', 'merge_reason': '已检查范围未发现缺陷',
+        })
+        coverage = report.split('### Review Coverage and Limitations\n', 1)[1].split('### Agent Agreement Summary', 1)[0]
+        first_section, second_section = coverage.split('#### claude (claude)', 1)
+        self.assertIn('#### codex (codex)', first_section)
+        self.assertIn('已审查：`src/main.py`', first_section)
+        self.assertIn('未审查：`src/retry.py`', first_section)
+        self.assertIn('默认重试次数需产品确认', first_section)
+        self.assertIn('已审查：`src/retry.py`', second_section)
+        self.assertIn('未审查：`src/main.py`', second_section)
+        self.assertIn('未验证真实 GitHub 发布', second_section)
+        self.assertIn('不代表验证全部行为', coverage)
+
+    def test_empty_coverage_does_not_imply_complete_review(self):
+        self.result['coverage'] = {'reviewed_paths': [], 'unreviewed_paths': [], 'notes': '未检查源码'}
+        report = review_files.render_merged(self.manifest, [self.record()], self.evaluation())
+        self.assertIn('已审查：未列出', report)
+        self.assertIn('未审查：未列出（不表示完整覆盖）', report)
+        self.assertIn('未检查源码', report)
+
+    def test_native_review_keeps_human_decisions_and_evidence_limits_visible(self):
+        prepare = review_files.build_prepare_prompt(self.manifest)
+        reviewer = review_files.build_reviewer_prompt(self.manifest)
+        synthesis = review_files.build_synthesis_prompt(self.manifest, self.root / 'inputs.json')
+        self.assertIn('original request', prepare)
+        self.assertIn('undisclosed decisions', reviewer)
+        self.assertIn('not a defect by itself', reviewer)
+        self.assertIn('coverage.notes', reviewer)
+        self.assertIn('unexecuted checks', reviewer)
+        self.assertIn('coverage limitations', synthesis)
+        self.assertIn('model agreement', synthesis)
+
     def test_reviewer_and_synthesis_prompts_require_adversarial_review(self):
         prompts = {
             'reviewer': review_files.build_reviewer_prompt(self.manifest),
