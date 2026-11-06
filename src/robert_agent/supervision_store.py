@@ -73,8 +73,8 @@ def _record_observation(conn, key, observation, now):
         progress_token = _json(progress_token)
     conn.execute('''INSERT INTO supervision_checkpoints(
             scope_type,scope_id,rule_id,lineage_key,classification,reason_code,
-            evidence_json,progress_token,last_progress_at,next_check_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            evidence_json,progress_token,last_progress_at,next_check_at,updated_at,eligible_since)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(scope_type,scope_id,rule_id) DO UPDATE SET
           last_progress_at=CASE
             WHEN supervision_checkpoints.lineage_key IS NOT excluded.lineage_key THEN excluded.last_progress_at
@@ -84,15 +84,18 @@ def _record_observation(conn, key, observation, now):
             THEN excluded.progress_token ELSE COALESCE(excluded.progress_token,supervision_checkpoints.progress_token) END,
           lineage_key=excluded.lineage_key,classification=excluded.classification,
           reason_code=excluded.reason_code,evidence_json=excluded.evidence_json,
-          next_check_at=excluded.next_check_at,updated_at=excluded.updated_at
+          next_check_at=excluded.next_check_at,updated_at=excluded.updated_at,
+          eligible_since=excluded.eligible_since
         WHERE supervision_checkpoints.lineage_key IS NOT excluded.lineage_key
            OR supervision_checkpoints.classification IS NOT excluded.classification
            OR supervision_checkpoints.reason_code IS NOT excluded.reason_code
            OR supervision_checkpoints.evidence_json IS NOT excluded.evidence_json
            OR supervision_checkpoints.next_check_at IS NOT excluded.next_check_at
+           OR supervision_checkpoints.eligible_since IS NOT excluded.eligible_since
            OR (excluded.progress_token IS NOT NULL AND supervision_checkpoints.progress_token IS NOT excluded.progress_token)''',
         (*key, observation['classification'], observation.get('reason_code'), _json(observation.get('evidence') or {}),
-         progress_token, now if progress_token is not None else None, observation.get('next_check_at'), now))
+         progress_token, (observation.get('progress_observed_at') or now) if progress_token is not None else None,
+         observation.get('next_check_at'), now, observation.get('eligible_since')))
 
 
 def _confirmed(conn, key, observation, active, now):

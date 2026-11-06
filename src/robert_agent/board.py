@@ -510,6 +510,21 @@ def list_board(
     }
 
 
+def _supervision_incidents(conn, tasks, work_item_id):
+    from robert_agent import supervision_store
+    if not supervision_store.has_schema(conn):
+        return []
+    task_ids = [task['task_id'] for task in tasks]
+    placeholders = ','.join('?' for _ in task_ids) or 'NULL'
+    rows = conn.execute(f"""SELECT incident_id,scope_id,rule_id,status,reason_code,severity,
+        first_observed_at,last_observed_at,next_check_at FROM supervision_incidents
+        WHERE (scope_type='task' AND scope_id IN ({placeholders})) OR
+        (scope_type='work_item_event' AND scope_id IN
+          (SELECT event_id FROM work_item_events WHERE work_item_id=?))
+        ORDER BY last_observed_at DESC LIMIT 50""", (*task_ids, work_item_id)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_work_item_detail(db_path, work_item_id):
     with closing(_connect(db_path)) as conn:
         row = conn.execute(
@@ -581,6 +596,7 @@ def get_work_item_detail(db_path, work_item_id):
             "completed_at": row["completed_at"],
             "canceled_at": row["canceled_at"],
             "tasks": tasks,
+            "supervision_incidents": _supervision_incidents(conn, tasks, work_item_id),
             "events": timeline["events"],
             "events_next_cursor": timeline["next_cursor"],
         }

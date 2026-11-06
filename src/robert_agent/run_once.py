@@ -41,7 +41,7 @@ from robert_agent import workflow_events
 from robert_agent.publication_lock import task_publication_lock
 from robert_agent import action_scope as result_scope
 from robert_agent.common import ControlDeadlineExceeded, emit, run_command
-from robert_agent import project_memory, runtime_knowledge, storage, usage, wakeup, work_items
+from robert_agent import project_memory, runtime_knowledge, storage, supervision_lineage, supervision_store, usage, wakeup, work_items
 from robert_agent.worker import heartbeat as command_heartbeat, snapshot as worker_snapshot
 
 
@@ -3466,6 +3466,14 @@ def _append_event_to_active_task(conn, event, relationship, run_now):
     return True
 
 
+def _enqueue_native_request(conn, store, repo, event, route, workers, admission, now):
+    lineage = supervision_lineage.github_key(event)
+    round_entry = store.enqueue(conn, repo, {**event, supervision_lineage.LINEAGE_FIELD: lineage}, route, workers)
+    supervision_lineage.record_disposition(conn, admission, disposition='queued_native_round', now=now,
+        target_type='vote_round' if store is vote_store else 'review_round', target_id=round_entry['round_id'],
+        lineage_key=lineage)
+
+
 def _runtime_context(db_path, repo, worktree_result=None):
     worktree_result = worktree_result or {}
     return {
@@ -4191,7 +4199,7 @@ def _prepare_github_retrigger_tasks(
     return prepared_workstreams
 
 
-def _resume_waiting_vote(conn, repo, event, run_now):
+def _resume_waiting_vote(conn, repo, event, run_now, admission=None):
     if (event.get('actor_login') not in repo.get('trusted_actors', []) or not event.get('mentions_dd')
             or not discover.bot_requests(event.get('body'), repo['github_account'])
             or event.get('authorization_status') not in {'accepted_context', 'authorized_trigger'}
@@ -4203,6 +4211,8 @@ def _resume_waiting_vote(conn, repo, event, run_now):
     if not row:
         return False
     if _event_has_terminal_trigger(conn, event['event_fingerprint']):
+        supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                reason_code='trigger_already_processed')
         return True  # Already-used replies cannot answer another question on polling.
     event_time = event.get('event_at')
     if not event_time:
@@ -4213,6 +4223,8 @@ def _resume_waiting_vote(conn, repo, event, run_now):
     try:
         # GitHub comment times have second precision; avoid a false rejection due to local microseconds.
         if not event_time or not question or _parse_time(event_time) < _parse_time(question[0]).replace(microsecond=0):
+            supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                    reason_code='reply_does_not_follow_question')
             return True
     except (ValueError, TypeError):
         return True
@@ -4221,6 +4233,8 @@ def _resume_waiting_vote(conn, repo, event, run_now):
         return False
     request = entry['request']
     if any(item.get('event_fingerprint') == event['event_fingerprint'] for item in request['event'].get('clarifications', [])):
+        supervision_lineage.record_disposition(conn, admission, disposition='queued_native_round', now=run_now,
+            target_type='vote_round', target_id=row[0], lineage_key=request['event'].get(supervision_lineage.LINEAGE_FIELD))
         return True
     request['event'].setdefault('clarifications', []).append(event)
     conn.execute("UPDATE tasks SET lifecycle='completed',updated_at=? WHERE task_id=?", (run_now, row[1]))
@@ -4231,6 +4245,8 @@ def _resume_waiting_vote(conn, repo, event, run_now):
                       request_json=json.dumps(request, ensure_ascii=False))
     conn.execute("INSERT OR IGNORE INTO task_events(task_id,event_id,relationship,created_at) VALUES (?,?,'consumed',?)",
                  (row[1], _event_id(event['event_fingerprint']), run_now))
+    supervision_lineage.record_disposition(conn, admission, disposition='queued_native_round', now=run_now,
+        target_type='vote_round', target_id=row[0], lineage_key=request['event'].get(supervision_lineage.LINEAGE_FIELD))
     return True
 
 
@@ -4327,6 +4343,7 @@ def _create_task_attempt_and_prompt(
     remediation_context = (
         (event.get("metadata") or {}).get("remediation") or {}
     )
+    selected_round = None
     if native_round_id:
         round_store = vote_store if route_result.get('native_vote_workers') else review_store
         selected_round = round_store.session(conn, round_id=native_round_id)
@@ -4344,6 +4361,20 @@ def _create_task_attempt_and_prompt(
             (existing_task_id, stream['workstream_id'])).fetchone()
         if not existing or not _execution_task_active(conn, existing_task_id, run_now):
             return None
+    if existing_task_id:
+        lineage_key = supervision_lineage.get_task_lineage(conn, existing_task_id)
+    elif selected_round:
+        lineage_key = selected_round['request']['event'].get(supervision_lineage.LINEAGE_FIELD)
+    elif new_request_event is not None:
+        lineage_key = supervision_lineage.github_key(new_request_event)
+    elif parent_task_id:
+        # A continuation of a legacy request stays unassigned; a parent link
+        # alone is not evidence that an old request has a valid recovery chain.
+        lineage_key = supervision_lineage.get_task_lineage(conn, parent_task_id)
+    elif remediation_context.get('episode_id'):
+        lineage_key = supervision_lineage.episode_key(remediation_context['episode_id'])
+    else:
+        lineage_key = supervision_lineage.github_key(event)
     if new_request_event is not None:
         # History linkage does not transfer ownership of the old execution.
         # Recheck after worktree I/O, which releases the SQLite writer lock.
@@ -4491,6 +4522,7 @@ def _create_task_attempt_and_prompt(
     )
     task_metadata = {
         **(_json_object(existing[0]) if existing else {}),
+        **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
         "review_input_policy": task["review_input_policy"],
         **({'refreshed_context': related_events} if existing else
            {'refreshed_context': refreshed_context} if refreshed_context else {}),
@@ -4546,7 +4578,8 @@ def _create_task_attempt_and_prompt(
                     or (parent and _json_object(parent[0]).get('recovered_execution_attention', {}).get('reason_code') == 'result_contract_cutover')):
                 recovery_key = retrigger_wakeup_id
         entry = (round_store.session(conn, round_id=native_round_id) if native_round_id
-                 else round_store.enqueue(conn, repo, event, route_result, workers, recovery_key=recovery_key))
+                 else round_store.enqueue(conn, repo, {**event, supervision_lineage.LINEAGE_FIELD: lineage_key},
+                                          route_result, workers, recovery_key=recovery_key))
         round_store.update(conn, entry["round_id"], task_id=task_id, status="queued", error=None)
     if blocked and event.get("task_kind", "human_request") == "human_request":
         conn.execute(
@@ -7721,8 +7754,13 @@ def _run_repo_pipeline(
         route_failures = []
         failed_workstreams = set()
 
+        track_admission = supervision_store.has_schema(conn)
         for event in decisions:
             source_id, event_id = _insert_source_and_event(conn, repo_id, event, run_now)
+            admission = None
+            if track_admission and supervision_lineage.is_driving_github_input(event):
+                # Retain acceptance before any preparation releases the writer.
+                admission = supervision_lineage.record_github_received(conn, event, event_id, repo_id, source_id, run_now)
             if (event.get("authorization_status") == "context_only"
                     and event.get("actor_login") != repo["github_account"]
                     and event.get("mentions_dd")):
@@ -7734,12 +7772,15 @@ def _run_repo_pipeline(
                     and event.get('actor_login') in repo.get('trusted_actors', [])
                     and event.get('intent') == 'vote'):
                 if conn.execute('SELECT 1 FROM task_events WHERE event_id=? LIMIT 1', (event_id,)).fetchone():
+                    supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                            reason_code='trigger_already_processed')
                     continue  # Never reinterpret an event that already drove or informed a task.
                 vote_route = _effective_route(config_result, repo, event)
                 if vote_route.get('native_vote_workers'):
-                    vote_store.enqueue(conn, repo, event, vote_route, vote_route['native_vote_workers'])
+                    _enqueue_native_request(conn, vote_store, repo, event, vote_route,
+                                            vote_route['native_vote_workers'], admission, run_now)
                     continue
-            if _resume_waiting_vote(conn, repo, event, run_now):
+            if _resume_waiting_vote(conn, repo, event, run_now, admission):
                 continue
             # New review requests are independent durable rounds. They never
             # become pending context that a still-running reviewer can consume.
@@ -7750,8 +7791,11 @@ def _run_repo_pipeline(
                 review_route = _effective_route(config_result, repo, event)
                 if review_route.get("native_review_workers"):
                     if conn.execute("SELECT 1 FROM task_events WHERE event_id=? LIMIT 1", (event_id,)).fetchone():
+                        supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                                reason_code='trigger_already_processed')
                         continue
-                    review_store.enqueue(conn, repo, event, review_route, review_route["native_review_workers"])
+                    _enqueue_native_request(conn, review_store, repo, event, review_route,
+                                            review_route['native_review_workers'], admission, run_now)
                     continue
             workflow_fact = _apply_workflow_event_fact(conn, event, run_now)
             if workflow_fact:
@@ -7769,6 +7813,8 @@ def _run_repo_pipeline(
                 remediation_episode_id,
                 run_now,
             ):
+                supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                        reason_code='remediation_episode_inactive')
                 continue
             related_workstreams = {
                 event["workstream_id"],
@@ -7778,6 +7824,8 @@ def _run_repo_pipeline(
                 failed_workstreams.update(related_workstreams)
                 continue
             if _should_skip_terminal_trigger(conn, event):
+                supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                        reason_code='trigger_already_processed')
                 continue
             if _is_driving_context_event(event):
                 waiting_task = _waiting_task_state(conn, event["workstream_id"])
@@ -7858,6 +7906,7 @@ def _run_repo_pipeline(
                     )
                     if task_info is None:
                         continue
+                    supervision_lineage.record_task_disposition(conn, admission, task_info['task_id'], run_now)
                     waiting_vote = vote_store.session(conn, task_id=waiting_task['task_id'])
                     if waiting_vote and waiting_vote['status'] == 'waiting_for_user':
                         vote_store.update(conn, waiting_vote['round_id'], status='superseded',
@@ -7878,6 +7927,9 @@ def _run_repo_pipeline(
                 if event["workstream_id"] in active_workstreams:
                     appended = _append_event_to_active_task(conn, event, "context", run_now)
                     if appended:
+                        if admission is not None:
+                            supervision_lineage.record_task_disposition(conn, admission,
+                                _active_task_id(conn, event['workstream_id']), run_now, pending=True)
                         try:
                             refreshed_prompt = _refresh_prepared_task(
                                 conn,
@@ -7917,6 +7969,8 @@ def _run_repo_pipeline(
                     run_now,
                 ):
                     summary["current_state_closed_skip_count"] += 1
+                    supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                            reason_code='source_closed')
                     continue
                 retry_parent_id = _latest_task_id(conn, event["workstream_id"])
                 if retry_parent_id and not _github_followup_allows_new_subject(conn, repo, event, retry_parent_id):
@@ -7977,6 +8031,7 @@ def _run_repo_pipeline(
                 )
                 if task_info is None:
                     continue
+                supervision_lineage.record_task_disposition(conn, admission, task_info['task_id'], run_now)
                 _queue_dispatch(
                     dispatch_queue,
                     task_info,
@@ -7996,7 +8051,10 @@ def _run_repo_pipeline(
                 continue
             stream = workstream.plan_event(event, active_workstreams=active_workstreams)
             if stream["action"] == "append_pending_event":
-                _append_event_to_active_task(conn, event, "pending", run_now)
+                appended = _append_event_to_active_task(conn, event, "pending", run_now)
+                if appended and admission is not None:
+                    supervision_lineage.record_task_disposition(conn, admission,
+                        _active_task_id(conn, event['workstream_id']), run_now, pending=True)
                 continue
             if _record_current_state_closed_source_if_needed(
                 conn,
@@ -8007,6 +8065,8 @@ def _run_repo_pipeline(
                 run_now,
             ):
                 summary["current_state_closed_skip_count"] += 1
+                supervision_lineage.record_disposition(conn, admission, disposition='explicitly_ignored', now=run_now,
+                                                        reason_code='source_closed')
                 continue
             route_result = _effective_route(
                 config_result,
@@ -8047,6 +8107,7 @@ def _run_repo_pipeline(
             )
             if task_info is None:
                 continue
+            supervision_lineage.record_task_disposition(conn, admission, task_info['task_id'], run_now)
             _queue_dispatch(
                 dispatch_queue,
                 task_info,

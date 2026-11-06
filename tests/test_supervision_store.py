@@ -89,6 +89,17 @@ class SupervisionStoreTests(unittest.TestCase):
         self.apply(observation(progress_token='audited:result-one'), now=LATER)
         self.assertEqual(supervision_store.get_checkpoint(self.conn, *key)['last_progress_at'], LATER)
 
+    def test_wait_resets_eligibility_but_heartbeat_does_not_reset_progress(self):
+        self.apply(observation(eligible_since=NOW, progress_observed_at=NOW))
+        self.apply(observation(eligible_since=None, classification='expected_wait', progress_token=None), now=LATER)
+        checkpoint = supervision_store.get_checkpoint(self.conn, 'task', 'task-one', 'result_not_consumed')
+        self.assertIsNone(checkpoint['eligible_since'])
+        self.assertEqual(checkpoint['last_progress_at'], NOW)
+        self.apply(observation(eligible_since=LATER), now=LATER)
+        checkpoint = supervision_store.get_checkpoint(self.conn, 'task', 'task-one', 'result_not_consumed')
+        self.assertEqual(checkpoint['eligible_since'], LATER)
+        self.assertEqual(checkpoint['last_progress_at'], NOW)
+
     def test_upgrade_preserves_business_state_and_supervision_history(self):
         self.conn.execute("INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('repo','example/r','bot','main','/repo','/trees')")
         self.conn.execute("INSERT INTO workstreams(workstream_id,repo_id,lifecycle,created_at,updated_at) VALUES ('workstream','repo','active',?,?)", (NOW, NOW))

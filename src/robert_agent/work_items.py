@@ -10,7 +10,7 @@ import sqlite3
 import subprocess
 from uuid import uuid4
 
-from robert_agent import wakeup, wakeup_notifier, work_item_control
+from robert_agent import supervision_lineage, wakeup, wakeup_notifier, work_item_control
 
 
 MAX_TITLE = 200
@@ -523,6 +523,7 @@ def _create_task(
     trigger_event_id=None,
     now,
     workstream_id=None,
+    lineage_key=None,
 ):
     workstream_id = workstream_id or item['workstream_id']
     task_id = f"task-{uuid4().hex}"
@@ -537,6 +538,8 @@ def _create_task(
     }
     if trigger_event_id:
         metadata["trigger_work_item_event_id"] = trigger_event_id
+    if lineage_key:
+        metadata[supervision_lineage.LINEAGE_FIELD] = lineage_key
     conn.execute(
         """
         INSERT INTO tasks(
@@ -784,9 +787,10 @@ def _activate(conn, item, context, idempotency_key, now, *, initial_version=None
         (workstream_id, now, now, version, item["work_item_id"]),
     )
     item = _load_item(conn, item["work_item_id"])
-    task_id = _create_task(conn, item, now=now)
+    task_id = _create_task(conn, item, now=now,
+                           lineage_key=supervision_lineage.operator_key(item['work_item_id'], idempotency_key))
     result = {"ok": True, "command": "start", "item": _item_from_row(_load_item(conn, item["work_item_id"])), "task_id": task_id}
-    _insert_event(
+    activation = _insert_event(
         conn,
         item["work_item_id"],
         event_type="activated",
@@ -796,6 +800,7 @@ def _activate(conn, item, context, idempotency_key, now, *, initial_version=None
         metadata={"command_result": result, "task_id": task_id},
         now=now,
     )
+    supervision_lineage.record_operator_admission(conn, item, activation, task_id, now)
     _insert_event(
         conn,
         item["work_item_id"],
@@ -1032,9 +1037,10 @@ def execute_command(
                 retry = {'ok': True, 'command': command, 'item': _item_from_row(_load_item(conn, work_item_id)),
                          'task_id': audit_task['task_id'], 'result_id': audit_result_id,
                          'resolved_event_id': unresolved['event_id'] if unresolved else None}
-                _insert_event(conn, work_item_id, event_type='retry_requested', actor_kind=context.actor_kind,
+                retry_event = _insert_event(conn, work_item_id, event_type='retry_requested', actor_kind=context.actor_kind,
                     actor_identity=context.actor_identity, idempotency_key=idempotency_key,
                     resolves_event_id=retry['resolved_event_id'], metadata={'command_result': retry}, now=now)
+                supervision_lineage.record_operator_admission(conn, item, retry_event, audit_task['task_id'], now)
                 return _commit_result(conn, db_path, retry, notifier)
             if facts["running"] and command not in {"cancel", "approve"}:
                 raise WorkItemConflictError("An attempt is still running; stop it before starting another attempt.")
@@ -1144,6 +1150,7 @@ def execute_command(
                     parent_task_id=parent_task_id,
                     trigger_event_id=idempotency_key,
                     now=now,
+                    lineage_key=supervision_lineage.operator_key(work_item_id, idempotency_key),
                 )
                 resolved_event_id = None
             else:
@@ -1258,6 +1265,7 @@ def execute_command(
                         trigger_event_id=idempotency_key,
                         now=now,
                         workstream_id=parent['workstream_id'] if question_task_id else None,
+                        lineage_key=supervision_lineage.get_task_lineage(conn, parent_task_id),
                     )
                 resolved_event_id = unresolved["event_id"] if unresolved else None
 
@@ -1271,7 +1279,7 @@ def execute_command(
             }
             if abandon_review_run_ids:
                 result['abandoned_review_run_ids'] = abandon_review_run_ids
-            _insert_event(
+            command_event = _insert_event(
                 conn,
                 work_item_id,
                 event_type=_command_event_type(command),
@@ -1283,6 +1291,7 @@ def execute_command(
                 metadata={"command_result": result, "task_id": task_id},
                 now=now,
             )
+            supervision_lineage.record_operator_admission(conn, item, command_event, task_id, now)
             return _commit_result(conn, db_path, result, notifier)
         except Exception:
             conn.rollback()

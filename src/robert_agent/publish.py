@@ -902,11 +902,36 @@ def _publish_action(
     }
 
 
+def _delivery_receipt(conn, action, result, now):
+    """Bind the publisher's confirmation to the audited action, without inventing evidence."""
+    scope = _trusted_action_scope(conn, action) or {}
+    response = result.get("response") or {}
+    reconciliation = response.get("reconciliation") or {}
+    metadata = _decode_json(action.get("metadata_json"))
+    marker = _hidden_marker(metadata.get("body", ""),
+                            WORKSTREAM_MARKER_RE if action["action_type"] == "open_pr" else COMMENT_MARKER_RE)
+    return {
+        "schema_version": 1,
+        "action_id": action["action_id"], "result_id": action.get("result_id"),
+        "task_id": action.get("task_id"), "action_type": action["action_type"],
+        "scope": scope,
+        "external_id": result.get("external_id") or reconciliation.get("external_id"),
+        "target_url": result.get("target_url") or reconciliation.get("target_url") or action.get("target_url"),
+        "result_head_sha": result.get("result_head_sha") or reconciliation.get("source_sha") or response.get("head_sha"),
+        "expected_marker": marker,
+        "confirmation_method": ("remote_reconciliation" if reconciliation else
+                                "remote_deduplication" if result.get("deduplicated") else "publisher_acknowledgement"),
+        "confirmed_at": now,
+    }
+
+
 def _mark_published(conn, action, result, now, intent=None):
     review_publish.record_outcome(conn, action, "published", now)
     vote_publish.record_outcome(conn, action, "published", now)
     metadata = _decode_json(action["metadata_json"])
+    receipt = _delivery_receipt(conn, action, result, now)
     metadata["publish"] = {
+        "receipt": receipt,
         "status": "published",
         "published_at": now,
         "response": result.get("response", {}),
@@ -942,8 +967,11 @@ def _mark_published(conn, action, result, now, intent=None):
                 "published",
                 now,
                 remote_evidence={
+                    **_decode_json(intent.get("remote_evidence_json")),
                     "status": "confirmed_effect",
                     "reason_code": "publisher_success",
+                    "reconciliation": (result.get("response") or {}).get("reconciliation", {}),
+                    "receipt": receipt,
                 },
             )
 

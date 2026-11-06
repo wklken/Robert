@@ -79,12 +79,27 @@ class SupervisionObservationTests(unittest.TestCase):
 
     def test_bound_publication_receipt_is_positive_after_confirmed_action(self):
         self.task('a')
+        self.execute("UPDATE tasks SET lifecycle='completed',expected_output='comment_analysis' WHERE task_id='a'")
         self.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('attempt','a',1,'completed')")
-        self.execute("INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES('result','a','attempt','comment_analysis',?,'{\"audit\":{\"status\":\"accepted\"}}')", (OLD,))
-        self.execute("INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,created_at,external_id,metadata_json) VALUES('action','result','a','comment','accepted','published',?,'external',json_object('publish',json_object('status','published','published_at',?)))", (OLD, OLD))
-        self.execute("INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,status,created_at,updated_at,remote_evidence_json) VALUES('intent','action','key','fingerprint','published',?,?,'{\"status\":\"confirmed_effect\"}')", (OLD, OLD))
+        url = 'https://github.com/example/repo/issues/1'
+        self.execute("""INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json)
+            VALUES('result','a','attempt','comment_analysis',?,json_object(
+                'audit',json_object('status','accepted','action_scope',json_object('repo','example/repo')),
+                'normalized_payload',json_object('planned_github_actions',json_array(json_object('type','comment')))))""", (OLD,))
+        receipt = ('{"schema_version":1,"action_id":"action","result_id":"result","task_id":"a",'
+                   '"action_type":"comment","scope":{"repo":"example/repo"},"external_id":"external",'
+                   f'"target_url":"{url}","confirmed_at":"{OLD}","confirmation_method":"publisher_acknowledgement"}}')
+        self.execute("""INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,created_at,external_id,target_url,metadata_json)
+            VALUES('action','result','a','comment','accepted','published',?,'external',?,json_object('type','comment',
+            'publish',json_object('status','published','published_at',?,'receipt',json(?))))""", (OLD, url, OLD, receipt))
+        self.execute("""INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,status,created_at,updated_at,remote_evidence_json)
+            VALUES('intent','action','key','fingerprint','published',?,?,json_object('status','confirmed_effect','receipt',json(?)))""", (OLD, OLD, receipt))
         publication = next(row for row in self.observations() if row['rule_id'] == 'publication_stalled')
         self.assertEqual(publication['positive_evidence']['result_id'], 'result')
+        self.execute("DELETE FROM github_actions WHERE action_id='action'")
+        inconsistent = next(row for row in self.observations() if row['rule_id'] == 'delivery_inconsistent')
+        self.assertEqual(inconsistent['classification'], 'confirmed')
+        self.assertEqual(inconsistent['reason_code'], 'planned_actions_do_not_match')
 
     def test_latched_lane_stays_failed_until_success_in_a_replacement_daemon(self):
         self.execute("INSERT INTO daemon_runs(daemon_run_id,owner_id,config_path,started_at,status) VALUES('run','run','/tmp/config',?,'running')", (OLD,))
