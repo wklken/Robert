@@ -4,7 +4,7 @@ import shutil
 import subprocess
 
 from robert_agent import validate_config, result_cutover
-from robert_agent.route_config import (
+from robert_agent.configuration.routes import (
     load_route_policies,
     resolve_route_config,
 )

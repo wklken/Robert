@@ -130,8 +130,8 @@ class VotePoolTests(unittest.TestCase):
             run = vote_store.new_run(conn, self.driver.round_id, 'vote', 'codex', self.driver.attempt_id,
                                      self.driver.manifest['artifact_root'], 'hash')
             vote_store.update_run(conn, run['run_id'], status='starting', slot_reserved=1)
-        from robert_agent.model_execution import ReviewStopped
-        with self.assertRaises(ReviewStopped):
+        from robert_agent.execution.stages import StageStopped
+        with self.assertRaises(StageStopped):
             self.fixture.driver().run()
         with vote_store.connect(self.fixture.db) as conn:
             self.assertEqual(model_pool.status(conn)['in_use'], 1)

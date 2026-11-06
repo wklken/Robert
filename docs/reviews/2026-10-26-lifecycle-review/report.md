@@ -119,7 +119,7 @@ check_active 同时读取所有权和更新父 attempt 心跳，每个模型等�
 
 原ID：B/I/4。
 
-控制代码：[src/robert_agent/model_execution.py:136](../../../src/robert_agent/model_execution.py#L136)；[src/robert_agent/review_store.py:81](../../../src/robert_agent/review_store.py#L81)；[src/robert_agent/review_coordinator.py:114](../../../src/robert_agent/review_coordinator.py#L114)。
+控制代码：[src/robert_agent/model_execution.py:136](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L136)；[src/robert_agent/review_store.py:81](../../../src/robert_agent/review_store.py#L81)；[src/robert_agent/review_coordinator.py:114](../../../src/robert_agent/review_coordinator.py#L114)。
 
 隔离证据：[robert-verify-agent-lifecycle-results.json](evidence/robert-verify-agent-lifecycle-results.json)。
 
@@ -281,7 +281,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：B/III/3。
 
-控制代码：[src/robert_agent/model_execution.py:136](../../../src/robert_agent/model_execution.py#L136)；[src/robert_agent/model_execution.py:222](../../../src/robert_agent/model_execution.py#L222)；[src/robert_agent/model_execution.py:319](../../../src/robert_agent/model_execution.py#L319)。
+控制代码：[src/robert_agent/model_execution.py:136](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L136)；[src/robert_agent/model_execution.py:222](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L222)；[src/robert_agent/model_execution.py:319](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L319)。
 
 <a id="r17"></a>
 ### R17 · 优化 · 历史规模放大进度统计、模型池与部分恢复查询
@@ -305,7 +305,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：A/PERFORMANCE-2, B/LATENCY-9, B/III/4。
 
-控制代码：[src/robert_agent/review_workspace.py:161](../../../src/robert_agent/review_workspace.py#L161)；[src/robert_agent/review_files.py:20](../../../src/robert_agent/review_files.py#L20)；[src/robert_agent/model_execution.py:358](../../../src/robert_agent/model_execution.py#L358)。
+控制代码：[src/robert_agent/review_workspace.py:161](../../../src/robert_agent/review_workspace.py#L161)；[src/robert_agent/review_files.py:20](../../../src/robert_agent/review_files.py#L20)；[src/robert_agent/model_execution.py:358](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L358)。
 
 隔离证据：[robert-review-lifecycle-native-cost.out](evidence/robert-review-lifecycle-native-cost.out)、[reused-evidence-code-hashes.json](evidence/reused-evidence-code-hashes.json)。
 
@@ -412,7 +412,7 @@ live poll 对通知/source/PR/CI 串行采集，daemon 同步等待 child 返回
 
 原ID：B/LATENCY-5。
 
-控制代码：[src/robert_agent/run_once.py:936](../../../src/robert_agent/run_once.py#L936)；[src/robert_agent/run_once.py:963](../../../src/robert_agent/run_once.py#L963)；[src/robert_agent/model_execution.py:136](../../../src/robert_agent/model_execution.py#L136)。
+控制代码：[src/robert_agent/run_once.py:936](../../../src/robert_agent/run_once.py#L936)；[src/robert_agent/run_once.py:963](../../../src/robert_agent/run_once.py#L963)；[src/robert_agent/model_execution.py:136](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L136)。
 
 <a id="u01"></a>
 ### U01 · 待补证 · pending fact 的无限空转风险尚缺常规生产触发证据

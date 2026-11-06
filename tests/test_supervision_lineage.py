@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from tests import test_github_board_recovery, test_review_coordinator, test_run_once
 from robert_agent import review_store, run_once, supervision_lineage, work_items
+from robert_agent.execution import ownership as execution_ownership
+from robert_agent.work.application import lifecycle as work_application_lifecycle
 
 
 def _receipt(conn, scope_type, event_id):
@@ -70,7 +72,7 @@ class SupervisionLineageTests(unittest.TestCase):
             conn.execute("UPDATE tasks SET lifecycle='failed'")
             conn.execute("UPDATE attempts SET status='failed'")
             conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL")
-            run_once._close_task_binding_if_terminal(conn, parent, run_once._now())
+            execution_ownership.close_terminal_task(conn, parent, run_once._now())
         events = json.loads(fixture.fixture_path.read_text())['events']
         fixture.fixture_path.write_text(json.dumps({'events': [{**events[0], 'id': 'next',
             'body': '@robert-bot please investigate the next issue', 'intent': 'analysis'}]}))
@@ -125,7 +127,7 @@ class SupervisionLineageTests(unittest.TestCase):
             lineage = _task_lineage(conn, parent)
             now = run_once._now()
             review_store.update(conn, round_entry['round_id'], status='superseded')
-            run_once._finalize_failed_task(conn, parent, round_entry['workstream_id'], now, {'status': 'failed_worker_process_exited'})
+            work_application_lifecycle.finalize_failed_task(conn, parent, round_entry['workstream_id'], now, {'status': 'failed_worker_process_exited'})
             # The dry-run launcher recorded synthetic dispatch metadata; it started no worker.
             conn.execute("""UPDATE attempts SET status='failed',finished_at=?,metadata_json=json_remove(metadata_json,'$.dispatch')
                 WHERE attempt_id=?""", (now, attempt_id))

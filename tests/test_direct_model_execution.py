@@ -14,6 +14,27 @@ from robert_agent import review_coordinator, vote_coordinator
 
 
 class DirectModelExecutionTests(unittest.TestCase):
+    def test_importing_stage_executor_does_not_load_workflow_implementations(self):
+        script = """
+import sys
+from robert_agent.execution import stages as model_execution
+
+workflow_modules = {
+    'native_rounds',
+    'review_coordinator', 'review_files', 'review_store', 'review_workspace',
+    'vote_coordinator', 'vote_files', 'vote_store', 'vote_workspace',
+}
+loaded = workflow_modules & {name.removeprefix('robert_agent.') for name in sys.modules}
+assert not loaded, f'stage executor loaded workflows: {sorted(loaded)}'
+"""
+        result = subprocess.run(
+            [sys.executable, '-B', '-c', script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def no_system_sandbox(self):
         original = shutil.which
 

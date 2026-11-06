@@ -1,4 +1,5 @@
 """Single-protocol guard and isolation of incompatible task evidence."""
+from robert_agent.adapters.processes import attempt as attempt_process
 from contextlib import closing
 import json
 from pathlib import Path
@@ -94,7 +95,7 @@ def _prepare(db_path, *, now=None, isolated_only=False):
     This never converts an old result or attests that a live worker stopped.
     Cancellation and replacement remain explicit operator actions.
     """
-    from robert_agent import execution_store, native_rounds, run_once, supervise, work_items
+    from robert_agent import execution_store, native_rounds, supervise, work_items
     from robert_agent.publication_lock import task_publication_lock
 
     now = now or datetime.now(timezone.utc).isoformat()
@@ -121,7 +122,7 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                 # capacity whenever identity or descendant cleanup is uncertain.
                 for attempt in snapshots:
                     metadata = json.loads(attempt['metadata_json'] or '{}')
-                    if run_once._dispatch_process_status(metadata)['status'] == 'dead':
+                    if attempt_process.dispatch_status(metadata)['status'] == 'dead':
                         stopped.append(attempt)
                 native_exit = native_rounds.observe_exit(conn, task_id)
                 with conn:

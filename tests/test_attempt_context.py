@@ -1,4 +1,5 @@
 """Attempt input snapshots and deterministic prompt context contracts."""
+from robert_agent.workflows import routing as workflow_routing
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -55,7 +56,7 @@ class AttemptContextTests(unittest.TestCase):
             'ok': True, 'worktree_path': str(self.root / 'worktree'), 'branch_name': 'fix'})
         self.prepare_mock = self.prepare.start()
         self.addCleanup(self.prepare.stop)
-        self.effective = patch.object(run_once, '_effective_route', return_value=self.route)
+        self.effective = patch.object(workflow_routing, "effective_route", return_value=self.route)
         self.effective.start()
         self.addCleanup(self.effective.stop)
 

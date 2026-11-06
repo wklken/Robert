@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+from robert_agent.delivery import policies
 from robert_agent.common import emit
 from robert_agent import redaction, review_publish, vote_publish
 
@@ -31,15 +32,7 @@ EXPECTED_ACTIONS_FOR_OUTPUT = {
     "multi_agent_vote_report": {"comment"},
     "waiting_for_user": {"comment"},
 }
-VALID_OPERATOR_QUESTION_KINDS = {
-    "clarification",
-    "scope_decision",
-    "completion_acceptance",
-}
 REVIEW_EVALUATION_OUTPUTS = {"update_existing_pr", "review_comment"}
-VALID_REVIEW_VERDICTS = {"correct", "partially_correct", "incorrect", "unverified"}
-VALID_REVIEW_ACTIONS = {"implement", "skip", "comment", "clarify"}
-IMPLEMENTABLE_VERDICTS = {"correct", "partially_correct"}
 REMEDIATION_TASK_KINDS = {"ci_remediation", "merge_conflict_remediation"}
 VALID_VERIFICATION_STATUSES = {"passed", "failed", "skipped"}
 CLASSIFICATION_RECOMMENDED_ROUTES = {
@@ -371,11 +364,11 @@ def _audit_review_point_evaluation(result, actual_types, input_policy="required"
         for field in ("summary", "verdict", "reasoning", "action"):
             if not isinstance(entry.get(field), str) or not entry.get(field):
                 return ["invalid_review_point_evaluation"]
-        if entry["verdict"] not in VALID_REVIEW_VERDICTS:
+        if entry["verdict"] not in policies.VALID_REVIEW_VERDICTS:
             return ["invalid_review_point_evaluation"]
-        if entry["action"] not in VALID_REVIEW_ACTIONS:
+        if entry["action"] not in policies.VALID_REVIEW_ACTIONS:
             return ["invalid_review_point_evaluation"]
-        if entry["action"] == "implement" and entry["verdict"] not in IMPLEMENTABLE_VERDICTS:
+        if entry["action"] == "implement" and entry["verdict"] not in policies.IMPLEMENTABLE_VERDICTS:
             return ["invalid_review_point_evaluation"]
     if (output_type == "update_existing_pr" and "push_existing_pr" in actual_types
             and not (input_policy == "classify" and result.get("review_input_kind") == "mixed")):
@@ -560,28 +553,6 @@ def _audit_public_text(actions):
     return needs_redaction
 
 
-def _audit_operator_question(result):
-    question = result.get("operator_question")
-    if not isinstance(question, dict):
-        return "waiting_for_user requires operator_question"
-    if question.get("kind") not in VALID_OPERATOR_QUESTION_KINDS:
-        return "operator_question.kind is invalid"
-    summary = question.get("summary")
-    if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:
-        return "operator_question.summary is invalid"
-    choices = question.get("choices", [])
-    if not isinstance(choices, list) or len(choices) > 5:
-        return "operator_question.choices is invalid"
-    for choice in choices:
-        if not isinstance(choice, dict):
-            return "operator_question choices must be objects"
-        if not isinstance(choice.get("id"), str) or not choice["id"]:
-            return "operator_question choice id is required"
-        if not isinstance(choice.get("label"), str) or not choice["label"]:
-            return "operator_question choice label is required"
-    return None
-
-
 def audit_result(
     result,
     allowed_github_actions,
@@ -681,7 +652,7 @@ def audit_result(
             "safe_error": f"expected_output {expected_output} does not match result output_type {output_type}",
         }
     if waiting_alternate:
-        question_error = _audit_operator_question(result)
+        question_error = policies.validate_operator_question(result)
         if question_error:
             return {
                 "ok": False,

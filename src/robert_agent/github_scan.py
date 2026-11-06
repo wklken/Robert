@@ -1,4 +1,6 @@
 """Remote observation producer and durable handoff to the local control plane."""
+from robert_agent.adapters.github import client as github_client
+from robert_agent.adapters.github import sources as github_sources
 import argparse
 from datetime import datetime, timezone
 from contextlib import closing
@@ -19,10 +21,10 @@ MAX_BATCH_RETRIES = 5
 
 
 def review_allowlist(config, repo):
-    from robert_agent import route_config, run_once
+    from robert_agent.configuration import routes as route_config
     if config is None:
         return []
-    settings = route_config.resolve_route_config(config, repo, run_once.ROUTE_POLICIES['review-pr']).get('multi_agent_review', {})
+    settings = route_config.resolve_route_config(config, repo, route_config.ROUTE_POLICIES['review-pr']).get('multi_agent_review', {})
     return sorted(settings.get('author_allowlist') or []) if settings.get('enabled') and len(settings.get('workers', [])) > 1 else []
 
 
@@ -61,21 +63,13 @@ def refresh_pending_events(events, pending, covered, repo):
     return list(merged.values())
 
 
-def command_key(args):
-    args = list(args)
-    if '--hostname' in args:
-        index = args.index('--hostname')
-        del args[index:index + 2]
-    return json.dumps(args)
-
-
 class RecordingRunner:
     def __init__(self, runner):
         self.runner = runner
         self.responses = {}
 
     def __call__(self, args, **kwargs):
-        key = command_key(args)
+        key = github_client.command_key(args)
         try:
             response = self.runner(args, **kwargs)
         except Exception:
@@ -95,7 +89,7 @@ class ReplayRunner:
         self.responses = dict(responses)
 
     def __call__(self, args, **kwargs):
-        key = command_key(args)
+        key = github_client.command_key(args)
         if key not in self.responses or self.responses[key] is None:
             if kwargs.get('check'):
                 raise subprocess.CalledProcessError(1, args, '', 'remote observation unavailable')
@@ -145,7 +139,6 @@ def next_batch(db_path, repo_id, *, now=None, context=None):
                              (repo_id, (time.time() if now is None else now) - 3600)).fetchall()
     return {**dict(row), 'raw_events': json.loads(row['raw_events_json']),
             'responses': dict(reads)}
-
 
 
 def has_pending(conn, repo_ids, *, now=None, contexts=None):
@@ -218,7 +211,7 @@ def finish_batch(db_path, batch_id, *, success, now=None, failure_reason="local_
 
 
 def _budget(session, config):
-    payload = discover._run_json(['gh', 'api', 'rate_limit'], runner=session)
+    payload = github_client.read_json(['gh', 'api', 'rate_limit'], runner=session)
     resources = payload.get('resources') or {}
     core = resources.get('core') or {}
     search = resources.get('search') or {}
@@ -230,18 +223,19 @@ def _budget(session, config):
 
 
 def _scan_repo(config, repo, session, hints):
-    from robert_agent import run_once
+    from robert_agent.work import queries as work_queries
+    from robert_agent.work import repositories as work_repositories
     db_path = config['db_path']
     recorded = RecordingRunner(session)
     with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
-        repo_id = run_once._upsert_repo(conn, repo)
-        known = run_once._load_known_workstreams(conn, repo_id)
+        repo_id = work_repositories.upsert_repo(conn, repo)
+        known = work_queries.load_known_workstreams(conn, repo_id)
         health_sources = set(conn.execute('''SELECT gs.source_type,gs.number FROM workstreams w
             JOIN github_sources gs ON gs.source_id=w.primary_source_id
             WHERE w.repo_id=? AND w.origin_workstream_id IS NOT NULL
               AND gs.source_type='pull_request' AND gs.state='open' ''', (repo_id,)).fetchall())
         sources = list(dict.fromkeys((row[4], row[5], (row[4], row[5]) in health_sources)
-                                    for row in run_once._remote_source_rows(conn, repo_id)))
+                                    for row in work_queries.remote_source_rows(conn, repo_id)))
         pending_rows = conn.execute('SELECT batch_id,context_digest,raw_events_json,retry_at FROM github_scan_batches WHERE repo_id=? AND completed_at IS NULL AND attention_reason IS NULL', (repo_id,)).fetchall()
         pending = [(row[2],) for row in pending_rows]
         # A successful batch is not proof that every driving event created a
@@ -275,7 +269,7 @@ def _scan_repo(config, repo, session, hints):
     context = context_digest(repo, known, config=config)
     try:
         for source_type, number, health_candidate in sources:
-            remote_states[(source_type, number)] = run_once._remote_source_state(repo['full_name'], source_type, number, recorded)
+            remote_states[(source_type, number)] = github_sources.read_source_state(repo['full_name'], source_type, number, recorded)
             automation = repo.get('pr_automation') or {}
             if health_candidate and any((automation.get(k) or {}).get('enabled') for k in ('ci', 'conflict')):
                 snapshot = pr_health.fetch_pr_snapshot(repo['full_name'], number, runner=recorded)
@@ -306,7 +300,7 @@ def _scan_repo(config, repo, session, hints):
         for raw in [*events, *(raw for (encoded,) in pending for raw in json.loads(encoded))]:
             source = (raw.get('source_type', 'issue'), raw['number'])
             if source not in remote_states:
-                remote_states[source] = run_once._remote_source_state(repo['full_name'], *source, recorded)
+                remote_states[source] = github_sources.read_source_state(repo['full_name'], *source, recorded)
         incomplete = {(raw.get('source_type', 'issue'), raw['number']) for raw in events
                       if raw.get('authorization_lookup_complete') is False}
         covered = {source for source, state in remote_states.items()

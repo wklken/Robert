@@ -9,6 +9,8 @@ import time
 from robert_agent.common import emit
 from robert_agent import storage, wakeup, execution_store, retry_policy, supervise, pending_handoff
 from robert_agent import run_once as run_once_module
+from robert_agent.adapters.processes import attempt as attempt_process
+from robert_agent.work import queries as work_queries
 from robert_agent import validate_config
 
 
@@ -127,7 +129,7 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             global_timeout_seconds=config.get('hard_timeout_seconds', 2700),
             hard_timeout_seconds=timeout,
         )
-        process = run_once_module._dispatch_process_status(metadata)
+        process = attempt_process.dispatch_status(metadata)
         if not received_result and process['status'] == 'dead' and not run_once_module._inspection_due(metadata.get('inspection_retry', {}), now):
             continue
         if process['status'] != 'alive_same' or status.get('terminate'):
@@ -194,7 +196,7 @@ def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=
             for repo in config_result['repos']:
                 row = conn.execute('SELECT repo_id FROM repos WHERE full_name=?', (repo['full_name'],)).fetchone()
                 if row and (not repo_ids or row[0] in repo_ids):
-                    known = run_once_module._load_known_workstreams(conn, row[0])
+                    known = work_queries.load_known_workstreams(conn, row[0])
                     contexts[row[0]] = github_scan.context_digest(repo, known, config=config_result)
         scoped = repo_ids or [row[0] for row in conn.execute('SELECT repo_id FROM repos')]
         when = run_once_module._parse_time(now).timestamp() if now is not None else None

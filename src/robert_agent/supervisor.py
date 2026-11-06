@@ -16,7 +16,8 @@ import tempfile
 import threading
 import time
 
-from robert_agent import notify, redaction, supervision_actions, supervision_config, supervision_diagnose, supervision_observe, supervision_store
+from robert_agent import notify, redaction, supervision_actions, supervision_diagnose, supervision_observe, supervision_store
+from robert_agent.configuration import supervision as supervision_config
 
 
 def utc_now():

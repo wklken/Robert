@@ -1,3 +1,4 @@
+from robert_agent.adapters.processes import attempt as attempt_process
 from contextlib import closing
 from datetime import datetime, timezone
 import json
@@ -58,7 +59,7 @@ class TimeoutIsolationTests(unittest.TestCase):
             events = json.loads(fixture.fixture_path.read_text())['events']
             events.append({**events[0], 'id': 'independent-comment', 'number': 124})
             fixture.fixture_path.write_text(json.dumps({'events': events}))
-            with mock.patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}), \
+            with mock.patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}), \
                     mock.patch.object(run_once, '_run_inspection_command', side_effect=subprocess.TimeoutExpired(['git', 'status'], 5)):
                 outcome = run_once.run_once(fixture.config_path, fixture_path=fixture.fixture_path,
                                             dry_run=True, skip_external=True)

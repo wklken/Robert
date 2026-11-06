@@ -1,3 +1,4 @@
+from robert_agent.adapters.processes import attempt as attempt_process
 from contextlib import closing
 import json
 from pathlib import Path
@@ -6,6 +7,7 @@ import unittest
 from unittest import mock
 
 from robert_agent import execution_store, loop_engine, route, run_once, workstream
+from robert_agent.work.application import lifecycle as work_application_lifecycle
 from tests import test_pr_remediation_integration, test_run_once
 
 
@@ -74,7 +76,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
         }
         with (
             mock.patch.object(
-                run_once, "_dispatch_process_status", return_value={"status": "dead"}
+                attempt_process, "dispatch_status", return_value={"status": "dead"}
             ),
             mock.patch.object(
                 run_once,
@@ -103,7 +105,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
         evidence["previous_attempt_id"] = latest
         with (
             mock.patch.object(
-                run_once, "_dispatch_process_status", return_value={"status": "dead"}
+                attempt_process, "dispatch_status", return_value={"status": "dead"}
             ),
             mock.patch.object(
                 run_once,
@@ -129,7 +131,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             self.fail_timeout(conn, "2026-10-24T00:00:00+00:00")
         with (
             mock.patch.object(
-                run_once, "_dispatch_process_status", return_value={"status": "dead"}
+                attempt_process, "dispatch_status", return_value={"status": "dead"}
             ),
             mock.patch.object(
                 run_once,
@@ -184,7 +186,7 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                     fixture.repo, event, route.route_task(event), True
                 ),
             )
-            run_once._finalize_failed_task(
+            work_application_lifecycle.finalize_failed_task(
                 conn,
                 task["task_id"],
                 task["workstream_id"],

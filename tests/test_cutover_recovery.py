@@ -1,4 +1,5 @@
 """Incompatible task results require attention without stopping other work."""
+from robert_agent.adapters.processes import attempt as attempt_process
 from contextlib import closing
 import json
 from pathlib import Path
@@ -11,6 +12,7 @@ from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent import board, daemon, daemon_state, result_cutover, run_once, storage
+from robert_agent.work import queries as work_queries
 
 
 class CutoverRecoveryTests(unittest.TestCase):
@@ -30,7 +32,7 @@ class CutoverRecoveryTests(unittest.TestCase):
             conn.execute("INSERT INTO work_items(work_item_id,repo_id,title,origin_type,workstream_id,creation_idempotency_key,created_by,created_at,updated_at) VALUES('item','repo','Bad request','web','bad','item','operator',?,?)", (self.now, self.now))
 
     def test_quarantine_preserves_result_and_shows_waiting_without_blocking_good_task(self):
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             first = result_cutover.prepare(self.db, now=self.now)
             second = result_cutover.prepare(self.db, now=self.now)
         self.assertTrue(first['ok'], first)
@@ -49,7 +51,7 @@ class CutoverRecoveryTests(unittest.TestCase):
 
     def test_live_or_unknown_worker_keeps_capacity_and_is_not_signaled(self):
         for status in ('alive_same', 'unknown'):
-            with self.subTest(status=status), patch.object(run_once, '_dispatch_process_status', return_value={'status': status}), patch.object(run_once, '_terminate_attempt_process') as terminate:
+            with self.subTest(status=status), patch.object(attempt_process, 'dispatch_status', return_value={'status': status}), patch.object(attempt_process, 'terminate_attempt') as terminate:
                 prepared = result_cutover.prepare(self.db, now=self.now)
                 self.assertTrue(prepared['ok'], prepared)
                 terminate.assert_not_called()
@@ -61,7 +63,7 @@ class CutoverRecoveryTests(unittest.TestCase):
         spool.mkdir()
         record = spool / 'legacy.json'
         record.write_text('{"payload": {}}')
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             checked = result_cutover.prepare(self.db, now=self.now)
         self.assertFalse(checked['ok'], checked)
         self.assertEqual(record.read_text(), '{"payload": {}}')
@@ -103,7 +105,7 @@ class CutoverRecoveryTests(unittest.TestCase):
                 conn.execute("INSERT INTO workstreams(workstream_id,repo_id,lifecycle,created_at,updated_at) VALUES(?,'repo','active',?,?)", (task, self.now, self.now))
                 conn.execute("INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES(?,?,'queued',?,?)", (task, task, self.now, self.now))
                 conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status,metadata_json) VALUES(?,?,1,'running',?)", (task, task, json.dumps({'dispatch': {'pid': 123456789}})))
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             self.assertTrue(result_cutover.prepare(self.db, now=self.now)['ok'])
 
     def test_local_backoff_does_not_pause_scan_lane(self):
@@ -122,7 +124,7 @@ class CutoverRecoveryTests(unittest.TestCase):
             event = {'event_type': 'assigned', 'number': 205, 'body': '', 'event_fingerprint': 'assignment:205'}
             conn.execute("INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)", (json.dumps(event), self.now))
             conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES('bad','event','trigger',?)", (self.now,))
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             result_cutover.prepare(self.db, now=self.now)
             with patch.object(discover, '_source_metadata', return_value=({**event, 'body': 'suppress specified plugin warning'}, 'open')):
                 result = work_items.retrigger_failed_github_task(self.db, 'bad',
@@ -143,7 +145,7 @@ class CutoverRecoveryTests(unittest.TestCase):
             conn.execute("INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)", (json.dumps(event), self.now))
             conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES('good','event','trigger',?)", (self.now,))
             conn.execute("UPDATE tasks SET metadata_json=? WHERE task_id='good'", (json.dumps({'refreshed_context': [{**event, 'body': 'actual issue body', 'authorization_status': 'ignored'}]}),))
-            context = run_once._task_related_events(conn, 'good', include_consumed=True)
+            context = work_queries.task_related_events(conn, 'good', include_consumed=True)
         self.assertEqual(context[0]['body'], 'actual issue body')
         self.assertEqual(context[0]['authorization_status'], 'authorized_trigger')
 
@@ -156,7 +158,7 @@ class CutoverRecoveryTests(unittest.TestCase):
             conn.execute("INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','notification','assignment:205',?,?)", (json.dumps(event), self.now))
             conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES('bad','event','trigger',?)", (self.now,))
         context = work_items.CommandContext('operator', 'owner', frozenset({'repo'}), frozenset())
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
         with patch.object(discover, '_source_metadata', return_value=(event, 'open')):
             with self.assertRaisesRegex(work_items.WorkItemConflictError, 'termination'):
@@ -198,9 +200,9 @@ class CutoverRecoveryTests(unittest.TestCase):
     def test_isolated_worker_exit_releases_capacity_and_allows_retrigger(self):
         from robert_agent import discover, supervise, work_items
         self.github_item()
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             self.assertTrue(result_cutover.prepare(self.db, now=self.now)['ok'])
             with closing(sqlite3.connect(self.db)) as conn:
                 self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts a WHERE task_id=\'bad\' AND ' + supervise.occupied_attempt_sql()).fetchone()[0], 0)
@@ -213,11 +215,11 @@ class CutoverRecoveryTests(unittest.TestCase):
 
     def test_isolated_completed_worker_exit_releases_capacity_without_rewriting_result(self):
         from robert_agent import supervise
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE attempts SET status='completed',finished_at='original' WHERE task_id='bad'")
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             result_cutover.prepare(self.db, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts a WHERE task_id=\'bad\' AND ' + supervise.occupied_attempt_sql()).fetchone()[0], 0)
@@ -253,11 +255,11 @@ class CutoverRecoveryTests(unittest.TestCase):
                     self.assertEqual(json.loads(event[0])['status'], 'child_timeout')
 
     def test_latched_pause_reaps_isolated_attempt_without_resuming_guard(self):
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
         context = self.context()
         daemon._record_control_outcome(context, 'local', {'ok': False, 'status': 'blocked_result_contract_cutover'}, now=self.now)
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}), patch.object(result_cutover, 'check', side_effect=AssertionError('latched guard must not resume')), patch.object(daemon, '_maybe_prune'), patch.object(daemon.notify, 'deliver_pending'):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}), patch.object(result_cutover, 'check', side_effect=AssertionError('latched guard must not resume')), patch.object(daemon, '_maybe_prune'), patch.object(daemon.notify, 'deliver_pending'):
             daemon.run_once_decision(context, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'failed')
@@ -265,10 +267,10 @@ class CutoverRecoveryTests(unittest.TestCase):
 
     def test_main_board_offers_retrigger_only_after_isolated_worker_stops(self):
         self.github_item()
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
         self.assertEqual(board.get_work_item_detail(self.db, 'item')['valid_commands'], ['cancel'])
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             result_cutover.prepare(self.db, now=self.now)
         self.assertEqual(board.get_work_item_detail(self.db, 'item')['valid_commands'], ['retrigger', 'cancel'])
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -278,7 +280,7 @@ class CutoverRecoveryTests(unittest.TestCase):
     def test_ordinary_approve_cannot_resolve_cutover_isolation(self):
         from robert_agent import work_items
         self.github_item()
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             result_cutover.prepare(self.db, now=self.now)
         card = board.get_work_item_detail(self.db, 'item')
         context = work_items.CommandContext('operator', 'owner', frozenset({'repo'}), frozenset())
@@ -288,9 +290,9 @@ class CutoverRecoveryTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM work_item_events').fetchone()[0], 1)
 
     def test_isolated_exit_observation_retains_unknown_parent_identity(self):
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'unknown'}), patch.object(run_once, '_terminate_attempt_process') as terminate:
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'unknown'}), patch.object(attempt_process, 'terminate_attempt') as terminate:
             self.assertTrue(result_cutover.prepare(self.db, now=self.now)['ok'])
             terminate.assert_not_called()
             with closing(sqlite3.connect(self.db)) as conn:
@@ -298,13 +300,13 @@ class CutoverRecoveryTests(unittest.TestCase):
                 self.assertEqual(conn.execute('SELECT COUNT(*) FROM notifications').fetchone()[0], 1)
 
     def test_exit_observation_does_not_overwrite_a_changed_attempt(self):
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
         def process_changed(metadata):
             with closing(sqlite3.connect(self.db)) as conn, conn:
                 conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.dispatch.pid',99999999) WHERE task_id='bad'")
             return {'status': 'dead'}
-        with patch.object(run_once, '_dispatch_process_status', side_effect=process_changed):
+        with patch.object(attempt_process, 'dispatch_status', side_effect=process_changed):
             result_cutover.prepare(self.db, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'running')
@@ -312,7 +314,7 @@ class CutoverRecoveryTests(unittest.TestCase):
     def test_main_board_retrigger_route_creates_one_recovery_and_hides_pending_action(self):
         from robert_agent import discover, web
         self.github_item()
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'dead'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             result_cutover.prepare(self.db, now=self.now)
             context = web.ControlContext(str(self.db), 'owner', frozenset({'repo'}), frozenset(), frozenset({'http://127.0.0.1:8765'}), 'csrf', True, None)
             headers = {'Host': '127.0.0.1:8765', 'Origin': 'http://127.0.0.1:8765', 'Content-Type': 'application/json', 'X-Robert-CSRF-Token': 'csrf', 'X-Idempotency-Key': 'board-recovery'}

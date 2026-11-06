@@ -1,3 +1,4 @@
+from robert_agent.adapters.github import client as github_client
 import json
 import sqlite3
 import subprocess
@@ -6,6 +7,7 @@ from pathlib import Path
 
 from tests import test_review_input_workflow as review_fixtures
 from robert_agent import publish, run_once, validate_config, execution_store
+from robert_agent.execution import ownership as execution_ownership
 from tests import test_terminal_github_followup as terminal_fixtures
 from robert_agent.worker import result
 
@@ -362,7 +364,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                         ).fetchone()[0]
                         == 1
                     )
-                    run_once._close_subject_binding(
+                    execution_ownership.close_subject(
                         c, "remediation_episode", scope["episode_id"], now
                     )
                     parent_id = task["task_id"]
@@ -429,7 +431,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                             conn,
                             "repo:example/backend",
                             {
-                                github_scan.command_key(
+                                github_client.command_key(
                                     ["gh", "api", "repos/example/backend/issues/13"]
                                 ): json.dumps(
                                     {

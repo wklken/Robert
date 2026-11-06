@@ -1,3 +1,5 @@
+from robert_agent.adapters.github import client as github_client
+from robert_agent.adapters.github import sources as github_sources
 from tests import support  # noqa: F401
 from contextlib import closing
 import json
@@ -44,18 +46,17 @@ class ObservationTests(unittest.TestCase):
                 ReplayRunner([])(['gh', 'api', 'repos/example/repo/issues/1'], check=True)
 
     def test_open_pr_reconcile_does_not_fetch_pull_details(self):
-        from robert_agent import run_once
         calls = []
         def runner(args, **kwargs):
             calls.append(args)
             return subprocess.CompletedProcess(args, 0, json.dumps({'state': 'open'}), '')
-        result = run_once._remote_source_state('example/repo', 'pull_request', 1, runner)
+        result = github_sources.read_source_state('example/repo', 'pull_request', 1, runner)
         self.assertEqual(result['state'], 'open')
         self.assertEqual(len(calls), 1)
 
     def test_old_batch_uses_latest_remote_state(self):
         from robert_agent import github_scan
-        key = github_scan.command_key(['gh', 'api', 'repos/example/repo/issues/1'])
+        key = github_client.command_key(['gh', 'api', 'repos/example/repo/issues/1'])
         github_scan.save_batch(self.db, 'repo', 'context', [{'id': 'one'}], {key: '{"state":"open"}'}, now=100)
         github_scan.save_batch(self.db, 'repo', 'context', [], {key: '{"state":"closed"}'}, now=101)
         batch = github_scan.next_batch(self.db, 'repo', now=102)
@@ -81,7 +82,7 @@ class ObservationTests(unittest.TestCase):
 
     def test_new_read_failure_invalidates_old_success(self):
         from robert_agent import github_scan
-        key = github_scan.command_key(['gh', 'api', 'repos/example/repo/issues/1'])
+        key = github_client.command_key(['gh', 'api', 'repos/example/repo/issues/1'])
         github_scan.save_batch(self.db, 'repo', 'context', [{'id': 'one'}], {key: '{"state":"open"}'}, now=100)
         github_scan.save_batch(self.db, 'repo', 'context', [], {key: None}, now=101)
         batch = github_scan.next_batch(self.db, 'repo', now=102)
@@ -127,6 +128,7 @@ class ObservationTests(unittest.TestCase):
         import sys
         from tests.test_run_once import RunOnceDryRunTests
         from robert_agent import github_scan, run_once, validate_config
+        from robert_agent.work import repositories as work_repositories
         from robert_agent.control_lane import ControlLane
         from robert_agent.worker import result as worker_result
         fixture = RunOnceDryRunTests()
@@ -136,7 +138,7 @@ class ObservationTests(unittest.TestCase):
         db = config['db_path']
         storage.init_database(db)
         with closing(sqlite3.connect(db)) as conn, conn:
-            repo_id = run_once._upsert_repo(conn, config['repos'][0])
+            repo_id = work_repositories.upsert_repo(conn, config['repos'][0])
         lane = ControlLane(db, 'scan', 'test-owner')
         lane.start([sys.executable, '-c', 'import time; time.sleep(30)'], timeout_seconds=40)
         self.addCleanup(lane.stop)
@@ -146,7 +148,7 @@ class ObservationTests(unittest.TestCase):
         event = {'id': 'analysis-one', 'number': 123, 'source_type': 'issue', 'event_type': 'comment',
                  'actor_login': 'wklken', 'body': '@robert-bot please analyze this', 'intent': 'analysis',
                  'state': 'open', 'url': 'https://github.com/example/backend/issues/123'}
-        reads = {github_scan.command_key(['gh', 'api', 'repos/example/backend/issues/123']): '{"state":"open"}'}
+        reads = {github_client.command_key(['gh', 'api', 'repos/example/backend/issues/123']): '{"state":"open"}'}
         github_scan.save_batch(db, repo_id, github_scan.context_digest(config['repos'][0], []), [event], reads)
         launched = []
         def launch(**kwargs):
@@ -183,7 +185,8 @@ class ObservationTests(unittest.TestCase):
         self.assertTrue(publisher_lane.stop())
 
     def test_effective_global_review_config_changes_context(self):
-        from robert_agent import github_scan, route_config
+        from robert_agent import github_scan
+        from robert_agent.configuration import routes as route_config
         repo = {'full_name': 'example/backend', 'github_account': 'bot'}
         with mock.patch.object(route_config, 'resolve_route_config', return_value={
                 'multi_agent_review': {'enabled': True, 'workers': ['a', 'b'], 'author_allowlist': ['alice']}}):
@@ -234,7 +237,7 @@ class ObservationTests(unittest.TestCase):
 
     def test_old_remote_safety_read_expires_even_while_batch_is_pending(self):
         from robert_agent import github_scan
-        key = github_scan.command_key(['gh', 'api', 'repos/example/repo/issues/1'])
+        key = github_client.command_key(['gh', 'api', 'repos/example/repo/issues/1'])
         github_scan.save_batch(self.db, 'repo', 'context', [{'id': 'one'}], {key: '{"state":"open"}'}, now=100)
         batch = github_scan.next_batch(self.db, 'repo', now=4000)
         with self.assertRaises(subprocess.CalledProcessError):
@@ -245,7 +248,7 @@ class ObservationTests(unittest.TestCase):
         session = mock.Mock()
         session.poll_interval_seconds = None
         config = {'daemon': {'min_core_remaining': 500, 'min_search_remaining': 10}}
-        with mock.patch.object(github_scan.discover, '_run_json', return_value={
+        with mock.patch.object(github_scan.github_client, 'read_json', return_value={
                 'resources': {'core': {'remaining': 3, 'reset': 1500}, 'search': {'remaining': 30}}}), \
              mock.patch.object(github_scan.time, 'time', return_value=1000):
             self.assertFalse(github_scan._budget(session, config))
@@ -315,7 +318,8 @@ class ObservationTests(unittest.TestCase):
 
     def test_scan_failure_preserves_new_safety_read_over_old_success(self):
         from tests.test_run_once import RunOnceDryRunTests
-        from robert_agent import github_scan, run_once, validate_config
+        from robert_agent import github_scan, validate_config
+        from robert_agent.work import repositories as work_repositories
         fixture = RunOnceDryRunTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -324,9 +328,9 @@ class ObservationTests(unittest.TestCase):
         storage.init_database(db)
         import sqlite3
         with closing(sqlite3.connect(db)) as conn, conn:
-            repo_id = run_once._upsert_repo(conn, config['repos'][0])
+            repo_id = work_repositories.upsert_repo(conn, config['repos'][0])
         event = {'id': 'old', 'number': 7, 'source_type': 'issue', 'event_type': 'comment'}
-        key = github_scan.command_key(['gh', 'api', 'repos/example/backend/issues/7'])
+        key = github_client.command_key(['gh', 'api', 'repos/example/backend/issues/7'])
         github_scan.save_batch(db, repo_id, 'context', [event], {key: '{"state":"open"}'})
         session = mock.Mock(side_effect=lambda args, **kwargs: subprocess.CompletedProcess(args, 0, '{"state":"closed"}', ''))
         session.metrics.return_value = {'errors': 0}
@@ -341,7 +345,8 @@ class ObservationTests(unittest.TestCase):
 
     def test_context_refresh_uses_cached_hints_without_repolling_notifications(self):
         from tests import test_run_once as fixtures
-        from robert_agent import github_scan, run_once, validate_config, wakeup
+        from robert_agent import github_scan, validate_config, wakeup
+        from robert_agent.work import repositories as work_repositories
         fixture = fixtures.RunOnceDryRunTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -349,7 +354,7 @@ class ObservationTests(unittest.TestCase):
         storage.init_database(config['db_path'])
         import sqlite3
         with closing(sqlite3.connect(config['db_path'])) as conn, conn:
-            repo_id = run_once._upsert_repo(conn, config['repos'][0])
+            repo_id = work_repositories.upsert_repo(conn, config['repos'][0])
             wakeup.request_wakeup(conn, repo_id=repo_id, reason='manual_operator_request',
                 dedupe_key='refresh', metadata={'kind': 'github_context_refresh'})
         session = mock.Mock()
@@ -423,7 +428,8 @@ class ObservationTests(unittest.TestCase):
         import sqlite3
         import yaml
         from tests import test_run_once as fixtures
-        from robert_agent import github_scan, run_once, validate_config, wakeup
+        from robert_agent import github_scan, validate_config, wakeup
+        from robert_agent.work import repositories as work_repositories
         fixture = fixtures.RunOnceDryRunTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -435,7 +441,7 @@ class ObservationTests(unittest.TestCase):
         storage.init_database(config['db_path'])
         with closing(sqlite3.connect(config['db_path'])) as conn, conn:
             for repo in config['repos']:
-                run_once._upsert_repo(conn, repo)
+                work_repositories.upsert_repo(conn, repo)
             wakeup.request_wakeup(conn, repo_id='repo:example/backend', reason='manual_operator_request',
                 dedupe_key='refresh', metadata={'kind': 'github_context_refresh'})
             for name in ('future', 'expired', 'canceled', 'ordinary'):

@@ -1,8 +1,9 @@
 """Durable Kanban requests awaiting GitHub context from the remote scanner."""
+from robert_agent.adapters.github import client as github_client
 from datetime import datetime
 import json
 
-from robert_agent import execution_store, github_scan, work_item_control
+from robert_agent import execution_store, work_item_control
 
 
 def pending_tasks(conn, repo_ids=(), *, task_id=None):
@@ -30,7 +31,7 @@ def pending_tasks(conn, repo_ids=(), *, task_id=None):
 
 def source_read(conn, task):
     """Require a scanner observation after the accepted operator request."""
-    key = github_scan.command_key(['gh', 'api', f"repos/{task['full_name']}/issues/{task['number']}"])
+    key = github_client.command_key(['gh', 'api', f"repos/{task['full_name']}/issues/{task['number']}"])
     row = conn.execute('''SELECT response_json FROM github_scan_reads
         WHERE repo_id=? AND command_key=? AND observed_at>=?''',
         (task['repo_id'], key, datetime.fromisoformat(task['requested_at']).timestamp()),

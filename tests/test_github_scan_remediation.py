@@ -1,3 +1,5 @@
+from robert_agent.adapters.github import client as github_client
+from robert_agent.adapters.processes import attempt as attempt_process
 from tests import support  # noqa: F401
 from contextlib import closing
 import json
@@ -8,6 +10,7 @@ import unittest
 from unittest import mock
 
 from robert_agent import daemon, github_scan, run_once, storage, validate_config
+from robert_agent.work import repositories as work_repositories
 from robert_agent.github_read import GitHubReadSession
 
 
@@ -20,7 +23,7 @@ class GitHubScanRemediationTests(unittest.TestCase):
         config = validate_config.validate_config(fixture.config_path, skip_external=True)
         storage.init_database(config['db_path'])
         with closing(sqlite3.connect(config['db_path'])) as conn, conn:
-            repo_id = run_once._upsert_repo(conn, config['repos'][0])
+            repo_id = work_repositories.upsert_repo(conn, config['repos'][0])
         return fixture, config, repo_id
 
     def test_inflight_scan_keeps_local_wait_even_after_poll_deadline(self):
@@ -56,7 +59,7 @@ class GitHubScanRemediationTests(unittest.TestCase):
         _, config, _ = self.fixture()
         lane = ControlLane(config['db_path'], 'scan', 'owner')
         lane.process = SimpleNamespace(pid=1, poll=lambda: 0)
-        with mock.patch.object(lane, '_state'), mock.patch.object(daemon, '_process_group_stopped', return_value=False):
+        with mock.patch.object(lane, '_state'), mock.patch.object(attempt_process, 'group_stopped', return_value=False):
             self.assertEqual(lane.poll()['status'], 'attention')
             self.assertIsNone(lane.poll())
             self.assertIsNotNone(lane.process)
@@ -185,7 +188,7 @@ class GitHubScanRemediationTests(unittest.TestCase):
         good = {'id': 'good', 'number': 8, 'event_type': 'comment', 'source_type': 'issue',
                 'actor_login': 'wklken', 'body': '@robert-bot please analyze this', 'intent': 'analysis',
                 'url': 'https://github.com/example/backend/issues/8'}
-        key = github_scan.command_key(['gh', 'api', 'repos/example/backend/issues/8'])
+        key = github_client.command_key(['gh', 'api', 'repos/example/backend/issues/8'])
         github_scan.save_batch(config['db_path'], repo_id, context, [bad, good], {key: '{"state":"open"}'})
         result = run_once.run_once(fixture.config_path, dry_run=True, skip_external=True,
                                   skip_publish=True, consume_observations=True)

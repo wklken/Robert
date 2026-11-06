@@ -190,7 +190,8 @@ class SQLiteRuntimeTests(unittest.TestCase):
 
     def test_missing_episode_stops_once_and_is_not_runnable(self):
         import json
-        from robert_agent import run_once, loop_engine
+        from robert_agent import loop_engine
+        from robert_agent.execution import ownership as execution_ownership
 
         db, queue, _kwargs = self._prepared_queue()
         task = queue[0]["task_info"]["task_id"]
@@ -198,7 +199,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
             conn.execute("UPDATE tasks SET task_kind='ci_remediation',metadata_json='{}' WHERE task_id=?", (task,))
             conn.execute("DELETE FROM execution_subjects WHERE subject_id=?", (task,))
             for _ in range(2):
-                self.assertFalse(run_once._execution_task_active(conn, task))
+                self.assertFalse(execution_ownership.claim_task(conn, task))
             metadata = json.loads(conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task,)).fetchone()[0])
             self.assertEqual(metadata["execution_attention"]["reason_code"], "remediation_episode_missing")
             self.assertEqual(conn.execute("SELECT count(*) FROM notifications WHERE notification_type='execution_attention_required'").fetchone()[0], 1)

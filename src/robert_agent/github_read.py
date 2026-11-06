@@ -3,6 +3,7 @@
 Cached events are observations, never proof that local routing succeeded. Every
 cache hit is returned to the caller for current authorization and routing.
 """
+from robert_agent.adapters.github import client as github_client
 
 from contextlib import closing
 import copy
@@ -111,7 +112,6 @@ class GitHubReadSession:
         return copy.deepcopy(self._stats)
 
     def search(self, args, *, notification_hints=()):
-        from robert_agent import discover
         key = 'search:' + _digest(args)
         version = _digest(notification_hints)
         cached = self._get(key, version if self.search_allowed else None)
@@ -124,7 +124,7 @@ class GitHubReadSession:
                 return cached if legacy else cached['items']
         if not self.search_allowed:
             return []
-        payload = discover._run_json(args, runner=self)
+        payload = github_client.read_json(args, runner=self)
         if not isinstance(payload, list):
             raise ValueError('GitHub search did not return a list')
         self._put(key, version, {'items': payload,

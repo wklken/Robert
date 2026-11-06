@@ -7,13 +7,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from robert_agent import execution_store, redaction, retry_policy, supervision_store
+from robert_agent.configuration.supervision import RECOVERY_STAGES as STAGES
 from robert_agent.supervision_rules import timestamp
 
 
-STAGES = {
-    'spool_replay': 'ingestion', 'audit_retry': 'audit', 'handoff_resume': 'handoff',
-    'publication_retry': 'publication', 'publication_reconcile': 'publication_reconcile',
-}
 MAX_STAGE_ATTEMPTS = 1
 MAX_LINEAGE_ATTEMPTS = 3
 ACTION_TIMEOUT_SECONDS = 300

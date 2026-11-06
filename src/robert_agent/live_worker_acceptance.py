@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from robert_agent.configuration.loading import load_config
 import argparse
 from contextlib import closing
 import json
@@ -59,7 +60,7 @@ def _isolated_config(source_config, workspace_dir):
     config = validate_config.validate_config(source_config, skip_external=True)
     if not config["ok"]:
         return config
-    isolated = validate_config.load_config(source_config)
+    isolated = load_config(source_config)
     isolated["data_dir"] = str(workspace_dir / "data")
     isolated["database"] = "dd.sqlite3"
     isolated.setdefault("scheduler", {})["max_concurrency"] = 1

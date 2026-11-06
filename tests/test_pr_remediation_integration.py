@@ -478,6 +478,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
 
     def test_failed_system_task_can_retry_same_guarded_event(self):
         from robert_agent import route, run_once, workstream
+        from robert_agent.work.application import lifecycle as work_application_lifecycle
 
         data_dir = Path(self.tmp.name) / "retry-data"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -506,7 +507,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
                     True,
                 ),
             )
-            run_once._finalize_failed_task(
+            work_application_lifecycle.finalize_failed_task(
                 conn,
                 task["task_id"],
                 task["workstream_id"],

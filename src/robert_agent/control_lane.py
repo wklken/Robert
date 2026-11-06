@@ -151,8 +151,8 @@ class ControlLane:
                     return self._attention('Control child cleanup unproven')
                 return {'ok': False, 'status': 'child_timeout'}
             return None
-        from robert_agent.daemon import _process_group_stopped
-        if not _process_group_stopped(self.process.pid):
+        from robert_agent.adapters.processes.attempt import group_stopped
+        if not group_stopped(self.process.pid):
             return self._attention('Control child descendants still active')
         self.output.seek(0)
         try:
@@ -205,8 +205,8 @@ class ControlLane:
                 self.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 return False
-        from robert_agent.daemon import _process_group_stopped
-        if not _process_group_stopped(self.process.pid):
+        from robert_agent.adapters.processes.attempt import group_stopped
+        if not group_stopped(self.process.pid):
             return False
         self._finish()
         return True
@@ -240,8 +240,8 @@ def recover(db_path, *, scope_key, current_owner):
                     safe = False
             continue
         result = worker_identity.terminate_recorded_identity(recorded)
-        from robert_agent.daemon import _process_group_stopped
-        if result['status'] == 'attention' or not _process_group_stopped(recorded.get('pid', 0)):
+        from robert_agent.adapters.processes.attempt import group_stopped
+        if result['status'] == 'attention' or not group_stopped(recorded.get('pid', 0)):
             safe = False
             continue
         with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:

@@ -1,4 +1,4 @@
-from robert_agent import model_execution
+from robert_agent.execution import stages as model_execution
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import json
@@ -114,7 +114,8 @@ sys.exit(int(sys.argv[3]))
                 if locked:
                     with review_store.connect(self.fixture.db) as conn:
                         conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (driver.task_id,))
-                        self.assertNotEqual(review_coordinator.terminate_children(conn, driver.task_id), 'attention')
+                        outcome = model_execution.terminate_children(conn, driver.task_id, store=review_store)
+                        self.assertNotEqual(outcome, 'attention')
                     return
             time.sleep(.02)
         self.fail('could not acquire cancellation lock')
@@ -232,12 +233,12 @@ sys.exit(int(sys.argv[3]))
             try:
                 self.assertEqual(self.wait_started(1), 1)
                 self.cancel(driver)
-                with self.assertRaises(review_coordinator.ReviewStopped):
+                with self.assertRaises(review_coordinator.StageStopped):
                     future.result(timeout=5)
             finally:
                 self.gate.touch()
         self.assertEqual(len(self.launched), 1)
-        self.assertTrue(all(review_coordinator._group_finished(run) for run, _ in self.launched))
+        self.assertTrue(all(model_execution._group_finished(run) for run, _ in self.launched))
         self.assertEqual(self.pool()['in_use'], 0)
         with review_store.connect(self.fixture.db) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM github_actions').fetchone()[0], 0)
@@ -289,11 +290,11 @@ sys.exit(int(sys.argv[3]))
         driver = self.driver()
         driver.request['workers'] = driver.request['workers'][:1]
         driver.launcher = lambda **kwargs: (_ for _ in ()).throw(OSError('unknown spawn result'))
-        with self.assertRaisesRegex(review_coordinator.ReviewStopped, 'unknown'):
+        with self.assertRaisesRegex(review_coordinator.StageStopped, 'unknown'):
             driver.run()
         self.assertEqual(self.pool()['in_use'], 1)
         driver = self.fixture.coordinator()
-        with self.assertRaisesRegex(review_coordinator.ReviewStopped, 'unknown'):
+        with self.assertRaisesRegex(review_coordinator.StageStopped, 'unknown'):
             driver.run()
         driver.reclaim_finished_slots()
         self.assertEqual(self.pool()['in_use'], 1)
@@ -390,9 +391,9 @@ print(int(acquired))
         class InterruptedSubmission(ThreadPoolExecutor):
             def submit(self, *args, **kwargs):
                 super().submit(*args, **kwargs)
-                raise review_coordinator.ReviewStopped('termination during submission')
+                raise review_coordinator.StageStopped('termination during submission')
 
         with patch.object(model_execution, 'ThreadPoolExecutor', InterruptedSubmission):
-            with self.assertRaisesRegex(review_coordinator.ReviewStopped, 'termination during submission'):
+            with self.assertRaisesRegex(review_coordinator.StageStopped, 'termination during submission'):
                 driver.parallel([1, 2], lambda item: observed.append(driver.stopping.wait(.5)))
         self.assertEqual(observed, [True])

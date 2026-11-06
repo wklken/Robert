@@ -10,6 +10,7 @@ import unittest
 
 from tests import support  # noqa: F401
 from robert_agent import discover, github_scan, run_once, storage
+from robert_agent.work import repositories as work_repositories
 from robert_agent.github_read import GitHubReadSession, _digest
 
 
@@ -27,7 +28,7 @@ class SourceContextTests(unittest.TestCase):
         self.db = Path(self.tmp.name) / 'state.sqlite3'
         storage.init_database(self.db)
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            run_once._upsert_repo(conn, REPO)
+            work_repositories.upsert_repo(conn, REPO)
 
     def event(self, **changes):
         raw = {'number': 70, 'source_type': 'issue', 'event_type': 'assigned',
@@ -153,7 +154,7 @@ class SourceContextTests(unittest.TestCase):
         db = fixture.data_dir / 'dd.sqlite3'
         storage.init_database(db)
         with closing(sqlite3.connect(db)) as conn, conn:
-            repo_id = run_once._upsert_repo(conn, {**REPO, 'github_account': 'robert-bot'})
+            repo_id = work_repositories.upsert_repo(conn, {**REPO, 'github_account': 'robert-bot'})
             run_once._insert_source_and_event(conn, repo_id, assignment, NEW)
         incomplete = dict(assignment)
         incomplete.pop('body')

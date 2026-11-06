@@ -1,10 +1,11 @@
 """Task-scoped access to native model round lifecycles."""
 import os
 
-from robert_agent import review_store, vote_store
-from robert_agent.model_execution import terminate_children as stop_children
+from robert_agent import model_pool, review_store, vote_store
+from robert_agent.execution.stages import terminate_children as stop_children
 
 STORES = (review_store, vote_store)
+SLOT_STORES = tuple(zip(STORES, model_pool.RUN_TABLES))
 
 
 def owner(conn, task_id):
@@ -29,7 +30,7 @@ def _exit_snapshot(conn, task_id):
 
 
 def _run_stopped(run):
-    from robert_agent.run_once import _dispatch_process_status
+    from robert_agent.adapters.processes.attempt import dispatch_status
 
     recorded = run['dispatch']
     if not recorded:
@@ -50,7 +51,7 @@ def _run_stopped(run):
         return False
     # Reuse complete identity / trusted Popen-exit evidence and descendant
     # observation. Neither a terminal run status nor an absent PID is proof.
-    return _dispatch_process_status({'dispatch': recorded})['status'] == 'dead'
+    return dispatch_status({'dispatch': recorded})['status'] == 'dead'
 
 
 def observe_exit(conn, task_id):

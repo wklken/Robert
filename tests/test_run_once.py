@@ -1,3 +1,5 @@
+from robert_agent.adapters.processes import attempt as attempt_process
+from robert_agent import worker_identity
 from contextlib import closing
 import json
 import sqlite3
@@ -3158,6 +3160,7 @@ repos:
 
     def test_manual_retrigger_prepares_child_from_failed_github_task(self):
         from robert_agent import run_once, work_items
+        from robert_agent.execution import ownership as execution_ownership
 
         first = run_once.run_once(
             self.config_path,
@@ -3193,7 +3196,7 @@ repos:
             )
             # This fixture was only prepared in dry-run; no process was launched.
             conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.dispatch') WHERE task_id=?", (parent_task_id,))
-            run_once._close_task_binding_if_terminal(conn, parent_task_id, '2026-10-19T00:01:00+00:00')
+            execution_ownership.close_terminal_task(conn, parent_task_id, '2026-10-19T00:01:00+00:00')
         context = work_items.CommandContext(
             actor_kind="operator",
             actor_identity="owner",
@@ -3209,12 +3212,12 @@ repos:
         )
         self.assertEqual(queued["status"], "queued")
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            self.assertFalse(run_once._execution_parent_allows_child(conn, parent_task_id))
-            self.assertFalse(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
-            self.assertTrue(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            self.assertTrue(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id))
+            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
+            self.assertTrue(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            self.assertTrue(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
             conn.execute("UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?", (parent_task_id,))
-            self.assertFalse(run_once._execution_parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
+            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
             conn.execute("UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?", (parent_task_id,))
         followup_fixture = self.root / "retrigger-followup.json"
         followup_fixture.write_text(
@@ -5452,9 +5455,8 @@ repos:
 
 
     def test_dispatch_process_status_requires_complete_recorded_identity(self):
-        from robert_agent import run_once
 
-        status = run_once._dispatch_process_status(
+        status = attempt_process.dispatch_status(
             {"dispatch": {"pid": 43210, "status": "running"}}
         )
 
@@ -5900,8 +5902,8 @@ repos:
                 ),
             )
             execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
-            original_group = run_once._live_process_group
-            run_once._live_process_group = lambda _pid: False
+            original_group = worker_identity.live_process_group
+            worker_identity.live_process_group = lambda _pid: False
             original_inspect = run_once.worker_identity.inspect_recorded_identity
             original_recovery = run_once._inspect_attempt_recovery_with_metadata
             original_create = run_once._create_resume_attempt_and_prompt
@@ -5934,7 +5936,7 @@ repos:
                     repo={},
                 )
             finally:
-                run_once._live_process_group = original_group
+                worker_identity.live_process_group = original_group
                 run_once.worker_identity.inspect_recorded_identity = original_inspect
                 run_once._inspect_attempt_recovery_with_metadata = original_recovery
                 run_once._create_resume_attempt_and_prompt = original_create
@@ -5986,14 +5988,14 @@ repos:
                 ),
             )
             original_inspect = run_once.worker_identity.inspect_recorded_identity
-            original_group = run_once._live_process_group
+            original_group = worker_identity.live_process_group
             original_recovery = run_once._inspect_attempt_recovery_with_metadata
             original_create = run_once._create_resume_attempt_and_prompt
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             # The synthetic PID must not observe an unrelated host process.
-            run_once._live_process_group = lambda _pid: False
+            worker_identity.live_process_group = lambda _pid: False
             run_once._inspect_attempt_recovery_with_metadata = (
                 lambda *_args, **_kwargs: {
                     "status": "recoverable_progress",
@@ -6016,7 +6018,7 @@ repos:
                 )
             finally:
                 run_once.worker_identity.inspect_recorded_identity = original_inspect
-                run_once._live_process_group = original_group
+                worker_identity.live_process_group = original_group
                 run_once._inspect_attempt_recovery_with_metadata = original_recovery
                 run_once._create_resume_attempt_and_prompt = original_create
             binding = execution_store.get_binding(conn, "task", task_id)
@@ -6440,7 +6442,7 @@ repos:
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._rate_limited_attempt()
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6469,7 +6471,7 @@ repos:
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
                 db_path, _, _ = fixture._rate_limited_attempt(fallback=fallback, model=model, phase=True)
-                with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+                with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
                     run_once.run_once(fixture.config_path, dry_run=True, skip_external=True)
                 with closing(sqlite3.connect(db_path)) as conn:
                     self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
@@ -6496,7 +6498,7 @@ repos:
                 [{"task_info": target, "worktree_result": worktree, "repo_id": "repo:example/backend", "repo": {}}],
                 False, 3, workers=[worker])
         self.assertTrue(dispatched[0]["ok"], dispatched)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
@@ -6508,7 +6510,7 @@ repos:
         from robert_agent import run_once
 
         db_path, task_id, _ = self._rate_limited_attempt()
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             current_id, raw = conn.execute("SELECT attempt_id,metadata_json FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()
@@ -6521,7 +6523,7 @@ repos:
             conn.execute("INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at)"
                          " VALUES ('fallback-log',?,?,'worker_stdout',?,?)",
                          (task_id, current_id, str(log), datetime.now(timezone.utc).isoformat()))
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
@@ -6546,7 +6548,7 @@ repos:
                         conn.execute("UPDATE tasks SET lifecycle='canceled'")
                         conn.execute("UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?", (task_id,))
                 process_status = "alive_same" if state == "alive" else "dead"
-                with patch.object(run_once, "_dispatch_process_status", return_value={"status": process_status}):
+                with patch.object(attempt_process, "dispatch_status", return_value={"status": process_status}):
                     run_once.run_once(fixture.config_path, dry_run=True, skip_external=True)
                 with closing(sqlite3.connect(db_path)) as conn:
                     self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
@@ -6564,7 +6566,7 @@ repos:
             consumed_event_fingerprints=["comment:1"], verification=[], handoff="recorded", used_skills=[])
         self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+            with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
                 run_once._supervise_running_attempts(conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
                     data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"})
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
@@ -6629,7 +6631,7 @@ time.sleep(.3)
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6679,7 +6681,7 @@ time.sleep(.3)
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6701,7 +6703,7 @@ time.sleep(.3)
             conn.execute("UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1')", (json.dumps({
                 "dispatch": self._recorded_identity(987654), "resume": {"transport_failure_count": 5},
             }),))
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6726,7 +6728,7 @@ time.sleep(.3)
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
@@ -6747,7 +6749,7 @@ time.sleep(.3)
         from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
@@ -6780,7 +6782,7 @@ time.sleep(.3)
                 False, 3, workers=[worker],
             )
         self.assertTrue(dispatched[0]["ok"], dispatched)
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6806,7 +6808,7 @@ time.sleep(.3)
         )
         self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+            with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
                 run_once._supervise_running_attempts(
                     conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
                     data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"},
@@ -6833,8 +6835,8 @@ time.sleep(.3)
             "status": "running", "pid": os.getpid(),
             "process_identity": heartbeat.process_identity(os.getpid()),
         }))
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "alive_same"}), \
-             patch.object(run_once, "_terminate_attempt_process", return_value={"status": "terminated"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "alive_same"}), \
+             patch.object(attempt_process, "terminate_attempt", return_value={"status": "terminated"}):
             result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
@@ -6846,7 +6848,7 @@ time.sleep(.3)
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         for expected_count, expected_delay in ((1, 30),):
-            with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+            with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
                 result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
             self.assertTrue(result["ok"], result)
             with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6876,7 +6878,7 @@ time.sleep(.3)
                 conn.execute("UPDATE attempts SET status='running',metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id=?",
                              (json.dumps(updated_metadata), current_id))
 
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
@@ -6957,7 +6959,7 @@ time.sleep(.3)
             conn.execute("UPDATE attempts SET started_at=?,heartbeat_at=?,metadata_json = json_set(?, '$.result_contract', 'compact-v1')", (old, old, json.dumps({
                 "dispatch": self._recorded_identity(987654), "resume": {"transport_failure_count": 5},
             })))
-        with patch.object(run_once, "_dispatch_process_status", return_value={"status": "dead"}):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             for _ in range(2):
                 result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
                 self.assertTrue(result["ok"], result)
@@ -6973,7 +6975,7 @@ time.sleep(.3)
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
-            status = run_once._dispatch_process_status(
+            status = attempt_process.dispatch_status(
                 {"dispatch": self._recorded_identity(43210)}
             )
         finally:
@@ -7017,11 +7019,11 @@ time.sleep(.3)
             self.assertFalse(run_once._record_remote_terminal_state(*args))
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             conn.execute("UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1')", (json.dumps({"dispatch": {"pid": 12345}}),))
-            with patch.object(run_once, "_terminate_attempt_process", return_value={"status": "permission_denied"}):
+            with patch.object(attempt_process, "terminate_attempt", return_value={"status": "permission_denied"}):
                 run_once._record_remote_terminal_state(*args)
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             self.assertEqual(conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0], task_id)
-            with patch.object(run_once, "_terminate_attempt_process", return_value={"status": "terminated"}):
+            with patch.object(attempt_process, "terminate_attempt", return_value={"status": "terminated"}):
                 run_once._record_remote_terminal_state(*args)
             status, metadata = conn.execute("SELECT status,metadata_json FROM attempts").fetchone()
             self.assertEqual(status, "canceled")
@@ -7034,8 +7036,8 @@ time.sleep(.3)
         with patch.object(
             run_once.worker_identity, "terminate_recorded_identity",
             return_value={"status": "already_dead", "pid": 24680},
-        ), patch.object(run_once, "_live_process_group", return_value=False):
-            result = run_once._terminate_attempt_process(
+        ), patch.object(worker_identity, "live_process_group", return_value=False):
+            result = attempt_process.terminate_attempt(
                 {"dispatch": self._recorded_identity(24680)}
             )
 
@@ -7048,8 +7050,8 @@ time.sleep(.3)
 
         with patch.object(
             run_once.worker_identity, "inspect_recorded_identity", return_value="dead",
-        ), patch.object(run_once, "_live_process_group", return_value=False):
-            status = run_once._dispatch_process_status(
+        ), patch.object(worker_identity, "live_process_group", return_value=False):
+            status = attempt_process.dispatch_status(
                 {"dispatch": self._recorded_identity(13579)}
             )
 
@@ -7318,11 +7320,11 @@ time.sleep(.3)
             )
 
         original_inspect = run_once.worker_identity.inspect_recorded_identity
-        original_group = run_once._live_process_group
+        original_group = worker_identity.live_process_group
         original_terminate = run_once.worker_identity.terminate_recorded_identity
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
-            run_once._live_process_group = lambda _pid: False
+            worker_identity.live_process_group = lambda _pid: False
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
@@ -7336,7 +7338,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once._live_process_group = original_group
+            worker_identity.live_process_group = original_group
             run_once.worker_identity.inspect_recorded_identity = original_inspect
             run_once.worker_identity.terminate_recorded_identity = original_terminate
 
@@ -7394,11 +7396,11 @@ time.sleep(.3)
             )
 
         original_inspect = run_once.worker_identity.inspect_recorded_identity
-        original_group = run_once._live_process_group
+        original_group = worker_identity.live_process_group
         original_terminate = run_once.worker_identity.terminate_recorded_identity
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
-            run_once._live_process_group = lambda _pid: False
+            worker_identity.live_process_group = lambda _pid: False
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
@@ -7412,7 +7414,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once._live_process_group = original_group
+            worker_identity.live_process_group = original_group
             run_once.worker_identity.inspect_recorded_identity = original_inspect
             run_once.worker_identity.terminate_recorded_identity = original_terminate
 
@@ -7577,7 +7579,7 @@ time.sleep(.3)
             )
 
         original_inspect = run_once.worker_identity.inspect_recorded_identity
-        original_group = run_once._live_process_group
+        original_group = worker_identity.live_process_group
         original_terminate = run_once.worker_identity.terminate_recorded_identity
         original_collect_notifications = run_once.discover.collect_account_notifications
         original_collect = run_once.discover.collect_live_events
@@ -7598,7 +7600,7 @@ time.sleep(.3)
 
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
-            run_once._live_process_group = lambda _pid: False
+            worker_identity.live_process_group = lambda _pid: False
             run_once.worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
@@ -7614,7 +7616,7 @@ time.sleep(.3)
                 skip_external=False,
             )
         finally:
-            run_once._live_process_group = original_group
+            worker_identity.live_process_group = original_group
             run_once.worker_identity.inspect_recorded_identity = original_inspect
             run_once.worker_identity.terminate_recorded_identity = original_terminate
             run_once.discover.collect_account_notifications = original_collect_notifications
@@ -8037,10 +8039,10 @@ time.sleep(.3)
                 "failed_count": 0,
             }
 
-        original_process = run_once._dispatch_process_status
+        original_process = attempt_process.dispatch_status
         try:
             # The stub worker has exited; only the controller can confirm that fact.
-            run_once._dispatch_process_status = lambda _metadata: {"status": "dead"}
+            attempt_process.dispatch_status = lambda _metadata: {"status": "dead"}
             run_once.publish.publish_ready_actions = fake_publish_ready_actions
             second = run_once.run_once(
                 self.config_path,
@@ -8049,7 +8051,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once._dispatch_process_status = original_process
+            attempt_process.dispatch_status = original_process
             run_once.publish.publish_ready_actions = original_publish
 
         self.assertTrue(second["ok"], second)

@@ -228,7 +228,8 @@ Commands:
 /tmp/robert-dev-check/bin/python -m mypy \
   src/robert_agent/cli \
   src/robert_agent/paths.py \
-  src/robert_agent/route_config.py \
+  src/robert_agent/configuration \
+  src/robert_agent/execution/stages.py \
   src/robert_agent/skills.py \
   src/robert_agent/service.py
 /tmp/robert-dev-check/bin/python -B -m unittest discover -s tests
@@ -515,3 +516,12 @@ python3 -m venv /tmp/robert-pypi-smoke
 ```
 
 Result: `robert 0.1.0b1`.
+
+### 源码边界检查
+
+`tests/test_architecture_boundaries.py` 随完整 unittest 门禁运行。它检查函数内的静态
+import，禁止源码循环依赖，并为已迁移的配置、执行机制、纯政策和外部适配器限制
+允许的依赖。新增依赖应先确认职责归属，不能通过局部 import 绕过检查。
+
+本轮目录与后续拆分范围见 [源码分层](architecture.md#源码分层)。运行测试使用项目虚拟环境。受控端到端验收会通过当前 `sys.executable` 启动独立 Worker，
+直接调用虚拟环境解释器时也不会错误选择 PATH 中的另一个 Python。

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from robert_agent.adapters.processes import attempt as attempt_process
 import argparse
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -27,7 +28,7 @@ _ACTIVE_CHILD_PGID = None
 RATE_LIMIT_TIMEOUT_SECONDS = 30
 CONTROL_TERM_GRACE_SECONDS = 2
 CONTROL_KILL_REAP_SECONDS = 2
-# run_once._live_process_group bounds its ps inspection at five seconds.
+# worker_identity.live_process_group bounds its ps inspection at five seconds.
 CONTROL_GROUP_PROOF_SECONDS = 5
 STOP_SLEEP_SLICE_SECONDS = 1
 LEASE_WAIT_MAX_SLICE_SECONDS = 5
@@ -121,16 +122,6 @@ def _short_text(value, max_chars=2000):
     return f"{text[:max_chars]}...[truncated {len(text) - max_chars} chars]"
 
 
-def _process_group_stopped(pgid):
-    """A failed observation cannot prove that executor ownership is releasable."""
-    from robert_agent import run_once as executor
-
-    try:
-        return not executor._live_process_group(pgid)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
 def _signal_child_group(pgid, signum):
     try:
         os.killpg(pgid, signum)
@@ -182,7 +173,7 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
                     except subprocess.TimeoutExpired:
                         _signal_child_group(process.pid, signal.SIGKILL)
                         process.communicate(timeout=CONTROL_KILL_REAP_SECONDS)
-                    group_stopped = _process_group_stopped(process.pid)
+                    group_stopped = attempt_process.group_stopped(process.pid)
                     raise
             finally:
                 _ACTIVE_CHILD_PGID = None
@@ -190,10 +181,10 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
                 # Members that outlived the leader's TERM must not survive the daemon.
                 _signal_child_group(process.pid, signal.SIGKILL)
                 if process.returncode is not None and process.returncode < 0:
-                    group_stopped = _process_group_stopped(process.pid)
+                    group_stopped = attempt_process.group_stopped(process.pid)
                     return _child_stopped_result(command, timeout_seconds, executor_id, group_stopped)
             completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-            group_stopped = _process_group_stopped(process.pid)
+            group_stopped = attempt_process.group_stopped(process.pid)
         else:
             completed = runner(command, cwd=str(AGENTS_ROOT), text=True, capture_output=True,
                                timeout=timeout_seconds, check=False)
@@ -570,7 +561,7 @@ def _reconcile_abandoned_executors(context):
         if (not executor_id or identity.get('process_group_id') != identity.get('pid')
                 or worker_identity.inspect_recorded_identity(identity) != 'dead'):
             continue
-        if _process_group_stopped(identity['pid']):
+        if attempt_process.group_stopped(identity['pid']):
             _finish_stopped_executor(context, executor_id)
 
 
@@ -1026,7 +1017,6 @@ def _heartbeat(context, now=None):
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.heartbeat_daemon_lease(conn, context.lease_id, ttl_seconds, now=now)
     _record_runtime_tick(context, now=now)
-
 
 
 def _resident_loop(

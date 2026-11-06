@@ -1,3 +1,4 @@
+from robert_agent import worker_identity
 from contextlib import closing
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ class DeadlineRemediationTests(unittest.TestCase):
                 signals = [None, ProcessLookupError()] if at_kill else [ProcessLookupError()]
                 with mock.patch.object(daemon.subprocess, 'Popen', return_value=process), mock.patch.object(
                     daemon.os, 'killpg', side_effect=signals
-                ) as kill, mock.patch.object(run_once, '_live_process_group', return_value=False):
+                ) as kill, mock.patch.object(worker_identity, 'live_process_group', return_value=False):
                     result = daemon.run_child_json(['control'], timeout_seconds=1)
                 self.assertEqual(result['status'], 'child_timeout')
                 self.assertTrue(result['child']['executor_id'])
@@ -40,7 +41,7 @@ class DeadlineRemediationTests(unittest.TestCase):
         process.communicate.side_effect = [subprocess.TimeoutExpired(['control'], 1), ('', '')]
         with mock.patch.object(daemon.subprocess, 'Popen', return_value=process), mock.patch.object(
             daemon.os, 'killpg', side_effect=ProcessLookupError()
-        ), mock.patch.object(run_once, '_live_process_group', return_value=True):
+        ), mock.patch.object(worker_identity, 'live_process_group', return_value=True):
             result = daemon.run_child_json(['control'], timeout_seconds=1)
         self.assertFalse(result['child']['process_group_stopped'])
         self.assertTrue(result['child']['executor_id'])

@@ -165,12 +165,12 @@ class ControlplaneRemediationTests(unittest.TestCase):
             program = '''import json,os,sqlite3,sys,time
 from datetime import datetime,timezone
 from pathlib import Path
-from robert_agent import run_once
+from robert_agent.execution import leases as execution_leases
 now=datetime.now(timezone.utc).isoformat()
 conn=sqlite3.connect(sys.argv[1])
 conn.execute("INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('timed','running',?,?)",
              (now,json.dumps({'executor_id':os.environ.get('_ROBERT_EXECUTOR_ID')})))
-run_once._acquire_agent_lease(conn,'repo:x','timed',now,9)
+execution_leases.acquire(conn,'repo:x','timed',now,9)
 conn.commit()
 Path(sys.argv[2]).touch()
 time.sleep(30)

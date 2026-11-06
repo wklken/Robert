@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent import retry_policy, run_once
+from robert_agent.execution import leases as execution_leases
 
 
 class RetryClassificationTests(unittest.TestCase):
@@ -276,7 +277,7 @@ class WaitingEvidenceTests(unittest.TestCase):
         now=run_once._now()
         with closing(sqlite3.connect(db)) as conn,conn:
             task=conn.execute('SELECT task_id FROM tasks').fetchone()[0]
-            lease=run_once._acquire_agent_lease(conn,'repo:example/backend','other-run',now,9)
+            lease=execution_leases.acquire(conn,'repo:example/backend','other-run',now,9)
         saved=None
         for _ in range(2):
             run_once.run_once(fixture.config_path,dry_run=True,skip_external=True,skip_publish=True)
@@ -288,7 +289,7 @@ class WaitingEvidenceTests(unittest.TestCase):
                     self.assertEqual(timing['waiting_since'],saved)
                 saved=timing['waiting_since']
         with closing(sqlite3.connect(db)) as conn,conn:
-            run_once._release_agent_lease(conn,lease['lease_id'],run_once._now())
+            execution_leases.release(conn,lease['lease_id'],run_once._now())
         run_once.run_once(fixture.config_path,dry_run=True,skip_external=True,skip_publish=True)
         with closing(sqlite3.connect(db)) as conn:
             self.assertNotEqual(execution_metrics.task_timing(conn,task)['waiting_reason'],'repository_busy')

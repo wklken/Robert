@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from robert_agent.adapters.git.remotes import github_owner
 import argparse
 from contextlib import closing
 import json
@@ -390,20 +391,6 @@ def _find_existing_open_pr(repo, head, marker, run_command, base="", head_owner=
     return {"ok": True, "status": "not_found", "command": command}
 
 
-def _github_remote_owner(remote_url):
-    remote_url = (remote_url or "").strip()
-    if not remote_url:
-        return ""
-    if remote_url.startswith("git@") and ":" in remote_url:
-        path = remote_url.split(":", 1)[1]
-    else:
-        path = urlparse(remote_url).path.lstrip("/")
-    if path.endswith(".git"):
-        path = path[:-4]
-    parts = [part for part in path.split("/") if part]
-    return parts[0] if len(parts) >= 2 else ""
-
-
 def _head_owner_from_push_metadata(metadata, head, run_command):
     branch = _metadata_value(metadata, "branch", "head", "head_branch")
     if branch and branch != head:
@@ -420,7 +407,7 @@ def _head_owner_from_push_metadata(metadata, head, run_command):
     )
     if _command_failure(completed, "git remote get-url failed"):
         return ""
-    return _github_remote_owner(getattr(completed, "stdout", ""))
+    return github_owner(getattr(completed, "stdout", ""))
 
 
 def _sibling_push_metadata(conn, action, head):
@@ -1914,8 +1901,8 @@ def publish_ready_actions(db_path, dry_run=False, limit=20, run_command=subproce
                         if (result['status'] == 'superseded' and result_id
                                 and not scope.get('review_round_id') and not scope.get('vote_round_id')
                                 and scope.get('task_kind') not in {'ci_remediation', 'merge_conflict_remediation'}):
-                            from robert_agent import run_once
-                            run_once._finalize_superseded_result(conn, result_id, now)
+                            from robert_agent.work.application import lifecycle as work_application_lifecycle
+                            work_application_lifecycle.finalize_superseded_result(conn, result_id, now)
                     continue
                 # A non-zero/raised remote command is ambiguous.  Keep the intent in
                 # executing and let the next pass reconcile before any retry.

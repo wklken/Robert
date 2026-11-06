@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from robert_agent import daemon, github_scan, run_once, storage, validate_config, wakeup
+from robert_agent import daemon, github_scan, storage, validate_config, wakeup
+from robert_agent.work import repositories as work_repositories
 from tests import test_retention as retention_fixtures, test_run_once as run_fixtures
 
 
@@ -98,7 +99,7 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
         config = validate_config.validate_config(fixture.config_path, skip_external=True)
         storage.init_database(config['db_path'])
         with closing(sqlite3.connect(config['db_path'])) as conn, conn:
-            repo_id = run_once._upsert_repo(conn, config['repos'][0])
+            repo_id = work_repositories.upsert_repo(conn, config['repos'][0])
             wakeup.request_wakeup(conn, repo_id=repo_id, reason='manual_operator_request',
                 dedupe_key='refresh', metadata={'kind': 'github_context_refresh'})
 

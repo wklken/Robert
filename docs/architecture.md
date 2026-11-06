@@ -3,9 +3,10 @@
 Robert 是运行在本机的 Python 控制面。GitHub 和本地操作提供输入，编码 Worker
 完成受限任务，控制面负责授权、调度、监督、审计和发布，SQLite 保存可恢复的事实。
 
-本文按 **2026-10-31、源码提交 `06fb28b7a22a9615a5781c5a4a82688c086de6fc`**
-核对实现。Mermaid 图可直接在 GitHub 阅读。箭头的含义在各图前说明；省略通用日志
-和工具函数。先看整体架构与模块表，再按问题进入机制图：
+运行机制图基于 **2026-10-31、源码提交 `06fb28b7a22a9615a5781c5a4a82688c086de6fc`**。
+[源码分层](#源码分层)与模块路径于 **2026-11-07** 按 `main@e5989c3` 上的本轮重构更新。
+Mermaid 图可直接在 GitHub 阅读。箭头的含义在各图前说明；省略通用日志和工具函数。
+先看整体架构与模块表，再按问题进入机制图：
 
 - [整体架构](#整体架构)与[模块关系](#模块关系)
 - [事件授权、串行协作与路由](#事件授权串行协作与路由)
@@ -16,6 +17,62 @@ Robert 是运行在本机的 Python 控制面。GitHub 和本地操作提供输�
 - [多模型评审与投票](#多模型评审与投票)
 - [PR 自修复](#pr-自修复)
 - [核心数据关系](#核心数据关系)
+
+## 源码分层
+
+当前采用模块化单体，仍使用同一个 SQLite 数据库。目录迁移按事务和依赖边界推进。
+本阶段先建立可复用的底层能力，尚未完成所有应用用例、UI 和运维入口的迁移。
+
+```text
+robert_agent/
+  configuration/              # 配置加载、schema、严格 v2 校验、路由和监督设置
+  work/
+    errors.py                 # 命令异常契约（work_items 仍对调用者提供相同异常类型）
+    policies.py               # 纯事件信任判断
+    queries.py                # 任务输入、工作流和来源查询
+    repositories.py           # 仓库登记；使用调用者的事务
+    admission.py              # 请求重新授权、输入归属
+    application/lifecycle.py  # 失败、等待、发布被新版本替代后的任务终结
+  execution/
+    ownership.py              # Subject claim、预算归属、终结和 attention
+    leases.py                 # 仓库执行租约；过期不等于进程已退出
+    notifications.py          # 本地执行通知记录
+    stages.py                 # 可注入存储/快照/产物能力的多模型执行机制
+  delivery/policies.py        # 提交和最终审计共享的纯校验
+  workflows/routing.py        # 路由解析、即时授权和技能可用性
+  adapters/
+    processes/attempt.py      # 进程身份、存活、组退出和终止
+    github/                   # gh JSON 读取、来源状态、PR 元信息
+    git/remotes.py            # Git remote 所有者解析
+  security/text.py            # 操作界面共享的安全文本
+```
+
+- `configuration` 不加载监督执行服务。`resources/routes.yml` 是固定路由的唯一可编辑来源；
+  Python 派生默认技能、置信度和运行时表示。外部仍是严格 config v2。
+- `execution.stages` 定义 `StageStore`、`StageWorkspace`、`StageArtifacts` 能力。
+  review/vote 协调器提供实现及共享槽位，不由执行器选择某个具体工作流。
+- `work.queries` 只查询；`ownership`、`admission`、`lifecycle` 使用调用者的连接和原事务。
+  `claim_task` 可能持久化 claim/attention，不是只读判断。发布回执和任务终结的原子性保持。
+- `result_contract` 依赖纯 `delivery.policies`，不加载最终审计与 vote 实现。
+  授权目标观察仍在 `action_scope`，最终审计仍在 `audit_result`，二者职责没有合并。
+- `run_once` 消费以上能力。业务消费者不再通过它获取租约、任务输入、授权或任务终结函数。
+  `worker_supervision` 仍共用其运行监督用例，这项剩余依赖在后续执行层拆分时处理。
+
+`tests/test_architecture_boundaries.py` 检查全源码显式静态 import 图无环（包括函数内
+import），并约束新底层模块的依赖。该门禁不证明任意动态加载、外部部署脚本或运行时
+对象调用无环；Worker 和已安装 wheel 入口另由场景及打包验证覆盖。
+
+当前保留 `robert_agent.cli.main`、`validate_config` 的命令入口，以及已生成 prompt
+使用的 `worker_result.py`、`worker_snapshot.py`、`worker_heartbeat.py`、`status.py`。
+原 `route_config`、`supervision_config`、`model_execution` 没有仓库内持久入口，消费者已
+迁到新模块，不保留整包转发。仓库外直接 import 这些内部模块的脚本需要调整；本轮不
+宣称兼容任意第三方私有 import。
+
+后续依次迁移任务准备/接续、Attempt 派发和恢复、发布对账、监督维护工作流、上下文及
+查询/UI、运行装配。`work.application.lifecycle` 仍调用既有 `native_rounds`、`remediation`
+和 `work_items`，它是过渡中的应用用例，不是纯领域层。不能因为静态 import 无环，就把
+整个项目视为已经满足最终分层目标。完整步骤及验收约束见
+[源码重构计划](superpowers/plans/2026-11-06-source-architecture-refactor.md)。
 
 ## 整体架构
 
@@ -83,7 +140,7 @@ flowchart LR
     CLI --> Run["run_once.py"]
     Loop --> Run
     Run --> Intake["discover.py · authorize.py · workstream.py"]
-    Run --> Routing["route.py · route_config.py · skills.py"]
+    Run --> Routing["route.py · configuration/routes.py · skills.py"]
     Run --> Prepare["worktree.py · render_prompt.py"]
     Run --> Launch["dispatch.py → worker_adapters/"]
     Run --> Supervise["supervise.py · worker_identity.py"]
@@ -91,19 +148,19 @@ flowchart LR
     Run --> Publish["publish.py → publication_reconcile.py"]
     Run --> State["storage.py · execution_store.py · execution_operations.py"]
     Run --> Rounds["review_coordinator.py / vote_coordinator.py"]
-    Rounds --> Models["model_execution.py → model_pool.py"]
+    Rounds --> Models["execution/stages.py → model_pool.py"]
 ```
 
 | 责任 | 主要模块 | 关键契约 |
 | --- | --- | --- |
 | 外部发现 | [github_scan.py](../src/robert_agent/github_scan.py)、[github_read.py](../src/robert_agent/github_read.py)、[discover.py](../src/robert_agent/discover.py) | 完整观察批次先落盘；缓存命中仍需本地授权 |
 | 授权与协作线程 | [authorize.py](../src/robert_agent/authorize.py)、[workstream.py](../src/robert_agent/workstream.py) | 正文不能扩大权限；Issue 与 PR 保留各自主线 |
-| 路由与准备 | [route.py](../src/robert_agent/route.py)、[route_config.py](../src/robert_agent/route_config.py)、[skills.py](../src/robert_agent/skills.py)、[worktree.py](../src/robert_agent/worktree.py)、[render_prompt.py](../src/robert_agent/render_prompt.py) | 固定输出、动作权限与 workspace 策略；缺必需 Skill 时不启动 |
+| 路由与准备 | [route.py](../src/robert_agent/route.py)、[configuration/routes.py](../src/robert_agent/configuration/routes.py)、[skills.py](../src/robert_agent/skills.py)、[worktree.py](../src/robert_agent/worktree.py)、[render_prompt.py](../src/robert_agent/render_prompt.py) | 固定输出、动作权限与 workspace 策略；缺必需 Skill 时不启动 |
 | 执行与监督 | [dispatch.py](../src/robert_agent/dispatch.py)、[worker_adapters/](../src/robert_agent/worker_adapters/)、[supervise.py](../src/robert_agent/supervise.py)、[worker_identity.py](../src/robert_agent/worker_identity.py) | 环境白名单、进程身份、心跳、超时与退出证明 |
 | Worker 交接 | [worker/](../src/robert_agent/worker/)、[result_contract.py](../src/robert_agent/result_contract.py)、[result_spool.py](../src/robert_agent/result_spool.py) | 绑定任务与 Attempt；规范化计划动作；持久提交与冲突拒绝 |
 | 审计与发布 | [audit_result.py](../src/robert_agent/audit_result.py)、[action_scope.py](../src/robert_agent/action_scope.py)、[redaction.py](../src/robert_agent/redaction.py)、[publish.py](../src/robert_agent/publish.py)、[publication_reconcile.py](../src/robert_agent/publication_reconcile.py) | 校验证据、权限与文本；发布锁、远端确认、去重与有限重试 |
 | 状态与内部调度 | [storage.py](../src/robert_agent/storage.py)、[execution_store.py](../src/robert_agent/execution_store.py)、[execution_operations.py](../src/robert_agent/execution_operations.py)、[wakeup.py](../src/robert_agent/wakeup.py)、[wakeup_notifier.py](../src/robert_agent/wakeup_notifier.py) | SQLite 事务与事实回执；通知只是提示；恢复受主体状态约束 |
-| 内建多模型流程 | [review_coordinator.py](../src/robert_agent/review_coordinator.py)、[vote_coordinator.py](../src/robert_agent/vote_coordinator.py)、[model_execution.py](../src/robert_agent/model_execution.py)、[model_pool.py](../src/robert_agent/model_pool.py) | 冻结输入、共享额度、封存输出、复用已校验阶段 |
+| 内建多模型流程 | [review_coordinator.py](../src/robert_agent/review_coordinator.py)、[vote_coordinator.py](../src/robert_agent/vote_coordinator.py)、[execution/stages.py](../src/robert_agent/execution/stages.py)、[model_pool.py](../src/robert_agent/model_pool.py) | 冻结输入、共享额度、封存输出、复用已校验阶段 |
 | PR 自修复 | [pr_health.py](../src/robert_agent/pr_health.py)、[remediation.py](../src/robert_agent/remediation.py) | 仓库显式开启；证据、版本、次数与预算限制 |
 | 操作与可观测性 | [web.py](../src/robert_agent/web.py)、[work_item_control.py](../src/robert_agent/work_item_control.py)、[status.py](../src/robert_agent/status.py)、[diagnostics.py](../src/robert_agent/diagnostics.py)、[notify.py](../src/robert_agent/notify.py) | 默认只读；写入需身份、CSRF 与状态校验；诊断导出脱敏 |
 | 可选知识与查询 | [project_memory.py](../src/robert_agent/project_memory.py)、[runtime_knowledge.py](../src/robert_agent/runtime_knowledge.py)、[integrations/openclaw.py](../src/robert_agent/integrations/openclaw.py) | 项目记忆与运行知识可复用；OpenClaw 提供查询 |
@@ -380,7 +437,7 @@ Worker 的运行超时，父任务期限仍有效。未知启动保留额度。�
 同账户进程仍可能访问其他目录。
 
 源码：[review_coordinator.py](../src/robert_agent/review_coordinator.py)、
-[vote_coordinator.py](../src/robert_agent/vote_coordinator.py)、[StageCoordinator](../src/robert_agent/model_execution.py)、
+[vote_coordinator.py](../src/robert_agent/vote_coordinator.py)、[StageCoordinator](../src/robert_agent/execution/stages.py)、
 [model_pool.py](../src/robert_agent/model_pool.py)、[vote_tally.py](../src/robert_agent/vote_tally.py)。
 配置与恢复见 [multi-model-review.md](multi-model-review.md) 和 [multi-agent-vote.md](multi-agent-vote.md)。
 

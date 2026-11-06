@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from robert_agent.adapters.github import client as github_client
 import argparse
 import json
 import re
@@ -6,7 +7,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from robert_agent.common import emit, run_command
+from robert_agent.common import emit
 
 
 SOURCE_CONTEXT_VERSION = 3
@@ -108,21 +109,6 @@ def normalize_events(raw_events, repo_config):
     return normalized
 
 
-def _run_json(args, runner=subprocess.run):
-    completed = run_command(args, runner=runner, text=True, capture_output=True, check=True)
-    stdout = completed.stdout.strip()
-    if not stdout:
-        return []
-    return json.loads(stdout)
-
-
-def _try_run_json(args, runner=subprocess.run):
-    try:
-        return _run_json(args, runner=runner)
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
-        return None
-
-
 def _flatten_items(payload):
     if not payload:
         return []
@@ -138,7 +124,7 @@ def _flatten_items(payload):
 
 
 def _api_items(repo, api_path, runner):
-    payload = _try_run_json(
+    payload = github_client.try_read_json(
         ["gh", "api", f"repos/{repo}/{api_path}", "--paginate", "--slurp"],
         runner=runner,
     )
@@ -330,7 +316,7 @@ def _enrich_pull_request_metadata(raw, repo_config, runner):
         return raw
     repo = repo_config["full_name"]
     github_account = repo_config["github_account"]
-    details = _try_run_json(["gh", "api", f"repos/{repo}/pulls/{raw['number']}"], runner=runner)
+    details = github_client.try_read_json(["gh", "api", f"repos/{repo}/pulls/{raw['number']}"], runner=runner)
     details = details if isinstance(details, dict) else {}
     body = details.get("body") or raw.get("body") or ""
     dd_workstream = parse_dd_workstream_metadata(body)
@@ -385,7 +371,7 @@ def _actor_permission(repo_config, actor_login, runner):
     if not actor_login:
         return None
     repo = repo_config["full_name"]
-    payload = _try_run_json(
+    payload = github_client.try_read_json(
         ["gh", "api", f"repos/{repo}/collaborators/{actor_login}/permission"],
         runner=runner,
     )
@@ -424,7 +410,7 @@ def collect_account_notifications(repo_configs, runner=subprocess.run, read_sess
         return read_session.collect_notifications(repo_configs)
     configured = {repo["full_name"] for repo in repo_configs}
     buckets = {repo["full_name"]: [] for repo in repo_configs}
-    pages = _run_json(
+    pages = github_client.read_json(
         ["gh", "api", "notifications", "--paginate", "--slurp"],
         runner=runner,
     )
@@ -443,7 +429,7 @@ def collect_account_notifications(repo_configs, runner=subprocess.run, read_sess
 
 def _source_metadata(raw, repo_config, runner):
     repo = repo_config["full_name"]
-    payload = _try_run_json(["gh", "api", f"repos/{repo}/issues/{raw['number']}"], runner=runner)
+    payload = github_client.try_read_json(["gh", "api", f"repos/{repo}/issues/{raw['number']}"], runner=runner)
     if not isinstance(payload, dict):
         return raw, None
     user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
@@ -859,7 +845,7 @@ def collect_live_events(
     def search(args):
         if read_session is not None:
             return read_session.search(args, notification_hints=notification_raws)
-        return _run_json(args, runner=runner)
+        return github_client.read_json(args, runner=runner)
 
     def source_events(raw, load):
         if read_session is None:

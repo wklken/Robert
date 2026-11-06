@@ -1,12 +1,14 @@
 import copy
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
 import yaml
 
 from robert_agent.validate_config import validate_config
-from robert_agent.route_config import resolve_route_config
+from robert_agent.configuration.routes import resolve_route_config
 
 
 class ConfigV2Tests(unittest.TestCase):
@@ -128,7 +130,7 @@ class ConfigV2Tests(unittest.TestCase):
         self.assertIn('prohibited', self.validate()['safe_error'])
 
     def test_continuous_supervision_defaults_and_nullable_profiles_are_preserved(self):
-        from robert_agent.supervision_config import DEFAULTS
+        from robert_agent.configuration.supervision import DEFAULTS
         self.assertEqual(self.validate()['supervision'], DEFAULTS)
         self.config['supervision'] = {'mode': 'off', 'diagnosis': None,
                                       'repair': None, 'recovery': None, 'build_manifest': None}
@@ -136,10 +138,36 @@ class ConfigV2Tests(unittest.TestCase):
         self.config['supervision']['diagnosis'] = {'command': ['/usr/bin/false'] * 33}
         self.assertIn('at most 32', self.validate()['safe_error'])
 
+    def test_config_validation_does_not_load_supervision_services(self):
+        self.config['supervision'] = {
+            'mode': 'recover_known',
+            'diagnosis': {'command': ['/usr/bin/false']},
+            'recovery': {'allowed_actions': ['audit_retry'], 'repositories': ['example/test']},
+            'repair': {'repository': 'example/test'},
+        }
+        self.path.write_text(yaml.safe_dump(self.config), encoding='utf-8')
+        script = """
+import sys
+from robert_agent.validate_config import validate_config
+
+result = validate_config(sys.argv[1], skip_external=True)
+assert result['ok'], result
+services = {'supervision_diagnose', 'supervision_actions', 'supervision_repair'}
+loaded = services & {name.removeprefix('robert_agent.') for name in sys.modules}
+assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}'
+"""
+        result = subprocess.run(
+            [sys.executable, '-B', '-c', script, str(self.path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_integer_schema_checks_do_not_coerce_to_float(self):
-        from robert_agent.validate_config import _schema_value
+        from robert_agent.configuration.schema import apply_schema
         large = 10 ** 500
-        self.assertEqual(_schema_value(large, {'type': 'integer'}, {}, 'value'), large)
+        self.assertEqual(apply_schema(large, {'type': 'integer'}, {}, 'value'), large)
 
     def test_runtime_defaults_and_repository_account_override(self):
         import sys
@@ -255,7 +283,8 @@ class ConfigV2Tests(unittest.TestCase):
         from contextlib import closing
         from datetime import datetime, timedelta, timezone
         import sqlite3
-        from robert_agent import run_once, storage, supervise
+        from robert_agent import storage, supervise
+        from robert_agent.execution import leases as execution_leases
         self.config['scheduler'] = {'lease_ttl_seconds': 61}
         self.config['supervision'] = {'heartbeat_stale_seconds': 31, 'hard_timeout_seconds': 121}
         config = self.validate()
@@ -263,7 +292,7 @@ class ConfigV2Tests(unittest.TestCase):
         now = datetime(2026, 11, 6, tzinfo=timezone.utc)
         storage.init_database(config['db_path'])
         with closing(sqlite3.connect(config['db_path'])) as conn, conn:
-            lease = run_once._acquire_agent_lease(conn, 'repo', 'run', now.isoformat(),
+            lease = execution_leases.acquire(conn, 'repo', 'run', now.isoformat(),
                                                   config['lease_ttl_seconds'])
             expires = conn.execute('SELECT expires_at FROM leases WHERE lease_id=?',
                                    (lease['lease_id'],)).fetchone()[0]

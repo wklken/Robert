@@ -1,4 +1,5 @@
 """Read-only GitHub PR health and CI evidence normalization."""
+from robert_agent.adapters.github import client as github_client
 
 import hashlib
 import json
@@ -6,7 +7,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
-from robert_agent import discover, redaction
+from robert_agent import redaction
 from robert_agent.common import run_command
 
 
@@ -30,7 +31,7 @@ def _mapping(value):
 
 
 def fetch_pr_snapshot(repo_full_name, number, runner=subprocess.run):
-    payload = discover._try_run_json(
+    payload = github_client.try_read_json(
         ["gh", "api", f"repos/{repo_full_name}/pulls/{number}"],
         runner=runner,
     )
@@ -159,7 +160,7 @@ def _workflow_observation(
     conclusion = workflow.get("conclusion")
     evidence = {}
     if conclusion == "failure":
-        jobs_payload = discover._try_run_json(
+        jobs_payload = github_client.try_read_json(
             [
                 "gh",
                 "api",
@@ -243,7 +244,7 @@ def _check_observation(
     evidence = {}
     if conclusion == "failure":
         output = _mapping(check.get("output"))
-        annotations = discover._try_run_json(
+        annotations = github_client.try_read_json(
             [
                 "gh",
                 "api",
@@ -295,7 +296,7 @@ def collect_ci_observations(
     runner=subprocess.run,
 ):
     allowed = set(check_allowlist)
-    workflow_payload = discover._try_run_json(
+    workflow_payload = github_client.try_read_json(
         [
             "gh",
             "api",
@@ -315,7 +316,7 @@ def collect_ci_observations(
         and workflow.get("name") in allowed
     ]
 
-    checks_payload = discover._try_run_json(
+    checks_payload = github_client.try_read_json(
         [
             "gh",
             "api",

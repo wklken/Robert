@@ -46,7 +46,8 @@ jobs:
           python -m mypy
           src/robert_agent/cli
           src/robert_agent/paths.py
-          src/robert_agent/route_config.py
+          src/robert_agent/configuration
+          src/robert_agent/execution/stages.py
           src/robert_agent/skills.py
           src/robert_agent/service.py
       - run: python -B -m unittest discover -s tests

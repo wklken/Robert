@@ -1,4 +1,6 @@
 """A stopped admission lane still bounds and reaps its existing workers."""
+from robert_agent.adapters.processes import attempt as attempt_process
+from robert_agent import worker_identity
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
@@ -11,7 +13,8 @@ import unittest
 from unittest import mock
 
 from tests import test_terminal_github_followup as fixtures
-from robert_agent import daemon, daemon_state, run_once, validate_config, worker_identity
+from robert_agent import daemon, daemon_state, run_once, validate_config
+from robert_agent.execution import leases as execution_leases
 
 
 class PausedWorkerSupervisionTests(unittest.TestCase):
@@ -81,7 +84,7 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
         from robert_agent import worker_supervision
         proc = self.process()
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            run_once._acquire_agent_lease(conn, self.fixture.fixture.repo_id, 'other-owner', self.now.isoformat(), 60)
+            execution_leases.acquire(conn, self.fixture.fixture.repo_id, 'other-owner', self.now.isoformat(), 60)
         result = worker_supervision.run(self.config_path)
         self.assertTrue(result['ok'], result)
         self.assertIsNone(proc.poll())
@@ -107,7 +110,7 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
     def test_unknown_identity_keeps_capacity_and_does_not_signal(self):
         from robert_agent import worker_supervision
         proc = self.process()
-        with mock.patch.object(run_once, '_dispatch_process_status', return_value={'status': 'unknown'}), \
+        with mock.patch.object(attempt_process, 'dispatch_status', return_value={'status': 'unknown'}), \
              mock.patch.object(run_once, '_terminate_owned_attempt', side_effect=AssertionError('unverified identity')):
             self.assertTrue(worker_supervision.run(self.config_path)['ok'])
         self.assertIsNone(proc.poll())
