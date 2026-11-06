@@ -161,6 +161,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wait for another daemon's lease instead of exiting (used by service managers).",
     )
 
+    supervisor_parser = subparsers.add_parser("supervisor", help="Independently supervise task progress.")
+    supervisor_commands = supervisor_parser.add_subparsers(dest="supervisor_command", required=True)
+    for name in ("run", "check", "status"):
+        sub = supervisor_commands.add_parser(name)
+        _add_config_argument(sub)
+        _add_output_argument(sub)
+        if name == "run":
+            sub.add_argument("--once", action="store_true")
+
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Migrate legacy Robert state.",
@@ -217,6 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     ]:
         command_parser = service_subparsers.add_parser(name)
         command_parser.add_argument("--dry-run", action="store_true")
+        command_parser.add_argument("--target", choices=["all", "daemon", "supervisor"], default="all")
         _add_output_argument(command_parser)
         if name == "install":
             _add_config_argument(command_parser)
@@ -421,6 +431,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 args.output,
             )
+        if args.command == "supervisor":
+            from robert_agent import supervisor
+            validated = validate_config.validate_config(args.config, skip_external=True)
+            if not validated.get("ok"):
+                return _emit_and_code(validated, args.output)
+            if args.supervisor_command == "run":
+                result = supervisor.run(validated, once=args.once)
+            elif args.supervisor_command == "check":
+                result = supervisor.check(validated)
+            else:
+                result = supervisor.status(validated)
+            return _emit_and_code(result, args.output)
         if args.command == "service":
             platform_name = (
                 "darwin"
@@ -436,17 +458,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     executable,
                     args.config,
                     dry_run=args.dry_run,
+                    **({"target": args.target} if args.target != "all" else {}),
                 )
             elif args.service_command == "uninstall":
                 result = service.uninstall_service(
                     platform_name,
                     dry_run=args.dry_run,
+                    **({"target": args.target} if args.target != "all" else {}),
                 )
             else:
                 result = service.control_service(
                     platform_name,
                     args.service_command,
                     dry_run=args.dry_run,
+                    **({"target": args.target} if args.target != "all" else {}),
                 )
             return _emit_and_code(result, args.output)
         if args.command == "maintenance" and args.maintenance_command == "prune":

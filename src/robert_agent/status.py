@@ -220,6 +220,8 @@ def build_status(db_path, history_limit=5):
     data = web.build_dashboard_data(Path(db_path).expanduser(), history_limit=history_limit)
     with closing(sqlite3.connect(db_path)) as conn:
         timings = execution_metrics.summarize(conn)
+        from robert_agent import supervision_store
+        supervision = supervision_store.list_incidents(conn, status="active", limit=history_limit) if supervision_store.has_schema(conn) else []
     latest_run = (data.get("recent_runs") or [{}])[0]
     return {
         "summary": data.get("summary") or {},
@@ -228,6 +230,7 @@ def build_status(db_path, history_limit=5):
         "wakeup_summary": data.get("wakeup_summary") or {},
         "acceptance_metrics": data.get("acceptance_metrics") or {},
         "execution_timings": timings,
+        "supervision_incidents": supervision,
         "latest_loop": data.get("latest_loop") or {},
         "operator_alerts": (data.get("operator_alerts") or [])[:history_limit],
         "operator_next_steps": (data.get("operator_next_steps") or [])[:history_limit],

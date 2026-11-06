@@ -80,3 +80,10 @@ repos: []
 #     multi_agent_vote:
 #       enabled: true
 #       workers: [default, claude_voter]
+
+# Independent task observation; recovery remains opt-in.
+supervision:
+  mode: observe
+  poll_seconds: 60
+  batch_size: 100
+  stall_seconds: 300
