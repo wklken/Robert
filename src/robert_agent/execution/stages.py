@@ -10,23 +10,45 @@ import stat
 import sqlite3
 import threading
 import time
+from typing import Any, ContextManager, Protocol
 
-from robert_agent import dispatch, execution_store, model_environment, retry_policy, review_files, review_workspace, worker_identity
-from robert_agent import review_store as store
+from robert_agent import dispatch, execution_store, model_environment, retry_policy, worker_identity
 from robert_agent.publication_lock import task_publication_lock
 from robert_agent.worker import snapshot
 
 
-def read_pr(repo, number):
-    from robert_agent.review_coordinator import read_pr as read
-    return read(repo, number)
+class StageStore(Protocol):
+    def connect(self, db_path: str) -> ContextManager[sqlite3.Connection]: ...
+    def session(self, conn: sqlite3.Connection, *, task_id: str) -> dict[str, Any] | None: ...
+    def now(self) -> str: ...
+    def digest(self, path: str | Path) -> str: ...
+    def update(self, conn: sqlite3.Connection, round_id: str, **fields: Any) -> None: ...
+    def runs(self, conn: sqlite3.Connection, round_id: str) -> list[dict[str, Any]]: ...
+    def new_run(
+        self, conn: sqlite3.Connection, round_id: str, stage: str, worker_id: str,
+        owner_attempt_id: str, root: str, prompt_sha256: str, model: str | None = None,
+    ) -> dict[str, Any]: ...
+    def update_run(self, conn: sqlite3.Connection, run_id: str, **fields: Any) -> None: ...
+    def reserve_slot(self, conn: sqlite3.Connection, run_id: str) -> bool: ...
+    def release_slot(self, conn: sqlite3.Connection, run_id: str) -> None: ...
+    def reserved_runs(self, conn: sqlite3.Connection) -> list[dict[str, Any]]: ...
+    def release_finished_slot(self, conn: sqlite3.Connection, run: dict[str, Any]) -> None: ...
 
 
-class ReviewStopped(RuntimeError):
+class StageWorkspace(Protocol):
+    def verify_snapshot(self, manifest: dict[str, Any]) -> bool: ...
+
+
+class StageArtifacts(Protocol):
+    def safe_path(self, path: str | Path, root: str | Path) -> Path: ...
+    def atomic_json(self, path: Path, payload: dict[str, Any]) -> None: ...
+
+
+class StageStopped(RuntimeError):
     pass
 
 
-class ReviewSuperseded(RuntimeError):
+class StageSuperseded(RuntimeError):
     pass
 
 
@@ -84,7 +106,7 @@ def _wait_for_group_exit(recorded, timeout=2):
         time.sleep(0.05)
 
 
-def _active(conn, task_id, attempt_id):
+def attempt_is_active(conn, task_id, attempt_id):
     row = conn.execute('''SELECT t.lifecycle,a.status FROM tasks t JOIN attempts a ON a.task_id=t.task_id
         WHERE t.task_id=? AND a.attempt_id=? AND a.attempt_no=(
             SELECT MAX(attempt_no) FROM attempts WHERE task_id=t.task_id)''', (task_id, attempt_id)).fetchone()
@@ -93,13 +115,13 @@ def _active(conn, task_id, attempt_id):
                 and binding and binding['binding_status'] == 'active')
 
 
-def terminate_children(conn, task_id, store=store):
+def terminate_children(conn, task_id, *, store: StageStore):
     """Cancel all model process groups before allowing another attempt to start."""
     review = store.session(conn, task_id=task_id)
     if not review:
         return 'already_dead'
     outcomes = []
-    updates = []
+    updates: list[tuple[str, dict[str, Any]]] = []
     for run in store.runs(conn, review['round_id']):
         if run['status'] in {'prepared', 'waiting'} and not run['slot_reserved']:
             updates.append((run['run_id'], {'status': 'interrupted', 'error': 'coordinator stopped before launch'}))
@@ -142,19 +164,21 @@ def terminate_children(conn, task_id, store=store):
 
 
 class StageCoordinator:
-    store = store
-    workspace = review_workspace
-    voter_stage = 'review'
-    handoff_files: dict[str, tuple[str, ...]] = {}
-    artifact_kinds = ('result', 'report', 'evaluation', 'context_summary', 'source_index')
-    workflow_name = 'review'
+    """Run stages using capabilities supplied by the concrete workflow."""
 
-    def __init__(self, db_path, task_id, attempt_id, *, fetch_pr=read_pr,
-                 launcher=dispatch.dispatch_worker,
-                 poll_seconds=1):
+    store: StageStore
+    workspace: StageWorkspace
+    artifact_files: StageArtifacts
+    slot_stores: tuple[tuple[StageStore, str], ...]
+    voter_stage: str
+    handoff_files: dict[str, tuple[str, ...]]
+    artifact_kinds: tuple[str, ...]
+    workflow_name: str
+
+    def __init__(self, db_path, task_id, attempt_id, *, launcher=dispatch.dispatch_worker, poll_seconds=1):
         store = self.store
         self.db_path, self.task_id, self.attempt_id = str(db_path), task_id, attempt_id
-        self.fetch_pr, self.launcher = fetch_pr, launcher
+        self.launcher = launcher
         self.poll_seconds = poll_seconds
         self.stopping = threading.Event()
         self.processes = {}
@@ -172,10 +196,10 @@ class StageCoordinator:
     def check_active(self):
         store = self.store
         if self.stopping.is_set():
-            raise ReviewStopped('review coordinator is stopping')
+            raise StageStopped('review coordinator is stopping')
         with store.connect(self.db_path) as conn:
-            if not _active(conn, self.task_id, self.attempt_id):
-                raise ReviewStopped('review attempt is no longer current')
+            if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                raise StageStopped('review attempt is no longer current')
         # Ownership/cancellation is checked on every poll. The shared parent
         # heartbeat is diagnostic and must not turn a busy writer into a failed
         # model round or make every reviewer contend on the same UPDATE.
@@ -187,8 +211,8 @@ class StageCoordinator:
                 return
             try:
                 with closing(sqlite3.connect(self.db_path, timeout=0.1)) as conn, conn:
-                    if not _active(conn, self.task_id, self.attempt_id):
-                        raise ReviewStopped('review attempt is no longer current')
+                    if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                        raise StageStopped('review attempt is no longer current')
                     conn.execute('UPDATE attempts SET heartbeat_at=? WHERE attempt_id=?',
                                  (store.now(), self.attempt_id))
             except sqlite3.OperationalError as exc:
@@ -228,14 +252,14 @@ class StageCoordinator:
         pending = []
         for run in previous:
             if run['status'] == 'starting' and not run['dispatch']:
-                raise ReviewStopped('model launch outcome unknown; inspect before retry')
+                raise StageStopped('model launch outcome unknown; inspect before retry')
             if run['status'] == 'running':
                 pending.append(run)
 
         def reconcile(run):
             try:
                 self._wait(run, run['dispatch'], workers[run['worker_id']]['timeout_seconds'])
-            except ReviewStopped:
+            except StageStopped:
                 raise
             except RuntimeError as exc:
                 with store.connect(self.db_path) as conn:
@@ -269,10 +293,9 @@ class StageCoordinator:
     def reclaim_finished_slots(self):
         # A shared pool must reclaim proven-dead groups from either workflow;
         # unknown launches retain their reservation until explicit intervention.
-        from robert_agent.native_rounds import STORES
         reserved = []
         with self.store.connect(self.db_path) as conn:
-            for run_store, table in zip(STORES, ('review_runs', 'vote_runs')):
+            for run_store, table in self.slot_stores:
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
                     reserved.extend((run_store, run) for run in run_store.reserved_runs(conn))
         for run_store, run in reserved:
@@ -294,8 +317,8 @@ class StageCoordinator:
                     self.check_active()
                     with store.connect(self.db_path) as conn:
                         conn.execute('BEGIN IMMEDIATE')
-                        if not _active(conn, self.task_id, self.attempt_id):
-                            raise ReviewStopped('review attempt is no longer current')
+                        if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                            raise StageStopped('review attempt is no longer current')
                         acquired = store.reserve_slot(conn, run['run_id'])
                     if acquired:
                         launched = self.launcher(
@@ -343,13 +366,13 @@ class StageCoordinator:
         names = self.handoff_files[run['stage']]
         parent = 'runs' if run['stage'] == self.voter_stage else run['stage']
         sealed = Path(self.manifest['artifact_root']) / parent / 'sealed' / run['run_id']
-        review_files.safe_path(sealed, self.manifest['artifact_root'])
+        self.artifact_files.safe_path(sealed, self.manifest['artifact_root'])
         sealed.mkdir(parents=True, exist_ok=True)
         marker = sealed / 'seal.json'
         identity = {'run_id': run['run_id'], 'prompt_sha256': run['prompt_sha256']}
         if not marker.exists():
             hashes = {}
-            output = review_files.safe_path(run['output_dir'], self.manifest['artifact_root'])
+            output = self.artifact_files.safe_path(run['output_dir'], self.manifest['artifact_root'])
             directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 for name in names:
@@ -368,12 +391,12 @@ class StageCoordinator:
                     hashes[name] = hashlib.sha256(raw).hexdigest()
             finally:
                 os.close(directory_fd)
-            review_files.atomic_json(marker, {**identity, 'files': hashes})
+            self.artifact_files.atomic_json(marker, {**identity, 'files': hashes})
         saved = json.loads(marker.read_text(encoding='utf-8'))
         if any(saved.get(key) != value for key, value in identity.items()) or set(saved.get('files', {})) != set(names):
             raise ValueError('review seal identity changed')
         for name, expected in saved['files'].items():
-            path = review_files.safe_path(sealed / name, sealed)
+            path = self.artifact_files.safe_path(sealed / name, sealed)
             if store.digest(path) != expected:
                 raise ValueError('sealed review artifact changed')
         return sealed
@@ -399,20 +422,20 @@ class StageCoordinator:
                     launched = {**launched, 'process_exited': True}
                     break
                 if identity != 'alive_same':
-                    raise ReviewStopped('review worker identity requires attention')
+                    raise StageStopped('review worker identity requires attention')
             if (datetime.now(timezone.utc) - started).total_seconds() > timeout:
                 termination = worker_identity.terminate_recorded_identity(launched)
                 if termination['status'] == 'attention':
-                    raise ReviewStopped('review worker timeout termination requires attention')
+                    raise StageStopped('review worker timeout termination requires attention')
                 if not _wait_for_group_exit(launched):
-                    raise ReviewStopped('review worker timeout left a process group; inspect remaining processes')
+                    raise StageStopped('review worker timeout left a process group; inspect remaining processes')
                 self.release_slot(run)
                 raise RuntimeError('review worker timed out')
             time.sleep(self.poll_seconds)
         with store.connect(self.db_path) as conn:
             store.update_run(conn, run['run_id'], dispatch_json=json.dumps(launched))
         if not _wait_for_group_exit(launched):
-            raise ReviewStopped('review leader exited but process group remains; inspect and stop remaining processes before retry')
+            raise StageStopped('review leader exited but process group remains; inspect and stop remaining processes before retry')
         self.release_slot(run)
         _raise_rate_limit(launched)
         if launched.get('returncode', 0) != 0:
@@ -441,7 +464,7 @@ class StageCoordinator:
                     continue
                 raise ValueError('same-round prompt changed')
             if run['status'] == 'starting' and not run['dispatch']:
-                raise ReviewStopped('model launch outcome unknown; cancel and inspect this round')
+                raise StageStopped('model launch outcome unknown; cancel and inspect this round')
             if run['status'] not in {'succeeded', 'running'}:
                 continue
             try:
@@ -456,7 +479,7 @@ class StageCoordinator:
                     raise ValueError('registered review artifact changed')
                 self.workspace.verify_snapshot(self.manifest)
                 return self.register(run, artifact)
-            except ReviewStopped:
+            except StageStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
                 with store.connect(self.db_path) as conn:
@@ -488,7 +511,7 @@ class StageCoordinator:
             launched = self.launch_with_slot(run, worker, prompt_path, environment)
             if not launched.get('ok'):
                 if launched.get('pid') and not _wait_for_group_exit(launched):
-                    raise ReviewStopped('failed model launch left a process group; inspect remaining processes')
+                    raise StageStopped('failed model launch left a process group; inspect remaining processes')
                 self.release_slot(run)
                 _raise_rate_limit(launched)
                 raise RuntimeError(launched.get('safe_error', 'review launch failed'))
@@ -501,13 +524,13 @@ class StageCoordinator:
             if input_hash:
                 artifact['input_sha256'] = input_hash
             return self.register(run, artifact)
-        except ReviewStopped:
+        except StageStopped:
             raise
         except Exception as exc:
             with store.connect(self.db_path) as conn:
                 current = next(r for r in store.runs(conn, self.round_id) if r['run_id'] == run['run_id'])
                 if current['status'] == 'starting' and not current['dispatch']:
-                    raise ReviewStopped('model launch outcome unknown; inspect before retry') from exc
+                    raise StageStopped('model launch outcome unknown; inspect before retry') from exc
                 store.update_run(conn, run['run_id'], status='failed', error=str(exc))
             if (isinstance(exc, ModelRateLimited) and worker.get('fallback_model')
                     and model != worker['fallback_model']):

@@ -1,3 +1,5 @@
+from robert_agent.adapters.processes import attempt as attempt_process
+from robert_agent import worker_identity
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -10,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import execution_store, loop_engine, run_once, storage, worker_identity
+from robert_agent import execution_store, loop_engine, storage
 
 
 class SchedulerRemediationTests(unittest.TestCase):
@@ -170,7 +172,7 @@ repos:
         self.assertFalse(self.runnable())
 
     def test_unknown_identity_requests_fenced_supervision_immediately(self):
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'unknown'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'unknown'}):
             with self.connect() as conn:
                 conn.execute('PRAGMA query_only=ON')
                 self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=['repo:example/repo']))

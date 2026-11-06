@@ -1,3 +1,5 @@
+from robert_agent.workflows import routing as workflow_routing
+from robert_agent import worker_identity
 from collections import Counter
 from contextlib import closing
 import json
@@ -17,6 +19,7 @@ import yaml
 
 from tests import test_review_workspace as workspace_fixture
 from robert_agent import dispatch, loop_engine, publish, review_coordinator, review_files, review_store, run_once, validate_config, work_items
+from robert_agent.work.application import lifecycle as work_application_lifecycle
 from robert_agent.init_config import init_config
 from robert_agent.resource_files import resource
 
@@ -160,11 +163,11 @@ class ReviewCoordinatorTests(unittest.TestCase):
         driver.prepare()
         old_manifest = dict(driver.manifest)
         self.git_fixture.commit('value = 3\n')
-        with self.assertRaises(review_coordinator.ReviewSuperseded):
+        with self.assertRaises(review_coordinator.StageSuperseded):
             driver.run()
         with review_store.connect(self.db) as conn:
             now = review_store.now()
-            run_once._finalize_failed_task(conn, driver.task_id, driver.session['workstream_id'],
+            work_application_lifecycle.finalize_failed_task(conn, driver.task_id, driver.session['workstream_id'],
                                          now, {'status': 'failed_worker_process_exited'})
             conn.execute("UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=?",
                          (now, driver.attempt_id))
@@ -248,7 +251,7 @@ class ReviewCoordinatorTests(unittest.TestCase):
         process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
         self.addCleanup(process.kill)
         self.addCleanup(process.wait, 5)
-        identity = review_coordinator.worker_identity.capture_process_identity(process.pid)
+        identity = worker_identity.capture_process_identity(process.pid)
         process.kill()
         process.wait(timeout=5)
         with review_store.connect(self.db) as conn:
@@ -689,7 +692,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         repo = runtime['repos'][0]
         with review_store.connect(self.db) as conn:
             event = json.loads(conn.execute('SELECT payload_json FROM github_events LIMIT 1').fetchone()[0])
-            route = run_once._effective_route(runtime, repo, event)
+            route = workflow_routing.effective_route(runtime, repo, event)
             queued = review_store.enqueue(conn, repo, event, route, route['native_review_workers'])
 
         self.cycle([])
@@ -845,7 +848,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
                 conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (driver.task_id,))
             return result
         driver.launcher = cancel
-        with self.assertRaises(review_coordinator.ReviewStopped):
+        with self.assertRaises(review_coordinator.StageStopped):
             driver.run()
         with review_store.connect(self.db) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM github_actions').fetchone()[0], 0)
@@ -866,10 +869,10 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
     def test_disabled_or_unmatched_followup_preserves_legacy_route(self):
         config = validate_config.validate_config(self.config_path, skip_external=True)
         event = {**self.event(), 'authorization_status': 'accepted_context'}
-        self.assertEqual(run_once._effective_route(config, config['repos'][0], event)['route_id'], 'review-pr')
+        self.assertEqual(workflow_routing.effective_route(config, config['repos'][0], event)['route_id'], 'review-pr')
         for author, enabled in [('other', True), ('author', False)]:
             config['routes']['review-pr']['multi_agent_review']['enabled'] = enabled
-            result = run_once._effective_route(config, config['repos'][0], {**event, 'pr_author_login': author})
+            result = workflow_routing.effective_route(config, config['repos'][0], {**event, 'pr_author_login': author})
             self.assertEqual(result['route_id'], 'review-comment')
             self.assertNotIn('native_review_workers', result)
 
@@ -949,7 +952,7 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
         if mode == 'timeout':
             driver.request['workers'][0]['timeout_seconds'] = 1
         try:
-            expected_error = RuntimeError if mode == 'failure' else review_coordinator.ReviewStopped
+            expected_error = RuntimeError if mode == 'failure' else review_coordinator.StageStopped
             expected_message = 'worker exited immediately' if mode == 'failure' else 'process group'
             with self.assertRaisesRegex(expected_error, expected_message):
                 driver.run()
@@ -961,7 +964,7 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
                 if mode == 'failure':
                     for run in runs:
                         if run['stage'] == 'review':
-                            self.assertFalse(run_once._live_process_group(run['dispatch']['pid']))
+                            self.assertFalse(worker_identity.live_process_group(run['dispatch']['pid']))
                             self.assertFalse(run['slot_reserved'])
                 self.assertEqual(conn.execute('SELECT COUNT(*) FROM github_actions').fetchone()[0], 0)
         finally:

@@ -1,4 +1,5 @@
 """Regressions for the October lifecycle audit, using production entrypoints."""
+from robert_agent.work import repositories as work_repositories
 from tests.support import DAEMON_DEFAULTS
 
 from contextlib import closing
@@ -115,7 +116,7 @@ class LifecycleFollowupTests(unittest.TestCase):
         tasks = {}
         for repo, count in zip(validate_config.validate_config(f.config_path)["repos"], (3, 1)):
             with closing(sqlite3.connect(f.db_path)) as conn, conn:
-                rid = run_once._upsert_repo(conn, repo)
+                rid = work_repositories.upsert_repo(conn, repo)
             tasks[rid] = [
                 self.create(f, repo_id=rid, key=rid + str(i))["task_id"]
                 for i in range(count)
@@ -421,7 +422,7 @@ class LifecycleFollowupTests(unittest.TestCase):
         f.config_path.write_text(json.dumps(config))
         for repo in validate_config.validate_config(f.config_path)["repos"]:
             with closing(sqlite3.connect(f.db_path)) as conn, conn:
-                repo_id = run_once._upsert_repo(conn, repo)
+                repo_id = work_repositories.upsert_repo(conn, repo)
             self.create(f, repo_id=repo_id, key=repo_id)
         original = run_once._prepare_worktree
         failures = []

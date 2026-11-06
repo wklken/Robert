@@ -62,7 +62,7 @@ class SupervisorTests(unittest.TestCase):
             self.assertTrue(third)
 
     def test_configuration_rejects_unbounded_or_unknown_settings(self):
-        from robert_agent.supervision_config import normalize
+        from robert_agent.configuration.supervision import normalize
         for raw in ({'poll_seconds': 0}, {'batch_size': 100000}, {'mode': 'magic'}, {'typo': 1}):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 normalize(raw)

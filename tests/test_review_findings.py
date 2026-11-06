@@ -1,3 +1,5 @@
+from robert_agent.adapters.processes import attempt as attempt_process
+from robert_agent import worker_identity
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import os
@@ -30,10 +32,10 @@ class LaunchOwnershipTests(unittest.TestCase):
     def test_cleanup_attention_can_only_be_canceled_after_group_is_gone(self):
         metadata = {'dispatch': {'pid': 987654, 'cleanup_pending': True}}
         with patch.object(run_once.worker_identity, 'terminate_recorded_identity', side_effect=AssertionError('unverified PID must not be signaled')):
-            with patch.object(run_once, '_live_process_group', return_value=True):
-                self.assertEqual(run_once._terminate_attempt_process(metadata)['status'], 'attention')
-            with patch.object(run_once, '_live_process_group', return_value=False):
-                self.assertEqual(run_once._terminate_attempt_process(metadata)['status'], 'already_dead')
+            with patch.object(worker_identity, 'live_process_group', return_value=True):
+                self.assertEqual(attempt_process.terminate_attempt(metadata)['status'], 'attention')
+            with patch.object(worker_identity, 'live_process_group', return_value=False):
+                self.assertEqual(attempt_process.terminate_attempt(metadata)['status'], 'already_dead')
 
     def test_failed_leader_cleans_up_term_resistant_descendant(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -65,7 +67,7 @@ class LaunchOwnershipTests(unittest.TestCase):
                         worker_agent_config={'agent': 'command', 'command_argv': [sys.executable, '-c', leader]},
                         dry_run=False, startup_probe_seconds=0)
                 self.assertFalse(result['ok'])
-                self.assertFalse(run_once._live_process_group(result['pid']))
+                self.assertFalse(worker_identity.live_process_group(result['pid']))
                 self.assertFalse(result.get('cleanup_pending', False))
             finally:
                 for proc in processes:
@@ -162,7 +164,7 @@ class IdleSchedulingTests(unittest.TestCase):
         self.assertFalse(fixture.runnable(config_result=config))
         fixture.stop_process()
         self.assertTrue(fixture.runnable(config_result=config))
-        with patch.object(run_once, '_dispatch_process_status', return_value={'status': 'alive_same'}):
+        with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             with fixture.connect() as conn:
                 now = fixture.now.isoformat()
                 conn.execute("INSERT INTO wakeups(wakeup_id,repo_id,reason,dedupe_key,status,not_before_at,created_at,updated_at) VALUES ('manual','repo:example/repo','manual_operator_request','manual','pending',?,?,?)", (now, now, now))

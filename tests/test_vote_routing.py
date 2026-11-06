@@ -1,6 +1,7 @@
 import unittest
 
-from robert_agent import discover, route, route_config
+from robert_agent import discover, route
+from robert_agent.configuration import routes as route_config
 
 
 class VoteRoutingTests(unittest.TestCase):

@@ -1,3 +1,4 @@
+from robert_agent.adapters.github import client as github_client
 from tests import support  # noqa: F401
 from contextlib import closing
 import json
@@ -191,7 +192,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         count = []
         def load():
             count.append(1)
-            discover._try_run_json(['gh', 'api', 'repos/example/backend/issues/7'], runner=session)
+            github_client.try_read_json(['gh', 'api', 'repos/example/backend/issues/7'], runner=session)
             return []
         session.source_events(REPO, raw, load)
         session.source_events(REPO, raw, load)

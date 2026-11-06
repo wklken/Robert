@@ -18,52 +18,16 @@ from uuid import uuid4
 
 from robert_agent import (redaction, supervision_diagnose, supervision_rules, supervision_store,
                           wakeup_notifier, work_items, worker_identity)
+from robert_agent.configuration.supervision import REPAIR_ACTIONS as ACTIONS
+from robert_agent.configuration.supervision import is_repair_argv, normalize_diagnosis, normalize_repair
 
 
 ROUTE = 'new-pr'
 OUTPUT_TYPE = 'new_pr'
-ACTIONS = ('push_existing_pr', 'open_pr')
-_DEFAULTS = {'mode': 'backlog', 'worker': None, 'allowed_actions': [], 'launcher': [],
-             'verification_commands': [], 'max_repairs_per_day': 3}
 _BUDGET = ('repair', 'installation', 'budget')
 _STAGES = ('code_verified', 'mainline_verified', 'deployed_verified', 'original_progress')
 _ACTIVE_INCIDENTS = ('open', 'needs_attention', 'diagnosing')
 _SHA = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
-
-
-def _argv(value):
-    return (isinstance(value, list) and 1 <= len(value) <= 32
-            and all(isinstance(arg, str) and arg.strip() and '\x00' not in arg and len(arg) <= 4096 for arg in value)
-            and Path(value[0]).is_absolute())
-
-
-def normalize_repair(raw):
-    if raw is None:
-        return None
-    if not isinstance(raw, dict) or set(raw) - ({'repository'} | _DEFAULTS.keys()):
-        raise ValueError('supervision.repair must contain only supported maintenance fields')
-    policy = {**_DEFAULTS, **raw}
-    repository = policy.get('repository')
-    if not isinstance(repository, str) or not re.fullmatch(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+', repository):
-        raise ValueError('supervision.repair.repository must be a configured owner/repository')
-    if policy['mode'] not in ('backlog', 'auto'):
-        raise ValueError('supervision.repair.mode must be backlog or auto')
-    worker = policy['worker']
-    if worker is not None and (not isinstance(worker, str) or not worker.strip() or len(worker) > 120):
-        raise ValueError('supervision.repair.worker must name one configured command worker')
-    actions = policy['allowed_actions']
-    if not isinstance(actions, list) or any(action not in ACTIONS for action in actions):
-        raise ValueError('supervision.repair.allowed_actions only supports push_existing_pr and open_pr')
-    launcher = policy['launcher']
-    if launcher != [] and not _argv(launcher):
-        raise ValueError('supervision.repair.launcher must be an argv array with an absolute executable')
-    commands = policy['verification_commands']
-    if not isinstance(commands, list) or len(commands) > 8 or any(not _argv(argv) for argv in commands):
-        raise ValueError('supervision.repair.verification_commands must contain bounded absolute argv arrays')
-    limit = policy['max_repairs_per_day']
-    if type(limit) is not int or not 1 <= limit <= 20:
-        raise ValueError('supervision.repair.max_repairs_per_day must be an integer between 1 and 20')
-    return {**policy, 'repository': repository.casefold(), 'allowed_actions': [action for action in ACTIONS if action in actions]}
 
 
 def _json(value):
@@ -109,10 +73,10 @@ def _auto_authorization(config, policy, repo):
             or not policy['launcher'] or not policy['verification_commands']):
         return None
     worker = next((item for item in config.get('workers', []) if item['name'] == policy['worker']), None)
-    if not worker or worker['agent'] != 'command' or not _argv(worker.get('command_argv')):
+    if not worker or worker['agent'] != 'command' or not is_repair_argv(worker.get('command_argv')):
         return None
     try:
-        profile = supervision_diagnose.normalize_diagnosis({'command': worker['command_argv'],
+        profile = normalize_diagnosis({'command': worker['command_argv'],
             'environment_allowlist': worker.get('environment_allowlist', [])})
         executable_ids = [_fingerprint_file(argv[0]) for argv in
                           [policy['launcher'], worker['command_argv'], *policy['verification_commands']]]

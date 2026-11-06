@@ -5,22 +5,15 @@ import json
 from pathlib import Path
 import shutil
 import signal
-import subprocess
 
-from robert_agent import redaction, result_validation, review_files, review_workspace, worker_identity  # noqa: F401
+from robert_agent import redaction, result_validation, review_files, review_workspace
 from robert_agent import review_store as store
-from robert_agent.model_execution import (StageCoordinator, ReviewStopped, ReviewSuperseded,
-    _active, _group_finished, _wait_for_group_exit, terminate_children)  # noqa: F401
+from robert_agent.adapters.github.pull_requests import read_pr
+from robert_agent.execution.stages import (
+    StageStopped, StageSuperseded, StageCoordinator, attempt_is_active, terminate_children,
+)
+from robert_agent.native_rounds import SLOT_STORES
 from robert_agent.worker import result as worker_result
-
-
-def read_pr(repo, number):
-    completed = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{number}'],
-                               capture_output=True, text=True, check=True, timeout=60)
-    value = json.loads(completed.stdout)
-    if not isinstance(value, dict) or value.get('number') != number:
-        raise ValueError('GitHub returned invalid PR metadata')
-    return value
 
 
 def same_revision(manifest, pr):
@@ -37,8 +30,19 @@ class ReviewSubmissionRejected(RuntimeError):
 
 
 class Coordinator(StageCoordinator):
+    store = store
+    workspace = review_workspace
+    artifact_files = review_files
+    slot_stores = SLOT_STORES
+    voter_stage = 'review'
     handoff_files = {'prepare': ('context-summary.md', 'source-index.json'),
                      'review': ('result.json',), 'synthesis': ('evaluation.json',)}
+    artifact_kinds = ('result', 'report', 'evaluation', 'context_summary', 'source_index')
+    workflow_name = 'review'
+
+    def __init__(self, db_path, task_id, attempt_id, *, fetch_pr=read_pr, **kwargs):
+        super().__init__(db_path, task_id, attempt_id, **kwargs)
+        self.fetch_pr = fetch_pr
 
     def prepare(self):
         self.phase('preparing')
@@ -49,7 +53,7 @@ class Coordinator(StageCoordinator):
             for retry in range(2):
                 pr = self.fetch_pr(repo['full_name'], self.session['pr_number'])
                 if pr.get('state') != 'open':
-                    raise ReviewSuperseded('PR is closed')
+                    raise StageSuperseded('PR is closed')
                 expected_author = self.request['event'].get('pr_author_login', '')
                 if pr.get('user', {}).get('login', '').casefold() != expected_author.casefold():
                     raise ValueError('PR author does not match the authorized review request')
@@ -99,7 +103,7 @@ class Coordinator(StageCoordinator):
             self.manifest = review_workspace.freeze_context(self.manifest)
             self.save_manifest()
         if not same_revision(self.manifest, self.fetch_pr(repo['full_name'], self.session['pr_number'])):
-            raise ReviewSuperseded('PR head/base changed after context preparation')
+            raise StageSuperseded('PR head/base changed after context preparation')
 
     def review(self):
         self.phase('reviewing')
@@ -117,7 +121,7 @@ class Coordinator(StageCoordinator):
                         'report_sha256': store.digest(report_path)}
             try:
                 return self.run_phase('review', worker, self.manifest['prompt_path'], validate), None
-            except ReviewStopped:
+            except StageStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
                 return None, f"{worker['name']}: {exc}"
@@ -185,16 +189,16 @@ class Coordinator(StageCoordinator):
             return self.synthesize(self.review())
         except Exception as exc:
             with store.connect(self.db_path) as conn:
-                status = 'superseded' if isinstance(exc, ReviewSuperseded) else 'failed'
+                status = 'superseded' if isinstance(exc, StageSuperseded) else 'failed'
                 if isinstance(exc, ReviewSubmissionRejected):
                     status = 'attention'
                     conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.submission_validation',json(?)) WHERE attempt_id=?",
                                  (json.dumps(exc.diagnostic), self.attempt_id))
-                if isinstance(exc, ReviewStopped):
-                    status = 'canceled' if not _active(conn, self.task_id, self.attempt_id) else 'attention'
+                if isinstance(exc, StageStopped):
+                    status = 'canceled' if not attempt_is_active(conn, self.task_id, self.attempt_id) else 'attention'
                 store.update(conn, self.round_id, status=status, error=str(exc))
             with store.connect(self.db_path) as conn:
-                terminate_children(conn, self.task_id)
+                terminate_children(conn, self.task_id, store=store)
             raise
 
 

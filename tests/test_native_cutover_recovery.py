@@ -1,4 +1,6 @@
 """Native session history must not pin isolated, proven-stopped processes."""
+from robert_agent.adapters.processes import attempt as attempt_process
+from robert_agent import worker_identity
 from contextlib import closing
 import json
 import os
@@ -11,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from robert_agent import native_rounds, result_cutover, run_once, supervise, worker_identity
+from robert_agent import native_rounds, result_cutover, supervise
 from robert_agent.publication_lock import task_publication_lock
 from tests import test_cutover_recovery as cutover_fixture
 from tests import test_review_coordinator as review_fixture
@@ -52,7 +54,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
 
     def observe(self, fixture):
         with patch.object(worker_identity, 'terminate_recorded_identity') as terminate, \
-             patch.object(run_once, '_terminate_attempt_process') as stop_parent, \
+             patch.object(attempt_process, 'terminate_attempt') as stop_parent, \
              patch.object(native_rounds, 'terminate_children') as stop_children:
             result = result_cutover.prepare(fixture.db, now=fixture.now)
             self.assertTrue(result['ok'], result)
@@ -178,7 +180,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     fixture, round_id = self.fixture(store)
                     identity = self.process_identity(stopped=True)
                     run_id = self.run_record(fixture, store, round_id, dispatch=identity)
-                    original = run_once._dispatch_process_status
+                    original = attempt_process.dispatch_status
                     changed = []
                     def inspect(metadata):
                         if metadata['dispatch'].get('pid') == identity['pid'] and not changed:
@@ -196,7 +198,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                                     store.update_run(conn, new['run_id'], status='starting', slot_reserved=1)
                             changed.append(True)
                         return original(metadata)
-                    with patch.object(run_once, '_dispatch_process_status', side_effect=inspect):
+                    with patch.object(attempt_process, 'dispatch_status', side_effect=inspect):
                         self.observe(fixture)
                     self.assertTrue(changed)
                     parent, occupied, runs = self.state(fixture, store, round_id)

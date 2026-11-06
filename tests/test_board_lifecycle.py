@@ -170,7 +170,7 @@ class BoardLifecycleTests(unittest.TestCase):
 
     def test_verified_running_worker_can_be_canceled_and_replayed(self):
         item = self.fixture._seed_six_columns()["doing"]
-        with patch("robert_agent.run_once._terminate_attempt_process", return_value={"status": "terminated", "signal": "SIGTERM"}) as terminate:
+        with patch("robert_agent.adapters.processes.attempt.terminate_attempt", return_value={"status": "terminated", "signal": "SIGTERM"}) as terminate:
             result = self.command(item, "cancel")
             self.assertTrue(result["item"]["canceled_at"])
             self.command(item, "cancel")
@@ -181,7 +181,7 @@ class BoardLifecycleTests(unittest.TestCase):
 
     def test_failed_identity_verification_does_not_cancel(self):
         item = self.fixture._seed_six_columns()["doing"]
-        with patch("robert_agent.run_once._terminate_attempt_process", return_value={"status": "not_signalled", "reason": "missing_pid"}):
+        with patch("robert_agent.adapters.processes.attempt.terminate_attempt", return_value={"status": "not_signalled", "reason": "missing_pid"}):
             with self.assertRaisesRegex(work_items.WorkItemConflictError, "missing_pid"):
                 self.command(item, "cancel")
         self.assertIsNone(board.get_work_item_detail(self.db, item["work_item_id"])["canceled_at"])
@@ -282,7 +282,7 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertEqual(detail["execution"]["attempt_id"], "child-attempt")
         self.assertEqual(detail["valid_commands"], ["cancel"])
         self.assertIn("child-task", [task["task_id"] for task in detail["tasks"]])
-        with patch("robert_agent.run_once._terminate_attempt_process", return_value={"status": "not_found"}):
+        with patch("robert_agent.adapters.processes.attempt.terminate_attempt", return_value={"status": "not_found"}):
             self.command(item, "cancel")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT lifecycle FROM tasks WHERE task_id='child-task'").fetchone()[0], "canceled")
@@ -300,7 +300,7 @@ class BoardLifecycleTests(unittest.TestCase):
         item = self.fixture._seed_six_columns()["doing"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("INSERT INTO leases(lease_id,resource_type,resource_key,owner_id,status,acquired_at,expires_at,heartbeat_at) VALUES ('lease','agent_run','repo-1','engine','active','2026-10-22','9999-01-01','2026-10-22')")
-        with patch("robert_agent.run_once._terminate_attempt_process") as terminate:
+        with patch("robert_agent.adapters.processes.attempt.terminate_attempt") as terminate:
             with self.assertRaisesRegex(work_items.WorkItemConflictError, "processing a cycle"):
                 self.command(item, "cancel")
         terminate.assert_not_called()
@@ -437,7 +437,7 @@ class BoardLifecycleTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
             execution_store.ensure_subject(conn, 'task', task_id, 'human_request', '2026-10-22')
-        with patch('robert_agent.run_once._terminate_attempt_process', return_value={'status':'already_dead'}):
+        with patch('robert_agent.adapters.processes.attempt.terminate_attempt', return_value={'status':'already_dead'}):
             self.command(item, 'cancel')
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute('SELECT binding_status FROM execution_subjects').fetchone()[0], 'terminal')

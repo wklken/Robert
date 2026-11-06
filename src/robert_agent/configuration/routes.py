@@ -1,3 +1,7 @@
+"""Load packaged route policies and apply configured overrides."""
+
+from typing import TypedDict
+
 import yaml
 
 from robert_agent.resource_files import resource
@@ -14,7 +18,28 @@ ALLOWED_ROUTE_OVERRIDE_FIELDS = {
 }
 
 
-def load_route_policies():
+class VerificationPolicy(TypedDict):
+    mode: str
+    required_statuses: list[str]
+    allow_skipped: bool
+
+
+class _RequiredRoutePolicy(TypedDict):
+    id: str
+    workspace_mode: str
+    expected_output: str
+    allowed_github_actions: list[str]
+    needs_worktree: bool
+    verification_policy: VerificationPolicy
+
+
+class RoutePolicy(_RequiredRoutePolicy, total=False):
+    worktree_mode: str
+    recommended_skills: list[str]
+    required_skills: list[str]
+
+
+def load_route_policies() -> list[RoutePolicy]:
     data = yaml.safe_load(
         resource("routes.yml").read_text(encoding="utf-8")
     )
@@ -127,3 +152,6 @@ def _validate_multi_vote(route, workers):
             or len(set(names)) != len(names) or names[0] != route['worker']):
         raise ValueError('multi_agent_vote requires at least two distinct known workers with the main worker first')
     route['multi_agent_vote'] = {'enabled': settings.get('enabled', False), 'workers': list(names)}
+
+
+ROUTE_POLICIES = {policy["id"]: policy for policy in load_route_policies()}

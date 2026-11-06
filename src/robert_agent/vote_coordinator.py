@@ -5,13 +5,18 @@ from pathlib import Path
 import signal
 
 from robert_agent import vote_files, vote_store, vote_tally, vote_workspace
-from robert_agent.model_execution import StageCoordinator, ReviewStopped, ReviewSuperseded, _active, terminate_children
+from robert_agent.execution.stages import (
+    StageStopped, StageSuperseded, StageCoordinator, attempt_is_active, terminate_children,
+)
+from robert_agent.native_rounds import SLOT_STORES
 from robert_agent.worker import result as worker_result
 
 
 class Coordinator(StageCoordinator):
     store = vote_store
     workspace = vote_workspace
+    artifact_files = vote_files
+    slot_stores = SLOT_STORES
     voter_stage = 'vote'
     handoff_files = {'prepare': ('prepared-request.json',), 'vote': ('ballot.json',), 'synthesis': ('synthesis.json',)}
     artifact_kinds = ('prepared', 'ballot', 'synthesis')
@@ -26,7 +31,7 @@ class Coordinator(StageCoordinator):
 
     def check_sources(self):
         if not vote_workspace.same_sources(self.manifest, self.read_source()):
-            raise ReviewSuperseded('vote sources or PR revision changed')
+            raise StageSuperseded('vote sources or PR revision changed')
 
     def prepare(self):
         self.phase('preparing')
@@ -82,7 +87,7 @@ class Coordinator(StageCoordinator):
                 return {'ballot_path': str(path), 'ballot_sha256': vote_files.digest(path), 'adapter': worker['agent']}
             try:
                 return self.run_phase('vote', worker, self.manifest['prompt_path'], validate), None
-            except ReviewStopped:
+            except StageStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
                 return None, f"{worker['name']}: {exc}"
@@ -147,9 +152,9 @@ class Coordinator(StageCoordinator):
             return self.synthesize(self.vote())
         except Exception as exc:
             with vote_store.connect(self.db_path) as conn:
-                status = 'superseded' if isinstance(exc, ReviewSuperseded) else 'failed'
-                if isinstance(exc, ReviewStopped):
-                    status = 'canceled' if not _active(conn, self.task_id, self.attempt_id) else 'attention'
+                status = 'superseded' if isinstance(exc, StageSuperseded) else 'failed'
+                if isinstance(exc, StageStopped):
+                    status = 'canceled' if not attempt_is_active(conn, self.task_id, self.attempt_id) else 'attention'
                 vote_store.update(conn, self.round_id, status=status, error=str(exc))
             with vote_store.connect(self.db_path) as conn:
                 terminate_children(conn, self.task_id, store=vote_store)

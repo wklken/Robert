@@ -9,7 +9,7 @@ import yaml
 
 from robert_agent.init_config import init_config
 from robert_agent.resource_files import resource
-from robert_agent.route_config import resolve_route_config
+from robert_agent.configuration.routes import resolve_route_config
 from robert_agent.run_once import run_once
 
 

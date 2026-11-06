@@ -98,7 +98,7 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
         self.assertEqual({r['adapter'] for r in records}, {'codex','claude'})
 
     def test_cancel_stops_both_registered_voters_and_does_not_seal_votes(self):
-        from robert_agent.model_execution import ReviewStopped
+        from robert_agent.execution.stages import StageStopped
         with ThreadPoolExecutor(1) as executor:
             future = executor.submit(self.driver.vote)
             try:
@@ -106,7 +106,7 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
                 self.driver.stopping.set()
                 with vote_store.connect(self.fixture.db) as conn:
                     self.assertNotEqual(native_rounds.terminate_children(conn, self.driver.task_id), 'attention')
-                with self.assertRaises(ReviewStopped):
+                with self.assertRaises(StageStopped):
                     future.result(timeout=10)
             finally:
                 self.gate.touch()

@@ -604,7 +604,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             validated = _validated_config(args)
             if args.config_command == "show":
-                from robert_agent.route_config import load_route_policies, resolve_route_config
+                from robert_agent.configuration.routes import load_route_policies, resolve_route_config
                 validated["effective_routes"] = {
                     repo["full_name"]: {
                         policy["id"]: resolve_route_config(validated, repo, policy)

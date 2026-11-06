@@ -1,5 +1,6 @@
 """Transactional commands for repository-scoped DD work items."""
 
+from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
 from contextlib import closing, ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,18 +51,6 @@ class CommandContext:
     actor_identity: str
     allowed_repo_ids: frozenset[str]
     allowed_workers: frozenset[str]
-
-
-class WorkItemValidationError(ValueError):
-    pass
-
-
-class WorkItemConflictError(RuntimeError):
-    pass
-
-
-class WorkItemNotFoundError(LookupError):
-    pass
 
 
 def utc_now():
@@ -615,8 +604,8 @@ def retrigger_failed_github_task(
             if attention.get('reason_code') == 'result_contract_cutover':
                 recovery_snapshot = snapshot['metadata_json']
                 from robert_agent import discover
-                from robert_agent.run_once import _task_related_events
-                refreshed_context = _task_related_events(reader, task_id)
+                from robert_agent.work.queries import task_related_events
+                refreshed_context = task_related_events(reader, task_id)
                 refreshed = []
                 for event in refreshed_context:
                     updated, state = discover._source_metadata(event, dict(snapshot), subprocess.run)
@@ -687,8 +676,8 @@ def retrigger_failed_github_task(
             if failed_attempt:
                 process_metadata = json.loads(failed_attempt[0] or '{}')
                 if process_metadata.get('dispatch'):
-                    from robert_agent.run_once import _dispatch_process_status
-                    if _dispatch_process_status(process_metadata)['status'] != 'dead':
+                    from robert_agent.adapters.processes.attempt import dispatch_status
+                    if dispatch_status(process_metadata)['status'] != 'dead':
                         raise WorkItemConflictError("worker termination must be confirmed before retry")
             if cutover_recovery:
                 if not native_exit['all_stopped'] or not native_rounds.exit_observation_current(conn, task_id, native_exit):
@@ -1126,8 +1115,8 @@ def execute_command(
                 work_item_control.require_idle_repository(conn, item['repo_id'], now)
                 parent = _active_or_latest_task(conn, item['workstream_id'])
                 handoff = _decode_json(parent['metadata_json'], {}).get('pending_handoff', {}) if parent else {}
-                from robert_agent.run_once import _execution_subject_for_task
-                binding = execution_store.get_binding(conn, *_execution_subject_for_task(conn, parent['task_id'])) if parent else None
+                from robert_agent.execution.ownership import subject_for_task
+                binding = execution_store.get_binding(conn, *subject_for_task(conn, parent['task_id'])) if parent else None
                 stream = conn.execute('SELECT lifecycle,active_task_id FROM workstreams WHERE workstream_id=?', (item['workstream_id'],)).fetchone()
                 if (not parent or parent['lifecycle'] != 'completed' or handoff.get('status') != 'attention'
                         or _decode_json(handoff_failure['metadata_json'], {}).get('task_id') != parent['task_id']

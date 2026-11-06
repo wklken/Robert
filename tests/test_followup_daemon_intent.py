@@ -1,3 +1,4 @@
+from robert_agent import worker_identity
 from contextlib import closing
 from datetime import datetime, timezone
 import json
@@ -11,13 +12,14 @@ import unittest
 from unittest import mock
 
 from tests import test_daemon as daemon_fixture
-from robert_agent import daemon, daemon_state, discover, route, run_once, storage
+from robert_agent import daemon, daemon_state, discover, route, storage
+from robert_agent.execution import leases as execution_leases
 from tests.support import DAEMON_DEFAULTS
 
 
 class FollowupDaemonTests(unittest.TestCase):
     def _group_probe(self, mode):
-        original = run_once._live_process_group
+        original = worker_identity.live_process_group
 
         def inspect(pgid):
             def ps(command, **kwargs):
@@ -46,11 +48,11 @@ class FollowupDaemonTests(unittest.TestCase):
                 daemon_state.start_daemon_run(conn, config_path='/config', owner_id='daemon', now=now)
             program = '''import json,os,sqlite3,sys,time
 from pathlib import Path
-from robert_agent import run_once
+from robert_agent.execution import leases as execution_leases
 conn=sqlite3.connect(sys.argv[1])
 conn.execute("INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('owned','running',?,?)",
              (sys.argv[3],json.dumps({'executor_id':os.environ['_ROBERT_EXECUTOR_ID']})))
-run_once._acquire_agent_lease(conn,'repo:x','owned',sys.argv[3],90)
+execution_leases.acquire(conn,'repo:x','owned',sys.argv[3],90)
 conn.commit()
 Path(sys.argv[2]).touch()
 if sys.argv[4]=='slow': time.sleep(30)
@@ -84,7 +86,7 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                 {**DAEMON_DEFAULTS, 'local_drain_timeout_seconds': .1 if slow else 3}, 'daemon', 'lease')
             with mock.patch.object(daemon, 'build_loop_command', return_value=command), \
                     mock.patch.object(daemon.subprocess, 'Popen', side_effect=launch), \
-                    mock.patch.object(run_once, '_live_process_group', side_effect=self._group_probe(mode)):
+                    mock.patch.object(worker_identity, 'live_process_group', side_effect=self._group_probe(mode)):
                 result = daemon._run_local_drain(context)
             self.assertEqual(len(processes), 1)
             self.assertIsNotNone(processes[0].poll())
@@ -131,10 +133,10 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                 with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
                     conn.execute("INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('abandoned','running',?,?)",
                                  (now, json.dumps({'executor_id': 'executor', 'executor_identity': identity})))
-                    run_once._acquire_agent_lease(conn, 'repo:x', 'abandoned', now, 90)
+                    execution_leases.acquire(conn, 'repo:x', 'abandoned', now, 90)
                 probe = (lambda _pid: False) if mode == 'stopped' else self._group_probe(mode)
                 with mock.patch.object(daemon.worker_identity, 'inspect_recorded_identity', return_value='dead'), \
-                        mock.patch.object(run_once, '_live_process_group', side_effect=probe):
+                        mock.patch.object(worker_identity, 'live_process_group', side_effect=probe):
                     result = daemon.run_daemon(config, once=True)
                 self.assertTrue(result['ok'], result)
                 self.assertEqual(result['status'], 'stopped')

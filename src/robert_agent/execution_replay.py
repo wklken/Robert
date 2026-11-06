@@ -10,7 +10,8 @@ from robert_agent import execution_store
 
 
 def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
-    from robert_agent import run_once
+    from robert_agent.work import admission as work_admission
+    from robert_agent.work import policies as work_policies
 
     pending = execution_store.pending_facts(conn, repo_id, now)
     output = []
@@ -93,10 +94,10 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
                 continue
             continue  # already present in the freshly validated decision batch
         driving = (
-            run_once._is_driving_context_event(event)
+            work_policies.is_driving_context_event(event)
             or event.get("authorization_status") == "authorized_trigger"
         )
-        if driving and repo is not None and not run_once._is_trusted_actor(event, repo):
+        if driving and repo is not None and not work_policies.is_trusted_actor(event, repo):
             execution_store.mark_binding_attention(
                 conn, fact["subject_type"], fact["subject_id"], now
             )
@@ -108,7 +109,7 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
         if not driving:
             # Append the whole non-driving batch before any trusted reply can
             # close its parent. Context is data, never dispatch authorization.
-            if run_once._append_event_to_active_task(conn, event, "context", now):
+            if work_admission.append_event_to_active_task(conn, event, "context", now):
                 execution_store.consume_fact(conn, fact["source_signal_id"], now)
             continue
         output.append(event)

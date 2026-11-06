@@ -17,14 +17,10 @@ import time
 from uuid import uuid4
 
 from robert_agent import redaction, supervision_rules, supervision_store, worker_identity
+from robert_agent.configuration.supervision import normalize_diagnosis
 from robert_agent.worker_adapters import build_worker_launch
 
 
-_DEFAULTS = {'environment_allowlist': [], 'timeout_seconds': 120,
-             'cooldown_seconds': 600, 'max_calls_per_hour': 6}
-_DENIED_ENV_PREFIXES = ('GH_', 'GITHUB_', 'GIT_', 'OPENCLAW_', 'CODEX_', 'CLAUDE_',
-                        'ROBERT_', 'SSH_', 'AWS_', 'XDG_', 'PYTHON', 'LD_', 'DYLD_')
-_DENIED_ENV_NAMES = {'HOME', 'PATH', 'TMPDIR', 'BASH_ENV', 'ENV', 'NODE_OPTIONS'}
 _SENSITIVE_KEY = re.compile(r'(?:^|_)(?:password|passwd|token|secret|credentials?|api_key|authorization|cookie)(?:$|_)', re.I)
 _DIAGNOSIS_CLASSES = {'transient_failure', 'expected_wait', 'repeated_failure',
                       'goal_deviation', 'product_defect', 'operator_needed', 'unknown'}
@@ -37,31 +33,6 @@ _RUNNER = ('diagnostic', 'installation', 'runner')
 _IN_PROGRESS = ('open', 'needs_attention', 'diagnosing')
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
-
-
-def normalize_diagnosis(raw):
-    """Validate an opt-in administrator-configured no-tool command profile."""
-    if raw is None:
-        return None
-    if not isinstance(raw, dict) or set(raw) - ({'command'} | _DEFAULTS.keys()):
-        raise ValueError('supervision.diagnosis must contain only the supported profile fields')
-    argv = raw.get('command')
-    if (not isinstance(argv, list) or not 1 <= len(argv) <= 32
-            or any(not isinstance(arg, str) or not arg.strip() or '\x00' in arg or len(arg) > 8192 for arg in argv)
-            or not Path(argv[0]).is_absolute()):
-        raise ValueError('supervision.diagnosis.command requires an argv array with an absolute executable')
-    profile = {**_DEFAULTS, **raw}
-    allowlist = profile['environment_allowlist']
-    if not isinstance(allowlist, list) or len(allowlist) > 32 or any(
-            not isinstance(name, str) or not re.fullmatch(r'[A-Z_][A-Z0-9_]{0,63}', name)
-            or name in _DENIED_ENV_NAMES or name.startswith(_DENIED_ENV_PREFIXES)
-            for name in allowlist):
-        raise ValueError('supervision.diagnosis.environment_allowlist contains a prohibited or invalid variable name')
-    for field, maximum in (('timeout_seconds', 300), ('cooldown_seconds', 86400), ('max_calls_per_hour', 60)):
-        value = profile[field]
-        if type(value) is not int or not 1 <= value <= maximum:
-            raise ValueError(f'supervision.diagnosis.{field} must be an integer between 1 and {maximum}')
-    return {**profile, 'command': list(argv), 'environment_allowlist': list(dict.fromkeys(allowlist))}
 
 
 def _json(value):

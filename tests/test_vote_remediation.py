@@ -1,4 +1,5 @@
 """Regressions for PR #46 routing and handoff review findings PR-1 through PR-7."""
+from robert_agent.workflows import routing as workflow_routing
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,10 +63,10 @@ class VoteRequestRemediationTests(unittest.TestCase):
         self.assertNotEqual(discover.infer_intent('', body, 'comment', 'robert-bot'), 'vote')
         self.assertNotEqual(discover.infer_intent('', '@robert-bot-other vote A/B', 'comment', 'robert-bot'), 'vote')
         self.assertEqual(discover._issue_search_to_raw({'number': 42, 'body': body}, 'mention', 'custom-bot')['intent'], 'vote')
-        from robert_agent import run_once, validate_config
+        from robert_agent import validate_config
         config = validate_config.validate_config(self.vote.fixture.config_path, skip_external=True)
         event = {**self.vote.event(), 'body': '@alice choose A or B', 'mentions_dd': True}
-        route = run_once._effective_route(config, config['repos'][0], event, route_id='vote')
+        route = workflow_routing.effective_route(config, config['repos'][0], event, route_id='vote')
         self.assertNotIn('native_vote_workers', route)
 
     def test_pr1_polite_fix_and_explanation_requests_do_not_vote_on_a_function_name(self):

@@ -1,4 +1,6 @@
 from contextlib import closing
+import os
+from unittest.mock import patch
 import sqlite3
 import tempfile
 import unittest
@@ -48,6 +50,21 @@ repos:
 """,
             encoding="utf-8",
         )
+
+    def test_controlled_worker_uses_the_running_package_interpreter(self):
+        from robert_agent import controlled_e2e_acceptance
+        shadow_bin = self.root / 'shadow-bin'
+        shadow_bin.mkdir()
+        wrong_python = shadow_bin / 'python3'
+        wrong_python.write_text('#!/bin/sh\nexit 86\n', encoding='utf-8')
+        wrong_python.chmod(0o755)
+        with patch.dict(os.environ, {'PATH': str(shadow_bin) + os.pathsep + os.environ['PATH']}):
+            result = controlled_e2e_acceptance.controlled_e2e_acceptance(
+                self.config_path, workspace_dir=self.root / 'interpreter-e2e',
+                timeout_seconds=5, poll_interval_seconds=0.05,
+            )
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['publish_result']['published_count'], 2)
 
     def test_controlled_e2e_acceptance_completes_new_pr_workflow(self):
         from robert_agent import controlled_e2e_acceptance

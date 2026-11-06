@@ -2,7 +2,8 @@
 import json
 import unittest
 
-from robert_agent import model_execution, work_items
+from robert_agent import work_items
+from robert_agent.execution import stages as model_execution
 from tests import test_review_coordinator as review_fixture
 from tests import test_vote_coordinator as vote_fixture
 

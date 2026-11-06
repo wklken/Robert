@@ -5,183 +5,29 @@ import re
 import sys
 
 from robert_agent.common import emit
+from robert_agent.configuration.routes import RoutePolicy, load_route_policies
 
 
-DEFAULT_VERIFICATION_POLICIES = {
-    "comment-analysis": {
-        "mode": "optional",
-        "required_statuses": ["passed"],
-        "allow_skipped": True,
-    },
-    "local-result": {
-        "mode": "optional",
-        "required_statuses": ["passed"],
-        "allow_skipped": True,
-    },
-    "new-pr": {
-        "mode": "required",
-        "required_statuses": ["passed"],
-        "allow_skipped": False,
-    },
-    "update-existing-pr": {
-        "mode": "required_for_push",
-        "required_statuses": ["passed"],
-        "allow_skipped": False,
-    },
-    "review-comment": {
-        "mode": "optional",
-        "required_statuses": ["passed"],
-        "allow_skipped": True,
-    },
-    "review-pr": {
-        "mode": "optional",
-        "required_statuses": ["passed"],
-        "allow_skipped": True,
-    },
-    "classification-result": {
-        "mode": "none",
-        "required_statuses": [],
-        "allow_skipped": False,
-    },
-    "waiting-for-user": {
-        "mode": "none",
-        "required_statuses": [],
-        "allow_skipped": False,
-    },
-}
+def _task_route(policy: RoutePolicy):
+    route = dict(policy)
+    route_id = route.pop("id")
+    route["route_id"] = route_id
+    route["confidence"] = "low" if route_id == "classification-result" else "high"
+    route.setdefault("required_skills", [])
+    route.setdefault("recommended_skills", [])
+    return route
+
+
+ROUTES = {policy["id"]: _task_route(policy) for policy in load_route_policies()}
 
 
 def verification_policy_for(route_id):
-    route_config = ROUTES.get(route_id) or {}
-    policy = route_config.get("verification_policy") or DEFAULT_VERIFICATION_POLICIES.get(
-        route_id,
-        {
-            "mode": "optional",
-            "required_statuses": ["passed"],
-            "allow_skipped": True,
-        },
-    )
+    policy = ROUTES.get(route_id, {}).get("verification_policy") or {
+        "mode": "optional",
+        "required_statuses": ["passed"],
+        "allow_skipped": True,
+    }
     return dict(policy)
-
-
-ROUTES = {
-    "vote": {
-        "route_id": "vote", "expected_output": "multi_agent_vote_report",
-        "allowed_github_actions": ["comment"], "needs_worktree": False,
-        "workspace_mode": "none", "confidence": "high",
-        "verification_policy": {"mode": "optional", "required_statuses": ["passed"], "allow_skipped": True},
-    },
-    "local-result": {
-        "route_id": "local-result",
-        "expected_output": "local_result",
-        "allowed_github_actions": [],
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["local-result"],
-        "recommended_skills": ["fast-code-path", "fast-zoom-out"],
-        "needs_worktree": False,
-        "workspace_mode": "none",
-        "confidence": "high",
-    },
-    "comment-analysis": {
-        "route_id": "comment-analysis",
-        "expected_output": "comment_analysis",
-        "allowed_github_actions": ["comment"],
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["comment-analysis"],
-        "recommended_skills": [
-            "fast-code-path",
-            "fast-zoom-out",
-            "fast-verify-review-point",
-        ],
-        "needs_worktree": False,
-        "workspace_mode": "analysis",
-        "confidence": "high",
-    },
-    "new-pr": {
-        "route_id": "new-pr",
-        "expected_output": "new_pr",
-        "allowed_github_actions": ["push_existing_pr", "open_pr", "comment"],
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["new-pr"],
-        "recommended_skills": [
-            "fast-small-pr",
-            "fast-code-path",
-            "fast-add-tests",
-            "fast-test-fix",
-            "fast-preflight",
-        ],
-        "needs_worktree": True,
-        "workspace_mode": "new_branch",
-        "confidence": "high",
-    },
-    "update-existing-pr": {
-        "route_id": "update-existing-pr",
-        "expected_output": "update_existing_pr",
-        "allowed_github_actions": ["push_existing_pr", "comment"],
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["update-existing-pr"],
-        "recommended_skills": [
-            "fast-small-pr",
-            "fast-verify-review-point",
-            "fast-code-path",
-            "fast-add-tests",
-            "fast-test-fix",
-            "fast-code-simplify",
-            "fast-preflight",
-        ],
-        "needs_worktree": True,
-        "workspace_mode": "existing_pr",
-        "confidence": "high",
-    },
-    "review-comment": {
-        "route_id": "review-comment",
-        "expected_output": "review_comment",
-        "allowed_github_actions": ["comment"],
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["review-comment"],
-        "recommended_skills": [
-            "fast-review-github-pr",
-            "fast-verify-review-point",
-            "fast-code-path",
-        ],
-        "needs_worktree": False,
-        "workspace_mode": "analysis",
-        "confidence": "high",
-    },
-    "review-pr": {
-        "route_id": "review-pr",
-        "expected_output": "pr_review_comment",
-        "allowed_github_actions": ["comment"],
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["review-pr"],
-        "recommended_skills": [
-            "fast-review-github-pr",
-            "fast-code-path",
-        ],
-        "needs_worktree": True,
-        "worktree_mode": "review_pr",
-        "workspace_mode": "review_pr",
-        "confidence": "high",
-    },
-    "classification-result": {
-        "route_id": "classification-result",
-        "expected_output": "classification_result",
-        "allowed_github_actions": [],
-        "recommended_skills": [],
-        "needs_worktree": False,
-        "workspace_mode": "none",
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["classification-result"],
-        "confidence": "low",
-    },
-    "waiting-for-user": {
-        "route_id": "waiting-for-user",
-        "expected_output": "waiting_for_user",
-        "allowed_github_actions": ["comment"],
-        "recommended_skills": [],
-        "needs_worktree": False,
-        "workspace_mode": "none",
-        "verification_policy": DEFAULT_VERIFICATION_POLICIES["waiting-for-user"],
-        "confidence": "high",
-    },
-}
-
-for route_config in ROUTES.values():
-    route_config.setdefault("required_skills", [])
-    route_config.setdefault("recommended_skills", [])
 
 
 def review_input_policy(expected_output, trigger):

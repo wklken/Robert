@@ -1,4 +1,5 @@
 """The sole worker submission contract and deterministic result normalization."""
+from robert_agent.delivery import policies
 from copy import deepcopy
 import hashlib
 import json
@@ -72,26 +73,24 @@ def validate_submission(submission, output_type, origin_type):
     if output_type == "waiting_for_user":
         _require(not types if origin_type == "web" else bool(types) and all(kind == "comment" for kind in types), "planned_github_actions", "Waiting requires only deliverable question comments; Web waiting has no publication actions.")
     if "operator_question" in submission:
-        from robert_agent import audit_result
         question = submission["operator_question"]
         _require(isinstance(question, dict) and not (set(question) - {"kind", "summary", "choices"}), "operator_question", "Question contains unsupported fields.")
         _require(isinstance(question.get("kind"), str), "operator_question.kind", "Question kind must be a string.")
         for choice in question.get("choices", []) if isinstance(question.get("choices", []), list) else []:
             _require(isinstance(choice, dict) and not (set(choice) - {"id", "label"}), "operator_question.choices", "Choice contains unsupported fields.")
-        question_error = audit_result._audit_operator_question(submission)
+        question_error = policies.validate_operator_question(submission)
         _require(question_error is None, "operator_question", question_error or "Invalid operator question.")
     if "review_input_kind" in submission:
         _require(isinstance(submission["review_input_kind"], str) and submission["review_input_kind"] in {"request", "review_feedback", "mixed"}, "review_input_kind", "Review input kind is invalid.")
     if "review_point_evaluation" in submission:
         evaluation = submission["review_point_evaluation"]
         _require(isinstance(evaluation, list) and all(isinstance(item, dict) and all(isinstance(item.get(field), str) and bool(item[field].strip()) for field in ("summary", "verdict", "reasoning", "action")) for item in evaluation), "review_point_evaluation", "Review evaluation entries require summary, verdict, reasoning and action.")
-        from robert_agent import audit_result
         for index, item in enumerate(evaluation):
             field = f"review_point_evaluation[{index}]"
             _require(set(item) == {"summary", "verdict", "reasoning", "action"}, field, "Review evaluation contains unsupported fields.")
-            _require(item["verdict"] in audit_result.VALID_REVIEW_VERDICTS, field + ".verdict", "Review verdict is invalid.")
-            _require(item["action"] in audit_result.VALID_REVIEW_ACTIONS, field + ".action", "Review action is invalid.")
-            _require(item["action"] != "implement" or item["verdict"] in audit_result.IMPLEMENTABLE_VERDICTS, field + ".action", "Implement requires a supported verdict.")
+            _require(item["verdict"] in policies.VALID_REVIEW_VERDICTS, field + ".verdict", "Review verdict is invalid.")
+            _require(item["action"] in policies.VALID_REVIEW_ACTIONS, field + ".action", "Review action is invalid.")
+            _require(item["action"] != "implement" or item["verdict"] in policies.IMPLEMENTABLE_VERDICTS, field + ".action", "Implement requires a supported verdict.")
     if "memory_delta" in submission:
         memory = submission["memory_delta"]
         _require(isinstance(memory, dict), "memory_delta", "Memory delta must be an object.")

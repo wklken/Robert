@@ -1,8 +1,9 @@
 """Shared lifecycle facts and safe operator recovery for a work item."""
+from robert_agent.adapters.processes import attempt as attempt_process
 import json
 from robert_agent import supervise
 
-from robert_agent.board_execution import safe_text
+from robert_agent.security.text import safe_text
 from robert_agent.publication_lock import task_publication_lock
 
 
@@ -97,7 +98,7 @@ def lifecycle_facts(conn, item, *, controls=None):
 
 
 def require_idle_repository(conn, repo_id, now):
-    from robert_agent.work_items import WorkItemConflictError
+    from robert_agent.work.errors import WorkItemConflictError
     busy = conn.execute(
         """SELECT 1 FROM leases WHERE resource_type='agent_run' AND resource_key=?
         AND status='active' AND expires_at>? LIMIT 1""", (repo_id, now),
@@ -107,7 +108,7 @@ def require_idle_repository(conn, repo_id, now):
 
 
 def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_run_ids=()):
-    from robert_agent import run_once, work_items
+    from robert_agent.work.errors import WorkItemConflictError
     # The write transaction prevents a new engine lease. Publication has its
     # own task lock, held until this command commits; neither lock waits on I/O.
     require_idle_repository(conn, item['repo_id'], now)
@@ -116,7 +117,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
     task_ids = list(task_ids)
     for (task_id,) in task_ids:
         if not locks.enter_context(task_publication_lock(db_path, task_id)):
-            raise work_items.WorkItemConflictError('A publication is in progress for this task. Retry cancellation after it finishes.')
+            raise WorkItemConflictError('A publication is in progress for this task. Retry cancellation after it finishes.')
     from robert_agent import native_rounds
     unknown = {}
     for (task_id,) in task_ids:
@@ -125,7 +126,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             unknown.update({run['run_id']: {**run, 'store': round_store}
                             for run in round_store.runs(conn, review['round_id']) if round_store.can_abandon(run)})
     if set(abandon_review_run_ids) - unknown.keys():
-        raise work_items.WorkItemConflictError('The selected unknown review launch changed. Refresh and inspect before abandoning it.')
+        raise WorkItemConflictError('The selected unknown review launch changed. Refresh and inspect before abandoning it.')
     for attempt in facts['running']:
         try:
             metadata = json.loads(attempt['metadata_json'] or '{}')
@@ -133,9 +134,9 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             metadata = {}
         if not isinstance(metadata, dict):
             metadata = {}
-        outcome = run_once._terminate_attempt_process(metadata)
+        outcome = attempt_process.terminate_attempt(metadata)
         if outcome.get('status') not in {'terminated', 'not_found', 'already_dead'}:
-            raise work_items.WorkItemConflictError('Worker could not be stopped: ' + str(outcome.get('reason') or outcome.get('status')))
+            raise WorkItemConflictError('Worker could not be stopped: ' + str(outcome.get('reason') or outcome.get('status')))
         metadata['termination'] = outcome
         metadata['process_stopped_at'] = now
         conn.execute('UPDATE attempts SET metadata_json=? WHERE attempt_id=?', (json.dumps(metadata), attempt['attempt_id']))
@@ -147,13 +148,17 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
     from robert_agent.native_rounds import terminate_children
     for (task_id,) in task_ids:
         if terminate_children(conn, task_id) == 'attention':
-            raise work_items.WorkItemConflictError('Review worker identity could not be verified. Inspect and stop residual processes, then explicitly confirm abandonment of unknown launches when canceling.')
+            raise WorkItemConflictError('Review worker identity could not be verified. Inspect and stop residual processes, then explicitly confirm abandonment of unknown launches when canceling.')
     from robert_agent import execution_store
     subjects = {('task', task_id) for (task_id,) in task_ids}
     for (task_id,) in task_ids:
         task = conn.execute('SELECT task_kind, metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
         if task and task[0] in {'ci_remediation', 'merge_conflict_remediation'}:
-            metadata = work_items._decode_json(task[1], {}) or {}
+            try:
+                metadata = json.loads(task[1]) if task[1] else {}
+            except (TypeError, ValueError):
+                metadata = {}
+            metadata = metadata or {}
             if metadata.get('remediation_episode_id'):
                 subjects.add(('remediation_episode', metadata['remediation_episode_id']))
     for subject_type, subject_id in sorted(subjects):

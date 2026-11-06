@@ -261,8 +261,8 @@ class VoteCoordinatorTests(unittest.TestCase):
             driver.prepare()
             self.assertIn('review:123', driver.manifest['sources'])
             review['body'] = 'Do not vote now'
-            from robert_agent.model_execution import ReviewSuperseded
-            with self.assertRaises(ReviewSuperseded):
+            from robert_agent.execution.stages import StageSuperseded
+            with self.assertRaises(StageSuperseded):
                 driver.check_sources()
 
     def test_review_trigger_publication_checks_the_review_submission_endpoint(self):

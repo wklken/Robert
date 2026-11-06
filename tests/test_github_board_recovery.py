@@ -1,4 +1,5 @@
 """Kanban operator requests reach GitHub attempts without polling empty work."""
+from robert_agent.adapters.github import client as github_client
 from contextlib import closing
 from datetime import datetime
 import json
@@ -50,7 +51,7 @@ class GitHubBoardRecoveryTests(unittest.TestCase):
             requested = c.execute('SELECT created_at FROM wakeups WHERE task_id=?', (self.task_id,)).fetchone()[0]
             when = datetime.fromisoformat(requested).timestamp() + (1 if fresh else -1)
             github_scan._save_reads(c, self.fixture.repo_id,
-                {github_scan.command_key(['gh', 'api', 'repos/example/repo/issues/70']): json.dumps(payload)}, when)
+                {github_client.command_key(['gh', 'api', 'repos/example/repo/issues/70']): json.dumps(payload)}, when)
 
     def cycle(self):
         return self.fixture._run_local_cycle()

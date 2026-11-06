@@ -8,7 +8,7 @@ import yaml
 
 from robert_agent import validate_config
 from robert_agent.resource_files import resource
-from robert_agent.route_config import resolve_route_config, review_workers_for_author
+from robert_agent.configuration.routes import resolve_route_config, review_workers_for_author
 
 
 class MultiReviewConfigTests(unittest.TestCase):

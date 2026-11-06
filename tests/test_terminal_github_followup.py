@@ -1,4 +1,5 @@
 """Fresh trusted requests start independent subjects after terminal executions."""
+from robert_agent.adapters.github import sources as github_sources
 from contextlib import closing
 import json
 import sqlite3
@@ -153,7 +154,7 @@ class TerminalGithubFollowupTests(unittest.TestCase):
         config = validate_config.validate_config(self.fixture.config_path, skip_external=True)
         session = GitHubReadSession(self.db_path, account='robot')
         with mock.patch.object(session, 'collect_events', side_effect=collect), \
-                mock.patch.object(run_once, '_remote_source_state', return_value={'state': 'open'}), \
+                mock.patch.object(github_sources, 'read_source_state', return_value={'state': 'open'}), \
                 mock.patch('robert_agent.discover._source_metadata', return_value=({'number': 123, 'source_type': 'issue', 'event_type': 'notification', 'state': 'open'}, 'open')), \
                 mock.patch('robert_agent.discover._enrich_known_workstream_contexts', return_value=[event]):
             batch_id = github_scan._scan_repo(config, repo, session, [])
@@ -250,7 +251,7 @@ class TerminalGithubFollowupTests(unittest.TestCase):
             return [{**raw, **event}]
         metadata = {'number': 123, 'source_type': 'pull_request', 'event_type': 'notification', 'state': 'open'}
         with mock.patch.object(session, 'collect_events', return_value=[]), \
-                mock.patch.object(run_once, '_remote_source_state', return_value={'state': 'open'}), \
+                mock.patch.object(github_sources, 'read_source_state', return_value={'state': 'open'}), \
                 mock.patch.object(discover, '_source_metadata', return_value=(metadata, 'open')), \
                 mock.patch.object(discover, '_enrich_pull_request_metadata', return_value={**metadata,
                     'has_open_dd_pr': True, 'existing_pr_head_branch': 'codex/existing',

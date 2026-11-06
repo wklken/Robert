@@ -368,7 +368,8 @@ class TransactionBoundaryTests(unittest.TestCase):
 class RecoveryEntryTests(unittest.TestCase):
     def test_operator_can_start_new_subject_after_attention_and_dead_worker(self):
         from tests.test_work_items import WorkItemCommandTests
-        from robert_agent import work_items, run_once
+        from robert_agent import work_items
+        from robert_agent.execution import ownership as execution_ownership
 
         fixture = WorkItemCommandTests()
         fixture.setUp()
@@ -397,7 +398,7 @@ class RecoveryEntryTests(unittest.TestCase):
                 "terminal",
             )
             self.assertTrue(
-                run_once._execution_parent_allows_child(
+                execution_ownership.parent_allows_child(
                     conn, task_id, retrigger_wakeup_id=response["wakeup_id"]
                 )
             )

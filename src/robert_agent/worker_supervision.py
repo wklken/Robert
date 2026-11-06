@@ -6,6 +6,7 @@ import os
 import sqlite3
 
 from robert_agent import run_once, validate_config, worker_identity
+from robert_agent.execution import leases as execution_leases
 from robert_agent.worker.result import replay_pending_results
 from robert_agent.common import ControlDeadlineExceeded, emit
 from robert_agent.publication_lock import task_publication_lock
@@ -39,7 +40,7 @@ def run(config_path):
                     continue
                 repo_id = row[0]
                 with conn:
-                    lease = run_once._acquire_agent_lease(conn, repo_id, run_id, now, config.get('lease_ttl_seconds', 540))
+                    lease = execution_leases.acquire(conn, repo_id, run_id, now, config.get('lease_ttl_seconds', 540))
                 if not lease['ok']:
                     continue
                 try:
@@ -67,7 +68,7 @@ def run(config_path):
                     failures.append({'repo_id': repo_id, 'error_type': type(exc).__name__})
                 finally:
                     with conn:
-                        run_once._release_agent_lease(conn, lease['lease_id'], run_once._now())
+                        execution_leases.release(conn, lease['lease_id'], run_once._now())
         finally:
             with conn:
                 summary.update(supervised_count=supervised, failures=failures)

@@ -1,4 +1,6 @@
 """Supervision fences around the existing publisher's exact action and task lock."""
+from robert_agent.workflows import routing as workflow_routing
+from robert_agent.work import admission as work_admission
 
 from contextlib import closing
 import json
@@ -91,15 +93,15 @@ def guard(db, action, state, config, now):
             if not supervision_actions.publication_current(conn, state['claim'], config=config, now=now):
                 return False
             if not repair:
-                from robert_agent import native_rounds, run_once
+                from robert_agent import native_rounds
                 row = conn.execute('''SELECT r.full_name FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
                     JOIN repos r ON r.repo_id=w.repo_id WHERE t.task_id=?''', (action['task_id'],)).fetchone()
                 repo = next((value for value in config.get('repos', ()) if row and value['full_name'] == row[0]), None)
                 if not repo:
                     return False
                 native = native_rounds.session(conn, task_id=action['task_id'])
-                return (run_once._native_request_allowed(native, repo, config) if native
-                        else run_once._ordinary_dispatch_allowed(conn, action['task_id'], repo))
+                return (workflow_routing.native_request_allowed(native, repo, config) if native
+                        else work_admission.ordinary_dispatch_allowed(conn, action['task_id'], repo))
     return True
 
 

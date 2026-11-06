@@ -6,7 +6,8 @@ import threading
 from unittest.mock import patch
 
 import yaml
-from robert_agent import model_execution, vote_store, work_items, audit_result
+from robert_agent import vote_store, work_items, audit_result
+from robert_agent.execution import stages as model_execution
 from tests import test_vote_coordinator as fixture_module
 
 
@@ -76,7 +77,7 @@ class VoteRecoveryTests(unittest.TestCase):
             except OSError:
                 failures.wait(timeout=5)
                 raise
-        with patch.object(driver, 'launch_with_slot', side_effect=unknown_launch), self.assertRaises(model_execution.ReviewStopped):
+        with patch.object(driver, 'launch_with_slot', side_effect=unknown_launch), self.assertRaises(model_execution.StageStopped):
             driver.run()
         with vote_store.connect(self.fixture.db) as conn:
             conn.execute("UPDATE attempts SET status='failed' WHERE attempt_id=?", (driver.attempt_id,))
@@ -99,7 +100,7 @@ class VoteRecoveryTests(unittest.TestCase):
             self.assertEqual(vote_store.session(conn, task_id=driver.task_id)['status'], 'canceled')
             confirmed = {run['run_id'] for run in unknown}
             self.assertTrue(all(run['status'] == 'abandoned' for run in vote_store.runs(conn, driver.round_id) if run['run_id'] in confirmed))
-        with self.assertRaises(model_execution.ReviewStopped):
+        with self.assertRaises(model_execution.StageStopped):
             driver.check_active()
 
     def test_report_audit_rejects_scope_swap_and_unregistered_comment(self):

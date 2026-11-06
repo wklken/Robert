@@ -1,4 +1,4 @@
-from robert_agent import model_execution
+from robert_agent.execution import stages as model_execution
 from contextlib import closing
 import json
 import os
@@ -8,7 +8,7 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
-from robert_agent import board, review_coordinator, review_store, web, work_items
+from robert_agent import board, review_coordinator, review_store, web, work_items, worker_identity
 from tests import test_review_coordinator as fixtures
 
 
@@ -24,7 +24,7 @@ class ReviewRecoveryTests(unittest.TestCase):
         driver.prepare()
         driver.request['workers'] = driver.request['workers'][:1]
         driver.launcher = lambda **kwargs: (_ for _ in ()).throw(OSError('crash during spawn'))
-        with self.assertRaises(review_coordinator.ReviewStopped):
+        with self.assertRaises(review_coordinator.StageStopped):
             driver.run()
         with review_store.connect(self.fixture.db) as conn:
             # The supervisor has observed the coordinator's exit.
@@ -53,7 +53,7 @@ class ReviewRecoveryTests(unittest.TestCase):
         previous = signal.getsignal(signal.SIGTERM)
         try:
             with patch.object(review_coordinator, 'Coordinator', return_value=driver):
-                with self.assertRaises(review_coordinator.ReviewStopped):
+                with self.assertRaises(review_coordinator.StageStopped):
                     review_coordinator.main(['--db', str(self.fixture.db), '--task-id', driver.task_id,
                                              '--attempt-id', driver.attempt_id])
         finally:
@@ -85,7 +85,7 @@ class ReviewRecoveryTests(unittest.TestCase):
             self.assertEqual(review_store.session(conn, task_id=driver.task_id)['status'], 'canceled')
             metadata = json.loads(conn.execute("SELECT metadata_json FROM work_item_events WHERE idempotency_key='confirmed-abandon'").fetchone()[0])
             self.assertEqual(metadata['command_result']['abandoned_review_run_ids'], [run['run_id']])
-        with self.assertRaises(review_coordinator.ReviewStopped):
+        with self.assertRaises(review_coordinator.StageStopped):
             driver.check_active()
         self.fixture.cycle([self.fixture.event('after-abandon')])
         with review_store.connect(self.fixture.db) as conn:
@@ -108,7 +108,7 @@ class ReviewRecoveryTests(unittest.TestCase):
         driver, run, item, context = self.unknown_start()
         with review_store.connect(self.fixture.db) as conn:
             conn.execute("UPDATE attempts SET status='running' WHERE attempt_id=?", (driver.attempt_id,))
-        with patch('robert_agent.run_once._terminate_attempt_process', return_value={'status': 'attention'}):
+        with patch('robert_agent.adapters.processes.attempt.terminate_attempt', return_value={'status': 'attention'}):
             with self.assertRaisesRegex(work_items.WorkItemConflictError, 'Worker could not be stopped'):
                 work_items.execute_command(self.fixture.db, item['work_item_id'], context=context,
                     command='cancel', expected_version=item['version'], idempotency_key='parent-alive',
@@ -168,8 +168,8 @@ class ReviewRecoveryTests(unittest.TestCase):
         with patch.object(driver, 'prepare', side_effect=RuntimeError('phase failed')), \
              patch.object(model_execution, '_group_finished', return_value=False), \
              patch.object(model_execution, '_wait_for_group_exit', return_value=True), \
-             patch.object(review_coordinator.worker_identity, 'inspect_recorded_identity', return_value='alive'), \
-             patch.object(review_coordinator.worker_identity, 'terminate_recorded_identity', side_effect=terminate):
+             patch.object(worker_identity, 'inspect_recorded_identity', return_value='alive'), \
+             patch.object(worker_identity, 'terminate_recorded_identity', side_effect=terminate):
             with self.assertRaisesRegex(RuntimeError, 'phase failed'):
                 driver.run()
         self.assertEqual(observed, [424240, 424241])

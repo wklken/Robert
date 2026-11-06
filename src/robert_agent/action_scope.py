@@ -1,9 +1,10 @@
 """Trusted result targets shared by submission and final controller audit."""
+from robert_agent.adapters.git.remotes import github_owner
 import json
 from pathlib import Path
 import subprocess
 
-from robert_agent import publish, remediation, review_store, supervision_git, vote_store
+from robert_agent import remediation, review_store, supervision_git, vote_store
 
 
 def _object(value):
@@ -99,7 +100,7 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
             if inspected.returncode == 0 and inspected.stdout.strip():
                 value = inspected.stdout.strip()
                 if field == "head_owner":
-                    value = publish._github_remote_owner(value)
+                    value = github_owner(value)
                 if value:
                     action_scope[field] = value
         try:

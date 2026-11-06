@@ -4,6 +4,7 @@ from contextlib import closing
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -97,7 +98,7 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "version": 2, "default_worker": "default",
         "data_dir": str(workspace_dir / "data"), "database": "dd.sqlite3",
         "github": {"account": repo["github_account"]},
-        "workers": {"default": {"adapter": "cbc", "command": str(worker),
+        "workers": {"default": {"adapter": "cbc", "command": [sys.executable, str(worker)],
                     "model": "default", "effort": "default"}},
         "scheduler": {"max_concurrency": 1, "lease_ttl_seconds": source_config["lease_ttl_seconds"]},
         "supervision": {"startup_grace_seconds": 1,

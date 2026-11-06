@@ -12,7 +12,8 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import model_execution, review_files, review_store, storage, vote_store
+from robert_agent import review_files, review_store, storage, vote_store
+from robert_agent.execution import stages as model_execution
 from robert_agent.worker import heartbeat, snapshot
 from tests import test_review_coordinator as coordinator_fixture
 
@@ -138,14 +139,14 @@ class CoordinatorHeartbeatRemediationTests(unittest.TestCase):
             self.driver.check_active()
         with review_store.connect(self.fixture.db) as conn:
             conn.execute("UPDATE execution_subjects SET binding_status='attention' WHERE subject_type='task' AND subject_id=?", (self.driver.task_id,))
-        with self.assertRaises(model_execution.ReviewStopped):
+        with self.assertRaises(model_execution.StageStopped):
             self.driver.check_active()
 
     def test_cancellation_is_checked_even_when_heartbeat_is_not_due(self):
         self.driver.check_active()
         with review_store.connect(self.fixture.db) as conn:
             conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (self.driver.task_id,))
-        with self.assertRaises(model_execution.ReviewStopped):
+        with self.assertRaises(model_execution.StageStopped):
             self.driver.check_active()
 
     def test_non_contention_heartbeat_errors_remain_visible(self):
