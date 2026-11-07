@@ -32,24 +32,20 @@ class NotificationTests(TemporaryWorkspace):
         class Proc:
             returncode = 0
 
-        original_run = notify.subprocess.run
-
         def fake_run(args, **kwargs):
             calls.append((args, kwargs))
             return Proc()
 
-        try:
-            notify.subprocess.run = fake_run
-            result = notify.send_notification(
-                db_path,
-                {"type": "worker_stale", "task_id": "task-1"},
-                command="notify-tool --channel local",
-            )
-        finally:
-            notify.subprocess.run = original_run
+        notify.record_notification(db_path, "worker_stale", "recorded")
+        result = notify.deliver_pending(
+            db_path,
+            command="notify-tool --channel 'local alerts'",
+            runner=fake_run,
+        )
 
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(calls[0][0], ["notify-tool", "--channel", "local"])
+        self.assertEqual(result["sent"], 1, result)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], ["notify-tool", "--channel", "local alerts"])
         self.assertNotIn("shell", calls[0][1])
 
     def _init_notifications_db(self, db_path):
