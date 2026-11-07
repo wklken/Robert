@@ -4,7 +4,7 @@
 attempt. The worker helper requires `--db`, `--task-id`, `--attempt-id` and
 `--output-type`; stdin contains only the semantic submission. Programmatic
 callers use `build_result(...)` to produce that same binding envelope and
-`record_result(db, envelope)`. There is no old result parser or handoff-file input.
+`record_result(db, envelope)`. The helper accepts semantic JSON through stdin.
 
 Required lists are `planned_github_actions`, `used_skills`, `verification`, and
 the origin's consumed array: GitHub `consumed_event_fingerprints` or Web
@@ -111,23 +111,17 @@ different semantics conflict. Spool replay uses the saved normalization and neve
 converts unsupported formats. Public text still passes scope, redaction and
 idempotency checks.
 
-## Switching an existing installation
+## Result compatibility guard
 
 `robert doctor --config <config> --skip-external` reports the read-only
-`result_contract_cutover` check. Run, dispatch and direct/background publication
-block when old prepared/running attempts, unresolved results/publications or
-unsupported pending spool exist. A completed task still owning an active
-workstream is unresolved, including a pending classification handoff. The
-background publisher checks before notification delivery as well. Completed terminal history is retained and
-does not require an old parser.
+`result_contract_cutover` check. Execution and publication validate protocol
+bindings for prepared/running attempts, unresolved results and pending spool.
+An identifiable incompatible result isolates its task. An unidentifiable spool
+or database-inspection failure pauses automatic execution. Isolated processes
+still receive exit checks; receiving a result does not release their capacity.
 
-Stop dispatch first. Run the previous version until all prepared/running workers,
-spool ingestion and pending publications have drained. Verify actual worker
-processes stopped, then run doctor on the new version. If drain is impossible,
-stop processes and reconcile side effects before using the existing Workbench
-Cancel control. After switching, create a replacement task containing the
-remaining approved scope; this creates a new attempt and new prompt. Cancellation
-cannot be followed by Retry on that canceled work item. This is a manual
-re-preparation procedure, not automatic migration. Never dispatch an old prepared
-prompt on the new version, clear the DB/spool, or blindly replay published work.
-Installation actions and live model launches require their own deployment scope.
+Persisted results, pending publications and attention evidence remain available.
+Explicit retrigger requires stopped workers and reconciled publications, then
+creates a replacement task with fresh source context. Ordinary approval cannot
+clear protocol isolation. Cancellation cannot be followed by Retry on that
+canceled work item. Completed terminal history does not require a result parser.

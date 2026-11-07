@@ -63,21 +63,17 @@ The worker must not create or delete worktrees unless the agent explicitly
 provided that operation. Before recording GitHub-facing text, it must apply the
 agent redaction rules and stay within `allowed_github_actions`.
 
-Use the latest action JSON shape only: each `planned_github_actions` item must include `type`, and workers must not emit the legacy `action` key.
+Each `planned_github_actions` item uses `type` as its action discriminator.
 
-Workers must include the fields required by the publisher for each planned action:
-`comment` needs `target_url` and `body`, `open_pr` needs `repo`, `head`, `base`,
-`title`, and `body`, and `push_existing_pr` needs `worktree_path` and `branch`.
-For `new_pr`, record both `push_existing_pr` and `open_pr` so the branch exists
-on the remote before the publisher calls `gh pr create`.
-Comment bodies must include the `robert-comment` hidden idempotency marker. New PR
-bodies must include the `robert-workstream` hidden metadata block so retries and
-follow-up discovery can match the existing GitHub side effect instead of
-creating another one.
-Issue-sourced `open_pr` actions must set `issue_resolution` to `complete` or
-`partial`. Complete delivery must use a GitHub closing keyword for the source
-issue. Partial delivery must use `Refs #N` and include a non-empty
-`remaining_scope` describing what still needs a follow-up.
+Workers submit semantic actions according to [the result contract](result-contract.md):
+`comment` contains `body` and a `target_url` when target selection is ambiguous;
+`open_pr` contains `title` and `body`; `push_existing_pr` contains only `type`.
+Robert binds repository, paths, branches, remote and idempotency markers from
+trusted state. Workers must not supply those fields or hidden markers.
+For `new_pr`, plan `push_existing_pr` before `open_pr` so the branch exists
+before PR creation. Issue-sourced `open_pr` also requires `issue_resolution`
+(`complete` or `partial`); partial delivery requires nonempty `remaining_scope`.
+Robert adds the issue closing/reference statement from that decision.
 
 ## Native voting
 

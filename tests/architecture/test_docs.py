@@ -38,7 +38,8 @@ class DocumentationTests(unittest.TestCase):
         text = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
         self.assertIn("`daemon`", text)
         self.assertIn("`scheduler`", text)
-        self.assertIn("config-v2-upgrade.md", text)
+        self.assertIn("config.example.yml", text)
+        self.assertIn("config.schema.json", text)
         self.assertNotIn("daemon_local_poll_seconds", text)
         public_docs = [
             ROOT / "docs" / "concepts.md",

@@ -37,6 +37,8 @@ class ConfigV2Tests(ConfigV2Fixture):
                 result = self.validate({**self.config, field: value})
                 self.assertFalse(result['ok'], result)
                 self.assertIn(field, result['safe_error'])
+                if field == 'version' and value == 1:
+                    self.assertIn('docs/reference.md#configuration', result['safe_error'])
 
     def test_duplicate_yaml_keys_fail(self):
         self.validate()

@@ -1,5 +1,7 @@
 # Robert Concepts
 
+[文档目录](README.md)
+
 ## Architecture
 
 Robert is a local Python control plane with five boundaries:
@@ -15,7 +17,7 @@ The installed `robert` command reads `~/.config/robert/config.yml`.
 `adapters.sqlite.database` owns schema setup, and route, worktree, dispatch,
 audit, and publication modules enforce separate policies.
 
-Robert uses polling in the first beta. It does not include a webhook receiver
+Robert uses polling. It does not include a webhook receiver
 or GitHub App authentication.
 
 The [architecture and mechanism diagrams (Chinese)](architecture.md) trace the
@@ -56,7 +58,8 @@ retained as context, but they cannot independently start protected work. The
 authenticated `gh` CLI session is the only GitHub credential source; tokens
 must not be stored in configuration.
 
-Workers cannot publish directly. They record structured planned actions.
+The worker protocol prohibits direct publication. Workers record structured
+planned actions; their OS account permissions are not restricted by Git worktrees.
 Robert checks route permissions, verification evidence, skill evidence,
 idempotency markers, and redaction before publication.
 
@@ -94,23 +97,29 @@ robert task show TASK_ID --config ~/.config/robert/config.yml --output json
 Routes define expected worker output, allowed GitHub actions, verification
 policy, workspace mode, worker selection, and skill guidance.
 
-Packaged routes include analysis, new pull request, existing pull-request
-update, source review, review comment, classification, local result, and
-waiting-for-user flows.
+The [packaged route catalog](../src/robert_agent/resources/routes.yml) contains
+`comment-analysis`, `new-pr`, `update-existing-pr`, `review-pr`, `review-comment`,
+`classification-result`, `local-result`, `waiting-for-user`, and `vote`.
 
 Immutable fields such as `allowed_github_actions`, `expected_output`,
 `verification_policy`, and `workspace_mode` cannot be changed in
-`~/.config/robert/config.yml`. Global and repository overrides may set only:
+`~/.config/robert/config.yml`. Global and repository overrides select workers,
+ordinary model/effort, required/recommended skills, and supported native
+review/vote settings. For example:
 
 ```yaml
 routes:
   new-pr:
-    worker: default
+    worker: coder
+    model: default
+    effort: default
     required_skills: []
     recommended_skills: []
 ```
 
-Repository overrides replace only the fields they explicitly provide.
+Worker names must exist in `workers`. Repository overrides replace only the
+fields they explicitly provide; skill lists replace inherited lists, and native
+review/vote settings replace the whole block. See [configuration](reference.md#configuration).
 
 ## Worker Contract
 

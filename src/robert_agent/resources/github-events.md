@@ -21,7 +21,7 @@ calling the source issue or PR API.
 | --- | --- | --- | --- | --- |
 | `assigned` | Issue or PR timeline `assigned` event | `assigned:<timeline-event-id>` | Yes, only when the assigner is a trusted actor and the assignee is `github_account`. | Assignment discovery may start from assignee search or from a notification hint; both paths must reuse the same timeline event fingerprint and keep timeline-first resolution ahead of later discussion activity. |
 | `comment` | Issue comment, PR conversation comment, or issue/PR body mention lookup | `comment:<comment-id>` or explicit fixture fingerprint | Yes, only when a trusted actor mentions `github_account`; otherwise context only for known workstreams. | Pull requests are issues in the REST API, so PR conversation comments come from issue comment endpoints. |
-| `review` | Pull request review body | `review:<review-id>` | No for new work by itself; accepted as follow-up context in known workstreams. | A review can carry actionable text for an existing DD PR workstream. |
+| `review` | Pull request review body | `review:<review-id>` | No for new work by itself; accepted as follow-up context in known workstreams. | A trusted actor's review can carry actionable text for an existing Robert PR workstream. |
 | `review_comment` | Pull request diff review comment | `review_comment:<comment-id>` | No for new work by itself; accepted as follow-up context in known workstreams. | Diff comments are distinct from issue comments and must stay distinguishable in prompts and evidence. |
 | `review_request` | PR timeline `review_requested` event | `review_request:<timeline-event-id>` | Yes, only when the requester is trusted and the requested reviewer or team matches `github_account`. | Notification reason `review_requested` must be resolved through the PR timeline before authorization. Route to `review-pr` so the worker reviews PR source in a read-only worktree and records a comment-only result. |
 | `notification` | `/notifications` thread | `notification:<thread-id>` only while unresolved | No. | If lookup cannot complete, record pending authorization; if lookup completes without an actionable canonical event, ignore it. |
@@ -46,7 +46,7 @@ query collaborator permission and accept `admin`, `maintain`, `write`, or
 
 Issue follow-up belongs to the issue mainline. PR follow-up belongs to the PR mainline, even when the PR was created from an issue task. The PR keeps `origin_workstream_id` metadata so the agent can relate it back to the issue without serializing PR repair behind the issue workstream.
 
-DD-authored GitHub content never creates a task. It remains available as
+Robert-authored GitHub content never creates a task. It remains available as
 context and audit evidence.
 
 CI and conflict signals are internal `github_system` events, not trusted-user
@@ -72,10 +72,10 @@ the PR workstream.
    the derived PR workstream is materialized with `origin_workstream_id`
    pointing back to the issue.
 3. PR discussion fixes the branch: review bodies, issue-style PR comments, and
-   diff review comments on the DD-authored PR are routed on the PR workstream.
-   They must update the existing PR branch, not reopen or serialize through the
+   diff review comments on the Robert-authored PR are routed on the PR workstream.
+   Only trusted actors can trigger that update. The task uses the existing PR branch, not the
    origin issue workstream.
-4. Review request asks for DD attention: a notification with reason
+4. Review request asks for Robert attention: a notification with reason
    `review_requested` is only a hint. The canonical trigger is the PR timeline
    `review_requested` event whose requester is trusted and whose requested
    reviewer or team matches `github_account`. This creates a `review-pr` source
@@ -83,4 +83,4 @@ the PR workstream.
 5. Closed or merged sources stop creating new work: closed issue/PR notification
    hints are ignored during discovery. Active-task reconciliation must query the
    source issue or PR directly, cancel in-flight work when the source is closed,
-   and complete a DD PR workstream when the PR was merged.
+   and complete a Robert PR workstream when the PR was merged.

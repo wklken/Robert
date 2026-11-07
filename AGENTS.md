@@ -25,10 +25,11 @@ These rules apply to the entire Robert repository.
 The source is a modular monolith organized by domain, with smaller responsibility
 and layer modules inside each domain. See [the architecture map](docs/architecture.md)
 for the published source contract. Execution plans and review records under
-`docs/superpowers/` and `docs/reviews/` stay local and are ignored by Git.
-A plan unit is a verification checkpoint, not a partial delivery boundary.
-Do not describe the reorganization as complete while planned ownership or
-integration checks remain unfinished.
+`docs/superpowers/`, `docs/reviews/`, and `docs/remediation/` stay local and are
+ignored by Git. Published documentation describes current code and supported
+operations; keep implementation plans, review ledgers, historical comparisons
+and upgrade/migration procedures out of it. Use [the documentation index](docs/README.md)
+to find and maintain the current guides.
 
 Paths below are relative to `src/robert_agent/`.
 
@@ -131,7 +132,7 @@ Paths below are relative to `src/robert_agent/`.
   in its adapter. A new invariant belongs to the owning domain's rules or use case.
   Importing policies/configuration must not connect to production or launch work.
 
-## Entry points, migration and verification
+## Entry points and verification
 
 - The package root contains only `__init__.py`, `paths.py`, and
   `resource_files.py`. Executable modules live with their owning domain or
@@ -141,8 +142,6 @@ Paths below are relative to `src/robert_agent/`.
   Call Worker, status and daemon subprocess entrypoints at their current paths.
   When an entrypoint moves, update every caller directly and delete the old
   module. Do not add forwarding scripts or aliases for the old paths.
-- Follow the [source layout upgrade guide](docs/source-layout-upgrade.md) when
-  replacing an installation whose generated Worker prompts contain old paths.
 - Inventory source callers, tests, registrations, dynamic/module commands,
   persisted prompt paths, resources and service targets before moving a symbol.
   Update mocks where production actually looks up the collaborator. Static search
@@ -159,9 +158,8 @@ Paths below are relative to `src/robert_agent/`.
   including executable entrypoints and resources. CI covers Linux/macOS and the
   supported Python matrix, lint/types/tests/build, dependency/secret scans and links.
 - Update AGENTS and current architecture docs with the actual final structure.
-  Preserve historical review evidence: pin moved-file links to an appropriate
-  historical commit instead of pointing old line numbers at new implementations.
-  Do not suppress documentation or architecture checks to hide migration residue.
+  Keep source links, executable examples and diagrams aligned with their current
+  owners. Do not suppress documentation or architecture checks to hide stale references.
 
 ## Deployment checks
 
