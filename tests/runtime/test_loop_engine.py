@@ -64,7 +64,7 @@ repos:
 
     def test_loop_ignores_local_work_outside_configured_repos(self):
         from robert_agent.runtime import loop as loop_engine
-        db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -101,7 +101,7 @@ repos:
     def test_archived_workflow_signal_does_not_drive_native_execution(self):
         from robert_agent.runtime import loop as loop_engine
 
-        db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -122,7 +122,7 @@ repos:
         from robert_agent.runtime import loop as loop_engine
         from robert_agent.adapters.sqlite import execution_control as execution_store
 
-        db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -255,7 +255,7 @@ repos:
 
     def test_loop_runs_when_attempt_needs_supervision(self):
         from robert_agent.runtime import loop as loop_engine
-        db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -428,7 +428,7 @@ repos:
 
     def _init_runnable_db(self):
         from robert_agent.runtime import loop as loop_engine
-        db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
