@@ -184,7 +184,7 @@ class DiagnosisTests(unittest.TestCase):
 
         with (
             mock.patch.dict(os.environ, {"MODEL_FIXTURE": "allowed-for-test"}),
-            mock.patch.object(self.diagnose, "_stable_identity", return_value=None),
+            mock.patch.object(self.diagnose.model_command, "stable_identity", return_value=None),
             mock.patch.object(self.diagnose, "_complete", side_effect=complete),
         ):
             first = self.poll("completion_pending", "unavailable", "process_attention")

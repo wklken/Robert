@@ -180,6 +180,21 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "run":
             sub.add_argument("--once", action="store_true")
 
+    reply = supervisor_commands.add_parser("reply", help="Answer an exact supervisor question.")
+    _add_config_argument(reply)
+    _add_output_argument(reply)
+    reply.add_argument("--workstream-id", required=True)
+    reply.add_argument("--decision-id", required=True)
+    reply.add_argument("--body", required=True)
+
+    resolve = supervisor_commands.add_parser(
+        "resolve-decision", help="Release an exact stranded model claim after stopping its processes."
+    )
+    _add_config_argument(resolve)
+    _add_output_argument(resolve)
+    resolve.add_argument("--decision-id", required=True)
+    resolve.add_argument("--confirm-process-stopped", action="store_true", required=True)
+
     manifest = supervisor_commands.add_parser("build-manifest", help="Bind a built wheel to clean Git source.")
     manifest.add_argument("--repo", required=True)
     manifest.add_argument("--wheel", required=True)
@@ -463,6 +478,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result = supervisor.run(validated, once=args.once)
             elif args.supervisor_command == "check":
                 result = supervision_checks.check(validated)
+            elif args.supervisor_command == "reply":
+                from robert_agent.supervision.application import decision_control
+
+                result = decision_control.reply(validated, args.workstream_id, args.decision_id, args.body)
+            elif args.supervisor_command == "resolve-decision":
+                from robert_agent.supervision.application import decision_control
+
+                result = decision_control.resolve_runner(
+                    validated, args.decision_id, confirm_process_stopped=args.confirm_process_stopped
+                )
             elif args.supervisor_command.startswith("repair-"):
                 from robert_agent.workflows.maintenance import repair as supervision_repair
 

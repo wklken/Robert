@@ -22,7 +22,6 @@ import json
 import os
 from pathlib import Path
 import re
-import selectors
 import subprocess
 import tempfile
 import threading
@@ -33,6 +32,7 @@ from robert_agent.security import redaction
 from robert_agent.supervision import rules as supervision_rules
 from robert_agent.supervision import store as supervision_store
 from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.adapters.processes import model_command
 from robert_agent.configuration.supervision import normalize_diagnosis
 from robert_agent.worker_adapters import build_worker_launch
 
@@ -58,7 +58,6 @@ _OUTPUT_FIELDS = {
     "recommended_action",
     "expected_progress",
 }
-_MAX_STDOUT = 8192
 _MAX_BUNDLE = 49152
 _RUNNER = ("diagnostic", "installation", "runner")
 _IN_PROGRESS = ("open", "needs_attention", "diagnosing")
@@ -312,53 +311,6 @@ def _validate_output(raw, claim):
     return {**output, "expected_progress": safe["text"]}
 
 
-def _output(proc, deadline, stop):
-    output = bytearray()
-    eof = False
-    with selectors.DefaultSelector() as selector:
-        descriptor = proc.stdout.fileno()
-        os.set_blocking(descriptor, False)
-        selector.register(descriptor, selectors.EVENT_READ)
-        while not stop.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return "timed_out", b""
-            if eof:
-                if proc.poll() is not None:
-                    return ("exited" if proc.returncode else "read"), bytes(output)
-                stop.wait(min(remaining, 0.05))
-            elif selector.select(min(remaining, 0.05)):
-                chunk = os.read(descriptor, min(4096, _MAX_STDOUT + 1 - len(output)))
-                if chunk:
-                    output.extend(chunk)
-                    if len(output) > _MAX_STDOUT:
-                        return "invalid_output", b""
-                else:
-                    eof = True
-    return "stopped", b""
-
-
-def _stable_identity(proc, stop):
-    # On macOS `ps` can observe the exec transition before argv stabilizes.
-    # Never persist that transient command as proof for restart or cleanup.
-    previous = None
-    for _ in range(5):
-        if proc.poll() is not None:
-            return None
-        try:
-            observed = worker_identity.capture_process_identity(proc.pid)
-        except (OSError, worker_identity.IdentityReadError):
-            observed = None
-        if observed and previous and worker_identity.compare_recorded_identity(previous, observed) == "alive_same":
-            return observed
-        previous = observed
-        if stop.wait(0.025):
-            return None
-    if proc.poll() is None:
-        raise ValueError("diagnosis process identity did not stabilize")
-    return None
-
-
 def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
     started = time.monotonic()
     status, diagnosis, proc, stopped = "stopped", None, None, True
@@ -398,13 +350,13 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                         stderr=subprocess.DEVNULL,
                         start_new_session=True,
                     )
-                if identity := _stable_identity(proc, stop):
+                if identity := model_command.stable_identity(proc, stop):
                     if identity["process_group_id"] != proc.pid:
                         raise ValueError("diagnosis process group is not isolated")
                     claim = {**claim, "process_identity": identity, "status": "running"}
                     if not _set_claim(db_path, claim, now):
                         raise ValueError("diagnosis claim changed during spawn")
-                status, output = _output(proc, started + launch.timeout_seconds, stop)
+                status, output = model_command.read_output(proc, started + launch.timeout_seconds, stop)
                 if status in {"read", "exited"} and output:
                     try:
                         validated = _validate_output(output, claim)

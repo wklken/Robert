@@ -18,6 +18,8 @@ from robert_agent.configuration import supervision as supervision_config
 
 from robert_agent.persistence import supervision as boundary_adapters_sqlite_supervision
 from robert_agent.supervision import health as supervision_health
+from robert_agent.supervision import decisions
+from robert_agent.supervision.application import decision_control
 
 
 def schema_ready(conn):
@@ -91,7 +93,12 @@ def check(config, *, record=False, now=None):
                 queued_incidents = {item.get("incident_id") for item in recovery}
                 notify_changes(
                     conn,
-                    [change for change in changes if change["incident"]["incident_id"] not in queued_incidents],
+                    [
+                        change
+                        for change in changes
+                        if change["incident"]["incident_id"] not in queued_incidents
+                        and not (decisions.enabled(config) and change["incident"]["scope_type"] == "task")
+                    ],
                     now,
                 )
         result = {
@@ -131,7 +138,14 @@ def status(config):
                 from robert_agent.workflows.maintenance import repair as supervision_repair
 
                 incident["repair"] = supervision_repair.status(config, incident["incident_id"])
-        return {"ok": True, "status": "ready", "health": supervision_health.read_health(config), "incidents": incidents}
+        return {
+            "ok": True,
+            "status": "ready",
+            "health": supervision_health.read_health(config),
+            "incidents": incidents,
+            "decisions": decision_control.status(config),
+            "decision_runner": decision_control.runner_status(config),
+        }
     except (OSError, db_errors.Error, ValueError):
         return {
             "ok": False,

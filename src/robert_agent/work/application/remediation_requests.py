@@ -1,11 +1,13 @@
 """Translate observed pull request failures into remediation work."""
 
 from robert_agent.persistence import records as db_records
+from robert_agent.persistence import transactions
 from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.work.application import source_events
 from robert_agent.execution import ownership as execution_ownership
+from robert_agent.supervision import decisions as supervision_decisions
 from robert_agent.workflows import pr_health
 from robert_agent.workflows import pr_remediation as remediation
 
@@ -94,7 +96,9 @@ def collect_pr_remediation_decisions(
     repo,
     runner,
     run_now,
+    config=None,
 ):
+    config = config or {}
     automation = repo.get("pr_automation") or {}
     conflict_policy = automation.get("conflict") or {}
     ci_policy = automation.get("ci") or {}
@@ -110,6 +114,7 @@ def collect_pr_remediation_decisions(
     rows = db_read_workstreams.find_for_collect_pr_remediation_decisions(conn, repo_id)
     event_by_episode = {}
     snapshot_by_episode = {}
+    observed_workstreams = []
     for workstream_id, origin_workstream_id, source_key, number in rows:
         conn.commit()
         snapshot = pr_health.fetch_pr_snapshot(
@@ -157,6 +162,7 @@ def collect_pr_remediation_decisions(
                 conn, workstream_id, f"{snapshot['head_sha']}:{snapshot['base_sha']}"
             )
         }
+        observed_workstreams.append(workstream_id)
         conflict_episode = episodes.get("merge_conflict")
         if conflict_episode:
             event = _system_event(
@@ -169,9 +175,17 @@ def collect_pr_remediation_decisions(
                 episode=conflict_episode,
                 run_now=run_now,
             )
-            source_events.insert_source_and_event(conn, repo_id, event, run_now)
-            event_by_episode[conflict_episode["episode_id"]] = event
-            snapshot_by_episode[conflict_episode["episode_id"]] = snapshot
+            source_events.insert_source_and_event(
+                conn,
+                repo_id,
+                {**event, "creates_task": False, "drives_execution": False}
+                if supervision_decisions.enabled(config)
+                else event,
+                run_now,
+            )
+            if not supervision_decisions.enabled(config) or snapshot.get("mergeable") is False:
+                event_by_episode[conflict_episode["episode_id"]] = event
+                snapshot_by_episode[conflict_episode["episode_id"]] = snapshot
         ci_episode = episodes.get("ci")
         if ci_episode:
             ci_observations = ci_summary.get("observations", []) if ci_summary else []
@@ -188,17 +202,41 @@ def collect_pr_remediation_decisions(
                     observation=observation,
                     run_now=run_now,
                 )
-                source_events.insert_source_and_event(conn, repo_id, event, run_now)
+                source_events.insert_source_and_event(
+                    conn,
+                    repo_id,
+                    {**event, "creates_task": False, "drives_execution": False}
+                    if supervision_decisions.enabled(config)
+                    else event,
+                    run_now,
+                )
                 if observation.get("conclusion") == "failure":
                     event_by_episode.setdefault(ci_episode["episode_id"], event)
                     snapshot_by_episode[ci_episode["episode_id"]] = snapshot
 
+    if supervision_decisions.enabled(config) and observed_workstreams:
+        if not conn.in_transaction:
+            transactions.begin(conn, immediate=True)
+        for workstream_id in observed_workstreams:
+            supervision_decisions.withdraw_repairs(conn, config, workstream_id, run_now)
     decisions = remediation.next_system_decisions(
         conn,
         repo=repo_with_id,
         now=run_now,
     )
     events = []
+    for decision in decisions:
+        event = event_by_episode.get(decision["episode_id"])
+        if event and supervision_decisions.enabled(config):
+            supervision_decisions.offer(
+                conn,
+                config,
+                workstream_id=decision["workstream_id"],
+                action="resolve_conflict" if decision["episode_kind"] == "merge_conflict" else "repair_ci",
+                target_id=decision["episode_id"],
+                facts=_decision_facts(decision),
+                now=run_now,
+            )
     for decision in decisions:
         episode_id = decision["episode_id"]
         event = event_by_episode.get(episode_id)
@@ -218,18 +256,37 @@ def collect_pr_remediation_decisions(
             "limits": repo["pr_automation"][policy_key],
             "usage": decision["budget"],
         }
+        action = "resolve_conflict" if decision["episode_kind"] == "merge_conflict" else "repair_ci"
+        if not supervision_decisions.permit(
+            conn,
+            config,
+            workstream_id=decision["workstream_id"],
+            action=action,
+            target_id=episode_id,
+            facts=_decision_facts(decision),
+            now=run_now,
+        ):
+            continue
         events.append(event)
     for (episode_id,) in db_read_pr_remediation_episodes.find_for_collect_pr_remediation_decisions(conn, repo_id):
         execution_ownership.close_subject(conn, "remediation_episode", episode_id, run_now)
-    return [
-        event
-        for event in events
-        if execution_ownership.claim_episode(
-            conn,
-            ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id"),
-            run_now,
-        )
-    ]
+    accepted = []
+    for event in events:
+        episode_id = ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id")
+        if execution_ownership.claim_episode(conn, episode_id, run_now):
+            accepted.append(event)
+            supervision_decisions.executed(
+                conn,
+                config,
+                event["workstream_id"],
+                {
+                    "episode_id": episode_id,
+                    "event_fingerprint": event["event_fingerprint"],
+                    "status": "accepted_for_preparation",
+                },
+                run_now,
+            )
+    return accepted
 
 
 def handle_blocked_remediation_worktree(
@@ -270,3 +327,19 @@ def handle_blocked_remediation_worktree(
             )
         execution_ownership.close_subject(conn, "remediation_episode", episode_id, run_now)
     return True
+
+
+def _decision_facts(episode):
+    return {
+        key: episode.get(key)
+        for key in (
+            "episode_id",
+            "episode_kind",
+            "workstream_id",
+            "observed_head_sha",
+            "observed_base_sha",
+            "failure_signature",
+            "attempt_count",
+            "status",
+        )
+    }
