@@ -4,6 +4,8 @@ from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
     select,
+    table,
+    column,
     bindparam,
     and_,
     not_,
@@ -19,13 +21,17 @@ from robert_agent.persistence import statements
 
 def find_for_execution_recovery(conn, task_id, repo_id, lineage):
     query1 = select(bindparam("p0").label("task_id"), sql_constant(0).label("depth")).set_label_style(LABEL_STYLE_NONE)
-    cte2 = query1.cte("retries", recursive=True)
+    # A named reference lets the row limit apply to the entire recursive union,
+    # including the seed, before that union becomes the CTE.
+    recursive_rows = table("retries", column("task_id"), column("depth"))
     table3 = tables["tasks"].alias("child")
     table4 = tables["workstreams"].alias("w")
     query5 = (
-        select(table3.c["task_id"], (cte2.c["depth"] + sql_constant(1)))
+        select(table3.c["task_id"], (recursive_rows.c["depth"] + sql_constant(1)))
         .select_from(
-            cte2.join(table3, (table3.c["parent_task_id"] == cte2.c["task_id"]), isouter=False).join(
+            recursive_rows.join(
+                table3, (table3.c["parent_task_id"] == recursive_rows.c["task_id"]), isouter=False
+            ).join(
                 table4,
                 and_(
                     (table4.c["workstream_id"] == table3.c["workstream_id"]),
@@ -36,7 +42,7 @@ def find_for_execution_recovery(conn, task_id, repo_id, lineage):
         )
         .where(
             and_(
-                (cte2.c["depth"] < sql_constant(16)),
+                (recursive_rows.c["depth"] < sql_constant(16)),
                 (
                     func.json_extract(
                         table3.c["metadata_json"],
@@ -46,10 +52,10 @@ def find_for_execution_recovery(conn, task_id, repo_id, lineage):
                 ),
             )
         )
-        .correlate_except(cte2, table3, table4)
+        .correlate_except(recursive_rows, table3, table4)
         .set_label_style(LABEL_STYLE_NONE)
     )
-    cte2 = cte2.union_all(query5)
+    cte2 = query1.union_all(query5).limit(sql_constant(64)).cte("retries", recursive=True)
     table6 = tables["tasks"].alias("t")
     table8 = tables["work_items"].alias("wi")
     query9 = (

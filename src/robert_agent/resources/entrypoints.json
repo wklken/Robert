@@ -26,6 +26,7 @@
   "robert_agent.runtime.cycle",
   "robert_agent.runtime.daemon",
   "robert_agent.runtime.loop",
+  "robert_agent.runtime.paused_monitor",
   "robert_agent.runtime.scan",
   "robert_agent.runtime.supervisor",
   "robert_agent.security.authorization",
@@ -33,5 +34,8 @@
   "robert_agent.worker.heartbeat",
   "robert_agent.worker.result",
   "robert_agent.worker.snapshot",
-  "robert_agent.workflows.routes"
+  "robert_agent.workflows.maintenance.worker",
+  "robert_agent.workflows.review.coordinator",
+  "robert_agent.workflows.routes",
+  "robert_agent.workflows.vote.coordinator"
 ]
