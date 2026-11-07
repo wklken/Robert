@@ -37,7 +37,7 @@ def apply_schema(value, spec, schema, path):
     if kind and not valid[kind]:
         raise ValueError(f'{path} must be {kind}')
     if 'const' in spec and (type(value) is not type(spec['const']) or value != spec['const']):
-        raise ValueError(f'{path} must be {spec["const"]}; see docs/config-v2-upgrade.md')
+        raise ValueError(f'{path} must be {spec["const"]}; see docs/reference.md#configuration')
     if 'enum' in spec and value not in spec['enum']:
         raise ValueError(f'{path} must be one of {spec["enum"]}')
     if kind == 'object':

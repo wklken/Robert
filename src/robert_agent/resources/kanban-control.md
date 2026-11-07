@@ -20,7 +20,7 @@ robert web run \
   --operator "$USER"
 ```
 
-Open `http://127.0.0.1:8765/board`. The GitHub workbench is at `/`, and the
+Open `http://127.0.0.1:8765/board`. The board is also at `/`; the GitHub workbench is at `/work`, and the
 diagnostic dashboard remains at `/operations`.
 
 Read-only mode is available when the operator must inspect an existing
@@ -74,7 +74,7 @@ the detail response's `version` as `expected_version` and a new
 | `reply` | Answer an Agent question and create a serial child task. |
 | `request_changes` | Resolve review attention or request another pass on an open PR. |
 | `retry` | Resolve a retryable startup, execution, or publication failure. |
-| `cancel` | Cancel non-running work; a live attempt must finish or be supervised first. |
+| `cancel` | Stop and cancel work after proving owned worker groups have stopped; unknown model starts require explicit operator acknowledgment. |
 | `reopen` | Reopen a completed item as a new serial child task. |
 
 `409` means the item changed since the caller read it. The response includes a
@@ -89,11 +89,10 @@ from the validated config and is authoritative: if that worker is unavailable,
 the task stays prepared and becomes actionable instead of falling back to a
 different worker.
 
-Only attempts with `status = running` consume capacity. The global
-`max_concurrency` bounds the process, and `repos[].max_concurrency` may impose a
-lower limit for one repository. Prepared, waiting, stale, and historical rows
-do not consume a slot, although supervision still inspects stale/running
-attempts. Independent workstreams may run concurrently and receive distinct
+Capacity counts running or stale attempts, plus completed attempts with a recorded
+worker PID whose process stop is unproven, while their tasks are queued/running. An uncertain exit retains the
+slot. The global `scheduler.max_concurrency` bounds task capacity, and
+`repos[].max_concurrency` may impose a lower repository limit. Independent workstreams may run concurrently and receive distinct
 worktrees; a single workstream remains serial.
 
 ## Waiting and continuation
@@ -130,8 +129,8 @@ publication contracts.
 The server defaults to `127.0.0.1` and is intended for local operator use. It
 does not enable CORS. HTTP writes require all of the following:
 
-- an exact `Host` matching the configured bind origin;
-- an exact same-origin `Origin`;
+- `Host` and `Origin` matching the configured bind origin or explicit
+  `--public-origin`;
 - the process-scoped token returned by `/api/session` in
   `X-Robert-CSRF-Token`;
 - the expected content type;

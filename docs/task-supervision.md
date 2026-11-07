@@ -1,5 +1,7 @@
 # Continuous task supervision
 
+[文档目录](README.md)
+
 Robert's independent supervisor observes the existing control plane. It records
 incidents without changing task ownership, cancellation, audit, or publication.
 A live heartbeat is activity, not evidence of delivery. An incident only closes
@@ -7,7 +9,7 @@ when its rule observes positive progress evidence.
 
 ## Run and inspect
 
-After upgrading Robert and initializing its additive database migrations:
+Use an initialized Robert database:
 
 ```sh
 robert supervisor check --config /path/to/config.yml --output json
@@ -52,8 +54,7 @@ not imply a service was started or that a real model worker has been verified.
 ## Evidence and notifications
 
 `supervisor status` and `robert status` expose unresolved incidents. Observations,
-incidents, and recovery requests live in additive SQLite tables. No new database
-server or runtime dependency is required. Old tasks without reliable provenance
+incidents, and recovery requests live in SQLite. Tasks without reliable provenance
 remain observation-only.
 
 Set the existing `ROBERT_NOTIFICATION_COMMAND` in the service environment to
@@ -75,8 +76,8 @@ The published supervision boundaries are described in the
 
 Configure a dedicated administrator-owned wrapper that accepts one JSON evidence
 bundle on stdin and returns the structured JSON described in
-`resources/supervision-diagnosis.md`. It must expose no model tools. The ordinary
-coding adapters are not a diagnosis profile. Example (replace the executable):
+the [diagnosis contract](../src/robert_agent/resources/supervision-diagnosis.md).
+It must expose no model tools. The ordinary coding adapters are not a diagnosis profile. Example (replace the executable):
 
 ```yaml
 supervision:
@@ -288,7 +289,7 @@ and records its process identity, exact daemon run start and subsequent ticks.
 A matching version string is insufficient. Missing provenance remains
 `unverified`. The same-host runtime record cannot attest a different host.
 
-## Verification and safe rollback
+## Verification and disabling recovery
 
 The executable offline simulation is separate from the unit suite:
 
@@ -309,10 +310,8 @@ production service changes. A platform without an enforceable isolation fixture
 reports that check as blocked; it does not substitute a mock success. CI's
 existing Python/macOS/Linux matrix covers the deterministic suite.
 
-Old health notices remain the fallback when the supervisor is off or coverage
+Daemon health notices remain the fallback when the supervisor is off or coverage
 is stale. Fresh independent coverage owns overlapping delay/control alerts.
-Recovery rollback starts by disabling new actions and draining or reconciling
-nonterminal claims. Keep all additive tables, receipts, unknown scopes and
-budgets. Do not downgrade to a business writer that ignores outstanding fences
-until its remote effects have been reconciled. No production service or model
-profile is enabled merely by installing this code.
+Disabling recovery stops new actions; outstanding claims still require draining
+or reconciliation. Keep receipts, unknown scopes and budgets until their effects
+have been verified. No production service or model profile is enabled merely by installing this code.

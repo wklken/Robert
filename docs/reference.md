@@ -1,17 +1,18 @@
 # Reference
 
+[文档目录](README.md)
+
 ## Configuration
 
 Default path: `~/.config/robert/config.yml`. Use `robert config path` to resolve
 `ROBERT_CONFIG`, or pass `--config` explicitly.
 
-The only accepted configuration is `version: 2` YAML. Old versions, aliases,
-unknown fields, duplicate YAML keys and unknown route IDs are errors. Follow the
-[upgrade guide](config-v2-upgrade.md) to convert an existing file manually.
+The configuration contract is `version: 2` YAML. Unsupported versions, unknown
+fields, duplicate YAML keys and unknown route IDs are errors.
 `robert init` creates a minimal v2 file. The [packaged example](../src/robert_agent/resources/config.example.yml)
 lists optional settings with an empty repository list; add a real checkout first.
 The [schema](../src/robert_agent/resources/schemas/config.schema.json) defines
-structural validation and defaults. There is no engine selector or DBOS config.
+structural validation and defaults. SQLite is the execution engine.
 
 | Section | Purpose |
 | --- | --- |
@@ -27,13 +28,36 @@ structural validation and defaults. There is no engine selector or DBOS config.
 | `routes` | Worker, ordinary automatic model/effort overrides, skills, native review/vote settings. |
 | `repos` | Checkouts, worktrees, branch, trust, task capacity, route overrides and opt-in PR automation. |
 
-See the [complete config.yaml example and field mapping](config-v2-upgrade.md#2-调整后的完整-configyaml-示例).
+A complete minimal example follows. Replace repository paths, branch, account
+and trusted actor with your deployment values:
+
+```yaml
+version: 2
+data_dir: ~/.local/share/robert
+database: robert.sqlite3
+default_worker: coder
+github:
+  account: robert-bot
+workers:
+  coder:
+    adapter: codex
+    command: codex
+    model: default
+    effort: default
+repos:
+  - full_name: example/backend
+    checkout: /srv/repos/backend
+    worktrees: /srv/worktrees/backend
+    default_branch: main
+    trusted_actors: [maintainer]
+```
+
 Worker `adapter`, `command`, `model` and `effort` are required. The command
 adapter requires an argv list. Prompt transport is fixed to stdin.
 
-The existing [continuous supervision settings](task-supervision.md) remain under
-`supervision` alongside the worker timing fields. Observe mode and all opt-in
-diagnosis/recovery/repair permissions keep their existing defaults.
+The [continuous supervision settings](task-supervision.md) live under
+`supervision` alongside worker timing fields. The default mode is `observe`;
+diagnosis, recovery and repair require explicit configuration.
 
 ### Workers, routes, and repository overrides
 
@@ -47,9 +71,9 @@ explains this scope; its normalized output is not a round-trip YAML template.
 
 Skill lists replace the corresponding inherited list; native review/vote
 settings replace their entire block. Null does not clear inherited settings.
-Existing packaged required-skill constraints still apply. The first native
+Packaged required-skill constraints apply. The first native
 participant must equal the effective route worker. Trust checks and review
-PR-author eligibility are unchanged.
+PR-author eligibility are checked independently of worker selection.
 
 `repos[].github_account` overrides the listening account, not gh authentication.
 Repository max_concurrency cannot exceed scheduler.max_concurrency. Trusted
@@ -98,13 +122,6 @@ and its own timeout_seconds. PR automation's max_wall_minutes is a separate
 business-episode budget and keeps its existing unit. See [polling](github-polling.md)
 for server-directed intervals and [retention](#diagnostic-retention) for protected history.
 
-### Updating an existing configuration
-
-Preserve the original file and database. Apply the [v2 field mapping and upgrade
-procedure](config-v2-upgrade.md), validate with the new binary, then restart daemon
-and web together. `robert init --force` is not a migration tool. SQLite state is
-unchanged; no old configuration reader or automatic conversion is provided.
-
 ### Skill examples
 
 If Superpowers skills are installed locally, add their skill root to
@@ -129,6 +146,9 @@ routes:
 ```
 
 ## CLI
+
+Commands and flags are defined by the [CLI parser](../src/robert_agent/cli/main.py).
+Use `robert <command> --help` for the installed binary's accepted arguments.
 
 Global:
 
@@ -171,10 +191,11 @@ robert diagnostics export --output robert-diagnostics.zip
 ```
 
 Prepare Supervisor configuration using the [operations guide](guides.md#daemon-service).
-`robert service install` and `robert service start` remain alternatives with
-automatic backend selection; systemd/launchd only manage the daemon.
+`robert service install` and `robert service start` select a backend automatically
+and default to `--target all` (daemon and task supervisor). Only the Linux
+Supervisor backend includes Web in its daemon target.
 
-Integrations and migration:
+Integrations:
 
 ```bash
 robert openclaw install
@@ -249,8 +270,8 @@ Normal daemon heartbeats update the current lease without appending an event.
 Child completion events retain status, run references and bounded redacted
 errors instead of full subprocess stdout and nested cycle results. Successful
 `summarize` steps refer to `agent_runs.summary_json`; `robert run show` and the
-Web dashboard resolve this reference, while older inline summaries remain
-readable. Repository-pipeline diagnostics are retained for interrupted runs.
+Web dashboard resolve this reference and also read inline summaries.
+Repository-pipeline diagnostics are retained for interrupted runs.
 
 Preview a batch without modifying the database or contacting GitHub:
 
@@ -270,7 +291,7 @@ The result reports committed row counts and batch count. A lock conflict returns
 exit code 2; earlier batches, if any, remain committed, and retrying is safe.
 Other database errors return 5. Preview always inspects one batch regardless
 of `--batches`. It never creates a missing database or applies schema migrations.
-The daemon initializes the supporting indexes on startup after upgrade.
+The daemon initializes the supporting indexes on startup.
 
 DELETE frees pages for reuse; it does not immediately shrink the SQLite file.
 Robert never runs VACUUM automatically. To obtain a consistent compact copy for
@@ -338,9 +359,8 @@ notification. Missing or invalid worker PIDs require operator investigation.
 
 Publication records the controller-observed result commit and fork owner in the
 audit scope. A retry recognizes an existing-PR push that already reached that
-commit, while a different remote head remains protected by the lease. Older
-pending pushes without an audited result SHA fail with an explicit
-message; retry the task to obtain a new audited result. PR creation and
+commit, while a different remote head remains protected by the lease. Pending
+pushes without an audited result SHA fail with an explicit message; retry the task to obtain a new audited result. PR creation and
 deduplication must agree with the assigned fork owner even when a workstream
 marker matches.
 
@@ -364,8 +384,8 @@ polled, timed out and reaped, and their outcomes are recorded. A child's complet
 does not clear an operator stop; repair and restart are still required.
 
 An incompatible result associated with a known task instead isolates that task
-and puts its card in Waiting for You. Old results and pending publications remain
-preserved and cannot be consumed or published by the new protocol. Unrelated
+and puts its card in Waiting for You. Incompatible results and their pending
+publications remain preserved and cannot be consumed or published. Unrelated
 tasks continue. Recorded workers keep their capacity until process exit is proven;
 uncertain identities require operator cleanup. Once workers have stopped and
 pending publications have been reconciled, use Retrigger on the main board or task detail
@@ -375,8 +395,8 @@ history. Other affected work can be canceled and replaced after reconciliation.
 Isolated workers continue to receive exit checks even during a global stop;
 confirmed exits release capacity without ingesting or rewriting their results.
 Ordinary Approve cannot resolve protocol isolation or create recovery work.
-Internal helper scripts always use Robert's own interpreter, including when an
-older `python_bin` override remains in configuration after an upgrade.
+Internal helper scripts use Robert's own interpreter. The configured `python_bin`
+is validated separately; it does not replace the interpreter used for those helpers.
 
 Worker authentication failures (`401`, `Unauthorized`, expired credentials) stop
 recovery immediately and expose an operator action. Other dead-worker recovery
@@ -398,7 +418,7 @@ ingestion. The daemon and task cycle replay pending files; identical submissions
 are deduplicated by attempt and payload. Canceled or obsolete results cannot
 resume execution. Rejected and corrupt files are retained for inspection, with
 operator notifications; they are not automatically deleted. Keep this directory
-with the database during backup or migration. Waiting-for-user results require a
+with the database during backup. Waiting-for-user results require a
 structured question, and GitHub tasks additionally require a public comment action.
 
 Set `ROBERT_NOTIFICATION_COMMAND` in the daemon service environment to enable
@@ -416,16 +436,8 @@ bytes and bounded samples of delayed tasks, pending notifications and stale runs
 Queue/publication delays over 10 minutes produce one local notice per task.
 These are diagnostics, not automatic deletion of potentially live work. Existing
 retention and offline compaction instructions above still apply. Run-step times
-now use actual boundary timestamps and monotonic durations; Codex
+use actual boundary timestamps and monotonic durations; Codex
 `turn.completed` usage is recognized.
-
-### DBOS production v2
-
-This runtime was retired. Existing deployments must follow the
-[SQLite upgrade procedure](sqlite-state-machine-upgrade.md), including
-side-by-side tooling, drain/stop, backup, rehearsal, offline apply and postchecks.
-The former DBOS design is historical; its SQL migration checksums and records
-remain readable. Never restore stale business state after new external effects.
 
 ### Multi-Agent voting
 
