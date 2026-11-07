@@ -1,5 +1,7 @@
 """Task and execution evidence used by the board, dashboard and workbench."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import case, select
@@ -124,7 +126,7 @@ def completed_attempt_results(conn, task_ids):
     query = (
         select(results.c.task_id, results.c.metadata_json)
         .select_from(results.join(attempts, attempts.c.attempt_id == results.c.attempt_id))
-        .where(attempts.c.status == sql_constant("completed"))
+        .where(attempts.c.status == sql_constant(AttemptStatus.COMPLETED.value))
         .order_by(results.c.created_at.desc(), results.c.result_id.desc())
     )
     return _for_ids(conn, query, results.c.task_id, task_ids)

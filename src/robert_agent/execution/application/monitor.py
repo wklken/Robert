@@ -1,5 +1,7 @@
 """Observe worker attempts and apply bounded recovery decisions."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus
+
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
 from robert_agent.persistence import transactions as db_transactions
@@ -178,7 +180,9 @@ def supervise_running_attempts(
                 hard_timeout_seconds=worker_timeout_seconds,
             )
         process_status = {"status": "not_checked"}
-        if attempt_status in {"running", "stale", "completed"} and status["status"] in {
+        if attempt_status in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.COMPLETED} and status[
+            "status"
+        ] in {
             "running",
             "stale",
             "failed_timeout",
@@ -445,7 +449,7 @@ def supervise_running_attempts(
             }
         metadata["supervise"] = status
         if status["status"] == "running":
-            if attempt_status == "stale":
+            if attempt_status == AttemptStatus.STALE:
                 supervised += 1
                 db_write_attempts.update_for_supervise_running_attempts_3(
                     conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id
@@ -456,7 +460,7 @@ def supervise_running_attempts(
             db_write_attempts.update_for_supervise_running_attempts(
                 conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id
             )
-            if attempt_status != "stale":
+            if attempt_status != AttemptStatus.STALE:
                 execution_notifications.insert(
                     conn,
                     "worker_stale",

@@ -1,5 +1,8 @@
 """Shared queries operations for execution_pending_facts."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus
+from robert_agent.foundation.contracts.work import RemediationStatus
+
 from functools import lru_cache
 
 from robert_agent.persistence.expressions import sql_constant
@@ -69,10 +72,10 @@ def _has_local_work_filtered_statement(scoped):
                     or_(
                         table7.c["status"].in_(
                             [
-                                sql_constant("resolved"),
-                                sql_constant("exhausted"),
-                                sql_constant("superseded"),
-                                sql_constant("canceled"),
+                                sql_constant(RemediationStatus.RESOLVED.value),
+                                sql_constant(RemediationStatus.EXHAUSTED.value),
+                                sql_constant(RemediationStatus.SUPERSEDED.value),
+                                sql_constant(RemediationStatus.CANCELED.value),
                             ]
                         ),
                         (
@@ -101,7 +104,7 @@ def _has_local_work_filtered_statement(scoped):
         .where(
             and_(
                 table1.c["consumed_at"].is_(null()),
-                table2.c["binding_status"] == sql_constant("active"),
+                table2.c["binding_status"] == sql_constant(BindingStatus.ACTIVE.value),
                 runnable_task(table3),
                 func.julianday(table1.c["not_before_at"]) <= func.julianday(bindparam("p0")),
                 or_(

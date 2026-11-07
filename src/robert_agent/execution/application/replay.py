@@ -4,6 +4,9 @@ The migration queue is acknowledged only after an existing result or recorded
 Task event proves a domain effect. Wakeups alone are never consumption proof.
 """
 
+from robert_agent.foundation.contracts.execution import BindingStatus
+from robert_agent.foundation.contracts.work import TERMINAL_REMEDIATION_STATUSES, TaskLifecycle
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
 from robert_agent.persistence.queries import task_events as db_read_task_events
@@ -24,9 +27,9 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
     output = []
     for fact in pending:
         control = execution_store.get_binding(conn, fact["subject_type"], fact["subject_id"])
-        if not control or control["binding_status"] == "attention":
+        if not control or control["binding_status"] == BindingStatus.ATTENTION:
             continue
-        if control["binding_status"] == "terminal":
+        if control["binding_status"] == BindingStatus.TERMINAL:
             if fact["subject_type"] == "task":
                 terminal = db_records.first(db_read_tasks.find_for_decisions(conn, fact["subject_id"]))
             else:
@@ -50,10 +53,7 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
             )
             if not episode:
                 continue
-            if (
-                episode[0] in {"resolved", "exhausted", "superseded", "canceled"}
-                or fact["dedupe_key"] != f"{fact['fact_id']}:{episode[1]}"
-            ):
+            if episode[0] in TERMINAL_REMEDIATION_STATUSES or fact["dedupe_key"] != f"{fact['fact_id']}:{episode[1]}":
                 execution_store.consume_fact(
                     conn,
                     fact["source_signal_id"],
@@ -99,5 +99,8 @@ def acknowledge_effects(conn, repo_id, now):
         if fact["disposition"] != "github_event":
             continue
         linked = db_read_task_events.find_for_acknowledge_effects(conn, fact["fact_id"])
-        if any(task_id != fact["task_id"] or lifecycle in {"queued", "running"} for task_id, lifecycle in linked):
+        if any(
+            task_id != fact["task_id"] or lifecycle in {TaskLifecycle.QUEUED.value, TaskLifecycle.RUNNING.value}
+            for task_id, lifecycle in linked
+        ):
             execution_store.consume_fact(conn, fact["source_signal_id"], now)

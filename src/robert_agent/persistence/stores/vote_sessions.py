@@ -1,5 +1,7 @@
 """Shared stores operations for vote_sessions."""
 
+from robert_agent.foundation.contracts.execution import RoundStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, bindparam, and_, not_
@@ -70,7 +72,7 @@ def cancel_execution_filtered(conn, items, value_1):
         update(tables["vote_sessions"])
         .values(
             {
-                "status": sql_constant("canceled"),
+                "status": sql_constant(RoundStatus.CANCELED.value),
                 "error": sql_constant("operator canceled work item"),
                 "updated_at": bindparam("p0"),
             }
@@ -83,9 +85,9 @@ def cancel_execution_filtered(conn, items, value_1):
                     .c["status"]
                     .in_(
                         [
-                            sql_constant("published"),
-                            sql_constant("superseded"),
-                            sql_constant("canceled"),
+                            sql_constant(RoundStatus.PUBLISHED.value),
+                            sql_constant(RoundStatus.SUPERSEDED.value),
+                            sql_constant(RoundStatus.CANCELED.value),
                         ]
                     )
                 ),

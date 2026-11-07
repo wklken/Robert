@@ -1,5 +1,9 @@
 """Shared queries operations for github_actions."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind, RecoveryStatus
+
 from functools import cache
 
 from robert_agent.persistence.queries import sqlite_master
@@ -69,8 +73,8 @@ def find_for_control_plane_state_gate(conn):
         .select_from(tables["github_actions"])
         .where(
             and_(
-                (tables["github_actions"].c["audit_status"] == sql_constant("accepted")),
-                (tables["github_actions"].c["publish_status"] == sql_constant("not_published")),
+                (tables["github_actions"].c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value)),
+                (tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value)),
             )
         )
         .correlate_except(tables["github_actions"])
@@ -132,7 +136,7 @@ def find_for_sibling_push_metadata(conn, result_id):
         .where(
             and_(
                 (tables["github_actions"].c["result_id"] == bindparam("p0")),
-                (tables["github_actions"].c["action_type"] == sql_constant("push_existing_pr")),
+                (tables["github_actions"].c["action_type"] == sql_constant(GitHubActionType.PUSH_EXISTING_PR.value)),
             )
         )
         .order_by(
@@ -186,8 +190,8 @@ def find_for_skip_pending_result_actions(conn, result_id, excluding_action_id):
             and_(
                 tables["github_actions"].c["result_id"] == bindparam("p0"),
                 tables["github_actions"].c["action_id"] != bindparam("p1"),
-                tables["github_actions"].c["audit_status"] == sql_constant("accepted"),
-                tables["github_actions"].c["publish_status"] == sql_constant("not_published"),
+                tables["github_actions"].c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
+                tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
             )
         )
         .correlate_except(tables["github_actions"])
@@ -214,7 +218,7 @@ def find_for_retire_unstarted_actions(conn, task_id):
         .where(
             and_(
                 (tables["github_actions"].c["task_id"] == bindparam("p0")),
-                (tables["github_actions"].c["publish_status"] == sql_constant("not_published")),
+                (tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value)),
             )
         )
         .correlate_except(tables["github_actions"])
@@ -362,7 +366,9 @@ def find_for_summarize_database(conn):
         select(func.count(literal_column("*")))
         .select_from(tables["github_actions"])
         .where(
-            tables["github_actions"].c["audit_status"].in_([sql_constant("failed"), sql_constant("policy_violation")])
+            tables["github_actions"]
+            .c["audit_status"]
+            .in_([sql_constant(AuditStatus.FAILED.value), sql_constant(AuditStatus.POLICY_VIOLATION.value)])
         )
         .correlate_except(tables["github_actions"])
         .set_label_style(LABEL_STYLE_NONE)
@@ -376,8 +382,8 @@ def find_for_summarize_database_2(conn):
         .select_from(tables["github_actions"])
         .where(
             and_(
-                tables["github_actions"].c["audit_status"] == sql_constant("accepted"),
-                tables["github_actions"].c["publish_status"] == sql_constant("not_published"),
+                tables["github_actions"].c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
+                tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
                 func.json_extract(
                     tables["github_actions"].c["metadata_json"],
                     sql_constant("$.publish.status"),
@@ -397,8 +403,8 @@ def find_for_summarize_database_3(conn):
         .select_from(tables["github_actions"])
         .where(
             and_(
-                (tables["github_actions"].c["audit_status"] == sql_constant("accepted")),
-                (tables["github_actions"].c["publish_status"] == sql_constant("skipped")),
+                (tables["github_actions"].c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value)),
+                (tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.SKIPPED.value)),
             )
         )
         .correlate_except(tables["github_actions"])
@@ -411,7 +417,7 @@ def find_for_action_counts_2(conn):
     query1 = (
         select(func.count(literal_column("*")))
         .select_from(tables["github_actions"])
-        .where((tables["github_actions"].c["publish_status"] == sql_constant("published")))
+        .where((tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.PUBLISHED.value)))
         .correlate_except(tables["github_actions"])
         .set_label_style(LABEL_STYLE_NONE)
     )
@@ -463,8 +469,10 @@ def find_for_retrigger_failed_github_task(conn, task_id):
         .where(
             and_(
                 tables["github_actions"].c["task_id"] == bindparam("p0"),
-                tables["github_actions"].c["audit_status"].in_([sql_constant("pending"), sql_constant("accepted")]),
-                tables["github_actions"].c["publish_status"] == sql_constant("not_published"),
+                tables["github_actions"]
+                .c["audit_status"]
+                .in_([sql_constant(AuditStatus.PENDING.value), sql_constant(AuditStatus.ACCEPTED.value)]),
+                tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
             )
         )
         .correlate_except(tables["github_actions"])
@@ -500,9 +508,9 @@ def find_for_delivery(conn, result_id):
         .where(
             and_(
                 table1.c["result_id"] == bindparam("p0"),
-                table1.c["audit_status"] == sql_constant("accepted"),
-                table1.c["publish_status"] == sql_constant("published"),
-                table2.c["status"] == sql_constant("published"),
+                table1.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
+                table1.c["publish_status"] == sql_constant(PublishStatus.PUBLISHED.value),
+                table2.c["status"] == sql_constant(PublicationStatus.PUBLISHED.value),
             )
         )
         .order_by(table1.c["created_at"].asc(), table1.c["action_id"].asc())
@@ -578,7 +586,7 @@ def find_for_ready_actions(conn, now, limit, repo_id=None, task_ids=None, action
             select(1)
             .where(
                 pending.c.action_id == action.c.action_id,
-                pending.c.status == sql_constant("executing"),
+                pending.c.status == sql_constant(PublicationStatus.EXECUTING.value),
             )
             .correlate_except(pending)
             .exists()
@@ -590,19 +598,21 @@ def find_for_ready_actions(conn, now, limit, repo_id=None, task_ids=None, action
                 recovery.c.scope_id == action.c.task_id,
                 recovery.c.action_kind.in_(
                     (
-                        sql_constant("publication_retry"),
-                        sql_constant("publication_reconcile"),
+                        sql_constant(RecoveryActionKind.PUBLICATION_RETRY.value),
+                        sql_constant(RecoveryActionKind.PUBLICATION_RECONCILE.value),
                     )
                 ),
                 recovery.c.status.in_(
                     (
-                        sql_constant("applying"),
-                        sql_constant("observing"),
-                        sql_constant("unknown"),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
                     )
                 ),
                 or_(
-                    recovery.c.status.in_((sql_constant("applying"), sql_constant("unknown"))),
+                    recovery.c.status.in_(
+                        (sql_constant(RecoveryStatus.APPLYING.value), sql_constant(RecoveryStatus.UNKNOWN.value))
+                    ),
                     recovery.c.target_id == action.c.action_id,
                 ),
                 ~and_(recovery.c.target_id == action.c.action_id, executing),
@@ -655,12 +665,12 @@ def find_for_publication_current(conn, target_id, scope_id, result_id, attempt_i
                 table1.c["task_id"] == bindparam("p1"),
                 table1.c["result_id"] == bindparam("p2"),
                 table4.c["attempt_id"] == bindparam("p3"),
-                table1.c["audit_status"] == sql_constant("accepted"),
-                table1.c["publish_status"] == sql_constant("not_published"),
-                table2.c["status"] == sql_constant("executing"),
+                table1.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
+                table1.c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
+                table2.c["status"] == sql_constant(PublicationStatus.EXECUTING.value),
                 func.json_extract(table3.c["metadata_json"], sql_constant("$.audit.status"))
                 == sql_constant("accepted"),
-                table4.c["status"] == sql_constant("completed"),
+                table4.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 or_(
                     func.json_type(table4.c["metadata_json"], sql_constant("$.dispatch.pid")).is_not(
                         sql_constant("integer")
@@ -825,8 +835,10 @@ def _lifecycle_facts_filtered_statement():
         .where(
             and_(
                 table2.c["workstream_id"].in_(bindparam("items", expanding=True)),
-                table1.c["publish_status"] == sql_constant("not_published"),
-                table1.c["audit_status"].in_([sql_constant("pending"), sql_constant("accepted")]),
+                table1.c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
+                table1.c["audit_status"].in_(
+                    [sql_constant(AuditStatus.PENDING.value), sql_constant(AuditStatus.ACCEPTED.value)]
+                ),
             )
         )
         .order_by(table1.c["created_at"].asc(), table1.c["action_id"].asc())

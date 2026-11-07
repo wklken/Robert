@@ -1,5 +1,7 @@
 """Select the assigned workspace for an attempt."""
 
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.adapters.git import workspace as worktree
 
 
@@ -21,10 +23,7 @@ def prepare_worktree(repo, event, route_result, dry_run):
         return None
     if workspace_mode == "analysis" and not route_result.get("enforce_workspace_policy", False):
         return None
-    if event.get("task_kind") in {
-        "ci_remediation",
-        "merge_conflict_remediation",
-    }:
+    if event.get("task_kind") in REMEDIATION_TASK_KINDS:
         return worktree.prepare_existing_pr_worktree(
             repo_root=repo["repo_root"],
             worktree_root=repo["worktree_root"],

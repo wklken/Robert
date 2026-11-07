@@ -1,5 +1,8 @@
 """application delivery effects responsibilities."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.adapters.git.remotes import github_owner
 import re
@@ -701,23 +704,23 @@ def publish_action(
     scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
-    if action["action_type"] == "submit_pr_review":
+    if action["action_type"] == GitHubActionType.SUBMIT_PR_REVIEW:
         return review_publish.publish(
             action,
             publication_scope.trusted_action_scope(conn, action),
             run_command,
             scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
         )
-    if action["action_type"] == "comment" and vote_publish.is_vote(action):
+    if action["action_type"] == GitHubActionType.COMMENT and vote_publish.is_vote(action):
         return vote_publish.publish(
             action,
             publication_scope.trusted_action_scope(conn, action),
             run_command,
             scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
         )
-    if action["action_type"] == "comment":
+    if action["action_type"] == GitHubActionType.COMMENT:
         return publish_comment(action, run_command, conn=conn, recovery_guard=recovery_guard)
-    if action["action_type"] == "open_pr":
+    if action["action_type"] == GitHubActionType.OPEN_PR:
         return publish_open_pr(
             action,
             run_command,
@@ -725,12 +728,9 @@ def publish_action(
             trusted_head_owner=trusted_head_owner,
             recovery_guard=recovery_guard,
         )
-    if action["action_type"] == "push_existing_pr":
+    if action["action_type"] == GitHubActionType.PUSH_EXISTING_PR:
         action_scope = publication_scope.trusted_action_scope(conn, action)
-        if isinstance(action_scope, dict) and action_scope.get("task_kind") in {
-            "ci_remediation",
-            "merge_conflict_remediation",
-        }:
+        if isinstance(action_scope, dict) and action_scope.get("task_kind") in REMEDIATION_TASK_KINDS:
             return publish_remediation_push(
                 action,
                 run_command,

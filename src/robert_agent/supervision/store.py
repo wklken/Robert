@@ -1,5 +1,7 @@
 """Caller-transaction storage for supervision observations and incidents."""
 
+from robert_agent.foundation.contracts.supervision import IncidentStatus
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import supervision_checkpoints as db_read_supervision_checkpoints
 from robert_agent.persistence.queries import supervision_incidents as db_read_supervision_incidents
@@ -134,7 +136,11 @@ def apply_observations(conn, observations, now):
             if incident_id is None:
                 continue
             transition = "opened"
-        elif active and active[1] in {"open", "diagnosing", "needs_attention"}:
+        elif active and active[1] in {
+            IncidentStatus.OPEN.value,
+            IncidentStatus.DIAGNOSING.value,
+            IncidentStatus.NEEDS_ATTENTION.value,
+        }:
             if observation["rule_id"] == "ready_not_dispatched":
                 expected_attempt = json.loads(active[2]).get("attempt_id")
                 opened_at = timestamp(active[3])

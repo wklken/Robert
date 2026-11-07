@@ -1,5 +1,8 @@
 """Native PR review stages using the shared supervised model executor."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.execution import RoundStatus
+
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.stores import attempts as db_write_attempts
 import argparse
@@ -63,7 +66,7 @@ class Coordinator(StageCoordinator):
         self.fetch_pr = fetch_pr
 
     def prepare(self):
-        self.phase("preparing")
+        self.phase(RoundStatus.PREPARING.value)
         self.reconcile_running()
         repo = self.request["repo"]
         if not self.manifest:
@@ -142,7 +145,7 @@ class Coordinator(StageCoordinator):
             raise StageSuperseded("PR head/base changed after context preparation")
 
     def review(self):
-        self.phase("reviewing")
+        self.phase(RoundStatus.REVIEWING.value)
 
         def review_one(worker):
             def validate(output, model, worker=worker):
@@ -176,7 +179,7 @@ class Coordinator(StageCoordinator):
         return records
 
     def synthesize(self, records):
-        self.phase("synthesizing")
+        self.phase(RoundStatus.SYNTHESIZING.value)
         inputs = review_files.write_synthesis_inputs(self.manifest, records)
         prompt = self.prompt(
             f"synthesis-prompt-{inputs['sha256']}.md",
@@ -213,7 +216,13 @@ class Coordinator(StageCoordinator):
         review_workspace.verify_snapshot(self.manifest)
         self.check_active()
         with store.connect(self.db_path) as conn:
-            store.update(conn, self.round_id, status="ready", report_path=str(path), report_sha256=store.digest(path))
+            store.update(
+                conn,
+                self.round_id,
+                status=RoundStatus.READY.value,
+                report_path=str(path),
+                report_sha256=store.digest(path),
+            )
             db_write_artifacts.insert_for_synthesize(
                 conn,
                 self.round_id + ":merged",
@@ -226,14 +235,14 @@ class Coordinator(StageCoordinator):
                 store.now(),
             )
         action = {
-            "type": "submit_pr_review",
+            "type": GitHubActionType.SUBMIT_PR_REVIEW.value,
             "target_url": f"https://github.com/{self.session['repo']}/pull/{self.session['pr_number']}",
             "body": body,
         }
         payload = worker_result.build_result(
             self.task_id,
             self.attempt_id,
-            "multi_agent_review_report",
+            OutputType.MULTI_AGENT_REVIEW_REPORT.value,
             [self.session["trigger_fingerprint"]],
             [],
             f"Review report: {path}",
@@ -255,12 +264,16 @@ class Coordinator(StageCoordinator):
             return self.synthesize(self.review())
         except Exception as exc:
             with store.connect(self.db_path) as conn:
-                status = "superseded" if isinstance(exc, StageSuperseded) else "failed"
+                status = RoundStatus.SUPERSEDED.value if isinstance(exc, StageSuperseded) else RoundStatus.FAILED.value
                 if isinstance(exc, ReviewSubmissionRejected):
-                    status = "attention"
+                    status = RoundStatus.ATTENTION.value
                     db_write_attempts.update_for_run(conn, json.dumps(exc.diagnostic), self.attempt_id)
                 if isinstance(exc, StageStopped):
-                    status = "canceled" if not attempt_is_active(conn, self.task_id, self.attempt_id) else "attention"
+                    status = (
+                        RoundStatus.CANCELED.value
+                        if not attempt_is_active(conn, self.task_id, self.attempt_id)
+                        else RoundStatus.ATTENTION.value
+                    )
                 store.update(conn, self.round_id, status=status, error=str(exc))
             with store.connect(self.db_path) as conn:
                 terminate_children(conn, self.task_id, store=store)

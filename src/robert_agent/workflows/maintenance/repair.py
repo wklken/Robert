@@ -1,5 +1,8 @@
 """Policy-bound engineering work items and separate repair evidence milestones."""
 
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.supervision import IncidentStatus
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import origins as db_read_origins
 
@@ -42,7 +45,7 @@ from robert_agent.configuration.supervision import is_repair_argv, normalize_dia
 
 
 ROUTE = "new-pr"
-OUTPUT_TYPE = "new_pr"
+OUTPUT_TYPE = OutputType.NEW_PR.value
 _BUDGET = ("repair", "installation", "budget")
 _STAGES = ("code_verified", "mainline_verified", "deployed_verified", "original_progress")
 _ACTIVE_INCIDENTS = ("open", "needs_attention", "diagnosing")
@@ -816,7 +819,7 @@ def _deployment(conn, runtime, mainline, repo, now):
 def _original_progress(conn, incident, deployment):
     if not incident:
         return {"status": "unobservable", "reason_code": "original_incident_unavailable"}
-    if incident["status"] == "dismissed":
+    if incident["status"] == IncidentStatus.DISMISSED:
         return {"status": "not_applicable", "reason_code": "original_incident_dismissed"}
     if incident["scope_type"] == "task":
         canceled = db_records.first(db_read_tasks.find_for_original_progress(conn, incident["scope_id"]))
@@ -832,7 +835,7 @@ def _original_progress(conn, incident, deployment):
     started = supervision_rules.timestamp(deployment.get("started_at"))
     if (
         deployment["status"] == "verified"
-        and incident["status"] == "resolved"
+        and incident["status"] == IncidentStatus.RESOLVED
         and incident["resolved_by"] in ("natural", "supervisor")
         and occurred is not None
         and occurred.tzinfo is not None

@@ -46,7 +46,9 @@ robert_agent/
   runtime/                    # once/loop/daemon/scan/supervisor/paused monitor
   interfaces/web/             # HTTP、输入/CSRF、模板、服务启动
   cli/, worker/, integrations/ # 稳定的 CLI、Worker 和 OpenClaw 接口命名空间
-  foundation/, security/      # 小型共享值/命令/错误与安全能力
+  foundation/                 # 小型共享值/命令/错误
+    contracts/                # 按 work/execution/delivery/supervision 分组的纯值合同
+  security/                   # 脱敏和安全文本能力
   operations/, acceptance/    # 数据库升级、运维命令和受控验收
   resources/, web_assets/     # 随 wheel 安装的资源
 ```
@@ -56,6 +58,14 @@ robert_agent/
 `delivery.results` 负责结果事实，`delivery.application.result_audit` 负责审计用例；
 `execution.workspace` 负责工作区能力，监控用例通过组合层传入的恢复函数创建新尝试。
 暂停监督不会隐式取得恢复权限。
+
+跨业务层、持久层和协议使用的生命周期、状态和动作值定义在
+[`foundation/contracts/`](../src/robert_agent/foundation/contracts/) 的领域模块中。
+这些模块只包含 `StrEnum` 与不可变值集合，不依赖数据库、配置或业务实现。
+任务、工作流、Attempt、模型轮次、发布意图与监督恢复分别持有自己的状态枚举；
+同名的 `running` 或 `failed` 不代表同一个状态机。调用方直接导入对应领域的值合同，
+数据库写入和 JSON/YAML 等序列化边界使用 `.value`，保留原有字符串编码。
+数据库 CHECK、模型映射与协议 Schema 继续声明各自边界约束，合同测试校验共享值的一致性。
 
 稳定领域能力、纯策略、适配器和读模型不依赖应用用例、具体 workflow、runtime 或接口。
 领域 `application/` 与具体 workflow 属于应用层，按明确的模块依赖组合能力；跨领域

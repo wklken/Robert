@@ -1,5 +1,14 @@
 """Scenario-specific SQLite read models for the DD GitHub workbench."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.work import (
+    ACTIVE_TASK_LIFECYCLES,
+    RemediationStatus,
+    TaskLifecycle,
+    WorkstreamLifecycle,
+)
+
 import base64
 import binascii
 import json
@@ -22,7 +31,6 @@ from robert_agent.persistence.queries.readviews import work_items as work_item_q
 from robert_agent.readmodels import board, execution_metrics
 from robert_agent.readmodels.execution import safe_text
 
-ACTIVE_TASK_LIFECYCLES = {"detected", "authorized", "classified", "queued", "running"}
 BUCKETS = {"needs_attention", "working", "waiting", "history"}
 BUCKET_ORDER = {"needs_attention": 0, "working": 1, "waiting": 2, "history": 3}
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -130,7 +138,7 @@ def _load_state(conn, workstream_id=None):
             )
             if metadata.get("execution_attention"):
                 attention[task["workstream_id"]] = safe_text(metadata["execution_attention"].get("reason_code"))
-            if binding and binding["binding_status"] == "attention":
+            if binding and binding["binding_status"] == BindingStatus.ATTENTION:
                 metadata = _decode_json(binding["metadata_json"], {}) or {}
                 attention[task["workstream_id"]] = safe_text(
                     metadata.get("reason_code") or "execution_attention_required"
@@ -187,7 +195,8 @@ def _derive_operator_state(
         latest_by_kind.setdefault(episode["episode_kind"], episode)
     latest_episodes = list(latest_by_kind.values())
     remediation_superseded = bool(latest_episodes) and all(
-        episode["status"] in {"resolved", "superseded", "canceled"} for episode in latest_episodes
+        episode["status"] in {RemediationStatus.RESOLVED, RemediationStatus.SUPERSEDED, RemediationStatus.CANCELED}
+        for episode in latest_episodes
     )
     failure = _decode_json((attempt or {}).get("failure_json"), {}) or {}
     if failure.get("reason_code") == "question_not_deliverable":
@@ -197,7 +206,7 @@ def _derive_operator_state(
             safe_text(failure.get("safe_error")) + " Confirm Worker cleanup, then correct the question and retry.",
         )
     for action in actions:
-        if action["publish_status"] == "published":
+        if action["publish_status"] == PublishStatus.PUBLISHED:
             continue
         metadata = _decode_json(action.get("metadata_json"), {}) or {}
         publish = metadata.get("publish") if isinstance(metadata, dict) else None
@@ -215,8 +224,8 @@ def _derive_operator_state(
                 ),
             )
         if (
-            action["audit_status"] == "accepted"
-            and action["publish_status"] == "skipped"
+            action["audit_status"] == AuditStatus.ACCEPTED
+            and action["publish_status"] == PublishStatus.SKIPPED
             and not remediation_superseded
         ):
             return (
@@ -225,7 +234,7 @@ def _derive_operator_state(
                 "An accepted GitHub action was skipped during publication.",
             )
     exhausted = next(
-        (episode for episode in latest_episodes if episode["status"] == "exhausted"),
+        (episode for episode in latest_episodes if episode["status"] == RemediationStatus.EXHAUSTED),
         None,
     )
     if exhausted:
@@ -236,37 +245,42 @@ def _derive_operator_state(
             "pr_remediation_exhausted",
             f"Automated PR remediation stopped: {reason}.",
         )
-    if task and task["lifecycle"] in {"failed", "canceled"}:
+    if task and task["lifecycle"] in {TaskLifecycle.FAILED, TaskLifecycle.CANCELED}:
         return (
             "needs_attention",
-            "task_failed" if task["lifecycle"] == "failed" else "task_canceled",
+            "task_failed" if task["lifecycle"] == TaskLifecycle.FAILED else "task_canceled",
             "The current task did not complete successfully.",
         )
-    if attempt and attempt["status"] == "stale":
+    if attempt and attempt["status"] == AttemptStatus.STALE:
         return (
             "needs_attention",
             "worker_stale",
             "The current worker attempt stopped updating its heartbeat.",
         )
-    if any(action["audit_status"] in {"failed", "policy_violation"} for action in actions):
+    if any(action["audit_status"] in {AuditStatus.FAILED, AuditStatus.POLICY_VIOLATION} for action in actions):
         return (
             "needs_attention",
             "github_action_rejected",
             "A planned GitHub action failed policy or audit checks.",
         )
-    if workstream["workstream_lifecycle"] == "failed":
+    if workstream["workstream_lifecycle"] == WorkstreamLifecycle.FAILED:
         return (
             "needs_attention",
             "workstream_failed",
             "The GitHub workstream is in a failed state.",
         )
-    if workstream["workstream_lifecycle"] == "waiting_for_user" or (task and task["lifecycle"] == "waiting_for_user"):
+    if workstream["workstream_lifecycle"] == WorkstreamLifecycle.WAITING_FOR_USER or (
+        task and task["lifecycle"] == TaskLifecycle.WAITING_FOR_USER
+    ):
         return (
             "waiting",
             "waiting_for_user",
             "The agent is waiting for a trusted GitHub user response.",
         )
-    if any(action["audit_status"] == "accepted" and action["publish_status"] == "not_published" for action in actions):
+    if any(
+        action["audit_status"] == AuditStatus.ACCEPTED and action["publish_status"] == PublishStatus.NOT_PUBLISHED
+        for action in actions
+    ):
         return (
             "working",
             "waiting_publish",
@@ -286,19 +300,22 @@ def _derive_operator_state(
             "agent_working",
             "The agent is actively processing this GitHub work item.",
         )
-    if workstream["workstream_lifecycle"] == "active":
+    if workstream["workstream_lifecycle"] == WorkstreamLifecycle.ACTIVE:
         return (
             "working",
             "active_workstream",
             "The GitHub workstream remains active.",
         )
-    if any(episode["status"] in {"open", "queued", "remediating"} for episode in latest_episodes):
+    if any(
+        episode["status"] in {RemediationStatus.OPEN, RemediationStatus.QUEUED, RemediationStatus.REMEDIATING}
+        for episode in latest_episodes
+    ):
         return (
             "working",
             "pr_remediation_active",
             "Automated PR remediation is active.",
         )
-    if any(episode["status"] == "waiting_for_signal" for episode in latest_episodes):
+    if any(episode["status"] == RemediationStatus.WAITING_FOR_SIGNAL for episode in latest_episodes):
         return (
             "waiting",
             "pr_remediation_waiting_for_signal",
@@ -378,7 +395,7 @@ def _item_from_workstream(state, workstream):
         else None
     )
     if (
-        workstream["workstream_lifecycle"] in {"completed", "canceled"}
+        workstream["workstream_lifecycle"] in {WorkstreamLifecycle.COMPLETED, WorkstreamLifecycle.CANCELED}
         and (
             str(workstream.get("source_state") or "").lower() in {"closed", "merged"}
             or (board_item and board_item["operator_cancellation_settled"])
@@ -388,7 +405,8 @@ def _item_from_workstream(state, workstream):
         and not any(t["lifecycle"] in ACTIVE_TASK_LIFECYCLES | {"waiting_for_user"} for t in tasks)
         and not any(t["task_id"] in state["occupied_tasks"] for t in tasks)
         and not any(
-            a["audit_status"] in {"pending", "accepted"} and a["publish_status"] == "not_published"
+            a["audit_status"] in {AuditStatus.PENDING, AuditStatus.ACCEPTED}
+            and a["publish_status"] == PublishStatus.NOT_PUBLISHED
             for t in tasks
             for a in state["actions"].get(t["task_id"], [])
         )
@@ -405,7 +423,7 @@ def _item_from_workstream(state, workstream):
                 "The source is closed and its workstream has ended; previous failures remain in execution history.",
             )
     failed_publish_actions = sum(
-        1 for action in actions if action["publish_status"] != "published" and _publish_error(action)
+        1 for action in actions if action["publish_status"] != PublishStatus.PUBLISHED and _publish_error(action)
     )
     item = {
         "id": workstream["workstream_id"],
@@ -431,7 +449,8 @@ def _item_from_workstream(state, workstream):
             "pending_publish_actions": sum(
                 1
                 for action in actions
-                if action["audit_status"] == "accepted" and action["publish_status"] == "not_published"
+                if action["audit_status"] == AuditStatus.ACCEPTED
+                and action["publish_status"] == PublishStatus.NOT_PUBLISHED
             ),
             "failed_publish_actions": failed_publish_actions,
             "worker_resume_count": sum(
@@ -736,7 +755,10 @@ def get_work_item(db_path, workstream_id):
             "can_retrigger": bool(
                 current_task
                 and (
-                    (current_task["lifecycle"] == "failed" and workstream["workstream_lifecycle"] == "failed")
+                    (
+                        current_task["lifecycle"] == TaskLifecycle.FAILED
+                        and workstream["workstream_lifecycle"] == WorkstreamLifecycle.FAILED
+                    )
                     or _decode_json(current_task.get("metadata_json"), {})
                     .get("execution_attention", {})
                     .get("reason_code")

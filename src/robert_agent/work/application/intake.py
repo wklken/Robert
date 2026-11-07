@@ -1,5 +1,7 @@
 """Admit ordered requests and prepare available work under existing task fences."""
 
+from robert_agent.foundation.contracts.work import FactClassification
+
 from robert_agent.persistence import transactions as db_transactions
 from robert_agent.execution.application import replay as execution_replay
 from robert_agent.execution.application import dispatch as dispatcher
@@ -20,7 +22,6 @@ from robert_agent.execution import ownership as execution_ownership
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.supervision import store as supervision_store
-from robert_agent.work import events as workflow_events
 from robert_agent.work import policies as work_policies
 from robert_agent.work import queries as work_queries
 from robert_agent.work import streams as workstream
@@ -191,7 +192,7 @@ def admit_requests(
         workflow_fact = facts.apply_workflow_event_fact(conn, event, run_now)
         if workflow_fact:
             attempt_id = workflow_fact.get("attempt_id")
-            if workflow_fact.get("classification") == workflow_events.INVALIDATING and attempt_id:
+            if workflow_fact.get("classification") == FactClassification.INVALIDATING.value and attempt_id:
                 invalidation_attempt_ids.append(attempt_id)
         remediation_episode_id = ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id")
         if remediation_episode_id and not execution_ownership.claim_episode(

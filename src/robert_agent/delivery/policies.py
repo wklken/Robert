@@ -1,16 +1,17 @@
 """Pure output policies shared by submission and final delivery audit."""
 
-VALID_OPERATOR_QUESTION_KINDS = {
-    "clarification",
-    "scope_decision",
-    "completion_acceptance",
-}
+from robert_agent.foundation.contracts.delivery import QuestionKind, ReviewAction, ReviewVerdict, VerificationStatus
 
-VALID_REVIEW_VERDICTS = {"correct", "partially_correct", "incorrect", "unverified"}
+VALID_OPERATOR_QUESTION_KINDS = frozenset(kind.value for kind in QuestionKind)
 
-VALID_REVIEW_ACTIONS = {"implement", "skip", "comment", "clarify"}
+VALID_REVIEW_VERDICTS = frozenset(verdict.value for verdict in ReviewVerdict)
 
-IMPLEMENTABLE_VERDICTS = {"correct", "partially_correct"}
+VALID_REVIEW_ACTIONS = frozenset(action.value for action in ReviewAction)
+
+IMPLEMENTABLE_VERDICTS = frozenset({ReviewVerdict.CORRECT.value, ReviewVerdict.PARTIALLY_CORRECT.value})
+
+
+VALID_VERIFICATION_STATUSES = frozenset(status.value for status in VerificationStatus)
 
 
 def validate_operator_question(result):

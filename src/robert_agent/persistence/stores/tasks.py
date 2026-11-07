@@ -1,5 +1,8 @@
 """Shared stores operations for tasks."""
 
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from sqlalchemy import literal
 
 from robert_agent.persistence.expressions import sql_constant
@@ -26,10 +29,10 @@ def insert_canary_fixture(conn, source_key, now, now_3):
         {
             "task_id": sql_constant("task-production-canary"),
             "workstream_id": bindparam("p0"),
-            "lifecycle": sql_constant("completed"),
+            "lifecycle": sql_constant(TaskLifecycle.COMPLETED.value),
             "priority": sql_constant("P2"),
             "route_id": sql_constant("production-write-canary"),
-            "expected_output": sql_constant("comment_analysis"),
+            "expected_output": sql_constant(OutputType.COMMENT_ANALYSIS.value),
             "created_at": bindparam("p1"),
             "updated_at": bindparam("p2"),
         }
@@ -92,7 +95,7 @@ def update_for_dispatch_queued_locked(conn, task_id):
 def update_for_dispatch_queued_locked_2(conn, now, task_id):
     stmt = (
         update(tables["tasks"])
-        .values({"lifecycle": sql_constant("canceled"), "updated_at": bindparam("p0")})
+        .values({"lifecycle": sql_constant(TaskLifecycle.CANCELED.value), "updated_at": bindparam("p0")})
         .where((tables["tasks"].c["task_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": now, "p1": task_id})
@@ -101,7 +104,7 @@ def update_for_dispatch_queued_locked_2(conn, now, task_id):
 def update_for_supervise_running_attempts(conn, run_now, task_id):
     stmt = (
         update(tables["tasks"])
-        .values({"lifecycle": sql_constant("failed"), "updated_at": bindparam("p0")})
+        .values({"lifecycle": sql_constant(TaskLifecycle.FAILED.value), "updated_at": bindparam("p0")})
         .where((tables["tasks"].c["task_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": run_now, "p1": task_id})
@@ -132,7 +135,7 @@ def insert_for_create_task(
         {
             "task_id": bindparam("p0"),
             "workstream_id": bindparam("p1"),
-            "lifecycle": sql_constant("detected"),
+            "lifecycle": sql_constant(TaskLifecycle.DETECTED.value),
             "parent_task_id": bindparam("p2"),
             "priority": bindparam("p3"),
             "routing_mode": bindparam("p4"),
@@ -162,7 +165,7 @@ def insert_for_create_task(
 def update_for_finish_parent_for_child(conn, now, task_id):
     stmt = (
         update(tables["tasks"])
-        .values({"lifecycle": sql_constant("completed"), "updated_at": bindparam("p0")})
+        .values({"lifecycle": sql_constant(TaskLifecycle.COMPLETED.value), "updated_at": bindparam("p0")})
         .where((tables["tasks"].c["task_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": now, "p1": task_id})
@@ -173,7 +176,7 @@ def update_for_retrigger_failed_github_task(conn, value_1, recovery_now, task_id
         update(tables["tasks"])
         .values(
             {
-                "lifecycle": sql_constant("failed"),
+                "lifecycle": sql_constant(TaskLifecycle.FAILED.value),
                 "metadata_json": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -255,7 +258,7 @@ def update_for_create_child_task_for_recommended_route(conn, value_1, parent_tas
 def mark_task_waiting_for_publish(conn, run_now, task_id):
     stmt = (
         update(tables["tasks"])
-        .values({"lifecycle": sql_constant("running"), "updated_at": bindparam("p0")})
+        .values({"lifecycle": sql_constant(TaskLifecycle.RUNNING.value), "updated_at": bindparam("p0")})
         .where((tables["tasks"].c["task_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": run_now, "p1": task_id})
@@ -266,7 +269,7 @@ def mark_task_waiting_for_user(conn, run_now, task_id):
         update(tables["tasks"])
         .values(
             {
-                "lifecycle": sql_constant("waiting_for_user"),
+                "lifecycle": sql_constant(TaskLifecycle.WAITING_FOR_USER.value),
                 "updated_at": bindparam("p0"),
             }
         )
@@ -407,7 +410,7 @@ def update_for_prepare_detected_local_tasks(
         update(tables["tasks"])
         .values(
             {
-                "lifecycle": sql_constant("queued"),
+                "lifecycle": sql_constant(TaskLifecycle.QUEUED.value),
                 "route_id": bindparam("p0"),
                 "expected_output": bindparam("p1"),
                 "priority": bindparam("p2"),
@@ -449,7 +452,7 @@ def record_remote_terminal_state_locked(conn, run_now, value_2, task_id):
         update(tables["tasks"])
         .values(
             {
-                "lifecycle": sql_constant("canceled"),
+                "lifecycle": sql_constant(TaskLifecycle.CANCELED.value),
                 "updated_at": bindparam("p0"),
                 "metadata_json": bindparam("p1"),
             }
@@ -461,12 +464,12 @@ def record_remote_terminal_state_locked(conn, run_now, value_2, task_id):
                 .c["lifecycle"]
                 .in_(
                     [
-                        sql_constant("detected"),
-                        sql_constant("authorized"),
-                        sql_constant("classified"),
-                        sql_constant("queued"),
-                        sql_constant("running"),
-                        sql_constant("waiting_for_user"),
+                        sql_constant(TaskLifecycle.DETECTED.value),
+                        sql_constant(TaskLifecycle.AUTHORIZED.value),
+                        sql_constant(TaskLifecycle.CLASSIFIED.value),
+                        sql_constant(TaskLifecycle.QUEUED.value),
+                        sql_constant(TaskLifecycle.RUNNING.value),
+                        sql_constant(TaskLifecycle.WAITING_FOR_USER.value),
                     ]
                 ),
             )
@@ -554,7 +557,7 @@ def insert_fixture(conn, rows):
 def cancel_execution_filtered(conn, items, value_1):
     stmt = (
         update(tables["tasks"])
-        .values({"lifecycle": sql_constant("canceled"), "updated_at": bindparam("p0")})
+        .values({"lifecycle": sql_constant(TaskLifecycle.CANCELED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
                 tables["tasks"].c["workstream_id"].in_(bindparam("items", expanding=True)),
@@ -563,9 +566,9 @@ def cancel_execution_filtered(conn, items, value_1):
                     .c["lifecycle"]
                     .in_(
                         [
-                            sql_constant("completed"),
-                            sql_constant("ignored"),
-                            sql_constant("canceled"),
+                            sql_constant(TaskLifecycle.COMPLETED.value),
+                            sql_constant(TaskLifecycle.IGNORED.value),
+                            sql_constant(TaskLifecycle.CANCELED.value),
                         ]
                     )
                 ),

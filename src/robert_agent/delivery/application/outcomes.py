@@ -1,5 +1,8 @@
 """application delivery outcomes responsibilities."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.stores import github_actions as db_write_github_actions
@@ -41,15 +44,23 @@ def mark_attention(conn, action, intent, scope, reconciliation, now):
         },
         now,
     )
-    if intent and intent["status"] in {"prepared", "executing", "failed"}:
-        if intent["status"] == "prepared":
-            execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
-        elif intent["status"] == "failed":
-            execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
+    if intent and intent["status"] in {
+        PublicationStatus.PREPARED,
+        PublicationStatus.EXECUTING,
+        PublicationStatus.FAILED,
+    }:
+        if intent["status"] == PublicationStatus.PREPARED:
+            execution_store.transition_publication_intent(
+                conn, intent["publication_id"], PublicationStatus.EXECUTING.value, now
+            )
+        elif intent["status"] == PublicationStatus.FAILED:
+            execution_store.transition_publication_intent(
+                conn, intent["publication_id"], PublicationStatus.EXECUTING.value, now
+            )
         execution_store.transition_publication_intent(
             conn,
             intent["publication_id"],
-            "attention",
+            PublicationStatus.ATTENTION.value,
             now,
             remote_evidence=reconciliation.get("evidence", {}),
             error={"reason_code": reason_code},
@@ -63,11 +74,11 @@ def mark_skipped(conn, action, result, now):
     vote_publish.record_outcome(conn, action, result.get("status"), now)
     if result.get("status") == "superseded":
         intent = intent_facts.load_intent(conn, action["action_id"])
-        if intent and intent["status"] == "executing":
+        if intent and intent["status"] == PublicationStatus.EXECUTING:
             execution_store.transition_publication_intent(
                 conn,
                 intent["publication_id"],
-                "confirmed_absent",
+                PublicationStatus.CONFIRMED_ABSENT.value,
                 now,
                 remote_evidence={"reason_code": "publication_superseded", "status": "confirmed_absent"},
             )
@@ -102,14 +113,20 @@ def retire_unstarted_actions(conn, task_id, now):
     for row in actions:
         action = dict(row)
         intent = intent_facts.load_intent(conn, action["action_id"])
-        if intent and intent["status"] not in {"prepared", "confirmed_absent", "failed"}:
+        if intent and intent["status"] not in {
+            PublicationStatus.PREPARED,
+            PublicationStatus.CONFIRMED_ABSENT,
+            PublicationStatus.FAILED,
+        }:
             continue
-        if intent and intent["status"] != "confirmed_absent":
-            execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
+        if intent and intent["status"] != PublicationStatus.CONFIRMED_ABSENT:
+            execution_store.transition_publication_intent(
+                conn, intent["publication_id"], PublicationStatus.EXECUTING.value, now
+            )
             execution_store.transition_publication_intent(
                 conn,
                 intent["publication_id"],
-                "confirmed_absent",
+                PublicationStatus.CONFIRMED_ABSENT.value,
                 now,
                 remote_evidence={"reason_code": "source_closed_before_publication"},
             )
@@ -150,9 +167,13 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
     publication_notifications.insert_notification(conn, action, "github_publish_failed", {**result, **state}, now)
     if not state["retryable"] and not reconcile_required:
         intent = intent_facts.load_intent(conn, action["action_id"])
-        if intent and intent["status"] == "executing":
+        if intent and intent["status"] == PublicationStatus.EXECUTING:
             execution_store.transition_publication_intent(
-                conn, intent["publication_id"], "attention", now, error={"reason_code": state["reason_code"]}
+                conn,
+                intent["publication_id"],
+                PublicationStatus.ATTENTION.value,
+                now,
+                error={"reason_code": state["reason_code"]},
             )
         execution_operations.mark_publication_attention(
             conn,
@@ -164,13 +185,13 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
 
 
 def record_remediation_publish_outcome(conn, action, result, now):
-    if action["action_type"] != "push_existing_pr":
+    if action["action_type"] != GitHubActionType.PUSH_EXISTING_PR:
         return
     action_scope = publication_scope.trusted_action_scope(conn, action)
     if not isinstance(action_scope, dict):
         return
     episode_id = action_scope.get("episode_id")
-    if action_scope.get("task_kind") not in {"ci_remediation", "merge_conflict_remediation"} or not episode_id:
+    if action_scope.get("task_kind") not in REMEDIATION_TASK_KINDS or not episode_id:
         return
     remediation.record_publish_result(
         conn,

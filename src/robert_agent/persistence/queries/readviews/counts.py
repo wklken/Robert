@@ -1,5 +1,8 @@
 """Read-only totals for controller progress and database summaries."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import func, select
@@ -42,22 +45,28 @@ def controller_progress(conn):
             f"{status}_attempts": _count(attempts, attempts.c.status == status)
             for status in ("prepared", "running", "stale", "completed", "failed")
         },
-        "pending_actions": _count(actions, actions.c.audit_status == sql_constant("pending")),
+        "pending_actions": _count(actions, actions.c.audit_status == sql_constant(AuditStatus.PENDING.value)),
         "accepted_unpublished_actions": _count(
             actions,
-            actions.c.audit_status == sql_constant("accepted"),
-            actions.c.publish_status == sql_constant("not_published"),
+            actions.c.audit_status == sql_constant(AuditStatus.ACCEPTED.value),
+            actions.c.publish_status == sql_constant(PublishStatus.NOT_PUBLISHED.value),
         ),
-        "published_actions": _count(actions, actions.c.publish_status == sql_constant("published")),
+        "published_actions": _count(actions, actions.c.publish_status == sql_constant(PublishStatus.PUBLISHED.value)),
         "running_tasks": _count(
             tasks,
-            tasks.c.lifecycle.in_((sql_constant("queued"), sql_constant("running"))),
+            tasks.c.lifecycle.in_(
+                (sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value))
+            ),
         ),
-        "completed_tasks": _count(tasks, tasks.c.lifecycle == sql_constant("completed")),
-        "failed_tasks": _count(tasks, tasks.c.lifecycle == sql_constant("failed")),
-        "active_workstreams": _count(streams, streams.c.lifecycle == sql_constant("active")),
-        "waiting_workstreams": _count(streams, streams.c.lifecycle == sql_constant("waiting_for_user")),
-        "completed_workstreams": _count(streams, streams.c.lifecycle == sql_constant("completed")),
+        "completed_tasks": _count(tasks, tasks.c.lifecycle == sql_constant(TaskLifecycle.COMPLETED.value)),
+        "failed_tasks": _count(tasks, tasks.c.lifecycle == sql_constant(TaskLifecycle.FAILED.value)),
+        "active_workstreams": _count(streams, streams.c.lifecycle == sql_constant(WorkstreamLifecycle.ACTIVE.value)),
+        "waiting_workstreams": _count(
+            streams, streams.c.lifecycle == sql_constant(WorkstreamLifecycle.WAITING_FOR_USER.value)
+        ),
+        "completed_workstreams": _count(
+            streams, streams.c.lifecycle == sql_constant(WorkstreamLifecycle.COMPLETED.value)
+        ),
     }
     query = select(*(count.label(name) for name, count in fields.items()))
     return dict(statements.read(conn, query)[0])

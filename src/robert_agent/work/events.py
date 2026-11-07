@@ -6,14 +6,12 @@ and source identity.  Only the small evidence projection returned here is
 safe to persist in a workflow binding.
 """
 
+from robert_agent.foundation.contracts.work import FactClassification
+
 from collections.abc import Mapping
 
 
-ADDITIVE = "additive"
-INVALIDATING = "invalidating"
-TERMINAL = "terminal"
-IRRELEVANT = "irrelevant"
-CLASSIFICATIONS = frozenset({ADDITIVE, INVALIDATING, TERMINAL, IRRELEVANT})
+CLASSIFICATIONS = frozenset(kind.value for kind in FactClassification)
 
 _ADDITIVE_EVENT_TYPES = {
     "comment",
@@ -212,7 +210,7 @@ def classify_subject_fact(fact):
         raise ValueError("workflow fact event_type must be a bounded string")
     event_type = event_type.strip().lower()
     if fact.get("duplicate") or fact.get("duplicate_of") or fact.get("no_change"):
-        return IRRELEVANT
+        return FactClassification.IRRELEVANT.value
 
     source_state = _state(fact)
     new_source_state = fact.get("new_source_state")
@@ -222,17 +220,17 @@ def classify_subject_fact(fact):
         or (isinstance(new_source_state, str) and new_source_state.strip().lower() in _TERMINAL_STATES)
         or merged
     ):
-        return TERMINAL
+        return FactClassification.TERMINAL.value
 
     claimed_invalidation = _has_invalidation_claim(fact)
     if claimed_invalidation and _validate_claimed_invalidation(fact):
-        return INVALIDATING
+        return FactClassification.INVALIDATING.value
     if claimed_invalidation:
         # Explicit old/new observations that are equal are a no-change fact.
-        return IRRELEVANT
+        return FactClassification.IRRELEVANT.value
 
     if event_type in _IRRELEVANT_EVENT_TYPES:
-        return IRRELEVANT
+        return FactClassification.IRRELEVANT.value
     status = fact.get("authorization_status")
     authorized = status in {
         "authorized_trigger",
@@ -241,8 +239,8 @@ def classify_subject_fact(fact):
         "accepted_review_participant",
     }
     if event_type in _ADDITIVE_EVENT_TYPES and authorized:
-        return ADDITIVE
-    return IRRELEVANT
+        return FactClassification.ADDITIVE.value
+    return FactClassification.IRRELEVANT.value
 
 
 def normalize_fact_evidence(fact, classification=None):
@@ -272,9 +270,9 @@ def normalize_fact_evidence(fact, classification=None):
         "permission_decision": "permission_decision",
     }
     reason = _reason(fact)
-    if classification == TERMINAL and not reason:
+    if classification == FactClassification.TERMINAL.value and not reason:
         reason = "source_merged" if (fact.get("merged") is True or fact.get("merged_at")) else "source_closed"
-    if classification == INVALIDATING and not reason:
+    if classification == FactClassification.INVALIDATING.value and not reason:
         for old_key, new_key, derived in (
             ("old_head_sha", "new_head_sha", "head_changed"),
             ("old_base_sha", "new_base_sha", "base_changed"),
@@ -293,7 +291,7 @@ def normalize_fact_evidence(fact, classification=None):
     if reason:
         evidence["reason_code"] = _required_id(reason, "reason_code")
     source_state = _state(fact)
-    if classification == TERMINAL and source_state:
+    if classification == FactClassification.TERMINAL.value and source_state:
         evidence["source_state"] = source_state
     for target, source in aliases.items():
         value = fact.get(source)

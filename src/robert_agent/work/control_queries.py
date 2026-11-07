@@ -1,5 +1,8 @@
 """Read-only work-item lifecycle facts shared by commands and projections."""
 
+from robert_agent.foundation.contracts.delivery import PublicationStatus
+from robert_agent.foundation.contracts.execution import BindingStatus
+
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 
@@ -53,11 +56,11 @@ def lifecycle_facts(conn, item, *, controls=None):
             publication = metadata.get("publish") or {}
         except (ValueError, AttributeError):
             publication = {}
-        if action["intent_status"] == "attention" or (
+        if action["intent_status"] == PublicationStatus.ATTENTION or (
             isinstance(publication, dict) and publication.get("retryable") is False
         ):
             retry_blocked = True
-        if action["intent_status"] == "attention" and not publication:
+        if action["intent_status"] == PublicationStatus.ATTENTION and not publication:
             publication = {
                 "status": "publish_failed",
                 "safe_error": "Publication reconciliation requires operator attention.",
@@ -104,8 +107,8 @@ def lifecycle_facts(conn, item, *, controls=None):
     for key in sorted(subjects):
         binding = controls.get(key)
         if binding and (
-            binding["binding_status"] == "attention"
-            or (binding.get("owner_engine") == "dbos" and binding["binding_status"] != "terminal")
+            binding["binding_status"] == BindingStatus.ATTENTION
+            or (binding.get("owner_engine") == "dbos" and binding["binding_status"] != BindingStatus.TERMINAL)
         ):
             metadata = json.loads(binding["metadata_json"] or "{}")
             attention.append(

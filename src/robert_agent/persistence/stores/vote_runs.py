@@ -1,5 +1,7 @@
 """Shared stores operations for vote_runs."""
 
+from robert_agent.foundation.contracts.execution import ModelRunStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, bindparam, and_
@@ -33,7 +35,7 @@ def insert_for_new_run(
             "model": bindparam("p4"),
             "attempt_no": bindparam("p5"),
             "owner_attempt_id": bindparam("p6"),
-            "status": sql_constant("prepared"),
+            "status": sql_constant(ModelRunStatus.PREPARED.value),
             "output_dir": bindparam("p7"),
             "prompt_sha256": bindparam("p8"),
             "created_at": bindparam("p9"),
@@ -86,7 +88,11 @@ def update_for_initialize(conn):
     stmt = (
         update(tables["vote_runs"])
         .values({"slot_reserved": sql_constant(1)})
-        .where(tables["vote_runs"].c["status"].in_([sql_constant("starting"), sql_constant("running")]))
+        .where(
+            tables["vote_runs"]
+            .c["status"]
+            .in_([sql_constant(ModelRunStatus.STARTING.value), sql_constant(ModelRunStatus.RUNNING.value)])
+        )
     )
     return statements.write(conn, stmt, {})
 
@@ -95,6 +101,10 @@ def update_for_initialize_2(conn):
     stmt = (
         update(tables["vote_runs"])
         .values({"started_at": tables["vote_runs"].c["created_at"]})
-        .where(tables["vote_runs"].c["status"].in_([sql_constant("starting"), sql_constant("running")]))
+        .where(
+            tables["vote_runs"]
+            .c["status"]
+            .in_([sql_constant(ModelRunStatus.STARTING.value), sql_constant(ModelRunStatus.RUNNING.value)])
+        )
     )
     return statements.write(conn, stmt, {})

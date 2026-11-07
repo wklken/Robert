@@ -57,6 +57,13 @@ Paths below are relative to `src/robert_agent/`.
 
 ## Dependency and reuse rules
 
+- `foundation/contracts/{work,execution,delivery,supervision}.py` owns shared
+  lifecycle, status and action values, grouped by domain. These pure leaf modules
+  contain `StrEnum` definitions and immutable value groups only. Persistence,
+  configuration and domain callers may import these contracts directly, without
+  importing another domain's implementation. Keep distinct state machines in
+  separate enum classes; use `.value` at database and serialization boundaries.
+  Stored strings, schema constraints and protocol values must stay aligned.
 - Group by domain first, then split a domain into responsibility/layer submodules.
   Reuse the domain's existing input types, errors, policies, facts and public
   capabilities. Do not scatter another implementation of the same concept into

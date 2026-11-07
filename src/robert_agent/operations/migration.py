@@ -4,6 +4,10 @@ This module never loads a DBOS SDK or performs Worker/GitHub effects. DBOS's
 system database and worktrees must be retained as backup evidence by operators.
 """
 
+from robert_agent.foundation.contracts.delivery import PublicationStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.work import TERMINAL_REMEDIATION_STATUSES, TERMINAL_TASK_LIFECYCLES
+
 from robert_agent.persistence.schema import execution_control as execution_schema
 
 from robert_agent.persistence.queries import legacy_inventory
@@ -105,7 +109,7 @@ def _inventory(conn, path):
             )
         }
         subjects.append(item)
-        if b["definition_version"] != "v2" and b["binding_status"] != "terminal":
+        if b["definition_version"] != "v2" and b["binding_status"] != BindingStatus.TERMINAL:
             blockers.append({"subject_id": b["subject_id"], "reason": "unsupported_v1"})
         if any(
             row["subject_type"] == b["subject_type"] and row["subject_id"] == b["subject_id"]
@@ -121,13 +125,13 @@ def _inventory(conn, path):
                 (t for t in snapshot["tasks"] if t["task_id"] == binding["subject_id"]),
                 None,
             )
-            terminal = domain and domain["lifecycle"] in execution_store._TERMINAL_TASK_LIFECYCLES
+            terminal = domain and domain["lifecycle"] in TERMINAL_TASK_LIFECYCLES
         else:
             domain = next(
                 (e for e in snapshot["pr_remediation_episodes"] if e["episode_id"] == binding["subject_id"]),
                 None,
             )
-            terminal = domain and domain["status"] in execution_store._TERMINAL_EPISODE_STATUSES
+            terminal = domain and domain["status"] in TERMINAL_REMEDIATION_STATUSES
         if not domain:
             blockers.append(
                 {
@@ -135,7 +139,7 @@ def _inventory(conn, path):
                     "reason": "domain_subject_missing",
                 }
             )
-        elif binding["binding_status"] == "terminal" and not terminal:
+        elif binding["binding_status"] == BindingStatus.TERMINAL and not terminal:
             blockers.append(
                 {
                     "subject_id": binding["subject_id"],
@@ -153,10 +157,10 @@ def _inventory(conn, path):
                         "reason": "worker_identity_" + identity,
                     }
                 )
-        if attempt["status"] in {"running", "stale"}:
+        if attempt["status"] in {AttemptStatus.RUNNING, AttemptStatus.STALE}:
             blockers.append({"attempt_id": attempt["attempt_id"], "reason": "worker_must_drain"})
     for intent in snapshot["publication_intents"]:
-        if intent["status"] == "executing":
+        if intent["status"] == PublicationStatus.EXECUTING:
             blockers.append(
                 {
                     "action_id": intent["action_id"],

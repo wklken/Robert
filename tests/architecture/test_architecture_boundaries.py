@@ -7,6 +7,13 @@ import unittest
 
 from tests.support import PACKAGE_ROOT as PACKAGE
 
+VALUE_CONTRACTS = {
+    "robert_agent.foundation.contracts.work",
+    "robert_agent.foundation.contracts.execution",
+    "robert_agent.foundation.contracts.delivery",
+    "robert_agent.foundation.contracts.supervision",
+}
+
 
 def import_graph(package):
     modules = {}
@@ -66,14 +73,26 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 for dependency in dependencies:
                     self.assertTrue(
                         dependency == "robert_agent"
+                        or dependency in VALUE_CONTRACTS
                         or any(dependency == prefix or dependency.startswith(prefix + ".") for prefix in allowed),
                         (name, dependency),
                     )
 
     def test_pure_policies_have_no_application_dependencies(self):
-        for name in ("work.policies", "delivery.policies"):
-            self.assert_dependencies("robert_agent." + name, ())
-        self.assert_dependencies("robert_agent.work.inputs", {"robert_agent.work.errors"})
+        self.assert_dependencies("robert_agent.work.policies", ())
+        self.assert_dependencies("robert_agent.delivery.policies", {"robert_agent.foundation.contracts.delivery"})
+        self.assert_dependencies(
+            "robert_agent.work.inputs", {"robert_agent.work.errors", "robert_agent.foundation.contracts.work"}
+        )
+
+    def test_shared_value_contracts_are_pure_leaves(self):
+        for name in VALUE_CONTRACTS:
+            self.assert_dependencies(name, ())
+            path = PACKAGE.joinpath(*name.split(".")[1:]).with_suffix(".py")
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ImportFrom):
+                    self.assertEqual(node.module, "enum", (name, node.lineno))
+                self.assertNotIsInstance(node, (ast.Import, ast.FunctionDef, ast.AsyncFunctionDef))
 
     def test_leaf_capabilities_do_not_import_their_callers(self):
         lower = (
@@ -132,6 +151,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             else:
                 continue
             for dependency in dependencies - {"robert_agent"}:
+                if name.startswith("robert_agent.persistence.") and dependency in VALUE_CONTRACTS:
+                    continue
                 self.assertIn(dependency.split(".")[1], allowed, (name, dependency))
 
     def test_database_expressions_are_owned_by_persistence(self):
@@ -188,7 +209,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_submission_and_stages_do_not_load_workflow_implementations(self):
         self.assert_dependencies(
-            "robert_agent.delivery.contract", {"robert_agent.delivery", "robert_agent.delivery.policies"}
+            "robert_agent.delivery.contract",
+            {
+                "robert_agent.delivery",
+                "robert_agent.delivery.policies",
+                "robert_agent.foundation.contracts.delivery",
+                "robert_agent.foundation.contracts.work",
+            },
         )
         for dependency in self.graph["robert_agent.execution.stages"]:
             self.assertFalse(

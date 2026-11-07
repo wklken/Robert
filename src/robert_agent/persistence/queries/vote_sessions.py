@@ -1,5 +1,8 @@
 """Shared queries operations for vote_sessions."""
 
+from robert_agent.foundation.contracts.execution import RoundStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import select, bindparam, and_, LABEL_STYLE_NONE
@@ -18,8 +21,8 @@ def find_for_resume_waiting_vote(conn, workstream_id, source_type, number):
         .where(
             and_(
                 table1.c["workstream_id"] == bindparam("p0"),
-                table1.c["status"] == sql_constant("waiting_for_user"),
-                table2.c["lifecycle"] == sql_constant("waiting_for_user"),
+                table1.c["status"] == sql_constant(RoundStatus.WAITING_FOR_USER.value),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.WAITING_FOR_USER.value),
                 table1.c["source_type"] == bindparam("p1"),
                 table1.c["number"] == bindparam("p2"),
             )

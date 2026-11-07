@@ -1,5 +1,7 @@
 """application delivery receipts responsibilities."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus, PublishStatus
+
 from robert_agent.persistence.stores import github_actions as db_write_github_actions
 import re
 from robert_agent.workflows.review import publish as review_publish
@@ -29,7 +31,8 @@ def delivery_receipt(conn, action, result, now):
     reconciliation = response.get("reconciliation") or {}
     metadata = publication_values.decode_json(action.get("metadata_json"))
     marker = publication_effects.hidden_marker(
-        metadata.get("body", ""), WORKSTREAM_MARKER_RE if action["action_type"] == "open_pr" else COMMENT_MARKER_RE
+        metadata.get("body", ""),
+        WORKSTREAM_MARKER_RE if action["action_type"] == GitHubActionType.OPEN_PR else COMMENT_MARKER_RE,
     )
     return {
         "schema_version": 1,
@@ -43,7 +46,9 @@ def delivery_receipt(conn, action, result, now):
         "result_head_sha": (
             result.get("result_head_sha")
             or reconciliation.get("source_sha")
-            or (reconciliation.get("remote_sha") if action["action_type"] == "push_existing_pr" else None)
+            or (
+                reconciliation.get("remote_sha") if action["action_type"] == GitHubActionType.PUSH_EXISTING_PR else None
+            )
             or response.get("head_sha")
         ),
         "expected_marker": marker,
@@ -59,13 +64,13 @@ def delivery_receipt(conn, action, result, now):
 
 
 def mark_published(conn, action, result, now, intent=None):
-    review_publish.record_outcome(conn, action, "published", now)
-    vote_publish.record_outcome(conn, action, "published", now)
+    review_publish.record_outcome(conn, action, PublishStatus.PUBLISHED.value, now)
+    vote_publish.record_outcome(conn, action, PublishStatus.PUBLISHED.value, now)
     metadata = publication_values.decode_json(action["metadata_json"])
     receipt = delivery_receipt(conn, action, result, now)
     metadata["publish"] = {
         "receipt": receipt,
-        "status": "published",
+        "status": PublishStatus.PUBLISHED.value,
         "published_at": now,
         "response": result.get("response", {}),
         "deduplicated": bool(result.get("deduplicated")),
@@ -80,13 +85,15 @@ def mark_published(conn, action, result, now, intent=None):
     publication_notifications.resolve_action_notification(conn, action, "github_publish_failed", result, now)
     if intent:
         current = intent["status"]
-        if current in {"executing", "failed"}:
-            if current == "failed":
-                execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
+        if current in {PublicationStatus.EXECUTING.value, PublicationStatus.FAILED.value}:
+            if current == PublicationStatus.FAILED.value:
+                execution_store.transition_publication_intent(
+                    conn, intent["publication_id"], PublicationStatus.EXECUTING.value, now
+                )
             execution_store.transition_publication_intent(
                 conn,
                 intent["publication_id"],
-                "published",
+                PublicationStatus.PUBLISHED.value,
                 now,
                 remote_evidence={
                     **publication_values.decode_json(intent.get("remote_evidence_json")),

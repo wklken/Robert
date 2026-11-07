@@ -1,5 +1,7 @@
 """Shared stores operations for workflow_bindings."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, bindparam, and_
@@ -14,7 +16,7 @@ def update_for_apply(conn, now, now_2, subject_type, subject_id):
         update(tables["workflow_bindings"])
         .values(
             {
-                "binding_status": sql_constant("terminal"),
+                "binding_status": sql_constant(BindingStatus.TERMINAL.value),
                 "terminal_at": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }

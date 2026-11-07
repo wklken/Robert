@@ -1,5 +1,8 @@
 """Shared supervised model stages for review and vote rounds."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus, ModelRunStatus, RoundStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import transactions as db_transactions
@@ -135,10 +138,10 @@ def attempt_is_active(conn, task_id, attempt_id):
     binding = execution_store.get_binding(conn, "task", task_id)
     return bool(
         row
-        and row[0] in {"queued", "running"}
-        and row[1] in {"prepared", "running", "stale"}
+        and row[0] in {TaskLifecycle.QUEUED.value, TaskLifecycle.RUNNING.value}
+        and row[1] in {AttemptStatus.PREPARED.value, AttemptStatus.RUNNING.value, AttemptStatus.STALE.value}
         and binding
-        and binding["binding_status"] == "active"
+        and binding["binding_status"] == BindingStatus.ACTIVE
     )
 
 
@@ -150,17 +153,22 @@ def terminate_children(conn, task_id, *, store: StageStore):
     outcomes = []
     updates: list[tuple[str, dict[str, Any]]] = []
     for run in store.runs(conn, review["round_id"]):
-        if run["status"] in {"prepared", "waiting"} and not run["slot_reserved"]:
-            updates.append((run["run_id"], {"status": "interrupted", "error": "coordinator stopped before launch"}))
+        if run["status"] in {ModelRunStatus.PREPARED, ModelRunStatus.WAITING} and not run["slot_reserved"]:
+            updates.append(
+                (
+                    run["run_id"],
+                    {"status": ModelRunStatus.INTERRUPTED.value, "error": "coordinator stopped before launch"},
+                )
+            )
             continue
-        if run["status"] not in {"starting", "running", "failed"}:
+        if run["status"] not in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING, ModelRunStatus.FAILED}:
             continue
         recorded = run["dispatch"]
         if _launch_failed_without_process(recorded):
             updates.append((run["run_id"], {"slot_reserved": 0}))
             outcomes.append("already_dead")
             continue
-        if run["status"] == "failed" and not recorded.get("pid"):
+        if run["status"] == ModelRunStatus.FAILED and not recorded.get("pid"):
             if run["slot_reserved"]:
                 outcomes.append("attention")
             continue
@@ -185,7 +193,10 @@ def terminate_children(conn, task_id, *, store: StageStore):
         outcomes.append(result["status"])
         if result["status"] != "attention":
             updates.append(
-                (run["run_id"], {"status": "interrupted", "slot_reserved": 0, "error": "coordinator stopped"})
+                (
+                    run["run_id"],
+                    {"status": ModelRunStatus.INTERRUPTED.value, "slot_reserved": 0, "error": "coordinator stopped"},
+                )
             )
     # Observe/stop every child before opening our write transaction. In
     # particular, stopping the second child must not hold the first's update.
@@ -268,7 +279,7 @@ class StageCoordinator:
             self.db_path,
             self.task_id,
             self.attempt_id,
-            "prepare" if status == "preparing" else "analyze",
+            "prepare" if status == RoundStatus.PREPARING.value else "analyze",
             "running",
             f"{self.workflow_name.title()} {self.round_id}: {status}",
         )
@@ -287,9 +298,9 @@ class StageCoordinator:
         workers = {worker["name"]: worker for worker in self.request["workers"]}
         pending = []
         for run in previous:
-            if run["status"] == "starting" and not run["dispatch"]:
+            if run["status"] == ModelRunStatus.STARTING and not run["dispatch"]:
                 raise StageStopped("model launch outcome unknown; inspect before retry")
-            if run["status"] == "running":
+            if run["status"] == ModelRunStatus.RUNNING:
                 pending.append(run)
 
         def reconcile(run):
@@ -299,7 +310,7 @@ class StageCoordinator:
                 raise
             except RuntimeError as exc:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(conn, run["run_id"], status="failed", error=str(exc))
+                    store.update_run(conn, run["run_id"], status=ModelRunStatus.FAILED.value, error=str(exc))
 
         self.parallel(pending, reconcile)
 
@@ -380,7 +391,9 @@ class StageCoordinator:
                             store.update_run(
                                 conn,
                                 run["run_id"],
-                                status="running" if launched.get("ok") or launched.get("pid") else "failed",
+                                status=ModelRunStatus.RUNNING.value
+                                if launched.get("ok") or launched.get("pid")
+                                else ModelRunStatus.FAILED.value,
                                 dispatch_json=json.dumps(launched),
                             )
                             fresh = next(r for r in store.runs(conn, self.round_id) if r["run_id"] == run["run_id"])
@@ -392,7 +405,13 @@ class StageCoordinator:
         store = self.store
         self.check_active()
         with store.connect(self.db_path) as conn:
-            store.update_run(conn, run["run_id"], status="succeeded", artifact_json=json.dumps(artifact), error=None)
+            store.update_run(
+                conn,
+                run["run_id"],
+                status=ModelRunStatus.SUCCEEDED.value,
+                artifact_json=json.dumps(artifact),
+                error=None,
+            )
             for kind in self.artifact_kinds:
                 path = artifact.get(kind + "_path")
                 if not path:
@@ -510,32 +529,37 @@ class StageCoordinator:
                 r for r in store.runs(conn, self.round_id) if r["stage"] == stage and r["worker_id"] == worker["name"]
             ]
         for run in reversed(prior):
-            if run["status"] in {"prepared", "waiting"} and not run["slot_reserved"]:
+            if run["status"] in {ModelRunStatus.PREPARED, ModelRunStatus.WAITING} and not run["slot_reserved"]:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(conn, run["run_id"], status="interrupted", error="recovered before launch")
+                    store.update_run(
+                        conn, run["run_id"], status=ModelRunStatus.INTERRUPTED.value, error="recovered before launch"
+                    )
                 continue
             if run["prompt_sha256"] != prompt_hash:
                 if stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen")):
-                    if run["status"] in {"running", "succeeded"}:
+                    if run["status"] in {ModelRunStatus.RUNNING, ModelRunStatus.SUCCEEDED}:
                         with store.connect(self.db_path) as conn:
                             store.update_run(
-                                conn, run["run_id"], status="superseded", error="synthesis input set changed"
+                                conn,
+                                run["run_id"],
+                                status=ModelRunStatus.SUPERSEDED.value,
+                                error="synthesis input set changed",
                             )
                     continue
                 raise ValueError("same-round prompt changed")
-            if run["status"] == "starting" and not run["dispatch"]:
+            if run["status"] == ModelRunStatus.STARTING and not run["dispatch"]:
                 raise StageStopped("model launch outcome unknown; cancel and inspect this round")
-            if run["status"] not in {"succeeded", "running"}:
+            if run["status"] not in {ModelRunStatus.SUCCEEDED, ModelRunStatus.RUNNING}:
                 continue
             try:
-                if run["status"] == "running":
+                if run["status"] == ModelRunStatus.RUNNING:
                     self._wait(run, run["dispatch"], worker["timeout_seconds"])
                 model = run["model"] or worker["default_model"]
                 artifact = validate(self.sealed_output(run), model)
                 artifact["model"] = model
                 if input_hash:
                     artifact["input_sha256"] = input_hash
-                if run["status"] == "succeeded" and artifact != run["artifact"]:
+                if run["status"] == ModelRunStatus.SUCCEEDED and artifact != run["artifact"]:
                     raise ValueError("registered review artifact changed")
                 self.workspace.verify_snapshot(self.manifest)
                 return self.register(run, artifact)
@@ -543,7 +567,7 @@ class StageCoordinator:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(conn, run["run_id"], status="failed", error=str(exc))
+                    store.update_run(conn, run["run_id"], status=ModelRunStatus.FAILED.value, error=str(exc))
                 break
         self.check_active()
         with store.connect(self.db_path) as conn:
@@ -555,7 +579,7 @@ class StageCoordinator:
                 r
                 for r in previous
                 if r["prompt_sha256"] == prompt_hash
-                and r["status"] == "failed"
+                and r["status"] == ModelRunStatus.FAILED
                 and (r["error"] or "").startswith("rate_limited: ")
             ]
             if limited:
@@ -566,7 +590,10 @@ class StageCoordinator:
             elif (
                 worker.get("fallback_model")
                 and len(previous) >= 2
-                and all(r["status"] == "failed" and r["error"] == "review worker timed out" for r in previous[-2:])
+                and all(
+                    r["status"] == ModelRunStatus.FAILED and r["error"] == "review worker timed out"
+                    for r in previous[-2:]
+                )
             ):
                 model = worker["fallback_model"]
             run = store.new_run(
@@ -579,7 +606,7 @@ class StageCoordinator:
                 prompt_hash,
                 model=model,
             )
-            store.update_run(conn, run["run_id"], status="waiting")
+            store.update_run(conn, run["run_id"], status=ModelRunStatus.WAITING.value)
         try:
             environment = model_environment.stage_environment(
                 self.manifest, run["output_dir"], self.data_dir, workflow_name=self.workflow_name
@@ -605,9 +632,9 @@ class StageCoordinator:
         except Exception as exc:
             with store.connect(self.db_path) as conn:
                 current = next(r for r in store.runs(conn, self.round_id) if r["run_id"] == run["run_id"])
-                if current["status"] == "starting" and not current["dispatch"]:
+                if current["status"] == ModelRunStatus.STARTING.value and not current["dispatch"]:
                     raise StageStopped("model launch outcome unknown; inspect before retry") from exc
-                store.update_run(conn, run["run_id"], status="failed", error=str(exc))
+                store.update_run(conn, run["run_id"], status=ModelRunStatus.FAILED.value, error=str(exc))
             if isinstance(exc, ModelRateLimited) and worker.get("fallback_model") and model != worker["fallback_model"]:
                 return self.run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
             raise

@@ -1,5 +1,8 @@
 """Shared lifecycle facts and safe operator recovery for a work item."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus, ModelRunStatus
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import vote_sessions as db_write_vote_sessions
@@ -78,7 +81,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
         unknown[run_id]["store"].update_run(
             conn,
             run_id,
-            status="abandoned",
+            status=ModelRunStatus.ABANDONED.value,
             slot_reserved=0,
             error="operator confirmed untracked model processes were stopped",
         )
@@ -94,7 +97,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
     subjects = {("task", task_id) for (task_id,) in task_ids}
     for (task_id,) in task_ids:
         task = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
-        if task and task[0] in {"ci_remediation", "merge_conflict_remediation"}:
+        if task and task[0] in REMEDIATION_TASK_KINDS:
             try:
                 metadata = json.loads(task[1]) if task[1] else {}
             except (TypeError, ValueError):
@@ -104,7 +107,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
                 subjects.add(("remediation_episode", metadata["remediation_episode_id"]))
     for subject_type, subject_id in sorted(subjects):
         binding = execution_store.get_binding(conn, subject_type, subject_id)
-        if not binding or binding["binding_status"] == "terminal":
+        if not binding or binding["binding_status"] == BindingStatus.TERMINAL:
             continue
         execution_store.close_binding(conn, subject_type, subject_id, now)
         if subject_type == "remediation_episode":

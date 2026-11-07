@@ -1,5 +1,8 @@
 """Read worker results and persist audit and result bookkeeping."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
@@ -85,10 +88,13 @@ def result_actions_all_published(conn, result_id):
     rows = db_read_github_actions.find_audit_status_and_publish_status_by_result_id(conn, result_id)
     if not rows:
         return True
-    if all(audit_status == "accepted" and publish_status == "published" for audit_status, publish_status in rows):
+    if all(
+        audit_status == AuditStatus.ACCEPTED and publish_status == PublishStatus.PUBLISHED
+        for audit_status, publish_status in rows
+    ):
         return True
     if not all(
-        audit_status == "accepted" and publish_status in {"published", "skipped"}
+        audit_status == AuditStatus.ACCEPTED and publish_status in {PublishStatus.PUBLISHED, PublishStatus.SKIPPED}
         for audit_status, publish_status in rows
     ):
         return False
@@ -101,10 +107,7 @@ def result_actions_all_published(conn, result_id):
     if isinstance(action_scope, dict) and action_scope.get("review_round_id"):
         review = review_store.session(conn, round_id=action_scope["review_round_id"])
         return bool(review and review["status"] == "superseded")
-    return isinstance(action_scope, dict) and action_scope.get("task_kind") in {
-        "ci_remediation",
-        "merge_conflict_remediation",
-    }
+    return isinstance(action_scope, dict) and action_scope.get("task_kind") in REMEDIATION_TASK_KINDS
 
 
 def result_audit_accepted(conn, result_id):

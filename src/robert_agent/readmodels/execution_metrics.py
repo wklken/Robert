@@ -4,6 +4,10 @@ Intervals are independently sampled, not additive: retries and manual waits can
 leave uninstrumented gaps. Never infer historical downtime from a queue delay.
 """
 
+from robert_agent.foundation.contracts.delivery import PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.work import TERMINAL_TASK_LIFECYCLES, TaskLifecycle
+
 import json
 import math
 from collections import defaultdict
@@ -37,7 +41,9 @@ def task_timing(conn, task_id):
         metadata = json.loads(attempt["metadata_json"] or "{}")
         dispatch = metadata.get("dispatch") or {}
         attempt["worker_started_at"] = metadata.get("worker_started_at") or (
-            attempt["started_at"] if attempt["status"] != "prepared" and dispatch.get("status") == "running" else None
+            attempt["started_at"]
+            if attempt["status"] != AttemptStatus.PREPARED and dispatch.get("status") == "running"
+            else None
         )
     result_by_attempt = {row["attempt_id"]: row for row in results}
     worker, ingestion, audit = [], [], []
@@ -62,11 +68,11 @@ def task_timing(conn, task_id):
     next_retry = [row["next_retry_at"] for row in publication if row.get("next_retry_at")]
     wait = json.loads(task["metadata_json"] or "{}").get("wait_state", {})
     reason = "unknown"
-    if task["lifecycle"] in {"completed", "failed", "canceled", "ignored"}:
+    if task["lifecycle"] in TERMINAL_TASK_LIFECYCLES:
         reason = "terminal"
         wait = {}
         next_retry = []
-    elif task["lifecycle"] == "waiting_for_user":
+    elif task["lifecycle"] == TaskLifecycle.WAITING_FOR_USER:
         reason = "human_input"
     elif any(row.get("retryable") is False and row.get("status") != "published" for row in publication):
         reason = "publication_attention"
@@ -74,11 +80,11 @@ def task_timing(conn, task_id):
         reason = "publication_backoff"
     elif wait.get("reason_code"):
         reason = wait["reason_code"]
-    elif any(row["publish_status"] == "not_published" for row in actions):
+    elif any(row["publish_status"] == PublishStatus.NOT_PUBLISHED for row in actions):
         reason = "publication_pending"
-    elif task["lifecycle"] == "queued":
+    elif task["lifecycle"] == TaskLifecycle.QUEUED:
         reason = "scheduler_pending"
-    elif task["lifecycle"] == "running":
+    elif task["lifecycle"] == TaskLifecycle.RUNNING:
         reason = "worker_or_result_pending"
     return {
         "task_id": task_id,
@@ -96,7 +102,9 @@ def task_timing(conn, task_id):
         "result_ingestion_seconds": round(sum(ingestion), 3) if ingestion else None,
         "result_to_audit_seconds": round(sum(audit), 3) if audit else None,
         "result_to_publication_seconds": _seconds(results[-1]["created_at"], max(published, key=_time))
-        if results and published and all(row["publish_status"] in {"published", "skipped"} for row in actions)
+        if results
+        and published
+        and all(row["publish_status"] in {PublishStatus.PUBLISHED, PublishStatus.SKIPPED} for row in actions)
         else None,
         "attempt_count": len(attempts),
     }

@@ -1,5 +1,6 @@
 """One SQLite admission limit shared by native review and voting processes."""
 
+from robert_agent.foundation.contracts.execution import ModelRunStatus
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import select, func, update
@@ -51,9 +52,9 @@ def reserve(conn, table, run_id, now):
             update(run)
             .where(
                 run.c.run_id == run_id,
-                run.c.status == sql_constant("waiting"),
+                run.c.status == sql_constant(ModelRunStatus.WAITING.value),
                 run.c.slot_reserved == sql_constant(0),
             )
-            .values(slot_reserved=1, status="starting", started_at=now, updated_at=now),
+            .values(slot_reserved=1, status=ModelRunStatus.STARTING.value, started_at=now, updated_at=now),
         )
     )

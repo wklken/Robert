@@ -1,5 +1,9 @@
 """Shared queries operations for supervision_checkpoints."""
 
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -87,7 +91,7 @@ def find_for_targets(conn, cutoff):
             and_(
                 table1.c["scope_type"] == sql_constant("task"),
                 table1.c["classification"] == sql_constant("suspect"),
-                table2.c["lifecycle"] == sql_constant("running"),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.RUNNING.value),
                 func.coalesce(
                     func.json_extract(table3.c["metadata_json"], sql_constant("$.evidence_retry_at")),
                     sql_constant(""),
@@ -133,7 +137,7 @@ def find_for_read_subject(conn, scope_type, scope_id, rule_id):
                 table1.c["scope_type"] == bindparam("p0"),
                 table1.c["scope_id"] == bindparam("p1"),
                 table1.c["rule_id"] == bindparam("p2"),
-                table2.c["lifecycle"] == sql_constant("running"),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.RUNNING.value),
             )
         )
         .correlate_except(table1, table2)
@@ -162,8 +166,8 @@ def find_for_candidate(conn, repository, policy_digest, value_3, value_4):
         .where(
             and_(
                 table5.c["workstream_id"] == table2.c["workstream_id"],
-                table6.c["output_type"] == sql_constant("new_pr"),
-                table7.c["status"] == sql_constant("completed"),
+                table6.c["output_type"] == sql_constant(OutputType.NEW_PR.value),
+                table7.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 func.json_extract(table6.c["metadata_json"], sql_constant("$.audit.status"))
                 == sql_constant("accepted"),
                 or_(

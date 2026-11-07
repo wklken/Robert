@@ -1,5 +1,9 @@
 """Shared queries operations for tasks."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle, WorkstreamLifecycle
+
 from functools import cache
 
 from robert_agent.persistence.expressions import sql_constant
@@ -250,10 +254,10 @@ def find_for_decisions(conn, subject_id):
                 .c["lifecycle"]
                 .in_(
                     [
-                        sql_constant("completed"),
-                        sql_constant("failed"),
-                        sql_constant("canceled"),
-                        sql_constant("ignored"),
+                        sql_constant(TaskLifecycle.COMPLETED.value),
+                        sql_constant(TaskLifecycle.FAILED.value),
+                        sql_constant(TaskLifecycle.CANCELED.value),
+                        sql_constant(TaskLifecycle.IGNORED.value),
                     ]
                 ),
             )
@@ -518,7 +522,11 @@ def find_for_verified(conn, child, task_id, value_3):
                 table1.c["task_id"] == bindparam("p0"),
                 table1.c["parent_task_id"] == bindparam("p1"),
                 table1.c["workstream_id"] == bindparam("p2"),
-                not_(table1.c["lifecycle"].in_([sql_constant("canceled"), sql_constant("ignored")])),
+                not_(
+                    table1.c["lifecycle"].in_(
+                        [sql_constant(TaskLifecycle.CANCELED.value), sql_constant(TaskLifecycle.IGNORED.value)]
+                    )
+                ),
                 table2.c["relationship"] == sql_constant("trigger"),
             )
         )
@@ -541,7 +549,7 @@ def find_for_is_current(conn, successor_task_id, lineage_key):
         .where(
             and_(
                 tables["tasks"].c["task_id"] == bindparam("p0"),
-                tables["tasks"].c["lifecycle"] == sql_constant("completed"),
+                tables["tasks"].c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value),
                 func.json_extract(
                     tables["tasks"].c["metadata_json"],
                     sql_constant("$.supervision_lineage_key"),
@@ -574,7 +582,11 @@ def find_for_task_facts(conn, task_id, value_2):
             and_(
                 tables["tasks"].c["parent_task_id"] == bindparam("p0"),
                 tables["tasks"].c["task_id"] == bindparam("p1"),
-                not_(tables["tasks"].c["lifecycle"].in_([sql_constant("canceled"), sql_constant("ignored")])),
+                not_(
+                    tables["tasks"]
+                    .c["lifecycle"]
+                    .in_([sql_constant(TaskLifecycle.CANCELED.value), sql_constant(TaskLifecycle.IGNORED.value)])
+                ),
             )
         )
         .correlate_except(tables["tasks"])
@@ -604,7 +616,7 @@ def find_for_is_current_2(conn, scope):
         .where(
             and_(
                 table1.c["task_id"] == bindparam("p0"),
-                table1.c["lifecycle"] == sql_constant("completed"),
+                table1.c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value),
                 not_(query4.exists()),
             )
         )
@@ -852,8 +864,8 @@ def find_for_pending_handoff_current(conn, task_id, workstream_id):
             and_(
                 table1.c["task_id"] == bindparam("p0"),
                 table1.c["workstream_id"] == bindparam("p1"),
-                table1.c["lifecycle"] == sql_constant("completed"),
-                table2.c["lifecycle"] == sql_constant("active"),
+                table1.c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value),
+                table2.c["lifecycle"] == sql_constant(WorkstreamLifecycle.ACTIVE.value),
                 table2.c["active_task_id"] == table1.c["task_id"],
                 table3.c["canceled_at"].is_(null()),
                 func.coalesce(func.lower(table4.c["state"]), sql_constant("open")) != sql_constant("closed"),
@@ -901,7 +913,7 @@ def find_for_create_task_attempt_and_prompt(conn, existing_task_id, workstream_i
             and_(
                 table1.c["task_id"] == bindparam("p0"),
                 table1.c["workstream_id"] == bindparam("p1"),
-                table1.c["lifecycle"] == sql_constant("detected"),
+                table1.c["lifecycle"] == sql_constant(TaskLifecycle.DETECTED.value),
                 not_(query5.exists()),
                 not_(
                     func.json_extract(
@@ -960,7 +972,7 @@ def find_for_prepare_detected_local_tasks(conn, repo_id):
                 table2.c["origin_type"] == sql_constant("web"),
                 table2.c["canceled_at"].is_(null()),
                 table2.c["completed_at"].is_(null()),
-                table1.c["lifecycle"] == sql_constant("detected"),
+                table1.c["lifecycle"] == sql_constant(TaskLifecycle.DETECTED.value),
                 not_(query6.exists()),
             )
         )
@@ -1004,18 +1016,18 @@ def find_for_collect_pr_remediation_decisions(conn, workstream_id):
                 table1.c["workstream_id"] == bindparam("p0"),
                 table1.c["task_kind"].in_(
                     [
-                        sql_constant("ci_remediation"),
-                        sql_constant("merge_conflict_remediation"),
+                        sql_constant(TaskKind.CI_REMEDIATION.value),
+                        sql_constant(TaskKind.MERGE_CONFLICT_REMEDIATION.value),
                     ]
                 ),
                 table1.c["lifecycle"].in_(
                     [
-                        sql_constant("queued"),
-                        sql_constant("running"),
-                        sql_constant("waiting_for_user"),
+                        sql_constant(TaskLifecycle.QUEUED.value),
+                        sql_constant(TaskLifecycle.RUNNING.value),
+                        sql_constant(TaskLifecycle.WAITING_FOR_USER.value),
                     ]
                 ),
-                table2.c["output_type"] == sql_constant("waiting_for_user"),
+                table2.c["output_type"] == sql_constant(OutputType.WAITING_FOR_USER.value),
             )
         )
         .limit(sql_constant(1))
@@ -1043,11 +1055,11 @@ def find_for_active_task_state(conn, workstream_id):
                 (table1.c["workstream_id"] == bindparam("p0")),
                 table1.c["lifecycle"].in_(
                     [
-                        sql_constant("detected"),
-                        sql_constant("authorized"),
-                        sql_constant("classified"),
-                        sql_constant("queued"),
-                        sql_constant("running"),
+                        sql_constant(TaskLifecycle.DETECTED.value),
+                        sql_constant(TaskLifecycle.AUTHORIZED.value),
+                        sql_constant(TaskLifecycle.CLASSIFIED.value),
+                        sql_constant(TaskLifecycle.QUEUED.value),
+                        sql_constant(TaskLifecycle.RUNNING.value),
                     ]
                 ),
             )
@@ -1113,10 +1125,10 @@ def record_remote_terminal_state_locked(conn, workstream_id, workstream_id_2):
                 not_(
                     table1.c["lifecycle"].in_(
                         [
-                            sql_constant("completed"),
-                            sql_constant("failed"),
-                            sql_constant("canceled"),
-                            sql_constant("ignored"),
+                            sql_constant(TaskLifecycle.COMPLETED.value),
+                            sql_constant(TaskLifecycle.FAILED.value),
+                            sql_constant(TaskLifecycle.CANCELED.value),
+                            sql_constant(TaskLifecycle.IGNORED.value),
                         ]
                     )
                 ),
@@ -1153,11 +1165,11 @@ def find_for_active_task_id(conn, workstream_id):
                 .c["lifecycle"]
                 .in_(
                     [
-                        sql_constant("detected"),
-                        sql_constant("authorized"),
-                        sql_constant("classified"),
-                        sql_constant("queued"),
-                        sql_constant("running"),
+                        sql_constant(TaskLifecycle.DETECTED.value),
+                        sql_constant(TaskLifecycle.AUTHORIZED.value),
+                        sql_constant(TaskLifecycle.CLASSIFIED.value),
+                        sql_constant(TaskLifecycle.QUEUED.value),
+                        sql_constant(TaskLifecycle.RUNNING.value),
                     ]
                 ),
             )
@@ -1185,7 +1197,9 @@ def mark_repository_busy(conn, repo_id):
         .where(
             and_(
                 (table2.c["repo_id"] == bindparam("p0")),
-                table1.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table1.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
             )
         )
         .correlate_except(table1, table2)
@@ -1208,7 +1222,9 @@ def find_for_repository_task_ids(conn, repo_id):
         .where(
             and_(
                 tables["tasks"].c["workstream_id"].in_(query2),
-                tables["tasks"].c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                tables["tasks"]
+                .c["lifecycle"]
+                .in_([sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]),
             )
         )
         .correlate_except(tables["tasks"])
@@ -1251,7 +1267,11 @@ def find_for_authorized_repair(conn, task_id, repo_id):
                 table1.c["task_id"] == bindparam("p0"),
                 table3.c["repo_id"] == bindparam("p1"),
                 table3.c["enabled"] == sql_constant(1),
-                not_(table1.c["lifecycle"].in_([sql_constant("canceled"), sql_constant("ignored")])),
+                not_(
+                    table1.c["lifecycle"].in_(
+                        [sql_constant(TaskLifecycle.CANCELED.value), sql_constant(TaskLifecycle.IGNORED.value)]
+                    )
+                ),
             )
         )
         .correlate_except(table1, table2, table3, table4)
@@ -1277,8 +1297,10 @@ def find_for_original_progress(conn, scope_id):
                 (table1.c["task_id"] == bindparam("p0")),
                 (
                     or_(
-                        table1.c["lifecycle"].in_([sql_constant("canceled"), sql_constant("ignored")]),
-                        (table2.c["lifecycle"] == sql_constant("canceled")),
+                        table1.c["lifecycle"].in_(
+                            [sql_constant(TaskLifecycle.CANCELED.value), sql_constant(TaskLifecycle.IGNORED.value)]
+                        ),
+                        (table2.c["lifecycle"] == sql_constant(WorkstreamLifecycle.CANCELED.value)),
                     )
                 ),
             )
@@ -1384,8 +1406,8 @@ def collect_filtered(conn, items, value_1, value_2, value_3):
         .where(
             and_(
                 table3.c["task_id"] == table1.c["task_id"],
-                table3.c["audit_status"] == sql_constant("accepted"),
-                table3.c["publish_status"] == sql_constant("not_published"),
+                table3.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
+                table3.c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
             )
         )
         .correlate_except(table3)
@@ -1398,8 +1420,8 @@ def collect_filtered(conn, items, value_1, value_2, value_3):
         .where(
             and_(
                 table6.c["task_id"] == table1.c["task_id"],
-                table6.c["audit_status"] == sql_constant("accepted"),
-                table6.c["publish_status"] == sql_constant("not_published"),
+                table6.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
+                table6.c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
                 func.julianday(table6.c["created_at"])
                 < func.julianday(bindparam("p1")) - sql_constant(2.0) / sql_constant(1440),
             )
@@ -1425,10 +1447,12 @@ def collect_filtered(conn, items, value_1, value_2, value_3):
         .where(
             and_(
                 table2.c["repo_id"].in_(bindparam("items", expanding=True)),
-                table1.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table1.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
                 or_(
                     and_(
-                        table1.c["lifecycle"] == sql_constant("queued"),
+                        table1.c["lifecycle"] == sql_constant(TaskLifecycle.QUEUED.value),
                         func.julianday(table1.c["created_at"])
                         < func.julianday(bindparam("p0")) - sql_constant(5.0) / sql_constant(1440),
                     ),
@@ -1518,8 +1542,8 @@ def _ready_rows_filtered_statement():
                 (table14.c["result_id"] == table4.c["result_id"]),
                 (
                     or_(
-                        (table14.c["audit_status"] != sql_constant("accepted")),
-                        (table14.c["publish_status"] != sql_constant("published")),
+                        (table14.c["audit_status"] != sql_constant(AuditStatus.ACCEPTED.value)),
+                        (table14.c["publish_status"] != sql_constant(PublishStatus.PUBLISHED.value)),
                     )
                 ),
             )
@@ -1533,12 +1557,12 @@ def _ready_rows_filtered_statement():
         .select_from(table16)
         .where(
             and_(
-                (table16.c["binding_status"] == sql_constant("active")),
+                (table16.c["binding_status"] == sql_constant(BindingStatus.ACTIVE.value)),
                 (
                     or_(
                         (
                             and_(
-                                table1.c["task_kind"] == sql_constant("human_request"),
+                                table1.c["task_kind"] == sql_constant(TaskKind.HUMAN_REQUEST.value),
                                 table16.c["subject_type"] == sql_constant("task"),
                                 table16.c["subject_id"] == table1.c["task_id"],
                             )
@@ -1547,8 +1571,8 @@ def _ready_rows_filtered_statement():
                             and_(
                                 table1.c["task_kind"].in_(
                                     [
-                                        sql_constant("ci_remediation"),
-                                        sql_constant("merge_conflict_remediation"),
+                                        sql_constant(TaskKind.CI_REMEDIATION.value),
+                                        sql_constant(TaskKind.MERGE_CONFLICT_REMEDIATION.value),
                                     ]
                                 ),
                                 table16.c["subject_type"] == sql_constant("remediation_episode"),
@@ -1591,17 +1615,17 @@ def _ready_rows_filtered_statement():
         .where(
             and_(
                 table2.c["repo_id"].in_(bindparam("items", expanding=True)),
-                table2.c["lifecycle"] == sql_constant("active"),
+                table2.c["lifecycle"] == sql_constant(WorkstreamLifecycle.ACTIVE.value),
                 table2.c["active_task_id"] == table1.c["task_id"],
-                table1.c["lifecycle"] == sql_constant("completed"),
+                table1.c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value),
                 not_(query7.exists()),
                 not_(query9.exists()),
-                table3.c["status"] == sql_constant("completed"),
+                table3.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 not_(
                     table4.c["output_type"].in_(
                         [
-                            sql_constant("classification_result"),
-                            sql_constant("waiting_for_user"),
+                            sql_constant(OutputType.CLASSIFICATION_RESULT.value),
+                            sql_constant(OutputType.WAITING_FOR_USER.value),
                         ]
                     )
                 ),
@@ -1670,10 +1694,10 @@ def github_followup_allows_new_subject_filtered(conn, items):
                     .c["lifecycle"]
                     .in_(
                         [
-                            sql_constant("completed"),
-                            sql_constant("failed"),
-                            sql_constant("canceled"),
-                            sql_constant("ignored"),
+                            sql_constant(TaskLifecycle.COMPLETED.value),
+                            sql_constant(TaskLifecycle.FAILED.value),
+                            sql_constant(TaskLifecycle.CANCELED.value),
+                            sql_constant(TaskLifecycle.IGNORED.value),
                         ]
                     )
                 ),
@@ -1697,7 +1721,9 @@ def _current_task_filtered_statement():
         .where(
             and_(
                 (table4.c["task_id"] == table1.c["task_id"]),
-                table4.c["status"].in_([sql_constant("running"), sql_constant("stale")]),
+                table4.c["status"].in_(
+                    [sql_constant(AttemptStatus.RUNNING.value), sql_constant(AttemptStatus.STALE.value)]
+                ),
             )
         )
         .correlate_except(table4)

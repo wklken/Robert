@@ -1,5 +1,7 @@
 """Audited, revision-bound GitHub PR Review COMMENT publication."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType
+
 from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
 
 import hashlib
@@ -54,7 +56,7 @@ def _target(url):
 def validate_action(action, scope):
     """Read only the audit-registered report, never a model-selected alternate."""
     action = payload(action)
-    if action.get("type") != "submit_pr_review" or not isinstance(scope, dict):
+    if action.get("type") != GitHubActionType.SUBMIT_PR_REVIEW.value or not isinstance(scope, dict):
         raise ValueError("PR review requires its trusted action scope")
     repo, number = _target(action.get("target_url"))
     if not scope.get("repo") or repo.casefold() != scope["repo"].casefold():
@@ -105,7 +107,12 @@ def validate_action(action, scope):
 
 def publication_keys(action, scope):
     data, repo, number, _ = validate_action(action, scope)
-    identity = {"type": "submit_pr_review", "repo": repo.casefold(), "number": number, "round_id": data["round_id"]}
+    identity = {
+        "type": GitHubActionType.SUBMIT_PR_REVIEW.value,
+        "repo": repo.casefold(),
+        "number": number,
+        "round_id": data["round_id"],
+    }
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     key = "publication:" + hashlib.sha256(encoded).hexdigest()
     request = {
@@ -304,7 +311,7 @@ def publish(action, scope, run_command, scope_guard=None):
 
 
 def record_outcome(conn, action, status, now):
-    if action.get("action_type") != "submit_pr_review" or status not in {"published", "superseded"}:
+    if action.get("action_type") != GitHubActionType.SUBMIT_PR_REVIEW or status not in {"published", "superseded"}:
         return
     try:
         round_id = payload(action).get("round_id")

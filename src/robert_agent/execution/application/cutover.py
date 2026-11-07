@@ -1,5 +1,8 @@
 """Single-protocol guard and isolation of incompatible task evidence."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle
+
 import json
 from contextlib import closing
 from datetime import datetime, timezone
@@ -36,7 +39,10 @@ def inspect(conn, db_path):
     for attempt, task, status, metadata, lifecycle in attempts:
         if json.loads(metadata or "{}").get("result_contract") == result_contract.CONTRACT_ID:
             continue
-        if status in {"running", "stale"} or (status == "prepared" and lifecycle in {"queued", "running"}):
+        if status in {AttemptStatus.RUNNING.value, AttemptStatus.STALE.value} or (
+            status == AttemptStatus.PREPARED.value
+            and lifecycle in {TaskLifecycle.QUEUED.value, TaskLifecycle.RUNNING.value}
+        ):
             blockers.append({"kind": "legacy_" + status, "task_id": task, "attempt_id": attempt})
     for result, task in results:
         blockers.append({"kind": "legacy_unresolved_result", "task_id": task, "result_id": result})
@@ -136,7 +142,7 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                         == "result_contract_cutover"
                     )
                     if not isolated:
-                        if task["lifecycle"] in {"canceled", "ignored"} or isolated_only:
+                        if task["lifecycle"] in {TaskLifecycle.CANCELED, TaskLifecycle.IGNORED} or isolated_only:
                             continue
                         if not any(item.get("task_id") == task_id for item in inspect(conn, db_path)["blockers"]):
                             continue
@@ -147,8 +153,11 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                     }
                     if not isolated:
                         db_write_tasks.update_for_prepare(conn, json.dumps(attention), now, task_id)
-                        if task["task_kind"] == "human_request" and task["lifecycle"] not in {"completed", "failed"}:
-                            execution_store.ensure_subject(conn, "task", task_id, "human_request", now)
+                        if task["task_kind"] == TaskKind.HUMAN_REQUEST and task["lifecycle"] not in {
+                            TaskLifecycle.COMPLETED,
+                            TaskLifecycle.FAILED,
+                        }:
+                            execution_store.ensure_subject(conn, "task", task_id, TaskKind.HUMAN_REQUEST.value, now)
                             execution_store.mark_binding_attention(conn, "task", task_id, now)
                     current_native = native_rounds.release_observed_slots(conn, task_id, native_exit)
                     if not current_native or not native_exit["all_stopped"]:
@@ -156,7 +165,7 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                     for attempt in stopped:
                         # A completed result remains historical evidence. Only
                         # mark its process stopped; do not rewrite its outcome.
-                        if attempt["status"] == "completed":
+                        if attempt["status"] == AttemptStatus.COMPLETED:
                             db_write_attempts.update_for_prepare_2(
                                 conn, now, attempt["attempt_id"], attempt["status"], attempt["metadata_json"]
                             )

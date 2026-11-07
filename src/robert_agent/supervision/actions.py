@@ -1,5 +1,10 @@
 """Typed recovery requests consumed under existing Robert domain ownership."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind, RecoveryStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import supervision_recovery_actions as db_read_supervision_recovery_actions
 from robert_agent.persistence.queries import tasks as db_read_tasks
@@ -134,13 +139,13 @@ def _target(conn, task, kind, target_id, now, generation):
         or not task["runnable"]
         or task["canceled"]
         or task["source_state"] == "closed"
-        or task["stream_lifecycle"] != "active"
+        or task["stream_lifecycle"] != WorkstreamLifecycle.ACTIVE
         or task["active_task_id"] != task["task_id"]
     ):
         return None
     task_id = task["task_id"]
-    if kind == "handoff_resume":
-        if target_id != task_id or task["lifecycle"] != "completed":
+    if kind == RecoveryActionKind.HANDOFF_RESUME:
+        if target_id != task_id or task["lifecycle"] != TaskLifecycle.COMPLETED:
             return None
         handoff = json.loads(task["metadata_json"]).get("pending_handoff") or {}
         if (
@@ -160,22 +165,22 @@ def _target(conn, task, kind, target_id, now, generation):
             "retry_at": handoff.get("next_retry_at"),
             "attempt_count": handoff.get("attempt_count"),
         }
-    if task["lifecycle"] not in {"queued", "running"}:
+    if task["lifecycle"] not in {TaskLifecycle.QUEUED, TaskLifecycle.RUNNING}:
         return None
     attempt = next((dict(row) for row in db_read_attempts.find_for_target(conn, task_id)), None)
     if not attempt:
         return None
-    if kind == "spool_replay":
+    if kind == RecoveryActionKind.SPOOL_REPLAY:
         if (
             not isinstance(generation, str)
             or not generation
             or attempt["attempt_id"] != target_id
-            or attempt["status"] not in {"prepared", "running", "stale"}
+            or attempt["status"] not in {AttemptStatus.PREPARED, AttemptStatus.RUNNING, AttemptStatus.STALE}
             or db_records.first(db_read_worker_results.find_for_target(conn, task_id, target_id))
         ):
             return None
         return {"attempt_id": target_id, "spool_fingerprint": generation}
-    if attempt["status"] != "completed" or (type(attempt["pid"]) is int and not attempt["stopped_at"]):
+    if attempt["status"] != AttemptStatus.COMPLETED or (type(attempt["pid"]) is int and not attempt["stopped_at"]):
         return None
     result = next(
         (dict(row) for row in db_read_worker_results.find_for_target_2(conn, task_id, attempt["attempt_id"])), None
@@ -188,7 +193,7 @@ def _target(conn, task, kind, target_id, now, generation):
         "result_id": result["result_id"],
         "submission_fingerprint": meta.get("submission_fingerprint"),
     }
-    if kind == "audit_retry":
+    if kind == RecoveryActionKind.AUDIT_RETRY:
         state = meta.get("audit_observation") or {}
         if (
             result["result_id"] != target_id
@@ -198,7 +203,7 @@ def _target(conn, task, kind, target_id, now, generation):
         ):
             return None
         return {**result_facts, "audit_retry": _retry_facts(state)}
-    if (meta.get("audit") or {}).get("status") != "accepted":
+    if (meta.get("audit") or {}).get("status") != AuditStatus.ACCEPTED.value:
         return None
     action = next(
         (
@@ -207,7 +212,9 @@ def _target(conn, task, kind, target_id, now, generation):
         ),
         None,
     )
-    if not action or (kind == "publication_reconcile") != (action["status"] == "executing"):
+    if not action or (kind == RecoveryActionKind.PUBLICATION_RECONCILE) != (
+        action["status"] == PublicationStatus.EXECUTING.value
+    ):
         return None
     state = json.loads(action["metadata_json"]).get("publish") or {}
     return {
@@ -233,20 +240,20 @@ def _candidate(observation):
     reason = observation.get("reason_code")
     if (
         reason == "publication_effect_unresolved"
-        and evidence.get("intent_status") == "executing"
+        and evidence.get("intent_status") == PublicationStatus.EXECUTING.value
         and observation.get("classification") == "confirmed"
     ):
-        return "publication_reconcile", evidence.get("action_id"), None
+        return RecoveryActionKind.PUBLICATION_RECONCILE.value, evidence.get("action_id"), None
     if observation.get("classification") not in {"suspect", "confirmed"}:
         return None
     if reason == "result_waiting_ingestion":
-        return "spool_replay", evidence.get("attempt_id"), evidence.get("spool_fingerprint")
+        return RecoveryActionKind.SPOOL_REPLAY.value, evidence.get("attempt_id"), evidence.get("spool_fingerprint")
     if reason == "result_waiting_audit":
-        return "audit_retry", evidence.get("result_id"), None
+        return RecoveryActionKind.AUDIT_RETRY.value, evidence.get("result_id"), None
     if reason == "publication_waiting_consumer":
-        return "publication_retry", evidence.get("action_id"), None
+        return RecoveryActionKind.PUBLICATION_RETRY.value, evidence.get("action_id"), None
     if reason == "handoff_waiting_consumer":
-        return "handoff_resume", observation["scope_id"], None
+        return RecoveryActionKind.HANDOFF_RESUME.value, observation["scope_id"], None
     return None
 
 
@@ -379,8 +386,8 @@ def blocks_consumer(conn, *, task_id, kind, target_id, now, config, native_retry
     active = db_records.first(db_read_supervision_recovery_actions.find_for_blocks_consumer(conn, task_id))
     if active:
         if tuple(active[:2]) == (kind, target_id):
-            return active[2] != "requested"
-        return active[2] in {"applying", "unknown"} or native_retry
+            return active[2] != RecoveryStatus.REQUESTED.value
+        return active[2] in {RecoveryStatus.APPLYING.value, RecoveryStatus.UNKNOWN.value} or native_retry
     # Scheduling is advisory. Native retries retain their own policy, and
     # actual supervised claims revalidate configuration at the effect boundary.
     return False
@@ -405,13 +412,13 @@ def begin(conn, *, task_id, kind, target_id, now, config, generation=None, nativ
         db_transactions.begin(conn, immediate=True)
     action = next((dict(row) for row in db_read_supervision_recovery_actions.find_for_begin_3(conn, task_id)), None)
     if action and (action["action_kind"], action["target_id"]) != (kind, target_id):
-        if action["status"] in {"applying", "unknown"}:
+        if action["status"] in {RecoveryStatus.APPLYING.value, RecoveryStatus.UNKNOWN.value}:
             return _blocked("recovery_scope_occupied")
         # Ordinary domain work may be the predecessor of a queued request.
         if not native_retry:
             return {"status": "legacy"}
         return _blocked("recovery_scope_occupied")
-    if action and action["status"] != "requested":
+    if action and action["status"] != RecoveryStatus.REQUESTED.value:
         return _blocked("recovery_already_active")
     if not action:
         return {"status": "legacy"}
@@ -483,14 +490,14 @@ def publication_current(conn, claim, *, config, now):
     row, task = _fenced(conn, claim, config, now)
     if (
         not row
-        or row["action_kind"] != "publication_retry"
+        or row["action_kind"] != RecoveryActionKind.PUBLICATION_RETRY.value
         or task["lineage_key"] != row["lineage_key"]
         or task["canceled"]
         or not task["enabled"]
         or not task["runnable"]
         or task["source_state"] == "closed"
-        or task["lifecycle"] not in {"queued", "running"}
-        or task["stream_lifecycle"] != "active"
+        or task["lifecycle"] not in {TaskLifecycle.QUEUED, TaskLifecycle.RUNNING}
+        or task["stream_lifecycle"] != WorkstreamLifecycle.ACTIVE
         or task["active_task_id"] != row["scope_id"]
     ):
         return False
@@ -522,7 +529,12 @@ def _safe_receipt(receipt):
 
 def finish(conn, claim, *, outcome, receipt, now):
     """Persist the domain receipt under the same fence. Return False for stale writers."""
-    if outcome not in {"observing", "failed", "rejected", "unknown"} or not isinstance(receipt, dict):
+    if outcome not in {
+        RecoveryStatus.OBSERVING.value,
+        RecoveryStatus.FAILED.value,
+        RecoveryStatus.REJECTED.value,
+        RecoveryStatus.UNKNOWN.value,
+    } or not isinstance(receipt, dict):
         raise ValueError("invalid recovery outcome or receipt")
     row = next(
         (
@@ -533,14 +545,16 @@ def finish(conn, claim, *, outcome, receipt, now):
         ),
         None,
     )
-    if not row or (row["status"] == "unknown" and outcome == "rejected"):
+    if not row or (row["status"] == RecoveryStatus.UNKNOWN.value and outcome == RecoveryStatus.REJECTED.value):
         return False
     changed = db_write_supervision_recovery_actions.update_for_finish(
         conn,
         outcome,
         _safe_receipt(receipt),
         now,
-        _after(now, RECHECK_SECONDS) if outcome in {"observing", "unknown"} else None,
+        _after(now, RECHECK_SECONDS)
+        if outcome in {RecoveryStatus.OBSERVING.value, RecoveryStatus.UNKNOWN.value}
+        else None,
         outcome,
         row["action_id"],
         row["status"],
@@ -548,11 +562,11 @@ def finish(conn, claim, *, outcome, receipt, now):
         row["claim_generation"],
     )
     if changed:
-        if outcome == "observing" and row["incident_id"]:
+        if outcome == RecoveryStatus.OBSERVING.value and row["incident_id"]:
             db_write_supervision_incidents.update_for_finish(conn, row["incident_id"])
-        elif outcome in {"failed", "unknown"}:
+        elif outcome in {RecoveryStatus.FAILED.value, RecoveryStatus.UNKNOWN.value}:
             _attention(conn, row, "recovery_" + outcome, now)
-        elif outcome == "rejected" and row["incident_id"]:
+        elif outcome == RecoveryStatus.REJECTED.value and row["incident_id"]:
             db_write_supervision_incidents.update_for_finish_2(conn, row["incident_id"])
     return bool(changed)
 
@@ -564,11 +578,11 @@ def _verified(conn, action):
     if (
         not task
         or task["canceled"]
-        or task["lifecycle"] in {"canceled", "ignored"}
+        or task["lifecycle"] in {TaskLifecycle.CANCELED, TaskLifecycle.IGNORED}
         or task["lineage_key"] != action["lineage_key"]
     ):
         return None
-    if kind == "spool_replay":
+    if kind == RecoveryActionKind.SPOOL_REPLAY:
         result = next(
             (
                 dict(row)
@@ -583,14 +597,16 @@ def _verified(conn, action):
             if result
             else None
         )
-    if kind == "audit_retry":
+    if kind == RecoveryActionKind.AUDIT_RETRY:
         row = db_records.first(
             db_read_worker_results.find_for_verified(
                 conn, task_id, target_id, facts.get("attempt_id"), facts.get("submission_fingerprint")
             )
         )
-        return {"result_id": target_id, "audit_status": "accepted", "occurred_at": row[0]} if row else None
-    if kind == "handoff_resume":
+        return (
+            {"result_id": target_id, "audit_status": AuditStatus.ACCEPTED.value, "occurred_at": row[0]} if row else None
+        )
+    if kind == RecoveryActionKind.HANDOFF_RESUME:
         child = (json.loads(task["metadata_json"]).get("pending_handoff") or {}).get("child_task_id")
         if not child:
             return None
@@ -613,7 +629,7 @@ def _verified_publication(conn, action, facts):
     )
     if (
         not row
-        or row["audit_status"] != "accepted"
+        or row["audit_status"] != AuditStatus.ACCEPTED
         or row["submission_fingerprint"] != facts["submission_fingerprint"]
         or (facts.get("publication_id") and facts["publication_id"] != row["publication_id"])
         or (facts.get("request_fingerprint") and facts["request_fingerprint"] != row["request_fingerprint"])
@@ -621,13 +637,13 @@ def _verified_publication(conn, action, facts):
         return None
     evidence = json.loads(row["remote_evidence_json"])
     if (
-        action["action_kind"] == "publication_reconcile"
-        and row["intent_status"] == "confirmed_absent"
+        action["action_kind"] == RecoveryActionKind.PUBLICATION_RECONCILE.value
+        and row["intent_status"] == PublicationStatus.CONFIRMED_ABSENT.value
         and evidence.get("status") == "confirmed_absent"
     ):
         return {"action_id": row["action_id"], "publication_id": row["publication_id"], "effect": "confirmed_absent"}
     receipt = (json.loads(row["metadata_json"]).get("publish") or {}).get("receipt")
-    if row["publish_status"] != "published" or not isinstance(receipt, dict) or not row["audited_scope"]:
+    if row["publish_status"] != PublishStatus.PUBLISHED or not isinstance(receipt, dict) or not row["audited_scope"]:
         return None
     from robert_agent.supervision.receipts import matches
 
@@ -649,8 +665,8 @@ def _unapplied_audit(conn, action, now):
     # write can release the scope while keeping its budget charged.
     expires = timestamp(action["claim_expires_at"])
     if (
-        action["action_kind"] != "audit_retry"
-        or action["status"] != "applying"
+        action["action_kind"] != RecoveryActionKind.AUDIT_RETRY.value
+        or action["status"] != RecoveryStatus.APPLYING.value
         or not action["claim_owner"]
         or action["claim_generation"] < 1
         or expires is None
@@ -695,24 +711,30 @@ def verify(conn, *, observations, now, limit=32):
                 )
             elif action["incident_id"]:
                 db_write_supervision_incidents.update_for_verify_2(conn, action["incident_id"])
-            changes.append({"action_id": action["action_id"], "status": "succeeded", "evidence": evidence})
+            changes.append(
+                {"action_id": action["action_id"], "status": RecoveryStatus.SUCCEEDED.value, "evidence": evidence}
+            )
             continue
         deadline = (
             action["claim_expires_at"]
-            if state == "applying"
+            if state == RecoveryStatus.APPLYING.value
             else _after(action["finished_at"] or action["created_at"], ACTION_TIMEOUT_SECONDS)
         )
-        if state in {"requested", "applying", "observing"} and _due(now, deadline):
-            if state == "requested":
-                outcome, reason = "rejected", "recovery_request_expired"
+        if state in {
+            RecoveryStatus.REQUESTED.value,
+            RecoveryStatus.APPLYING.value,
+            RecoveryStatus.OBSERVING.value,
+        } and _due(now, deadline):
+            if state == RecoveryStatus.REQUESTED.value:
+                outcome, reason = RecoveryStatus.REJECTED.value, "recovery_request_expired"
             elif _unapplied_audit(conn, action, now):
-                outcome, reason = "failed", "recovery_audit_claim_expired_without_effect"
+                outcome, reason = RecoveryStatus.FAILED.value, "recovery_audit_claim_expired_without_effect"
             else:
-                outcome, reason = "unknown", "recovery_verification_overdue"
+                outcome, reason = RecoveryStatus.UNKNOWN.value, "recovery_verification_overdue"
             db_write_supervision_recovery_actions.update_for_verify_2(
                 conn,
                 outcome,
-                _after(now, RECHECK_SECONDS) if outcome == "unknown" else None,
+                _after(now, RECHECK_SECONDS) if outcome == RecoveryStatus.UNKNOWN.value else None,
                 now,
                 outcome,
                 action["action_id"],

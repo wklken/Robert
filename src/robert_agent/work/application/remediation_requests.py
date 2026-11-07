@@ -1,5 +1,7 @@
 """Translate observed pull request failures into remediation work."""
 
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
 from robert_agent.persistence.queries import tasks as db_read_tasks
@@ -27,14 +29,14 @@ def _system_event(
     if episode_kind == "merge_conflict":
         event_type = "pr_merge_conflict_detected"
         fingerprint = f"github-system:merge-conflict:{number}:{snapshot['head_sha']}:{snapshot['base_sha']}"
-        task_kind = "merge_conflict_remediation"
+        task_kind = TaskKind.MERGE_CONFLICT_REMEDIATION.value
     else:
         source_kind = observation.get("source_kind") or "workflow_run"
         event_type = "ci_check_completed" if source_kind == "check_run" else "ci_run_completed"
         external_id = observation.get("external_id") or episode["episode_id"]
         attempt_no = observation.get("attempt_no") or 1
         fingerprint = f"github-system:{source_kind}:{external_id}:{attempt_no}"
-        task_kind = "ci_remediation"
+        task_kind = TaskKind.CI_REMEDIATION.value
     metadata = {
         "remediation": {
             "episode_id": episode["episode_id"],
@@ -238,10 +240,7 @@ def handle_blocked_remediation_worktree(
     worktree_result,
     run_now,
 ):
-    if event.get("task_kind") not in {
-        "ci_remediation",
-        "merge_conflict_remediation",
-    }:
+    if event.get("task_kind") not in REMEDIATION_TASK_KINDS:
         return False
     if not isinstance(worktree_result, dict) or worktree_result.get(
         "ok",

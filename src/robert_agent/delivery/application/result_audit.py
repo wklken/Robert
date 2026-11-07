@@ -1,5 +1,9 @@
 """Audit saved results with fresh execution and publication evidence."""
 
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
@@ -111,7 +115,7 @@ def audit_completed_results(
         gate = supervision_actions.begin(
             conn,
             task_id=payload["task_id"],
-            kind="audit_retry",
+            kind=RecoveryActionKind.AUDIT_RETRY.value,
             target_id=payload["result_id"],
             now=run_now,
             config=recovery_config,
@@ -177,7 +181,7 @@ def audit_completed_results(
             continue
         remediation_context = None
         remediation_attestation = None
-        if task_kind in {"ci_remediation", "merge_conflict_remediation"}:
+        if task_kind in REMEDIATION_TASK_KINDS:
             episode = remediation.load_episode(
                 conn,
                 task_metadata.get("remediation_episode_id"),
@@ -190,7 +194,7 @@ def audit_completed_results(
                     "observed_base_sha": episode["observed_base_sha"],
                     "failure_signature": episode.get("failure_signature"),
                 }
-            if payload["output_type"] != "waiting_for_user":
+            if payload["output_type"] != OutputType.WAITING_FOR_USER:
                 conn.commit()
                 remediation_attestation = remediation.attest_remediation_worktree(
                     task_kind=task_kind,

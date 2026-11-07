@@ -1,5 +1,7 @@
 """Task lifecycle transitions shared by execution and publication."""
 
+from robert_agent.foundation.contracts.work import TaskKind
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
@@ -56,7 +58,7 @@ def mark_task_waiting_for_user(conn, task_id, workstream_id, run_now):
 
 def finalize_superseded_result(conn, result_id, now):
     row = db_records.first(db_read_worker_results.find_for_finalize_superseded_result(conn, result_id))
-    if not row or row[2] != "human_request" or not execution_ownership.claim_task(conn, row[0], now):
+    if not row or row[2] != TaskKind.HUMAN_REQUEST.value or not execution_ownership.claim_task(conn, row[0], now):
         return False
     actions = db_read_github_actions.find_publish_status_and_metadata_json_by_result_id(conn, result_id)
     if not actions or any(status not in {"published", "skipped"} for status, _ in actions):

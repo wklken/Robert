@@ -1,3 +1,5 @@
+from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle, WakeupStatus
+
 from robert_agent.persistence.expressions import sql_constant
 from sqlalchemy import select, and_, not_, null, func, LABEL_STYLE_NONE
 
@@ -64,10 +66,10 @@ def pending_tasks(conn, repo_ids=(), task_id=None):
                 table5.c["origin_type"] == sql_constant("github"),
                 table5.c["canceled_at"].is_(null()),
                 table5.c["completed_at"].is_(null()),
-                table1.c["lifecycle"] == sql_constant("detected"),
-                table1.c["task_kind"] == sql_constant("human_request"),
+                table1.c["lifecycle"] == sql_constant(TaskLifecycle.DETECTED.value),
+                table1.c["task_kind"] == sql_constant(TaskKind.HUMAN_REQUEST.value),
                 table4.c["reason"] == sql_constant("manual_operator_request"),
-                table4.c["status"] == sql_constant("pending"),
+                table4.c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 not_(
                     func.json_extract(
                         table1.c["metadata_json"],
