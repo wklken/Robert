@@ -45,12 +45,14 @@ class KnownWorkstreamContextTests(TemporaryWorkspace):
             "event_type": "notification",
             "actor_login": "github",
         }
-        result = discover._enrich_known_workstream_context(
+        results = discover._enrich_known_workstream_contexts(
             raw,
             {"full_name": "example/repo", "github_account": "robot"},
             runner,
         )
 
+        self.assertEqual(len(results), 1)
+        result = results[0]
         self.assertEqual(result["id"], "comment-mention")
         self.assertEqual(result["event_fingerprint"], "comment:comment-mention")
         self.assertIn("@robot", result["body"])
