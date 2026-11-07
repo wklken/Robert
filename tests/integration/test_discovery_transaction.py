@@ -27,9 +27,7 @@ class DiscoveryLockTests(unittest.TestCase):
         calls = []
 
         def discover(*args, **kwargs):
-            with closing(
-                sqlite3.connect(fixture.data_dir / "dd.sqlite3", timeout=0.1)
-            ) as other:
+            with closing(sqlite3.connect(fixture.data_dir / "dd.sqlite3", timeout=0.1)) as other:
                 other.execute("BEGIN IMMEDIATE")
                 other.rollback()
             calls.append("unlocked")
@@ -39,8 +37,6 @@ class DiscoveryLockTests(unittest.TestCase):
             patch.object(discovery, "collect_account_notifications", return_value={}),
             patch.object(discovery, "collect_live_events", side_effect=discover),
         ):
-            response = run_once.run_once(
-                fixture.config_path, dry_run=True, skip_external=False
-            )
+            response = run_once.run_once(fixture.config_path, dry_run=True, skip_external=False)
         self.assertTrue(response["ok"], response)
         self.assertEqual(calls, ["unlocked"])

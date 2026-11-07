@@ -53,9 +53,7 @@ def _validated_override(raw, label):
         raise ValueError(f"{label} must be a mapping")
     unsupported = sorted(set(raw) - ALLOWED_ROUTE_OVERRIDE_FIELDS)
     if unsupported:
-        raise ValueError(
-            f"{label} contains unsupported fields: {', '.join(unsupported)}"
-        )
+        raise ValueError(f"{label} contains unsupported fields: {', '.join(unsupported)}")
     return raw
 
 
@@ -77,22 +75,14 @@ def resolve_route_config(config, repo, route_policy):
             result[field] = repo_override[field]
     workers = config["workers"]
     default_worker = config["default_worker"]
-    default_name = (
-        default_worker["name"] if isinstance(default_worker, dict) else default_worker
-    )
+    default_name = default_worker["name"] if isinstance(default_worker, dict) else default_worker
     result.setdefault("worker", default_name)
     by_name = workers if isinstance(workers, dict) else {w["name"]: w for w in workers}
     if result["worker"] not in by_name:
-        raise ValueError(
-            f"route {route_id} references unknown worker: {result['worker']}"
-        )
+        raise ValueError(f"route {route_id} references unknown worker: {result['worker']}")
     selected = by_name[result["worker"]]
-    result.setdefault(
-        "model", selected.get("default_model", selected.get("model", "default"))
-    )
-    result.setdefault(
-        "effort", selected.get("default_effort", selected.get("effort", "default"))
-    )
+    result.setdefault("model", selected.get("default_model", selected.get("model", "default")))
+    result.setdefault("effort", selected.get("default_effort", selected.get("effort", "default")))
     result.setdefault("required_skills", [])
     result.setdefault("recommended_skills", [])
     if "multi_agent_review" in result:
@@ -111,9 +101,7 @@ def _validate_multi_review(route, workers):
         "workers",
         "author_allowlist",
     }:
-        raise ValueError(
-            "multi_agent_review requires enabled, workers and author_allowlist"
-        )
+        raise ValueError("multi_agent_review requires enabled, workers and author_allowlist")
     if not isinstance(settings.get("enabled", False), bool):
         raise ValueError("multi_agent_review.enabled must be a boolean")
     names = settings.get("workers", [route["worker"]])
@@ -124,18 +112,12 @@ def _validate_multi_review(route, workers):
         or any(not isinstance(name, str) or name not in known for name in names)
         or len(set(names)) != len(names)
     ):
-        raise ValueError(
-            "multi_agent_review.workers must name distinct configured workers"
-        )
+        raise ValueError("multi_agent_review.workers must name distinct configured workers")
     if names[0] != route["worker"]:
         raise ValueError("the first review worker must equal routes.review-pr.worker")
     authors = settings.get("author_allowlist", [])
-    if not isinstance(authors, list) or any(
-        not isinstance(author, str) or not author.strip() for author in authors
-    ):
-        raise ValueError(
-            "multi_agent_review.author_allowlist must contain GitHub logins"
-        )
+    if not isinstance(authors, list) or any(not isinstance(author, str) or not author.strip() for author in authors):
+        raise ValueError("multi_agent_review.author_allowlist must contain GitHub logins")
     route["multi_agent_review"] = {
         "enabled": settings.get("enabled", False),
         "workers": list(names),
@@ -157,14 +139,8 @@ def review_workers_for_author(route, pr_author):
 
 def _validate_multi_vote(route, workers):
     settings = route["multi_agent_vote"]
-    if (
-        route["id"] != "vote"
-        or not isinstance(settings, dict)
-        or set(settings) - {"enabled", "workers"}
-    ):
-        raise ValueError(
-            "multi_agent_vote is only supported by vote and requires enabled/workers"
-        )
+    if route["id"] != "vote" or not isinstance(settings, dict) or set(settings) - {"enabled", "workers"}:
+        raise ValueError("multi_agent_vote is only supported by vote and requires enabled/workers")
     if type(settings.get("enabled", False)) is not bool:
         raise ValueError("multi_agent_vote.enabled must be a boolean")
     names = settings.get("workers", [])
@@ -176,9 +152,7 @@ def _validate_multi_vote(route, workers):
         or len(set(names)) != len(names)
         or names[0] != route["worker"]
     ):
-        raise ValueError(
-            "multi_agent_vote requires at least two distinct known workers with the main worker first"
-        )
+        raise ValueError("multi_agent_vote requires at least two distinct known workers with the main worker first")
     route["multi_agent_vote"] = {
         "enabled": settings.get("enabled", False),
         "workers": list(names),

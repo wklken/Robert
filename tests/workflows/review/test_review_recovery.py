@@ -28,9 +28,7 @@ class ReviewRecoveryTests(unittest.TestCase):
         driver = self.fixture.coordinator()
         driver.prepare()
         driver.request["workers"] = driver.request["workers"][:1]
-        driver.launcher = lambda **kwargs: (_ for _ in ()).throw(
-            OSError("crash during spawn")
-        )
+        driver.launcher = lambda **kwargs: (_ for _ in ()).throw(OSError("crash during spawn"))
         with self.assertRaises(review_coordinator.StageStopped):
             driver.run()
         with review_store.connect(self.fixture.db) as conn:
@@ -39,11 +37,7 @@ class ReviewRecoveryTests(unittest.TestCase):
                 "UPDATE attempts SET status='failed' WHERE attempt_id=?",
                 (driver.attempt_id,),
             )
-            run = next(
-                run
-                for run in review_store.runs(conn, driver.round_id)
-                if run["status"] == "starting"
-            )
+            run = next(run for run in review_store.runs(conn, driver.round_id) if run["status"] == "starting")
             item = dict(
                 conn.execute(
                     "SELECT * FROM work_items WHERE workstream_id=?",
@@ -92,11 +86,7 @@ class ReviewRecoveryTests(unittest.TestCase):
             signal.signal(signal.SIGTERM, previous)
         self.assertTrue(driver.stopping.is_set())
         with review_store.connect(self.fixture.db) as conn:
-            run = next(
-                run
-                for run in review_store.runs(conn, driver.round_id)
-                if run["stage"] == stage
-            )
+            run = next(run for run in review_store.runs(conn, driver.round_id) if run["stage"] == stage)
             self.assertTrue(run["dispatch"])
             self.assertEqual(review_store.process_pool_status(conn)["in_use"], 0)
 
@@ -113,12 +103,7 @@ class ReviewRecoveryTests(unittest.TestCase):
                     idempotency_key=attempt,
                 )
         detail = board.get_work_item_detail(self.fixture.db, item["work_item_id"])
-        unknown = next(
-            r
-            for task in detail["tasks"]
-            for r in task["review"]["runs"]
-            if r["status"] == "starting"
-        )
+        unknown = next(r for task in detail["tasks"] for r in task["review"]["runs"] if r["status"] == "starting")
         self.assertEqual(unknown["run_id"], run["run_id"])
         self.assertTrue(unknown["can_abandon"])
         kwargs = dict(
@@ -128,46 +113,32 @@ class ReviewRecoveryTests(unittest.TestCase):
             idempotency_key="confirmed-abandon",
             abandon_review_run_ids=[run["run_id"]],
         )
-        result = work_items.execute_command(
-            self.fixture.db, item["work_item_id"], **kwargs
-        )
+        result = work_items.execute_command(self.fixture.db, item["work_item_id"], **kwargs)
         self.assertEqual(
             result,
             work_items.execute_command(self.fixture.db, item["work_item_id"], **kwargs),
         )
         with review_store.connect(self.fixture.db) as conn:
-            current = next(
-                r
-                for r in review_store.runs(conn, driver.round_id)
-                if r["run_id"] == run["run_id"]
-            )
+            current = next(r for r in review_store.runs(conn, driver.round_id) if r["run_id"] == run["run_id"])
             self.assertEqual(current["status"], "abandoned")
             self.assertEqual(review_store.process_pool_status(conn)["in_use"], 0)
-            self.assertEqual(
-                review_store.session(conn, task_id=driver.task_id)["status"], "canceled"
-            )
+            self.assertEqual(review_store.session(conn, task_id=driver.task_id)["status"], "canceled")
             metadata = json.loads(
                 conn.execute(
                     "SELECT metadata_json FROM work_item_events WHERE idempotency_key='confirmed-abandon'"
                 ).fetchone()[0]
             )
-            self.assertEqual(
-                metadata["command_result"]["abandoned_review_run_ids"], [run["run_id"]]
-            )
+            self.assertEqual(metadata["command_result"]["abandoned_review_run_ids"], [run["run_id"]])
         with self.assertRaises(review_coordinator.StageStopped):
             driver.check_active()
         self.fixture.cycle([self.fixture.event("after-abandon")])
         with review_store.connect(self.fixture.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
 
     def test_abandon_rejects_changed_or_unrelated_run_without_releasing_slot(self):
         driver, run, item, context = self.unknown_start()
         with review_store.connect(self.fixture.db) as conn:
-            review_store.update_run(
-                conn, run["run_id"], dispatch_json=json.dumps({"pid": 424242})
-            )
+            review_store.update_run(conn, run["run_id"], dispatch_json=json.dumps({"pid": 424242}))
         for selected in ([run["run_id"]], ["another-round-run"]):
             with (
                 self.subTest(selected=selected),
@@ -200,9 +171,7 @@ class ReviewRecoveryTests(unittest.TestCase):
             "robert_agent.adapters.processes.attempt.terminate_attempt",
             return_value={"status": "attention"},
         ):
-            with self.assertRaisesRegex(
-                work_items.WorkItemConflictError, "Worker could not be stopped"
-            ):
+            with self.assertRaisesRegex(work_items.WorkItemConflictError, "Worker could not be stopped"):
                 work_items.execute_command(
                     self.fixture.db,
                     item["work_item_id"],
@@ -283,9 +252,7 @@ class ReviewRecoveryTests(unittest.TestCase):
             work_items.execute_command(
                 self.fixture.db,
                 item["work_item_id"],
-                context=work_items.CommandContext(
-                    "operator", "other", frozenset(), frozenset()
-                ),
+                context=work_items.CommandContext("operator", "other", frozenset(), frozenset()),
                 command="cancel",
                 expected_version=item["version"],
                 idempotency_key="wrong-repo",
@@ -321,9 +288,7 @@ class ReviewRecoveryTests(unittest.TestCase):
                 other,
             ):
                 other.execute("BEGIN IMMEDIATE")
-                other.execute(
-                    "UPDATE review_process_pool SET max_concurrency=max_concurrency"
-                )
+                other.execute("UPDATE review_process_pool SET max_concurrency=max_concurrency")
             observed.append(recorded["pid"])
             return {"status": "terminated"}
 
@@ -331,12 +296,8 @@ class ReviewRecoveryTests(unittest.TestCase):
             patch.object(driver, "prepare", side_effect=RuntimeError("phase failed")),
             patch.object(model_execution, "_group_finished", return_value=False),
             patch.object(model_execution, "_wait_for_group_exit", return_value=True),
-            patch.object(
-                worker_identity, "inspect_recorded_identity", return_value="alive"
-            ),
-            patch.object(
-                worker_identity, "terminate_recorded_identity", side_effect=terminate
-            ),
+            patch.object(worker_identity, "inspect_recorded_identity", return_value="alive"),
+            patch.object(worker_identity, "terminate_recorded_identity", side_effect=terminate),
         ):
             with self.assertRaisesRegex(RuntimeError, "phase failed"):
                 driver.run()

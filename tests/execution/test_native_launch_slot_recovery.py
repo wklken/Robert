@@ -20,9 +20,7 @@ FAILED_WITHOUT_PROCESS = {
 class NativeLaunchSlotRecoveryTests(unittest.TestCase):
     def fixture(self, kind):
         fixture = (
-            review_fixture.ReviewCoordinatorFixture()
-            if kind == "review"
-            else vote_fixture.VoteCoordinatorFixture()
+            review_fixture.ReviewCoordinatorFixture() if kind == "review" else vote_fixture.VoteCoordinatorFixture()
         )
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -54,14 +52,10 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
     def failed_launch(self, driver):
         run = self.new_run(driver)
         driver.launcher = lambda **kwargs: dict(FAILED_WITHOUT_PROCESS)
-        launched = driver.launch_with_slot(
-            run, driver.request["workers"][0], driver.manifest["prompt_path"], {}
-        )
+        launched = driver.launch_with_slot(run, driver.request["workers"][0], driver.manifest["prompt_path"], {})
         self.assertEqual(launched, FAILED_WITHOUT_PROCESS)
         with driver.store.connect(driver.db_path) as conn:
-            self.assertEqual(
-                driver.store.process_pool_status(conn), {"limit": 1, "in_use": 1}
-            )
+            self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 1})
         # Crash after launch outcome commits, before run_phase's release_slot.
         return run
 
@@ -86,17 +80,11 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
 
     def assert_released(self, driver, run):
         with driver.store.connect(driver.db_path) as conn:
-            current = next(
-                row
-                for row in driver.store.runs(conn, driver.round_id)
-                if row["run_id"] == run["run_id"]
-            )
+            current = next(row for row in driver.store.runs(conn, driver.round_id) if row["run_id"] == run["run_id"])
             self.assertEqual(current["status"], "failed")
             self.assertEqual(current["dispatch"], FAILED_WITHOUT_PROCESS)
             self.assertFalse(current["slot_reserved"])
-            self.assertEqual(
-                driver.store.process_pool_status(conn), {"limit": 1, "in_use": 0}
-            )
+            self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 0})
         waiting = self.new_run(driver)
         with driver.store.connect(driver.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -107,9 +95,7 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 fixture, driver = self.fixture(kind)
                 run = self.failed_launch(driver)
-                restarted = (
-                    fixture.coordinator() if kind == "review" else fixture.driver()
-                )
+                restarted = fixture.coordinator() if kind == "review" else fixture.driver()
                 restarted.reclaim_finished_slots()
                 self.assert_released(restarted, run)
 
@@ -160,17 +146,13 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
                                 driver.store.process_pool_status(conn),
                                 {"limit": 1, "in_use": 1},
                             )
-                            model_execution.terminate_children(
-                                conn, driver.task_id, store=driver.store
-                            )
+                            model_execution.terminate_children(conn, driver.task_id, store=driver.store)
                             self.assertEqual(
                                 driver.store.process_pool_status(conn),
                                 {"limit": 1, "in_use": 1},
                             )
                 with driver.store.connect(driver.db_path) as conn:
-                    driver.store.update_run(
-                        conn, run["run_id"], status="starting", dispatch_json="{}"
-                    )
+                    driver.store.update_run(conn, run["run_id"], status="starting", dispatch_json="{}")
                 with self.assertRaises(work_items.WorkItemConflictError):
                     self.cancel(driver)
                 with driver.store.connect(driver.db_path) as conn:

@@ -24,17 +24,13 @@ def derive_push_source_sha(action, action_scope, run_command):
     if scope.get("supervision_repair"):
         return scope, None
     metadata = publication_values.decode_json(action.get("metadata_json"))
-    worktree_path = publication_effects.metadata_value(
-        metadata, "worktree_path"
-    ) or scope.get("worktree_path")
+    worktree_path = publication_effects.metadata_value(metadata, "worktree_path") or scope.get("worktree_path")
     source_ref = publication_effects.metadata_value(metadata, "source_ref") or "HEAD"
     if not worktree_path:
         return scope, None
     command = ["git", "rev-parse", source_ref]
     try:
-        completed = run_command(
-            command, cwd=worktree_path, capture_output=True, text=True
-        )
+        completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
     except Exception:
         return scope, None
     if publication_effects.command_failure(completed, "git rev-parse failed"):
@@ -65,15 +61,11 @@ def prepare_publication_intent(db_path, action_id, run_command):
             return {"state": "missing", "action": None, "intent": None, "scope": None}
         action = dict(action_row)
         if not conn.execute(
-            "SELECT 1 FROM tasks t WHERE t.task_id=? AND "
-            + execution_store.runnable_sql(),
+            "SELECT 1 FROM tasks t WHERE t.task_id=? AND " + execution_store.runnable_sql(),
             (action["task_id"],),
         ).fetchone():
             return {"state": "missing", "action": action, "intent": None, "scope": None}
-        if (
-            action["publish_status"] != "not_published"
-            or action["audit_status"] != "accepted"
-        ):
+        if action["publish_status"] != "not_published" or action["audit_status"] != "accepted":
             return {"state": "missing", "action": action, "intent": None, "scope": None}
         scope = publication_scope.trusted_action_scope(conn, action)
         intent = intent_facts.load_intent(conn, action_id)
@@ -96,11 +88,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
             "intent": None,
             "scope": None,
         }
-    if (
-        intent is not None
-        and intent["status"] == "prepared"
-        and not isinstance(scope, dict)
-    ):
+    if intent is not None and intent["status"] == "prepared" and not isinstance(scope, dict):
         return {
             "state": "scope_missing",
             "action": action,
@@ -108,9 +96,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
             "scope": scope,
         }
     if intent is not None:
-        persisted_evidence = publication_values.decode_json(
-            intent.get("remote_evidence_json")
-        )
+        persisted_evidence = publication_values.decode_json(intent.get("remote_evidence_json"))
         source_sha = persisted_evidence.get("source_sha") or None
         head_owner = persisted_evidence.get("head_owner") or None
     # Source SHA is read before deriving the fingerprint and before the
@@ -158,9 +144,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
                 "scope": None,
             }
         try:
-            idempotency_key, request_fingerprint = (
-                publication_reconcile.derive_publication_keys(action, scope)
-            )
+            idempotency_key, request_fingerprint = publication_reconcile.derive_publication_keys(action, scope)
         except ValueError:
             return {
                 "state": "scope_missing",
@@ -238,9 +222,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
         elif latest["status"] in {"failed", "confirmed_absent"}:
             if latest["status"] == "confirmed_absent":
                 evidence = {
-                    **publication_values.decode_json(
-                        latest.get("remote_evidence_json")
-                    ),
+                    **publication_values.decode_json(latest.get("remote_evidence_json")),
                     **evidence,
                     "retry_after_absence": True,
                 }

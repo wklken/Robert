@@ -66,9 +66,7 @@ repos:
     def test_loop_ignores_local_work_outside_configured_repos(self):
         from robert_agent.runtime import loop as loop_engine
 
-        db_path, _repo_ids = loop_engine.load_config_scope(
-            self.config_path, skip_external=True
-        )
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -105,9 +103,7 @@ repos:
     def test_archived_workflow_signal_does_not_drive_native_execution(self):
         from robert_agent.runtime import loop as loop_engine
 
-        db_path, _repo_ids = loop_engine.load_config_scope(
-            self.config_path, skip_external=True
-        )
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -128,9 +124,7 @@ repos:
         from robert_agent.runtime import loop as loop_engine
         from robert_agent.adapters.sqlite import execution_control as execution_store
 
-        db_path, _repo_ids = loop_engine.load_config_scope(
-            self.config_path, skip_external=True
-        )
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -165,12 +159,8 @@ repos:
             )
 
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertFalse(
-                loop_engine.has_runnable_local_work(conn, repo_ids=["repo-a"])
-            )
-            self.assertTrue(
-                loop_engine.has_runnable_local_work(conn, repo_ids=["repo-b"])
-            )
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo-a"]))
+            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["repo-b"]))
 
     def test_loop_stops_when_cycle_makes_no_progress(self):
         from robert_agent.runtime import loop as loop_engine
@@ -277,9 +267,7 @@ repos:
     def test_loop_runs_when_attempt_needs_supervision(self):
         from robert_agent.runtime import loop as loop_engine
 
-        db_path, _repo_ids = loop_engine.load_config_scope(
-            self.config_path, skip_external=True
-        )
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -418,9 +406,7 @@ repos:
         def runner(*_args, **kwargs):
             runner_kwargs.append(kwargs)
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute(
-                    "UPDATE wakeups SET status = 'consumed' WHERE wakeup_id = 'wakeup-1'"
-                )
+                conn.execute("UPDATE wakeups SET status = 'consumed' WHERE wakeup_id = 'wakeup-1'")
                 now = datetime.now(timezone.utc).isoformat()
                 conn.execute(
                     """
@@ -465,9 +451,7 @@ repos:
     def _init_runnable_db(self):
         from robert_agent.runtime import loop as loop_engine
 
-        db_path, _repo_ids = loop_engine.load_config_scope(
-            self.config_path, skip_external=True
-        )
+        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(

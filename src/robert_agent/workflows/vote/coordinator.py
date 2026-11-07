@@ -39,9 +39,7 @@ class Coordinator(StageCoordinator):
         self.source_reader = source_reader
 
     def read_source(self):
-        return self.source_reader(
-            self.session["repo"], self.session["number"], self.session["source_type"]
-        )
+        return self.source_reader(self.session["repo"], self.session["number"], self.session["source_type"])
 
     def check_sources(self):
         if not vote_workspace.same_sources(self.manifest, self.read_source()):
@@ -78,15 +76,11 @@ class Coordinator(StageCoordinator):
                     "prepared_sha256": vote_files.digest(path),
                 }
 
-            result = self.run_phase(
-                "prepare", self.request["workers"][0], prompt, validate
-            )
+            result = self.run_phase("prepare", self.request["workers"][0], prompt, validate)
             prepared = vote_files.read_prepared(result["prepared_path"], self.manifest)
             if prepared["status"] == "needs_code":
                 if self.manifest.get("source_worktree"):
-                    raise ValueError(
-                        "source already provided; preparation must identify a concrete ambiguity"
-                    )
+                    raise ValueError("source already provided; preparation must identify a concrete ambiguity")
                 vote_workspace.add_issue_code(self.manifest, self.request["repo"])
                 self.save_manifest()
                 continue
@@ -118,9 +112,7 @@ class Coordinator(StageCoordinator):
 
     def target_url(self):
         kind = "pull" if self.session["source_type"] == "pull_request" else "issues"
-        return (
-            f"https://github.com/{self.session['repo']}/{kind}/{self.session['number']}"
-        )
+        return f"https://github.com/{self.session['repo']}/{kind}/{self.session['number']}"
 
     def vote(self):
         self.phase("voting")
@@ -136,9 +128,7 @@ class Coordinator(StageCoordinator):
                 }
 
             try:
-                return self.run_phase(
-                    "vote", worker, self.manifest["prompt_path"], validate
-                ), None
+                return self.run_phase("vote", worker, self.manifest["prompt_path"], validate), None
             except StageStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
@@ -195,9 +185,7 @@ class Coordinator(StageCoordinator):
             input_hash=inputs_hash,
         )
         ballots = vote_files.selected_ballots(self.manifest, records)
-        summary = vote_files.read_synthesis(
-            result["synthesis_path"], self.manifest, records, inputs_hash
-        )
+        summary = vote_files.read_synthesis(result["synthesis_path"], self.manifest, records, inputs_hash)
         body = vote_files.render(
             self.manifest,
             records,
@@ -237,9 +225,7 @@ class Coordinator(StageCoordinator):
     def record(self, payload):
         result = worker_result.record_result(self.db_path, payload)
         if not result.get("ok"):
-            raise RuntimeError(
-                "vote result rejected: " + result.get("status", "unknown")
-            )
+            raise RuntimeError("vote result rejected: " + result.get("status", "unknown"))
 
     def run(self):
         try:
@@ -250,11 +236,7 @@ class Coordinator(StageCoordinator):
             with vote_store.connect(self.db_path) as conn:
                 status = "superseded" if isinstance(exc, StageSuperseded) else "failed"
                 if isinstance(exc, StageStopped):
-                    status = (
-                        "canceled"
-                        if not attempt_is_active(conn, self.task_id, self.attempt_id)
-                        else "attention"
-                    )
+                    status = "canceled" if not attempt_is_active(conn, self.task_id, self.attempt_id) else "attention"
                 vote_store.update(conn, self.round_id, status=status, error=str(exc))
             with vote_store.connect(self.db_path) as conn:
                 terminate_children(conn, self.task_id, store=vote_store)

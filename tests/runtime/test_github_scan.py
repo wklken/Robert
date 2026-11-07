@@ -30,19 +30,13 @@ class ScanEntrypointTests(unittest.TestCase):
         for flags, expected in (([], "scan"), (["--publish", "--dry-run"], "publish")):
             with (
                 self.subTest(flags=flags),
-                mock.patch.object(
-                    synchronization, "scan", return_value={"ok": True}
-                ) as synchronize,
-                mock.patch.object(
-                    delivery_lane, "publish", return_value={"ok": True}
-                ) as publish,
+                mock.patch.object(synchronization, "scan", return_value={"ok": True}) as synchronize,
+                mock.patch.object(delivery_lane, "publish", return_value={"ok": True}) as publish,
                 mock.patch.object(scan, "emit", return_value=0),
             ):
                 self.assertEqual(scan.main(["--config", "fixture.json", *flags]), 0)
                 if expected == "scan":
-                    synchronize.assert_called_once_with(
-                        "fixture.json", refresh_context=False
-                    )
+                    synchronize.assert_called_once_with("fixture.json", refresh_context=False)
                     publish.assert_not_called()
                 else:
                     publish.assert_called_once_with("fixture.json", dry_run=True)
@@ -57,9 +51,7 @@ class ObservationTests(unittest.TestCase):
         storage.init_database(self.db)
 
     def test_failed_route_batch_survives_and_retries_without_remote_reads(self):
-        scan_batches.save_batch(
-            self.db, "repo", "context", [{"id": "one"}], [], now=100
-        )
+        scan_batches.save_batch(self.db, "repo", "context", [{"id": "one"}], [], now=100)
         batch = scan_batches.next_batch(self.db, "repo", now=100)
         self.assertEqual(batch["raw_events"], [{"id": "one"}])
         scan_batches.finish_batch(self.db, batch["batch_id"], success=False, now=100)
@@ -72,12 +64,8 @@ class ObservationTests(unittest.TestCase):
         self.assertIsNone(scan_batches.next_batch(self.db, "repo", now=132))
 
     def test_new_batch_does_not_overwrite_unseen_events(self):
-        scan_batches.save_batch(
-            self.db, "repo", "context", [{"id": "one"}], [], now=100
-        )
-        scan_batches.save_batch(
-            self.db, "repo", "context", [{"id": "two"}], [], now=101
-        )
+        scan_batches.save_batch(self.db, "repo", "context", [{"id": "one"}], [], now=100)
+        scan_batches.save_batch(self.db, "repo", "context", [{"id": "two"}], [], now=101)
         first = scan_batches.next_batch(self.db, "repo", now=102)
         self.assertEqual(first["raw_events"], [{"id": "one"}])
         scan_batches.finish_batch(self.db, first["batch_id"], success=True, now=102)
@@ -91,22 +79,16 @@ class ObservationTests(unittest.TestCase):
 
         with mock.patch("subprocess.run", side_effect=AssertionError("network called")):
             with self.assertRaises(subprocess.CalledProcessError):
-                ReplayRunner([])(
-                    ["gh", "api", "repos/example/repo/issues/1"], check=True
-                )
+                ReplayRunner([])(["gh", "api", "repos/example/repo/issues/1"], check=True)
 
     def test_open_pr_reconcile_does_not_fetch_pull_details(self):
         calls = []
 
         def runner(args, **kwargs):
             calls.append(args)
-            return subprocess.CompletedProcess(
-                args, 0, json.dumps({"state": "open"}), ""
-            )
+            return subprocess.CompletedProcess(args, 0, json.dumps({"state": "open"}), "")
 
-        result = github_sources.read_source_state(
-            "example/repo", "pull_request", 1, runner
-        )
+        result = github_sources.read_source_state("example/repo", "pull_request", 1, runner)
         self.assertEqual(result["state"], "open")
         self.assertEqual(len(calls), 1)
 
@@ -120,13 +102,9 @@ class ObservationTests(unittest.TestCase):
             {key: '{"state":"open"}'},
             now=100,
         )
-        scan_batches.save_batch(
-            self.db, "repo", "context", [], {key: '{"state":"closed"}'}, now=101
-        )
+        scan_batches.save_batch(self.db, "repo", "context", [], {key: '{"state":"closed"}'}, now=101)
         batch = scan_batches.next_batch(self.db, "repo", now=102)
-        response = github_recording.ReplayRunner(batch["responses"])(
-            ["gh", "api", "repos/example/repo/issues/1"]
-        )
+        response = github_recording.ReplayRunner(batch["responses"])(["gh", "api", "repos/example/repo/issues/1"])
         self.assertEqual(json.loads(response.stdout)["state"], "closed")
 
     def test_owned_background_process_does_not_hold_local_database(self):
@@ -143,9 +121,7 @@ class ObservationTests(unittest.TestCase):
         )
         self.addCleanup(lane.stop)
         self.assertIsNone(lane.poll())
-        scan_batches.save_batch(
-            self.db, "repo", "context", [{"id": "ready"}], [], now=100
-        )
+        scan_batches.save_batch(self.db, "repo", "context", [{"id": "ready"}], [], now=100)
         started = time.monotonic()
         batch = scan_batches.next_batch(self.db, "repo", now=100)
         scan_batches.finish_batch(self.db, batch["batch_id"], success=True, now=100)
@@ -166,26 +142,16 @@ class ObservationTests(unittest.TestCase):
         scan_batches.save_batch(self.db, "repo", "context", [], {key: None}, now=101)
         batch = scan_batches.next_batch(self.db, "repo", now=102)
         with self.assertRaises(subprocess.CalledProcessError):
-            github_recording.ReplayRunner(batch["responses"])(
-                ["gh", "api", "repos/example/repo/issues/1"], check=True
-            )
+            github_recording.ReplayRunner(batch["responses"])(["gh", "api", "repos/example/repo/issues/1"], check=True)
 
     def test_same_pending_batch_coalesces_and_context_change_waits_for_refresh(self):
         event = {"id": "one", "number": 7, "source_type": "issue"}
         first = scan_batches.save_batch(self.db, "repo", "old", [event], {}, now=100)
-        self.assertEqual(
-            scan_batches.save_batch(self.db, "repo", "old", [event], {}, now=101), first
-        )
-        self.assertIsNone(
-            scan_batches.next_batch(self.db, "repo", context="new", now=102)
-        )
-        fresh = scan_batches.save_batch(
-            self.db, "repo", "new", [], {}, now=103, complete_sources=[("issue", 7)]
-        )
+        self.assertEqual(scan_batches.save_batch(self.db, "repo", "old", [event], {}, now=101), first)
+        self.assertIsNone(scan_batches.next_batch(self.db, "repo", context="new", now=102))
+        fresh = scan_batches.save_batch(self.db, "repo", "new", [], {}, now=103, complete_sources=[("issue", 7)])
         scan_batches.finish_batch(self.db, fresh, success=True, now=104)
-        self.assertEqual(
-            scan_batches.next_batch(self.db, "repo", now=104)["raw_events"], [event]
-        )
+        self.assertEqual(scan_batches.next_batch(self.db, "repo", now=104)["raw_events"], [event])
 
     def test_spawn_failure_closes_handles_and_cancels_starting_row(self):
         from robert_agent.runtime.control import ControlLane
@@ -199,9 +165,7 @@ class ObservationTests(unittest.TestCase):
         self.assertIsNone(lane.error)
         with closing(sqlite3.connect(self.db)) as conn, conn:
             self.assertEqual(
-                conn.execute("SELECT status FROM github_control_children").fetchone()[
-                    0
-                ],
+                conn.execute("SELECT status FROM github_control_children").fetchone()[0],
                 "stopped",
             )
 
@@ -215,12 +179,8 @@ class ObservationTests(unittest.TestCase):
                 ("other", "other-scope", "2020-01-01T00:00:00+00:00", 1),
                 ("healthy", "current-scope", "2099-01-01T00:00:00+00:00", 99999),
             ]:
-                daemon_state.start_daemon_run(
-                    conn, config_path="/config", owner_id=owner, now=when
-                )
-                daemon_state.acquire_daemon_lease(
-                    conn, resource_key=scope, owner_id=owner, ttl_seconds=ttl, now=when
-                )
+                daemon_state.start_daemon_run(conn, config_path="/config", owner_id=owner, now=when)
+                daemon_state.acquire_daemon_lease(conn, resource_key=scope, owner_id=owner, ttl_seconds=ttl, now=when)
                 conn.execute(
                     "INSERT INTO github_control_children VALUES (?,?,?,'{}','running')",
                     (owner, owner, "scan"),
@@ -230,11 +190,7 @@ class ObservationTests(unittest.TestCase):
             "terminate_recorded_identity",
             side_effect=AssertionError("must not stop healthy/unrelated child"),
         ):
-            self.assertTrue(
-                control_lane.recover(
-                    self.db, scope_key="current-scope", current_owner="new"
-                )
-            )
+            self.assertTrue(control_lane.recover(self.db, scope_key="current-scope", current_owner="new"))
 
     def test_real_local_routing_and_finalization_while_scanner_is_running(self):
         import sqlite3
@@ -249,22 +205,16 @@ class ObservationTests(unittest.TestCase):
         fixture = RepositoryCycleFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        config = validate_config.validate_config(
-            fixture.config_path, skip_external=True
-        )
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
         db = config["db_path"]
         storage.init_database(db)
         with closing(sqlite3.connect(db)) as conn, conn:
             repo_id = work_repositories.upsert_repo(conn, config["repos"][0])
         lane = ControlLane(db, "scan", "test-owner")
-        lane.start(
-            [sys.executable, "-c", "import time; time.sleep(30)"], timeout_seconds=40
-        )
+        lane.start([sys.executable, "-c", "import time; time.sleep(30)"], timeout_seconds=40)
         self.addCleanup(lane.stop)
         publisher_lane = ControlLane(db, "publish", "test-owner")
-        publisher_lane.start(
-            [sys.executable, "-c", "import time; time.sleep(30)"], timeout_seconds=40
-        )
+        publisher_lane.start([sys.executable, "-c", "import time; time.sleep(30)"], timeout_seconds=40)
         self.addCleanup(publisher_lane.stop)
         event = {
             "id": "analysis-one",
@@ -277,11 +227,7 @@ class ObservationTests(unittest.TestCase):
             "state": "open",
             "url": "https://github.com/example/backend/issues/123",
         }
-        reads = {
-            github_client.command_key(
-                ["gh", "api", "repos/example/backend/issues/123"]
-            ): '{"state":"open"}'
-        }
+        reads = {github_client.command_key(["gh", "api", "repos/example/backend/issues/123"]): '{"state":"open"}'}
         scan_batches.save_batch(
             db,
             repo_id,
@@ -314,17 +260,13 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(len(launched), 1)
         self.assertIsNone(lane.poll())
         with closing(sqlite3.connect(db)) as conn, conn:
-            task, attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            task, attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         payload = {
             "task_id": task,
             "attempt_id": attempt,
             "output_type": "comment_analysis",
             "submission": {
-                "planned_github_actions": [
-                    {"type": "comment", "target_url": event["url"], "body": "Ready"}
-                ],
+                "planned_github_actions": [{"type": "comment", "target_url": event["url"], "body": "Ready"}],
                 "consumed_event_fingerprints": ["comment:analysis-one"],
                 "verification": [],
                 "used_skills": [],
@@ -359,9 +301,7 @@ class ObservationTests(unittest.TestCase):
         )
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db)) as conn, conn:
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed")
         self.assertIsNone(lane.poll())
         self.assertTrue(lane.stop())
         self.assertIsNone(publisher_lane.poll())
@@ -394,9 +334,7 @@ class ObservationTests(unittest.TestCase):
                 }
             },
         ):
-            self.assertNotEqual(
-                first, synchronization.context_digest(repo, [], config={})
-            )
+            self.assertNotEqual(first, synchronization.context_digest(repo, [], config={}))
 
     def test_refresh_retains_unconsumed_identity_and_rechecks_trigger(self):
         repo = {
@@ -414,15 +352,9 @@ class ObservationTests(unittest.TestCase):
             "body": "@bot old request",
         }
         new = {**old, "id": "new", "actor_login": "new-user"}
-        events = source_policy.refresh_pending_events(
-            [new], [old], {("issue", 7)}, repo
-        )
+        events = source_policy.refresh_pending_events([new], [old], {("issue", 7)}, repo)
         self.assertEqual({event["id"] for event in events}, {"old", "new"})
-        self.assertFalse(
-            next(event for event in events if event["id"] == "old")[
-                "trusted_trigger_found"
-            ]
-        )
+        self.assertFalse(next(event for event in events if event["id"] == "old")["trusted_trigger_found"])
 
     def test_ready_repo_dispatches_before_next_local_repo_pipeline(self):
         import yaml
@@ -452,9 +384,7 @@ class ObservationTests(unittest.TestCase):
             return []
 
         with (
-            mock.patch.object(
-                repository_cycle, "run_repo_pipeline", side_effect=pipeline
-            ),
+            mock.patch.object(repository_cycle, "run_repo_pipeline", side_effect=pipeline),
             mock.patch.object(dispatch_queue, "dispatch_queued", side_effect=dispatch),
         ):
             result = run_once.run_once(
@@ -479,9 +409,7 @@ class ObservationTests(unittest.TestCase):
         )
         batch = scan_batches.next_batch(self.db, "repo", now=4000)
         with self.assertRaises(subprocess.CalledProcessError):
-            github_recording.ReplayRunner(batch["responses"])(
-                ["gh", "api", "repos/example/repo/issues/1"], check=True
-            )
+            github_recording.ReplayRunner(batch["responses"])(["gh", "api", "repos/example/repo/issues/1"], check=True)
 
     def test_core_quota_floor_uses_reset_before_retrying(self):
         session = mock.Mock()
@@ -512,25 +440,15 @@ class ObservationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         context = fixture.context
-        scan = SimpleNamespace(
-            process=object(), poll=mock.Mock(return_value=None), start=mock.Mock()
-        )
-        publish = SimpleNamespace(
-            process=object(), poll=mock.Mock(return_value=None), start=mock.Mock()
-        )
+        scan = SimpleNamespace(process=object(), poll=mock.Mock(return_value=None), start=mock.Mock())
+        publish = SimpleNamespace(process=object(), poll=mock.Mock(return_value=None), start=mock.Mock())
         context.background_lanes = {"scan": scan, "publish": publish}
         context.startup_live_poll_pending = True
         with (
-            mock.patch.dict(
-                "os.environ", {"ROBERT_NOTIFICATION_COMMAND": "configured-but-not-run"}
-            ),
+            mock.patch.dict("os.environ", {"ROBERT_NOTIFICATION_COMMAND": "configured-but-not-run"}),
             mock.patch.object(daemon, "_maybe_prune"),
-            mock.patch.object(
-                daemon.loop_engine, "has_runnable_local_work", return_value=True
-            ),
-            mock.patch.object(
-                daemon, "_run_local_drain", return_value={"ok": True}
-            ) as drain,
+            mock.patch.object(daemon.loop_engine, "has_runnable_local_work", return_value=True),
+            mock.patch.object(daemon, "_run_local_drain", return_value={"ok": True}) as drain,
         ):
             result = daemon.run_once_decision(context, now=NOW)
         self.assertEqual(result["decision"], "local_drain")
@@ -554,9 +472,7 @@ class ObservationTests(unittest.TestCase):
             poll=mock.Mock(return_value={"ok": True, "poll_interval_seconds": 90}),
             start=mock.Mock(),
         )
-        publish = SimpleNamespace(
-            process=None, poll=mock.Mock(return_value=None), start=mock.Mock()
-        )
+        publish = SimpleNamespace(process=None, poll=mock.Mock(return_value=None), start=mock.Mock())
         context.background_lanes = {"scan": scan, "publish": publish}
         with fixture.connect() as conn:
             wakeup.request_wakeup(
@@ -569,9 +485,7 @@ class ObservationTests(unittest.TestCase):
             )
         with (
             mock.patch.object(daemon, "_maybe_prune"),
-            mock.patch.object(
-                daemon.loop_engine, "has_runnable_local_work", return_value=False
-            ),
+            mock.patch.object(daemon.loop_engine, "has_runnable_local_work", return_value=False),
         ):
             daemon.run_once_decision(context, now=NOW)
         self.assertEqual(context.next_live_poll_at, "2026-10-23T00:01:30+00:00")
@@ -587,9 +501,7 @@ class ObservationTests(unittest.TestCase):
         with fixture.connect() as conn:
             conn.execute("UPDATE daemon_runs SET status='stopped'")
             conn.execute("UPDATE leases SET status='released',released_at=?", (OLD,))
-            conn.execute(
-                "INSERT INTO github_control_children VALUES ('child','daemon','scan','{}','running')"
-            )
+            conn.execute("INSERT INTO github_control_children VALUES ('child','daemon','scan','{}','running')")
         result = retention.prune_database(fixture.db, apply=True, now=NOW)
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["counts"]["leases"], 0)
@@ -606,9 +518,7 @@ class ObservationTests(unittest.TestCase):
         fixture = RepositoryCycleFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        config = validate_config.validate_config(
-            fixture.config_path, skip_external=True
-        )
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
         db = config["db_path"]
         storage.init_database(db)
         import sqlite3
@@ -622,18 +532,12 @@ class ObservationTests(unittest.TestCase):
             "event_type": "comment",
         }
         key = github_client.command_key(["gh", "api", "repos/example/backend/issues/7"])
-        scan_batches.save_batch(
-            db, repo_id, "context", [event], {key: '{"state":"open"}'}
-        )
+        scan_batches.save_batch(db, repo_id, "context", [event], {key: '{"state":"open"}'})
         session = mock.Mock(
-            side_effect=lambda args, **kwargs: subprocess.CompletedProcess(
-                args, 0, '{"state":"closed"}', ""
-            )
+            side_effect=lambda args, **kwargs: subprocess.CompletedProcess(args, 0, '{"state":"closed"}', "")
         )
         session.metrics.return_value = {"errors": 0}
-        session.collect_events.side_effect = subprocess.CalledProcessError(
-            1, ["gh", "search"]
-        )
+        session.collect_events.side_effect = subprocess.CalledProcessError(1, ["gh", "search"])
         with self.assertRaises(subprocess.CalledProcessError):
             synchronization.scan_repo(config, config["repos"][0], session, [])
         # Failed refresh now backs off, but its newer safety observation is
@@ -652,9 +556,7 @@ class ObservationTests(unittest.TestCase):
         fixture = fixtures.RepositoryCycleFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        config = validate_config.validate_config(
-            fixture.config_path, skip_external=True
-        )
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
         storage.init_database(config["db_path"])
         import sqlite3
 
@@ -670,15 +572,11 @@ class ObservationTests(unittest.TestCase):
         session = mock.Mock()
         session.poll_interval_seconds = None
         session.metrics.return_value = {}
-        session.cached_notifications.return_value = {
-            "example/backend": [{"id": "hint"}]
-        }
+        session.cached_notifications.return_value = {"example/backend": [{"id": "hint"}]}
         with (
             mock.patch.object(github_read, "GitHubReadSession", return_value=session),
             mock.patch.object(github_budget, "budget", return_value=True),
-            mock.patch.object(
-                synchronization, "scan_repo", return_value="batch"
-            ) as scan,
+            mock.patch.object(synchronization, "scan_repo", return_value="batch") as scan,
         ):
             result = synchronization.scan(fixture.config_path, refresh_context=True)
         self.assertTrue(result["ok"])
@@ -702,9 +600,7 @@ class ObservationTests(unittest.TestCase):
                 if phase == "notifications":
                     session.collect_notifications.side_effect = failure
                 with (
-                    mock.patch.object(
-                        github_read, "GitHubReadSession", return_value=session
-                    ),
+                    mock.patch.object(github_read, "GitHubReadSession", return_value=session),
                     mock.patch.object(
                         github_budget,
                         "budget",
@@ -799,9 +695,7 @@ class ObservationTests(unittest.TestCase):
         for name in ("other", "future", "expired", "canceled", "ordinary"):
             raw["repos"].append({**raw["repos"][0], "full_name": "example/" + name})
         fixture.config_path.write_text(yaml.safe_dump(raw))
-        config = validate_config.validate_config(
-            fixture.config_path, skip_external=True
-        )
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
         storage.init_database(config["db_path"])
         with closing(sqlite3.connect(config["db_path"])) as conn, conn:
             for repo in config["repos"]:
@@ -819,19 +713,11 @@ class ObservationTests(unittest.TestCase):
                     repo_id="repo:example/" + name,
                     reason="manual_operator_request",
                     dedupe_key="refresh",
-                    metadata={}
-                    if name == "ordinary"
-                    else {"kind": "github_context_refresh"},
-                    not_before_at="2099-01-01T00:00:00+00:00"
-                    if name == "future"
-                    else None,
-                    expires_at="2000-01-01T00:00:00+00:00"
-                    if name == "expired"
-                    else None,
+                    metadata={} if name == "ordinary" else {"kind": "github_context_refresh"},
+                    not_before_at="2099-01-01T00:00:00+00:00" if name == "future" else None,
+                    expires_at="2000-01-01T00:00:00+00:00" if name == "expired" else None,
                 )
-            conn.execute(
-                "UPDATE wakeups SET status='canceled' WHERE repo_id='repo:example/canceled'"
-            )
+            conn.execute("UPDATE wakeups SET status='canceled' WHERE repo_id='repo:example/canceled'")
         session = mock.Mock()
         session.metrics.return_value = {}
         session.poll_interval_seconds = None
@@ -839,13 +725,9 @@ class ObservationTests(unittest.TestCase):
         with (
             mock.patch.object(github_read, "GitHubReadSession", return_value=session),
             mock.patch.object(github_budget, "budget", return_value=True),
-            mock.patch.object(
-                synchronization, "scan_repo", return_value="batch"
-            ) as scan,
+            mock.patch.object(synchronization, "scan_repo", return_value="batch") as scan,
         ):
-            self.assertTrue(
-                synchronization.scan(fixture.config_path, refresh_context=True)["ok"]
-            )
+            self.assertTrue(synchronization.scan(fixture.config_path, refresh_context=True)["ok"])
         self.assertEqual(
             [call.args[1]["full_name"] for call in scan.call_args_list],
             ["example/backend"],

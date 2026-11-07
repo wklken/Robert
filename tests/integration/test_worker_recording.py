@@ -43,15 +43,9 @@ class WorkerRecordingTests(WorkerProtocolFixture):
         self.assertTrue(snapshot_result["ok"], snapshot_result)
         self.assertTrue(result_result["ok"], result_result)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            phase_count = conn.execute("SELECT COUNT(*) FROM worker_phases").fetchone()[
-                0
-            ]
-            result_count = conn.execute(
-                "SELECT COUNT(*) FROM worker_results"
-            ).fetchone()[0]
-            action_count = conn.execute(
-                "SELECT COUNT(*) FROM github_actions"
-            ).fetchone()[0]
+            phase_count = conn.execute("SELECT COUNT(*) FROM worker_phases").fetchone()[0]
+            result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
+            action_count = conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0]
         self.assertEqual(phase_count, 1)
         self.assertEqual(result_count, 1)
         self.assertEqual(action_count, 1)

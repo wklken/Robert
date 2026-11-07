@@ -28,9 +28,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             "identity_source": "ps",
         }
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,))
             conn.execute(
                 "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (now, now, json.dumps({"dispatch": dispatch_metadata}), attempt_id),
@@ -53,9 +51,9 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             finally:
                 worker_identity.inspect_recorded_identity = original
             binding = execution_store.get_binding(conn, "task", task_id)
-            attempt_state = conn.execute(
-                "SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)
-            ).fetchone()[0]
+            attempt_state = conn.execute("SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()[
+                0
+            ]
 
         self.assertEqual(supervised, 1)
         self.assertEqual(binding["binding_status"], "attention")
@@ -75,9 +73,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -119,9 +115,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 "SELECT status FROM attempts WHERE attempt_id = ?",
                 (attempt_id,),
             ).fetchone()[0]
-            notification = conn.execute(
-                "SELECT notification_type, status FROM notifications"
-            ).fetchone()
+            notification = conn.execute("SELECT notification_type, status FROM notifications").fetchone()
         self.assertEqual(attempt_status, "stale")
         self.assertEqual(notification, ("worker_stale", "recorded"))
 
@@ -147,9 +141,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -192,12 +184,8 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream_lifecycle = conn.execute(
-                "SELECT lifecycle FROM workstreams"
-            ).fetchone()[0]
-            notification = conn.execute(
-                "SELECT notification_type, status FROM notifications"
-            ).fetchone()
+            workstream_lifecycle = conn.execute("SELECT lifecycle FROM workstreams").fetchone()[0]
+            notification = conn.execute("SELECT notification_type, status FROM notifications").fetchone()
         self.assertEqual(attempt_status, "running")
         self.assertIsNone(failure_json)
         self.assertEqual(task_lifecycle, "running")
@@ -218,9 +206,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -261,9 +247,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            notification = conn.execute(
-                "SELECT notification_type, status FROM notifications"
-            ).fetchone()
+            notification = conn.execute("SELECT notification_type, status FROM notifications").fetchone()
         self.assertEqual(attempt_status, "failed")
         self.assertIn("failed_worker_process_exited", failure_json)
         self.assertEqual(task_lifecycle, "failed")
@@ -285,9 +269,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -350,9 +332,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             attempts = conn.execute(
                 "SELECT attempt_id, status, metadata_json FROM attempts ORDER BY attempt_no"
             ).fetchall()
-            notification_count = conn.execute(
-                "SELECT COUNT(*) FROM notifications"
-            ).fetchone()[0]
+            notification_count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
         self.assertEqual(len(attempts), 1)
         self.assertEqual(attempts[0][1], "running")
         supervise_status = json.loads(attempts[0][2])["supervise"]["status"]
@@ -381,9 +361,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -442,9 +420,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         now = datetime.now(timezone.utc)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -507,9 +483,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         now = datetime.now(timezone.utc)
         missing_pid = 987654
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -558,9 +532,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 "SELECT status, failure_json, metadata_json FROM attempts WHERE attempt_id = ?",
                 (attempt_id,),
             ).fetchone()
-            notification = conn.execute(
-                "SELECT notification_type, status FROM notifications"
-            ).fetchone()
+            notification = conn.execute("SELECT notification_type, status FROM notifications").fetchone()
         metadata = json.loads(metadata_json)
         failure = json.loads(failure_json)
         self.assertEqual(attempt_status, "failed")
@@ -575,9 +547,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         from robert_agent.runtime import cycle as run_once
 
         self.config_path.write_text(
-            self.config_path.read_text(encoding="utf-8").replace(
-                "max_concurrency: 3", "max_concurrency: 1"
-            ),
+            self.config_path.read_text(encoding="utf-8").replace("max_concurrency: 3", "max_concurrency: 1"),
             encoding="utf-8",
         )
         first = run_once.run_once(
@@ -591,9 +561,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -607,9 +575,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 (
                     old,
                     old,
-                    json.dumps(
-                        {"dispatch": self._recorded_identity(12345)}, sort_keys=True
-                    ),
+                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
                     attempt_id,
                 ),
             )
@@ -670,9 +636,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         self.assertTrue(second["ok"], second)
         self.assertEqual(len(calls), 0)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            statuses = conn.execute(
-                "SELECT status FROM attempts ORDER BY started_at"
-            ).fetchall()
+            statuses = conn.execute("SELECT status FROM attempts ORDER BY started_at").fetchall()
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         self.assertCountEqual(statuses, [("stale",), ("prepared",)])
         self.assertEqual(task_count, 2)
@@ -691,9 +655,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=95)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -707,9 +669,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 (
                     old,
                     old,
-                    json.dumps(
-                        {"dispatch": self._recorded_identity(12345)}, sort_keys=True
-                    ),
+                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
                     attempt_id,
                 ),
             )
@@ -768,12 +728,8 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            run_status = conn.execute(
-                "SELECT status FROM agent_runs ORDER BY started_at DESC LIMIT 1"
-            ).fetchone()[0]
-            notification = conn.execute(
-                "SELECT notification_type, status, task_id FROM notifications"
-            ).fetchone()
+            run_status = conn.execute("SELECT status FROM agent_runs ORDER BY started_at DESC LIMIT 1").fetchone()[0]
+            notification = conn.execute("SELECT notification_type, status, task_id FROM notifications").fetchone()
         self.assertEqual(attempt_status, "failed")
         self.assertEqual(task_lifecycle, "failed")
         self.assertEqual(run_status, "failed")

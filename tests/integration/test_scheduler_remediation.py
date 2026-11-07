@@ -10,14 +10,10 @@ from tests.support.scheduler_remediation import SchedulerRemediationFixture
 
 class SchedulerRemediationTests(SchedulerRemediationFixture):
     def test_healthy_worker_does_not_create_business_runs(self):
-        outcome = loop_engine.run_loop(
-            self.config, dry_run=False, skip_external=True, skip_publish=True
-        )
+        outcome = loop_engine.run_loop(self.config, dry_run=False, skip_external=True, skip_publish=True)
         self.assertEqual(outcome["cycles"], 0)
         with self.connect() as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 0)
 
     def test_dead_worker_is_runnable_without_waiting_for_old_heartbeat(self):
         self.stop_process()
@@ -30,16 +26,10 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
             )
         with self.connect() as conn:
             conn.execute("PRAGMA query_only=ON")
-            self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/repo"]
-                )
-            )
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/repo"]))
             self.assertFalse(conn.in_transaction)
             self.assertEqual(
-                conn.execute(
-                    "SELECT status FROM wakeups WHERE wakeup_id='old'"
-                ).fetchone()[0],
+                conn.execute("SELECT status FROM wakeups WHERE wakeup_id='old'").fetchone()[0],
                 "pending",
             )
 
@@ -107,12 +97,8 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
                 ((self.now - timedelta(minutes=50)).isoformat(),),
             )
         self.assertTrue(self.runnable())  # The default global limit is 45 minutes.
-        outcome = loop_engine.run_loop(
-            self.config, dry_run=False, skip_external=True, skip_publish=True
-        )
-        self.assertEqual(
-            outcome["cycles"], 0
-        )  # This config deliberately permits 90 minutes.
+        outcome = loop_engine.run_loop(self.config, dry_run=False, skip_external=True, skip_publish=True)
+        self.assertEqual(outcome["cycles"], 0)  # This config deliberately permits 90 minutes.
 
     def test_orphaned_classification_is_discovered_and_respects_backoff(self):
         with self.connect() as conn:
@@ -122,9 +108,7 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
                 "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES ('classification','t','a','classification_result',?,?)",
                 (
                     self.now.isoformat(),
-                    json.dumps(
-                        {"recommended_route": "new-pr", "audit": {"status": "accepted"}}
-                    ),
+                    json.dumps({"recommended_route": "new-pr", "audit": {"status": "accepted"}}),
                 ),
             )
         self.assertTrue(self.runnable())
@@ -136,9 +120,7 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
                         {
                             "classification_handoff": {
                                 "retryable": True,
-                                "next_retry_at": (
-                                    self.now + timedelta(minutes=5)
-                                ).isoformat(),
+                                "next_retry_at": (self.now + timedelta(minutes=5)).isoformat(),
                             }
                         }
                     ),
@@ -153,16 +135,10 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
         self.assertFalse(self.runnable())
 
     def test_unknown_identity_requests_fenced_supervision_immediately(self):
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "unknown"}
-        ):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "unknown"}):
             with self.connect() as conn:
                 conn.execute("PRAGMA query_only=ON")
-                self.assertTrue(
-                    loop_engine.has_runnable_local_work(
-                        conn, repo_ids=["repo:example/repo"]
-                    )
-                )
+                self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/repo"]))
                 self.assertFalse(conn.in_transaction)
 
     def test_startup_evidence_is_checked_without_backfilling_during_probe(self):
@@ -190,15 +166,9 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
         )
         with self.connect() as conn:
             conn.execute("PRAGMA query_only=ON")
-            self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/repo"]
-                )
-            )
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/repo"]))
             self.assertFalse(conn.in_transaction)
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 0)
 
     def test_result_for_canceled_task_does_not_trigger_publication_drain(self):
         self.result()
@@ -216,22 +186,12 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
                 (self.now.isoformat(),) * 2,
             )
         with self.connect() as conn:
-            self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/repo"]
-                )
-            )
-            self.assertTrue(
-                loop_engine.has_runnable_local_work(conn, repo_ids=["other"])
-            )
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/repo"]))
+            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["other"]))
 
     def test_scope_config_return_remains_backwards_compatible(self):
-        self.assertEqual(
-            len(loop_engine.load_config_scope(self.config, skip_external=True)), 2
-        )
-        db, repos, config = loop_engine.load_config_scope(
-            self.config, skip_external=True, include_config=True
-        )
+        self.assertEqual(len(loop_engine.load_config_scope(self.config, skip_external=True)), 2)
+        db, repos, config = loop_engine.load_config_scope(self.config, skip_external=True, include_config=True)
         self.assertEqual(db, self.db)
         self.assertEqual(repos, ["repo:example/repo"])
         self.assertEqual(config["hard_timeout_seconds"], 5400)

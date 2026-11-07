@@ -25,9 +25,7 @@ class PromptMemoryTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         record = result.record_result(
             db_path,
@@ -73,9 +71,7 @@ class PromptMemoryTests(RepositoryCycleFixture):
         )
         self.assertTrue(audited["ok"], audited)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            memory_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_entries"
-            ).fetchone()[0]
+            memory_count = conn.execute("SELECT COUNT(*) FROM project_memory_entries").fetchone()[0]
             result_metadata = json.loads(
                 conn.execute(
                     "SELECT metadata_json FROM worker_results WHERE result_id = ?",

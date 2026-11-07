@@ -46,7 +46,5 @@ class ConfigV2Fixture(unittest.TestCase):
         }
 
     def validate(self, config=None):
-        self.path.write_text(
-            yaml.safe_dump(self.config if config is None else config, sort_keys=False)
-        )
+        self.path.write_text(yaml.safe_dump(self.config if config is None else config, sort_keys=False))
         return validate_config(self.path, skip_external=True)

@@ -63,9 +63,7 @@ def _database_error(exc):
             "file is not a database": "SQLITE_NOTADB",
             "interrupted": "SQLITE_INTERRUPT",
         }.get(message, "")
-        if message.startswith(
-            ("database table is locked: ", "database schema is locked: ")
-        ):
+        if message.startswith(("database table is locked: ", "database schema is locked: ")):
             name = "SQLITE_LOCKED"
         elif message.startswith(("no such table: ", "no such column: ")):
             name = "SQLITE_ERROR"
@@ -75,9 +73,7 @@ def _database_error(exc):
         return "database_corrupt"
     if name == "SQLITE_INTERRUPT":
         return "database_observation_deadline"
-    if name == "SQLITE_ERROR" and (
-        "no such table" in message or "no such column" in message
-    ):
+    if name == "SQLITE_ERROR" and ("no such table" in message or "no such column" in message):
         return "database_schema_incompatible"
     return "database_unavailable"
 
@@ -99,20 +95,14 @@ def _controller_facts(conn, db_path, now, config):
         if lease["run_status"] in {"failed", "stopped"}:
             status = lease["run_status"]
         elif expires:
-            status = (
-                "fresh"
-                if lease["lease_status"] == "active" and expires > now
-                else "expired"
-            )
+            status = "fresh" if lease["lease_status"] == "active" and expires > now else "expired"
     controller = {"scope_id": "daemon", "status": status, "daemon_run_id": run_id}
     if lease:
         controller["lease_id"] = lease["lease_id"]
         controller["lease_expires_at"] = lease["expires_at"]
         heartbeat = supervision_rules.timestamp(lease["heartbeat_at"])
         acquired = supervision_rules.timestamp(lease["acquired_at"])
-        controller["has_progress"] = bool(
-            acquired and heartbeat and acquired < heartbeat <= now
-        )
+        controller["has_progress"] = bool(acquired and heartbeat and acquired < heartbeat <= now)
         controller["heartbeat_at"] = lease["heartbeat_at"]
     facts = [controller]
     for lane, event_types in LANE_COMPLETIONS.items():
@@ -164,9 +154,7 @@ def _task_page(conn, now, cursor, limit, config):
         else ""
     )
     repos = [repo["full_name"] for repo in config.get("repos", ())]
-    repo_filter = (
-        "AND r.full_name IN (" + ",".join("?" for _ in repos) + ")" if repos else ""
-    )
+    repo_filter = "AND r.full_name IN (" + ",".join("?" for _ in repos) + ")" if repos else ""
     return conn.execute(
         f"""SELECT t.task_id,t.lifecycle,t.updated_at AS task_updated_at,t.route_id,t.expected_output,
         w.lifecycle AS stream_lifecycle,w.active_task_id,w.repo_id,r.full_name,r.enabled AS repo_enabled,
@@ -227,9 +215,7 @@ def _publication_facts(conn, facts, now):
         WHERE a.result_id=? ORDER BY a.created_at,a.action_id LIMIT ?""",
         (now, facts["result_id"], MAX_ACTIONS_PER_RESULT + 1),
     ).fetchall()
-    pending = [
-        action for action in actions if action["publish_status"] == "not_published"
-    ]
+    pending = [action for action in actions if action["publish_status"] == "not_published"]
     if pending:
         action = next((row for row in pending if row["eligible"]), pending[0])
         relevant = (
@@ -238,9 +224,7 @@ def _publication_facts(conn, facts, now):
             facts.get("audited_at"),
             action["created_at"],
         )
-        eligible_at = max(
-            filter(None, map(supervision_rules.timestamp, relevant)), default=None
-        )
+        eligible_at = max(filter(None, map(supervision_rules.timestamp, relevant)), default=None)
         facts.update(
             pending_action_id=action["action_id"],
             intent_status=action["intent_status"],
@@ -253,9 +237,7 @@ def _publication_facts(conn, facts, now):
             action_created_at=action["created_at"],
             action_eligible_at=eligible_at.isoformat() if eligible_at else None,
         )
-    if facts["lifecycle"] == "completed" or (
-        actions and all(a["publish_status"] == "published" for a in actions)
-    ):
+    if facts["lifecycle"] == "completed" or (actions and all(a["publish_status"] == "published" for a in actions)):
         _delivery_facts(facts, actions)
         if actions and facts["delivery_status"] == "confirmed":
             facts["publication_receipt"] = facts["delivery_positive"]
@@ -263,29 +245,22 @@ def _publication_facts(conn, facts, now):
 
 def _delivery_facts(facts, actions):
     def outcome(status, reason, positive=None):
-        facts.update(
-            delivery_status=status, delivery_reason=reason, delivery_positive=positive
-        )
+        facts.update(delivery_status=status, delivery_reason=reason, delivery_positive=positive)
 
     facts["action_count"] = len(actions)
-    if (
-        len(actions) > MAX_ACTIONS_PER_RESULT
-        or not facts["expected_output"]
-        or facts["planned_actions"] is None
-    ):
+    if len(actions) > MAX_ACTIONS_PER_RESULT or not facts["expected_output"] or facts["planned_actions"] is None:
         return outcome("unknown", "delivery_plan_unverified")
     plan = json.loads(facts["planned_actions"])
     if not isinstance(plan, list) or not all(
-        isinstance(action, dict) and isinstance(action.get("type"), str)
-        for action in plan
+        isinstance(action, dict) and isinstance(action.get("type"), str) for action in plan
     ):
         return outcome("unknown", "delivery_plan_unverified")
     facts["planned_action_count"] = len(plan)
     expected = facts["expected_output"]
     actual_output = facts["output_type"]
-    if (
-        actual_output != expected and actual_output != "waiting_for_user"
-    ) or audit_result._audit_expected_actions(actual_output, [a["type"] for a in plan]):
+    if (actual_output != expected and actual_output != "waiting_for_user") or audit_result._audit_expected_actions(
+        actual_output, [a["type"] for a in plan]
+    ):
         return outcome("inconsistent", "delivery_output_contract_mismatch")
     actual = []
     publications = []
@@ -293,19 +268,12 @@ def _delivery_facts(facts, actions):
         payload = _object(action["metadata_json"])
         publication = payload.pop("publish", {})
         publications.append(publication if isinstance(publication, dict) else {})
-        if (
-            payload.get("type") != action["action_type"]
-            or action["task_id"] != facts["task_id"]
-        ):
+        if payload.get("type") != action["action_type"] or action["task_id"] != facts["task_id"]:
             return outcome("inconsistent", "delivery_action_binding_mismatch")
         actual.append(payload)
-    if Counter(map(supervision_rules._digest, plan)) != Counter(
-        map(supervision_rules._digest, actual)
-    ):
+    if Counter(map(supervision_rules._digest, plan)) != Counter(map(supervision_rules._digest, actual)):
         return outcome("inconsistent", "planned_actions_do_not_match")
-    if facts["audit_status"] != "accepted" or any(
-        a["audit_status"] != "accepted" for a in actions
-    ):
+    if facts["audit_status"] != "accepted" or any(a["audit_status"] != "accepted" for a in actions):
         return outcome("inconsistent", "completed_delivery_not_audited")
     if any(a["publish_status"] == "skipped" for a in actions):
         # Existing business finalization permits superseded review/vote and remediation.
@@ -326,11 +294,7 @@ def _delivery_facts(facts, actions):
         if not receipts.matches(facts, action, scope, receipt):
             return outcome("inconsistent", "delivery_receipt_binding_mismatch")
         confirmations.append(supervision_rules.timestamp(receipt["confirmed_at"]))
-    occurred_at = (
-        max(confirmations)
-        if confirmations
-        else supervision_rules.timestamp(facts.get("audited_at"))
-    )
+    occurred_at = max(confirmations) if confirmations else supervision_rules.timestamp(facts.get("audited_at"))
     if occurred_at is None:
         return outcome("unknown", "delivery_occurrence_time_unverified")
     return outcome(
@@ -362,11 +326,7 @@ def _checkpoints(conn, scope_type, scope_id):
 def _execution_recovery(conn, facts, now):
     """Find a completed retry of the same request through explicit inheritance."""
     lineage = facts.get("lineage_key")
-    if (
-        not lineage
-        or facts["lifecycle"] not in {"completed", "failed"}
-        or facts.get("canceled")
-    ):
+    if not lineage or facts["lifecycle"] not in {"completed", "failed"} or facts.get("canceled"):
         return None
     if not conn.execute(
         """SELECT 1 FROM supervision_incidents WHERE scope_type='task' AND scope_id=?
@@ -390,11 +350,7 @@ def _execution_recovery(conn, facts, now):
         ORDER BY retries.depth DESC,t.task_id LIMIT 8""",
         (facts["task_id"], facts["repo_id"], lineage),
     ).fetchall()
-    failed_at = (
-        supervision_rules.timestamp(facts.get("finished_at"))
-        if facts["lifecycle"] == "failed"
-        else None
-    )
+    failed_at = supervision_rules.timestamp(facts.get("finished_at")) if facts["lifecycle"] == "failed" else None
     for candidate in candidates:
         completed = _completed_execution(conn, candidate, now)
         occurred_at = supervision_rules.timestamp((completed or {}).get("occurred_at"))
@@ -423,16 +379,9 @@ def _completed_execution(conn, candidate, now):
 
 
 def _completed_attempt_delivery(conn, candidate, attempt, now):
-    if (
-        not attempt
-        or attempt["attempt_status"] != "completed"
-        or not attempt["result_id"]
-    ):
+    if not attempt or attempt["attempt_status"] != "completed" or not attempt["result_id"]:
         return None
-    if (
-        type(_object(attempt["dispatch"]).get("pid")) is int
-        and not attempt["process_stopped_at"]
-    ):
+    if type(_object(attempt["dispatch"]).get("pid")) is int and not attempt["process_stopped_at"]:
         return None
     evidence = {**dict(candidate), **dict(attempt)}
     _publication_facts(conn, evidence, now)
@@ -447,9 +396,7 @@ def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
     facts.update(controller_wait)
     facts["local_completed_at"] = consumer_completed(facts["repo_id"], "github_route")
     facts["checkpoints"] = _checkpoints(conn, "task", facts["task_id"])
-    if supervision_rules._future(
-        supervision_rules.timestamp(now), facts["repository_busy_until"]
-    ):
+    if supervision_rules._future(supervision_rules.timestamp(now), facts["repository_busy_until"]):
         facts["local_wait"] = "repository_busy"
     handoff = _object(facts.pop("pending_handoff"))
     attempt = _attempt_facts(conn, facts["task_id"])
@@ -457,11 +404,7 @@ def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
         facts.update(dict(attempt))
         facts["dispatch"] = _object(facts["dispatch"])
         facts["process_recorded"] = type(facts["dispatch"].get("pid")) is int
-        facts["audit_eligible_at"] = (
-            facts["audit_retry_at"]
-            or facts["process_stopped_at"]
-            or facts["finished_at"]
-        )
+        facts["audit_eligible_at"] = facts["audit_retry_at"] or facts["process_stopped_at"] or facts["finished_at"]
         if facts["result_id"]:
             _publication_facts(conn, facts, now)
         if facts["attempt_status"] == "prepared":
@@ -512,13 +455,9 @@ def _dispatch_facts(conn, facts, capacity):
         ).fetchone()
     )
     route_info = route.ROUTES.get(facts["route_id"], {})
-    facts["has_worktree"] = bool(
-        facts["worktree_path"] or not route_info.get("needs_worktree", True)
-    )
+    facts["has_worktree"] = bool(facts["worktree_path"] or not route_info.get("needs_worktree", True))
     facts["dispatch_block"] = (
-        "worker_unavailable"
-        if facts["dispatch_wait"]
-        else capacity(facts["repo_id"], facts["full_name"])
+        "worker_unavailable" if facts["dispatch_wait"] else capacity(facts["repo_id"], facts["full_name"])
     )
 
 
@@ -536,9 +475,7 @@ def _milestones(conn, facts):
 
 def _receipt_page(conn, now, position, limit, config):
     repos = [repo["full_name"] for repo in config.get("repos", ())]
-    repo_filter = (
-        "AND r.full_name IN (" + ",".join("?" for _ in repos) + ")" if repos else ""
-    )
+    repo_filter = "AND r.full_name IN (" + ",".join("?" for _ in repos) + ")" if repos else ""
     return conn.execute(
         f"""SELECT c.scope_type,c.scope_id,c.lineage_key,c.metadata_json,c.updated_at AS disposition_at,
         COALESCE(lower(gs.state)='closed',0) AS source_closed,r.enabled AS repo_enabled
@@ -617,9 +554,7 @@ def _receipt_facts(conn, row, consumer_completed, wait):
                 (key, target_id, target_id),
             ).fetchone()
             facts["successor_task_id"] = successor["task_id"] if successor else None
-            facts["successor_occurred_at"] = (
-                successor["occurred_at"] if successor else None
-            )
+            facts["successor_occurred_at"] = successor["occurred_at"] if successor else None
             facts["pending_eligible"] = (
                 owner["lifecycle"] == "completed"
                 and owner["active_task_id"] == target_id
@@ -642,12 +577,8 @@ def _receipt_facts(conn, row, consumer_completed, wait):
                         successor_task_id=target_id,
                         successor_occurred_at=attempt["started_at"],
                     )
-    if disposition in {None, "deferred", "linked_pending"} or facts.get(
-        "operator_handoff_eligible"
-    ):
-        facts["consumer_completed_at"] = consumer_completed(
-            facts.get("repo_id"), facts.get("consumer")
-        )
+    if disposition in {None, "deferred", "linked_pending"} or facts.get("operator_handoff_eligible"):
+        facts["consumer_completed_at"] = consumer_completed(facts.get("repo_id"), facts.get("consumer"))
     return facts
 
 
@@ -699,14 +630,10 @@ def _command_facts(db_path, facts, pgid, deadline):
                 if number >= 64 or time.monotonic() >= deadline:
                     limited = True
                     break
-                if not entry.name.startswith(prefix) or not entry.name.endswith(
-                    ".command.json"
-                ):
+                if not entry.name.startswith(prefix) or not entry.name.endswith(".command.json"):
                     continue
                 try:
-                    fd = os.open(
-                        entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                    )
+                    fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                     with os.fdopen(fd, "rb") as stream:
                         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                             continue
@@ -723,11 +650,7 @@ def _command_facts(db_path, facts, pgid, deadline):
                 if record.get("status") in {"running", "starting"}:
                     wrapper_pid = record.get("wrapper_pid")
                     try:
-                        if (
-                            type(wrapper_pid) is int
-                            and wrapper_pid > 1
-                            and os.getpgid(wrapper_pid) == pgid
-                        ):
+                        if type(wrapper_pid) is int and wrapper_pid > 1 and os.getpgid(wrapper_pid) == pgid:
                             facts["command_in_progress"] = True
                     except OSError:
                         pass
@@ -753,9 +676,7 @@ def _observe_process(dispatch, ps_runner, live_groups):
     if dispatch.get("process_exited"):
         identity = "dead"
     else:
-        identity = worker_identity.inspect_recorded_identity(
-            dispatch, ps_runner=ps_runner
-        )
+        identity = worker_identity.inspect_recorded_identity(dispatch, ps_runner=ps_runner)
     if identity != "dead":
         return identity
     groups = live_groups()
@@ -777,10 +698,7 @@ def _spool_facts(db_path, task_id, attempt_id):
             return {"spool_status": "unverified"}
         record = json.loads(raw)
         result_spool._validate_record(record)
-        if (
-            record["payload"].get("task_id") == task_id
-            and record["payload"].get("attempt_id") == attempt_id
-        ):
+        if record["payload"].get("task_id") == task_id and record["payload"].get("attempt_id") == attempt_id:
             return {
                 "spool_status": "saved",
                 "spool_saved_at": record.get("saved_at"),
@@ -796,19 +714,14 @@ def _spool_facts(db_path, task_id, attempt_id):
 def _dead_worker_snapshot_current(db_path, facts, dispatch):
     # Spool replay may have committed a result and removed its file since the
     # first snapshot. Do not report a result-less exit from that mixed view.
-    with closing(
-        sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)
-    ) as conn:
+    with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
         conn.row_factory = sqlite3.Row
         fresh = _attempt_facts(conn, facts["task_id"])
     return bool(
         fresh
         and not fresh["result_id"]
         and not fresh["process_stopped_at"]
-        and all(
-            fresh[key] == facts.get(key)
-            for key in ("attempt_id", "attempt_status", "heartbeat_at")
-        )
+        and all(fresh[key] == facts.get(key) for key in ("attempt_id", "attempt_status", "heartbeat_at"))
         and _object(fresh["dispatch"]) == dispatch
     )
 
@@ -825,12 +738,8 @@ def is_current(conn, observation):
             WHERE scope_type=? AND scope_id=? AND rule_id='admission'""",
             (observation["scope_type"], scope),
         ).fetchone()
-        return bool(
-            row and supervision_rules._digest(row[0]) == generation["metadata_digest"]
-        )
-    row = conn.execute(
-        "SELECT lifecycle,updated_at FROM tasks WHERE task_id=?", (scope,)
-    ).fetchone()
+        return bool(row and supervision_rules._digest(row[0]) == generation["metadata_digest"])
+    row = conn.execute("SELECT lifecycle,updated_at FROM tasks WHERE task_id=?", (scope,)).fetchone()
     if not row or tuple(row) != (
         generation["lifecycle"],
         generation["task_updated_at"],
@@ -843,10 +752,7 @@ def is_current(conn, observation):
         (scope,),
     ).fetchone()
     current = tuple(attempt) if attempt else (None, None, None, None)
-    if current != tuple(
-        generation[key]
-        for key in ("attempt_id", "attempt_status", "result_id", "audit_status")
-    ):
+    if current != tuple(generation[key] for key in ("attempt_id", "attempt_status", "result_id", "audit_status")):
         return False
     rule = observation["rule_id"]
     if rule == "ready_not_dispatched" and observation["classification"] == "confirmed":
@@ -860,10 +766,7 @@ def is_current(conn, observation):
     proof = observation.get("positive_evidence")
     if not proof:
         return True
-    if (
-        rule == "ready_not_dispatched"
-        and observation["reason_code"] == "prepared_attempt_delivery_verified"
-    ):
+    if rule == "ready_not_dispatched" and observation["reason_code"] == "prepared_attempt_delivery_verified":
         candidate = conn.execute(
             """SELECT t.task_id,t.lifecycle,t.expected_output FROM tasks t
             WHERE t.task_id=? AND t.lifecycle='completed' AND NOT EXISTS (SELECT 1 FROM work_items wi
@@ -872,10 +775,7 @@ def is_current(conn, observation):
         ).fetchone()
         return bool(
             candidate
-            and _completed_attempt_delivery(
-                conn, candidate, _attempt_facts(conn, scope), proof["occurred_at"]
-            )
-            == proof
+            and _completed_attempt_delivery(conn, candidate, _attempt_facts(conn, scope), proof["occurred_at"]) == proof
         )
     if rule != "execution_failed":
         return True
@@ -900,12 +800,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
     a backlog of tasks cannot starve old admissions or vice versa.
     """
     now = supervision_rules.timestamp(now)
-    if (
-        now is None
-        or type(limit) is not int
-        or not 1 <= limit <= 500
-        or not isinstance(cursor, str)
-    ):
+    if now is None or type(limit) is not int or not 1 <= limit <= 500 or not isinstance(cursor, str):
         raise ValueError("invalid observation time, limit or cursor")
     positions = _page_positions(cursor)
     config = config or {}
@@ -916,13 +811,9 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
     deadline = started + OBSERVATION_SECONDS
     db_deadline = started + DB_SECONDS
     try:
-        with closing(
-            sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)
-        ) as conn:
+        with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
             conn.row_factory = sqlite3.Row
-            conn.set_progress_handler(
-                lambda: int(time.monotonic() >= db_deadline), 1000
-            )
+            conn.set_progress_handler(lambda: int(time.monotonic() >= db_deadline), 1000)
             conn.execute("BEGIN")
             controllers = _controller_facts(conn, db_path, now, config)
             controller_wait = {}
@@ -970,20 +861,14 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
                         tuple(repos),
                     )
                 ]
-                return execution_capacity.capacity_full_for_repos(
-                    conn, repo_ids, max_concurrency
-                )
+                return execution_capacity.capacity_full_for_repos(conn, repo_ids, max_concurrency)
 
             @lru_cache(maxsize=limit)
             def capacity(repo_id, full_name):
                 if full():
                     return "global_capacity"
-                repo_limit = (
-                    repos.get(full_name, {}).get("max_concurrency") or max_concurrency
-                )
-                if repo_limit is not None and execution_capacity.capacity_full(
-                    conn, repo_id, repo_limit
-                ):
+                repo_limit = repos.get(full_name, {}).get("max_concurrency") or max_concurrency
+                if repo_limit is not None and execution_capacity.capacity_full(conn, repo_id, repo_limit):
                     return "repository_capacity"
                 return None
 
@@ -1010,9 +895,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
                         consumer_completed,
                     )
                     if kind == "task"
-                    else _receipt_facts(
-                        conn, row, consumer_completed, controller_wait.get("local_wait")
-                    ),
+                    else _receipt_facts(conn, row, consumer_completed, controller_wait.get("local_wait")),
                 )
                 for kind, row in _mix_pages(pages, positions["next"], limit)
             ]
@@ -1031,9 +914,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
     @lru_cache(maxsize=1)
     def live_groups():
         try:
-            result = ps_runner(
-                ["ps", "-axo", "pgid=,stat="], capture_output=True, text=True
-            )
+            result = ps_runner(["ps", "-axo", "pgid=,stat="], capture_output=True, text=True)
         except (OSError, subprocess.SubprocessError):
             return None
         if result.returncode:
@@ -1041,15 +922,10 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
         return {
             int(fields[0])
             for line in result.stdout.splitlines()
-            if len(fields := line.split()) == 2
-            and fields[0].isdigit()
-            and fields[1][0] not in "ZXx"
+            if len(fields := line.split()) == 2 and fields[0].isdigit() and fields[1][0] not in "ZXx"
         }
 
-    observations = [
-        supervision_rules.evaluate_controller(facts, now=now, poll_seconds=poll)
-        for facts in controllers
-    ]
+    observations = [supervision_rules.evaluate_controller(facts, now=now, poll_seconds=poll) for facts in controllers]
     visited = {"task": 0, "receipt": 0}
     stall = settings.get("stall_seconds", 300)
     for kind, facts in candidates:
@@ -1060,9 +936,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
         if kind == "receipt":
             positions[kind] = [facts["scope_type"], facts["scope_id"]]
             observations.extend(
-                supervision_rules.evaluate_admission(
-                    facts, now=now, poll_seconds=poll, stall_seconds=stall
-                )
+                supervision_rules.evaluate_admission(facts, now=now, poll_seconds=poll, stall_seconds=stall)
             )
             continue
         positions[kind] = facts["task_id"]
@@ -1075,25 +949,16 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
             and facts.get("attempt_status") in {"running", "stale", "prepared"}
         ):
             facts.update(_spool_facts(db_path, facts["task_id"], facts["attempt_id"]))
-        if (
-            facts.get("process_status") == "dead"
-            and facts.get("spool_status") == "missing"
-        ):
+        if facts.get("process_status") == "dead" and facts.get("spool_status") == "missing":
             try:
-                current = time.monotonic() < deadline and _dead_worker_snapshot_current(
-                    db_path, facts, dispatch
-                )
+                current = time.monotonic() < deadline and _dead_worker_snapshot_current(db_path, facts, dispatch)
             except (sqlite3.Error, ValueError):
                 current = False
             if not current:
                 facts["spool_status"] = "unverified"
         if facts.get("process_status") == "alive_same" and not facts.get("result_id"):
             _command_facts(db_path, facts, dispatch.get("pid"), deadline)
-        observations.extend(
-            supervision_rules.evaluate_task(
-                facts, now=now, poll_seconds=poll, stall_seconds=stall
-            )
-        )
+        observations.extend(supervision_rules.evaluate_task(facts, now=now, poll_seconds=poll, stall_seconds=stall))
     positions["done"] = [kind for kind in pages if visited[kind] == len(pages[kind])]
     complete = len(positions["done"]) == len(pages)
     return {

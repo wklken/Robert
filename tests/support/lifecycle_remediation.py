@@ -45,9 +45,7 @@ class LifecycleRemediationFixture(unittest.TestCase):
             )
             task, repo = conn.execute("""SELECT t.task_id,w.repo_id FROM tasks t
                 JOIN workstreams w ON w.workstream_id=t.workstream_id""").fetchone()
-            execution_store.ensure_subject(
-                conn, "task", task, "human_request", now.isoformat()
-            )
+            execution_store.ensure_subject(conn, "task", task, "human_request", now.isoformat())
             conn.execute(
                 """INSERT INTO worker_phases(
                 phase_id,attempt_id,phase,status,summary,created_at)

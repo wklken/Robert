@@ -61,16 +61,12 @@ repos:
         self.assertEqual(result["attempt_status"], "running")
         self.assertEqual(result["branch_name"], "codex/dd-77-fix-worktree-acceptance")
         self.assertTrue(Path(result["worktree_path"]).is_dir())
-        self.assertTrue(
-            str(Path(result["worktree_path"])).startswith(str(workspace_dir))
-        )
+        self.assertTrue(str(Path(result["worktree_path"])).startswith(str(workspace_dir)))
         self.assertEqual(result["git_branch"], result["branch_name"])
         self.assertTrue(result["git_worktree_list_contains_branch"])
         self.assertFalse((self.source_data_dir / "dd.sqlite3").exists())
         with closing(sqlite3.connect(result["db_path"])) as conn, conn:
-            attempt = conn.execute(
-                "SELECT status, worktree_path, branch_name FROM attempts"
-            ).fetchone()
+            attempt = conn.execute("SELECT status, worktree_path, branch_name FROM attempts").fetchone()
         self.assertEqual(
             attempt,
             ("running", result["worktree_path"], result["branch_name"]),
@@ -167,42 +163,28 @@ repos:
         fork = self.root / "fork.git"
         self._git(["init", "--bare", str(fork)])
         self._git(["remote", "set-url", "origin", str(fork)], cwd=checkout)
-        first = worktree.plan_review_worktree(
-            checkout, worktrees, 13, "review-feature", "main", dry_run=False
-        )
-        self.assertEqual(
-            self._git(["rev-parse", "HEAD"], cwd=first["worktree_path"]), head_sha
-        )
+        first = worktree.plan_review_worktree(checkout, worktrees, 13, "review-feature", "main", dry_run=False)
+        self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=first["worktree_path"]), head_sha)
         seed = self.root / "seed"
         (seed / "value.txt").write_text("updated PR\n", encoding="utf-8")
         self._git(["commit", "-am", "update PR"], cwd=seed)
         latest_sha = self._git(["rev-parse", "HEAD"], cwd=seed)
         self._git(["push", "origin", "HEAD:refs/pull/13/head"], cwd=seed)
-        second = worktree.plan_review_worktree(
-            checkout, worktrees, 13, "review-feature", "main", dry_run=False
-        )
+        second = worktree.plan_review_worktree(checkout, worktrees, 13, "review-feature", "main", dry_run=False)
         self.assertEqual(
             Path(second["worktree_path"]).resolve(),
             Path(first["worktree_path"]).resolve(),
         )
-        self.assertEqual(
-            self._git(["rev-parse", "HEAD"], cwd=second["worktree_path"]), latest_sha
-        )
+        self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=second["worktree_path"]), latest_sha)
 
     def test_review_refresh_preserves_dirty_worktree(self):
         from robert_agent.adapters.git import workspace as worktree
 
         checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
-        first = worktree.plan_review_worktree(
-            checkout, worktrees, 13, "review-feature", "main", dry_run=False
-        )
+        first = worktree.plan_review_worktree(checkout, worktrees, 13, "review-feature", "main", dry_run=False)
         worktree_path = Path(first["worktree_path"])
-        (worktree_path / "value.txt").write_text(
-            "local review changes\n", encoding="utf-8"
-        )
-        result = worktree.plan_review_worktree(
-            checkout, worktrees, 13, "review-feature", "main", dry_run=False
-        )
+        (worktree_path / "value.txt").write_text("local review changes\n", encoding="utf-8")
+        result = worktree.plan_review_worktree(checkout, worktrees, 13, "review-feature", "main", dry_run=False)
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "blocked_dirty_worktree")
         self.assertEqual(
@@ -227,9 +209,7 @@ repos:
             ],
             cwd=checkout,
         )
-        result = worktree.plan_review_worktree(
-            checkout, worktrees, 13, "review-feature", "main", dry_run=False
-        )
+        result = worktree.plan_review_worktree(checkout, worktrees, 13, "review-feature", "main", dry_run=False)
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "blocked_unmanaged_worktree")
         self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=external), head_sha)

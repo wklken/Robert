@@ -32,15 +32,11 @@ class CompactResultTests(CompactResultFixture):
         with closing(sqlite3.connect(db)) as conn:
             actions = [
                 json.loads(row[0])
-                for row in conn.execute(
-                    "SELECT metadata_json FROM github_actions ORDER BY created_at"
-                )
+                for row in conn.execute("SELECT metadata_json FROM github_actions ORDER BY created_at")
             ]
         self.assertIn("action_index=0", actions[0]["body"])
         self.assertIn("action_index=1", actions[1]["body"])
-        self.assertEqual(
-            actions[0]["target_url"], "https://github.com/example/backend/pull/456"
-        )
+        self.assertEqual(actions[0]["target_url"], "https://github.com/example/backend/pull/456")
 
     def test_mechanical_fields_are_rejected_without_reserving_a_slot(self):
         db, task, attempt, _, _ = self.prepare("comment")
@@ -65,16 +61,12 @@ class CompactResultTests(CompactResultFixture):
             again = result.record_result(db, envelope)
         self.assertEqual(again["result_id"], first["result_id"])
         envelope["submission"]["handoff"] = "Different semantics"
-        self.assertEqual(
-            result.record_result(db, envelope)["status"], "result_conflict"
-        )
+        self.assertEqual(result.record_result(db, envelope)["status"], "result_conflict")
 
     def test_missing_attempt_contract_is_not_accepted(self):
         db, task, attempt, _, _ = self.prepare("comment")
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.result_contract')"
-            )
+            conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.result_contract')")
         self.assertEqual(
             result.record_result(db, self.envelope(task, attempt))["status"],
             "unsupported_contract",
@@ -101,9 +93,7 @@ class CompactResultTests(CompactResultFixture):
         ):
             self.assertEqual(result.replay_pending_results(db)["recorded"], 1)
         with closing(sqlite3.connect(db)) as conn:
-            metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
         self.assertEqual(
             metadata["normalized_payload"]["planned_github_actions"],
             saved["payload"]["planned_github_actions"],
@@ -122,12 +112,8 @@ class CompactResultTests(CompactResultFixture):
         changed["submission"]["handoff"] = "different"
         self.assertEqual(result.record_result(db, changed)["status"], "result_conflict")
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (task,)
-            )
-        self.assertEqual(
-            result.record_result(db, envelope)["status"], "rejected_by_supervisor"
-        )
+            conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (task,))
+        self.assertEqual(result.record_result(db, envelope)["status"], "rejected_by_supervisor")
         self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
 
     def test_unknown_spool_format_is_preserved_and_not_replayed(self):
@@ -143,9 +129,7 @@ class CompactResultTests(CompactResultFixture):
         self.assertEqual(result.replay_pending_results(db)["rejected"], 1)
         self.assertTrue(path.with_suffix(".invalid").exists())
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0)
 
     def test_issue_resolution_is_explicit_and_program_generates_reference(self):
         for resolution, reference in (("complete", "Fixes #1"), ("partial", "Refs #1")):
@@ -165,9 +149,7 @@ class CompactResultTests(CompactResultFixture):
             )
             envelope["output_type"] = "new_pr"
             normalized = result_contract.normalize(envelope, self.settings())
-            self.assertEqual(
-                normalized["planned_github_actions"][0]["branch"], "codex/fix"
-            )
+            self.assertEqual(normalized["planned_github_actions"][0]["branch"], "codex/fix")
             self.assertIn(reference, normalized["planned_github_actions"][1]["body"])
             self.assertEqual(normalized["planned_github_actions"][1]["repo"], "x/y")
 
@@ -210,25 +192,17 @@ class CompactResultTests(CompactResultFixture):
             }
         ]
         with self.assertRaises(result_contract.InvalidSubmission):
-            result_contract.validate_submission(
-                submission, "classification_result", "github"
-            )
+            result_contract.validate_submission(submission, "classification_result", "github")
 
     def test_ambiguous_publication_target_requires_selection(self):
         settings = self.settings()
-        settings["action_scope"]["sources"].append(
-            {"source_type": "pull_request", "number": 2}
-        )
+        settings["action_scope"]["sources"].append({"source_type": "pull_request", "number": 2})
         with self.assertRaises(result_contract.InvalidSubmission):
             result_contract.normalize(self.envelope("t", "a"), settings)
         envelope = self.envelope("t", "a")
-        envelope["submission"]["planned_github_actions"][0]["target_url"] = (
-            "https://github.com/x/y/pull/2"
-        )
+        envelope["submission"]["planned_github_actions"][0]["target_url"] = "https://github.com/x/y/pull/2"
         self.assertEqual(
-            result_contract.normalize(envelope, settings)["planned_github_actions"][0][
-                "target_url"
-            ],
+            result_contract.normalize(envelope, settings)["planned_github_actions"][0]["target_url"],
             "https://github.com/x/y/pull/2",
         )
 
@@ -240,9 +214,7 @@ class CompactResultTests(CompactResultFixture):
             ("waiting_for_user", ["push_existing_pr", "comment"]),
         ):
             with self.subTest(output=output):
-                self.assertIsNotNone(
-                    audit_result._audit_expected_actions(output, types)
-                )
+                self.assertIsNotNone(audit_result._audit_expected_actions(output, types))
 
 
 if __name__ == "__main__":

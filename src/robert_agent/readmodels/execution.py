@@ -15,9 +15,7 @@ def publication_history(conn, task_id):
     ):
         try:
             metadata = json.loads(row["metadata_json"] or "{}")
-            publication = (
-                metadata.get("publish", {}) if isinstance(metadata, dict) else {}
-            )
+            publication = metadata.get("publish", {}) if isinstance(metadata, dict) else {}
         except (TypeError, ValueError):
             publication = {}
         if not isinstance(publication, dict):
@@ -83,9 +81,7 @@ def attempt_summary(conn, attempt):
         "not_found",
         "already_dead",
     }:
-        cleanup_reason = safe_text(
-            termination.get("reason") or termination.get("status")
-        )
+        cleanup_reason = safe_text(termination.get("reason") or termination.get("status"))
     # Never return raw stderr, environment, metadata or arbitrary failure JSON.
     reason = next(
         (

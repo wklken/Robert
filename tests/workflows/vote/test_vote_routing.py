@@ -30,9 +30,7 @@ class VoteRoutingTests(unittest.TestCase):
             "@robert-bot compare A and B and vote for one",
             "@robert-bot 让多个模型投票选择上面两条路线中更合适的一条",
         ]:
-            self.assertEqual(
-                discover.infer_intent("", text, "comment", "robert-bot"), "vote"
-            )
+            self.assertEqual(discover.infer_intent("", text, "comment", "robert-bot"), "vote")
         for text in [
             "@robert-bot 不要投票，先分析",
             "@robert-bot review the vote implementation",
@@ -44,13 +42,9 @@ class VoteRoutingTests(unittest.TestCase):
             "@robert-bot compare A and B",
             "@robert-bot 让多个模型选择上面两条路线中更合适的一条",
         ]:
-            self.assertNotEqual(
-                discover.infer_intent("", text, "comment", "robert-bot"), "vote"
-            )
+            self.assertNotEqual(discover.infer_intent("", text, "comment", "robert-bot"), "vote")
         self.assertNotEqual(
-            discover.infer_intent(
-                "投票 A/B", "@robert-bot explain this", "comment", "robert-bot"
-            ),
+            discover.infer_intent("投票 A/B", "@robert-bot explain this", "comment", "robert-bot"),
             "vote",
         )
 

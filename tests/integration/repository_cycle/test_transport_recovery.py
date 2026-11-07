@@ -19,17 +19,11 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
-            result = run_once.run_once(
-                self.config_path, dry_run=True, skip_external=True
-            )
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+            result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
-            attempts = conn.execute(
-                "SELECT status,worktree_path FROM attempts ORDER BY attempt_no"
-            ).fetchall()
+            attempts = conn.execute("SELECT status,worktree_path FROM attempts ORDER BY attempt_no").fetchall()
         self.assertEqual([row[0] for row in attempts], ["failed", "prepared"])
         self.assertEqual(attempts[0][1], attempts[1][1])
 
@@ -55,9 +49,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             for _ in range(2):
-                recovery = evidence.inspect_attempt_recovery(
-                    conn, attempt_id, task_id, None
-                )
+                recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
                 self.assertEqual(recovery["status"], "recoverable_progress")
                 self.assertEqual(recovery["commands"][0]["returncode"], 0)
             count = conn.execute(
@@ -84,24 +76,16 @@ class TransportRecoveryTests(RepositoryCycleFixture):
             )
         )
         with closing(sqlite3.connect(db_path)) as conn:
-            recovery = evidence.inspect_attempt_recovery(
-                conn, attempt_id, task_id, None
-            )
+            recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
         self.assertEqual(recovery["status"], "recoverable_progress")
 
     def test_transport_failure_before_first_snapshot_resumes_with_backoff(self):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
-            result = run_once.run_once(
-                self.config_path, dry_run=True, skip_external=True
-            )
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+            result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
             resume_id, metadata = conn.execute(
@@ -120,9 +104,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 "UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1')",
@@ -135,24 +117,14 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                     ),
                 ),
             )
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
-            result = run_once.run_once(
-                self.config_path, dry_run=True, skip_external=True
-            )
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+            result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
-            failure = json.loads(
-                conn.execute("SELECT failure_json FROM attempts").fetchone()[0]
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+            failure = json.loads(conn.execute("SELECT failure_json FROM attempts").fetchone()[0])
             self.assertEqual(failure["status"], "failed_transport_retries_exhausted")
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed"
-            )
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
 
     def test_transport_failure_detection_ignores_quoted_errors_and_recovered_turns(
         self,
@@ -176,36 +148,22 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         for tail in (
             quoted,
             failed + "\n" + json.dumps({"type": "turn.completed"}),
-            failed
-            + "\n"
-            + json.dumps(
-                {"type": "turn.failed", "error": {"message": "invalid credentials"}}
-            ),
+            failed + "\n" + json.dumps({"type": "turn.failed", "error": {"message": "invalid credentials"}}),
         ):
-            self.assertIsNone(
-                evidence.terminal_transport_failure({"worker_stdout": {"tail": tail}})
-            )
+            self.assertIsNone(evidence.terminal_transport_failure({"worker_stdout": {"tail": tail}}))
 
     def test_transport_backoff_expires_and_preserves_prompt_and_worktree(self):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            resume_id = conn.execute(
-                "SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1"
-            ).fetchone()[0]
+            resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
             queue = []
             self.assertEqual(
-                dispatch_queue.queue_prepared_attempts(
-                    conn, "repo:example/backend", {}, queue, 3
-                ),
+                dispatch_queue.queue_prepared_attempts(conn, "repo:example/backend", {}, queue, 3),
                 0,
             )
             conn.execute(
@@ -216,9 +174,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                 ),
             )
             self.assertEqual(
-                dispatch_queue.queue_prepared_attempts(
-                    conn, "repo:example/backend", {}, queue, 3
-                ),
+                dispatch_queue.queue_prepared_attempts(conn, "repo:example/backend", {}, queue, 3),
                 1,
             )
             target, worktree = dispatch_queue.current_dispatch_target(conn, resume_id)
@@ -230,17 +186,11 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            resume_id = conn.execute(
-                "SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1"
-            ).fetchone()[0]
+            resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
             conn.execute(
                 "UPDATE attempts SET metadata_json = json_set('{}', '$.result_contract', 'compact-v1') WHERE attempt_id=?",
                 (resume_id,),
@@ -257,9 +207,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET status='prepared'")
             target, worktree = dispatch_queue.current_dispatch_target(conn, attempt_id)
@@ -272,9 +220,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
             "default_effort": "high",
         }
         with (
-            patch.object(
-                dispatch_queue, "ensure_dispatch_worktree", return_value=worktree
-            ),
+            patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value=worktree),
             patch.object(
                 cycle_worker,
                 "dispatch_worker",
@@ -304,17 +250,11 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                 workers=[worker],
             )
         self.assertTrue(dispatched[0]["ok"], dispatched)
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
-            result = run_once.run_once(
-                self.config_path, dry_run=True, skip_external=True
-            )
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+            result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
             metadata = json.loads(
                 conn.execute(
                     "SELECT metadata_json FROM attempts ORDER BY attempt_no DESC LIMIT 1",
@@ -326,14 +266,10 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         from unittest.mock import patch
         from robert_agent.delivery.application import submission as worker_result
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE tasks SET expected_output='local_result'")
-            conn.execute(
-                "UPDATE route_decisions SET expected_output='local_result', route_id='local-result'"
-            )
+            conn.execute("UPDATE route_decisions SET expected_output='local_result', route_id='local-result'")
         payload = worker_result.build_result(
             task_id,
             attempt_id,
@@ -346,9 +282,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         )
         self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            with patch.object(
-                attempt_process, "dispatch_status", return_value={"status": "dead"}
-            ):
+            with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
                 monitor.supervise_running_attempts(
                     conn,
                     "repo:example/backend",
@@ -359,12 +293,8 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                     repo={"default_base_branch": "master"},
                     resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
 
     def test_durable_command_is_startup_evidence_when_all_snapshot_writes_failed(self):
         import os
@@ -408,29 +338,19 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                 return_value={"status": "terminated"},
             ),
         ):
-            result = run_once.run_once(
-                self.config_path, dry_run=True, skip_external=True
-            )
+            result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
 
     def test_bound_transport_resume_keeps_worktree_and_stops_at_recovery_quota(self):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         for expected_count, expected_delay in ((1, 30),):
-            with patch.object(
-                attempt_process, "dispatch_status", return_value={"status": "dead"}
-            ):
-                result = run_once.run_once(
-                    self.config_path, dry_run=True, skip_external=True
-                )
+            with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+                result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
             self.assertTrue(result["ok"], result)
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 current_id, metadata, started_at, worktree = conn.execute(
@@ -441,8 +361,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                 self.assertEqual(resume["transport_failure_count"], expected_count)
                 self.assertEqual(
                     (
-                        datetime.fromisoformat(resume["not_before_at"])
-                        - datetime.fromisoformat(started_at)
+                        datetime.fromisoformat(resume["not_before_at"]) - datetime.fromisoformat(started_at)
                     ).total_seconds(),
                     expected_delay,
                 )
@@ -481,14 +400,10 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                     (json.dumps(updated_metadata), current_id),
                 )
 
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
             self.assertEqual(
                 conn.execute(
                     "SELECT binding_status FROM execution_subjects WHERE subject_id=?",
@@ -538,9 +453,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
-            recovery = evidence.inspect_attempt_recovery(
-                conn, attempt_id, task_id, None
-            )
+            recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
         self.assertEqual(recovery["status"], "orphaned_command_running")
         self.assertEqual(len(recovery["commands"]), 2)
         self.assertEqual(
@@ -572,10 +485,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
             )
         )
         (command_dir / record_path.name).symlink_to(record_path)
-        expected_phase_id = (
-            "phase-command-"
-            + hashlib.sha256(str(record_path.resolve()).encode()).hexdigest()[:24]
-        )
+        expected_phase_id = "phase-command-" + hashlib.sha256(str(record_path.resolve()).encode()).hexdigest()[:24]
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at)"
@@ -588,9 +498,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                 ),
             )
             for _ in range(2):
-                recovery = evidence.inspect_attempt_recovery(
-                    conn, attempt_id, task_id, None
-                )
+                recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
                 self.assertEqual(len(recovery["commands"]), 1)
                 self.assertEqual(recovery["status"], "recoverable_progress")
                 self.assertEqual(
@@ -609,9 +517,7 @@ class TransportRecoveryTests(RepositoryCycleFixture):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=False, transport=True
-        )
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         old = (datetime.now(timezone.utc) - timedelta(minutes=95)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -627,19 +533,11 @@ class TransportRecoveryTests(RepositoryCycleFixture):
                     ),
                 ),
             )
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             for _ in range(2):
-                result = run_once.run_once(
-                    self.config_path, dry_run=True, skip_external=True
-                )
+                result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
                 self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
-            failure = json.loads(
-                conn.execute("SELECT failure_json FROM attempts").fetchone()[0]
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+            failure = json.loads(conn.execute("SELECT failure_json FROM attempts").fetchone()[0])
         self.assertEqual(failure["status"], "failed_transport_retries_exhausted")

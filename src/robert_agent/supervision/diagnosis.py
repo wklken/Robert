@@ -106,17 +106,11 @@ def _checkpoint(conn, key):
 
 
 def _put(conn, key, metadata, now):
-    supervision_store.update_checkpoint(
-        conn, *key, now=now.isoformat(), metadata=metadata
-    )
+    supervision_store.update_checkpoint(conn, *key, now=now.isoformat(), metadata=metadata)
 
 
 def _target(row, source):
-    identifier = (
-        row["incident_id"]
-        if source == "incident"
-        else f"candidate:{row['scope_id']}:{row['rule_id']}"
-    )
+    identifier = row["incident_id"] if source == "incident" else f"candidate:{row['scope_id']}:{row['rule_id']}"
     lineage = row["lineage_key"] or f"{row['scope_type']}:{row['scope_id']}"
     return {
         "source": source,
@@ -157,9 +151,7 @@ def _targets(conn, now):
         ORDER BY COALESCE(d.updated_at,''),c.last_progress_at,c.scope_id,c.rule_id LIMIT 32""",
         (cutoff,),
     ).fetchall()
-    return [_target(row, "incident") for row in incidents] + [
-        _target(row, "checkpoint") for row in candidates
-    ]
+    return [_target(row, "incident") for row in incidents] + [_target(row, "checkpoint") for row in candidates]
 
 
 def _read_subject(conn, target):
@@ -303,9 +295,7 @@ def _bundle(snapshot, target, bundle_id):
 def _status(status, target=None, *, ok=True):
     result = {"ok": ok, "status": status}
     if target:
-        result["incident_id" if target["source"] == "incident" else "candidate_id"] = (
-            target["id"]
-        )
+        result["incident_id" if target["source"] == "incident" else "candidate_id"] = target["id"]
     return result
 
 
@@ -318,18 +308,13 @@ def _set_claim(db_path, claim, now):
     return True
 
 
-def _complete(
-    db_path, claim, now, status, diagnosis=None, *, stopped=True, provider_error=None
-):
+def _complete(db_path, claim, now, status, diagnosis=None, *, stopped=True, provider_error=None):
     target = claim["target"]
     with _write(db_path) as conn:
         runner = _checkpoint(conn, _RUNNER)
         if (runner.get("claim") or {}).get("job_id") != claim["job_id"]:
             return _status("claim_changed", target, ok=False)
-        if (
-            diagnosis is not None
-            and _digest(_snapshot(conn, target)) != claim["input_generation"]
-        ):
+        if diagnosis is not None and _digest(_snapshot(conn, target)) != claim["input_generation"]:
             status, diagnosis = "stale_evidence", None
         record = _checkpoint(conn, _analysis_key(target))
         if record.get("bundle_id") != claim["bundle_id"]:
@@ -338,9 +323,7 @@ def _complete(
         if diagnosis is not None:
             record["diagnosis"] = diagnosis
         if provider_error is not None:
-            delay = max(
-                claim["cooldown_seconds"], provider_error.get("retry_after_seconds", 0)
-            )
+            delay = max(claim["cooldown_seconds"], provider_error.get("retry_after_seconds", 0))
             retry_at = (now + timedelta(seconds=delay)).isoformat()
             record["provider_error"] = {**provider_error, "retry_at": retry_at}
             runner["provider_not_before"] = retry_at
@@ -371,10 +354,7 @@ def _validate_output(raw, claim):
         {"bundle_id", "bundle_sha256", "error"},
     ):
         raise ValueError("wrong diagnosis fields")
-    if (
-        output["bundle_id"] != claim["bundle_id"]
-        or output["bundle_sha256"] != claim["bundle_sha256"]
-    ):
+    if output["bundle_id"] != claim["bundle_id"] or output["bundle_sha256"] != claim["bundle_sha256"]:
         raise ValueError("diagnosis references a different bundle")
     if "error" in output:
         error = output["error"]
@@ -397,10 +377,7 @@ def _validate_output(raw, claim):
     if (
         not isinstance(ids, list)
         or not 1 <= len(ids) <= len(claim["evidence_ids"])
-        or any(
-            not isinstance(identifier, str) or identifier not in claim["evidence_ids"]
-            for identifier in ids
-        )
+        or any(not isinstance(identifier, str) or identifier not in claim["evidence_ids"] for identifier in ids)
         or len(set(ids)) != len(ids)
     ):
         raise ValueError("diagnosis references unknown or duplicate evidence")
@@ -451,12 +428,7 @@ def _stable_identity(proc, stop):
             observed = worker_identity.capture_process_identity(proc.pid)
         except (OSError, worker_identity.IdentityReadError):
             observed = None
-        if (
-            observed
-            and previous
-            and worker_identity.compare_recorded_identity(previous, observed)
-            == "alive_same"
-        ):
+        if observed and previous and worker_identity.compare_recorded_identity(previous, observed) == "alive_same":
             return observed
         previous = observed
         if stop.wait(0.025):
@@ -471,9 +443,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
     status, diagnosis, proc, stopped = "stopped", None, None, True
     provider_error = None
     try:
-        directory = tempfile.TemporaryDirectory(
-            prefix="robert-diagnosis-", ignore_cleanup_errors=True
-        )
+        directory = tempfile.TemporaryDirectory(prefix="robert-diagnosis-", ignore_cleanup_errors=True)
     except OSError:
         return _PendingCompletion(db_path, claim, now, "launch_failed", None, True)
     with directory as root:
@@ -493,11 +463,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
             )
         except (OSError, ValueError):
             return _PendingCompletion(db_path, claim, now, "launch_failed", None, True)
-        environment = {
-            name: os.environ[name]
-            for name in launch.environment_allowlist
-            if name in os.environ
-        }
+        environment = {name: os.environ[name] for name in launch.environment_allowlist if name in os.environ}
         environment.update(HOME=str(cwd), TMPDIR=str(cwd), PATH=os.defpath)
         if not stop.is_set():
             try:
@@ -543,16 +509,11 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                 if proc is not None:
                     proc.stdout.close()
                     try:
-                        stopped = (
-                            proc.poll() is not None
-                            and not worker_identity.live_process_group(proc.pid)
-                        )
+                        stopped = proc.poll() is not None and not worker_identity.live_process_group(proc.pid)
                     except (OSError, subprocess.TimeoutExpired):
                         stopped = False
                     if not stopped:
-                        stopped = worker_identity.cleanup_new_process(
-                            proc, wait_timeout=0.5
-                        )
+                        stopped = worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
             if not stopped:
                 status, diagnosis, provider_error = "process_attention", None, None
     finished = now + timedelta(seconds=time.monotonic() - observed_monotonic)
@@ -579,32 +540,24 @@ def _recover_previous(db_path, claim, now, stop):
     if state == "alive_same" and not timed_out:
         return _status("previous_process_running", target)
     if state == "alive_same" and not stop.is_set():
-        terminated = worker_identity.terminate_recorded_identity(
-            identity, timeout_seconds=0.5
-        )
+        terminated = worker_identity.terminate_recorded_identity(identity, timeout_seconds=0.5)
         if terminated["status"] in {"terminated", "already_dead"}:
             state = "dead"
     if state == "dead" and not worker_identity.live_process_group(pgid):
-        return _complete(
-            db_path, claim, now, "timed_out" if timed_out else "interrupted"
-        )
+        return _complete(db_path, claim, now, "timed_out" if timed_out else "interrupted")
     return _status("process_attention", target, ok=False)
 
 
 class _PendingCompletion:
     """Keep an already reaped outcome until its durable write succeeds."""
 
-    def __init__(
-        self, db_path, claim, now, status, diagnosis, stopped, *, provider_error=None
-    ):
+    def __init__(self, db_path, claim, now, status, diagnosis, stopped, *, provider_error=None):
         self.provider_error = provider_error
         self.arguments = (db_path, claim, now, status, diagnosis)
         self.stopped = stopped
 
     def persist(self):
-        return _complete(
-            *self.arguments, stopped=self.stopped, provider_error=self.provider_error
-        )
+        return _complete(*self.arguments, stopped=self.stopped, provider_error=self.provider_error)
 
 
 def _persist_job(job):
@@ -627,9 +580,7 @@ class _Job:
             except (OSError, sqlite3.Error, ValueError, subprocess.SubprocessError):
                 self.result = _status("unavailable", ok=False)
 
-        self.thread = threading.Thread(
-            target=execute, name="robert-diagnosis", daemon=True
-        )
+        self.thread = threading.Thread(target=execute, name="robert-diagnosis", daemon=True)
         self.thread.start()
 
 
@@ -649,21 +600,16 @@ def _claim(db_path, profile, target, packet, packet_bytes, now):
         recent = [
             stamp
             for stamp in runner.get("hourly_calls", [])
-            if (parsed := supervision_rules.timestamp(stamp)) is not None
-            and parsed > hour_ago
+            if (parsed := supervision_rules.timestamp(stamp)) is not None and parsed > hour_ago
         ]
         if len(recent) >= profile["max_calls_per_hour"]:
             return None, "rate_limited"
         key = _cooldown_key(target)
         last = supervision_rules.timestamp(_checkpoint(conn, key).get("claimed_at"))
-        if last is not None and now < last + timedelta(
-            seconds=profile["cooldown_seconds"]
-        ):
+        if last is not None and now < last + timedelta(seconds=profile["cooldown_seconds"]):
             return None, "cooldown"
         analysis_key = _analysis_key(target)
-        retry_at = supervision_rules.timestamp(
-            _checkpoint(conn, analysis_key).get("evidence_retry_at")
-        )
+        retry_at = supervision_rules.timestamp(_checkpoint(conn, analysis_key).get("evidence_retry_at"))
         if retry_at is not None and now < retry_at:
             return None, "cooldown"
         if _digest(_snapshot(conn, target)) != packet["input_generation"]:
@@ -686,18 +632,13 @@ def _claim(db_path, profile, target, packet, packet_bytes, now):
                 now,
             )
             return None, "evidence_too_large"
-        claim = {
-            key: packet[key]
-            for key in ("bundle_id", "bundle_sha256", "input_generation")
-        }
+        claim = {key: packet[key] for key in ("bundle_id", "bundle_sha256", "input_generation")}
         claim.update(
             job_id=packet["bundle_id"],
             status="reserved",
             target=target,
             claimed_at=now.isoformat(),
-            deadline_at=(
-                now + timedelta(seconds=profile["timeout_seconds"])
-            ).isoformat(),
+            deadline_at=(now + timedelta(seconds=profile["timeout_seconds"])).isoformat(),
             evidence_ids=[item["id"] for item in packet["evidence"]],
             cooldown_seconds=profile["cooldown_seconds"],
         )
@@ -731,11 +672,7 @@ def poll(config, *, now=None):
     if settings.get("mode") == "off" or profile is None:
         return _status("disabled")
     observed_monotonic = time.monotonic()
-    current = (
-        supervision_rules.timestamp(now)
-        if now is not None
-        else datetime.now(timezone.utc)
-    )
+    current = supervision_rules.timestamp(now) if now is not None else datetime.now(timezone.utc)
     if current is None:
         raise ValueError("invalid diagnosis clock")
     db_path = Path(config["db_path"]).resolve()
@@ -755,12 +692,8 @@ def poll(config, *, now=None):
                 runner = _checkpoint(conn, _RUNNER)
                 if previous := runner.get("claim"):
                     if not previous.get("process_identity"):
-                        return _status(
-                            "process_attention", previous["target"], ok=False
-                        )
-                    _JOBS[db_path] = _Job(
-                        lambda stop: _recover_previous(db_path, previous, current, stop)
-                    )
+                        return _status("process_attention", previous["target"], ok=False)
+                    _JOBS[db_path] = _Job(lambda stop: _recover_previous(db_path, previous, current, stop))
                     return _status("checking_previous", previous["target"])
                 if _provider_wait(runner, current):
                     return {
@@ -772,21 +705,15 @@ def poll(config, *, now=None):
             for target in targets:
                 with closing(_connect(db_path, readonly=True)) as conn:
                     conn.execute("BEGIN")
-                    last = supervision_rules.timestamp(
-                        _checkpoint(conn, _cooldown_key(target)).get("claimed_at")
-                    )
-                    if last is not None and current < last + timedelta(
-                        seconds=profile["cooldown_seconds"]
-                    ):
+                    last = supervision_rules.timestamp(_checkpoint(conn, _cooldown_key(target)).get("claimed_at"))
+                    if last is not None and current < last + timedelta(seconds=profile["cooldown_seconds"]):
                         continue
                     snapshot = _snapshot(conn, target)
                 if snapshot is None:
                     continue
                 packet = _bundle(snapshot, target, "diagnosis-" + uuid4().hex)
                 packet_bytes = len(_json(packet).encode("utf-8"))
-                claim, status = _claim(
-                    db_path, profile, target, packet, packet_bytes, current
-                )
+                claim, status = _claim(db_path, profile, target, packet, packet_bytes, current)
                 if status == "evidence_too_large":
                     # Keep scanning the bounded batch even if this target's
                     # cooldown expires before the next resident poll.

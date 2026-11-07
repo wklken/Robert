@@ -218,13 +218,9 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
         self.assertEqual(projected["items"][0]["column"], "review")
         self.assertEqual(projected["items"][0]["pr"]["number"], 42)
         with closing(sqlite3.connect(result["db_path"])) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM work_item_events WHERE event_type = 'pr_opened'"
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type = 'pr_opened'").fetchone()[0],
                 1,
             )
 
@@ -243,12 +239,8 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
             "verification": [],
             "used_skills": [],
         }
-        analysis = internal_result(
-            **base, handoff="Analysis completed without code changes."
-        )
-        no_op = internal_result(
-            **base, handoff="Code change is unnecessary; existing behavior is correct."
-        )
+        analysis = internal_result(**base, handoff="Analysis completed without code changes.")
+        no_op = internal_result(**base, handoff="Code change is unnecessary; existing behavior is correct.")
         for payload in (analysis, no_op):
             audited = audit_result.audit_result(
                 payload,
@@ -258,18 +250,12 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
             )
             self.assertEqual(audited["status"], "accepted")
 
-        board_status, _headers, board_body = web.build_http_response(
-            "/board", self.db_path
-        )
-        operations_status, _headers, operations_body = web.build_http_response(
-            "/operations", self.db_path
-        )
+        board_status, _headers, board_body = web.build_http_response("/board", self.db_path)
+        operations_status, _headers, operations_body = web.build_http_response("/operations", self.db_path)
         artifact_status, _headers, _body = web.build_http_response(
             "/artifact.txt?task_id=missing&artifact_type=prompt", self.db_path
         )
-        knowledge_status, _headers, knowledge_body = web.handle_dashboard_post(
-            "/knowledge/propose", b"", self.db_path
-        )
+        knowledge_status, _headers, knowledge_body = web.handle_dashboard_post("/knowledge/propose", b"", self.db_path)
         self.assertEqual(board_status, 200)
         self.assertIn(b'id="board-app"', board_body)
         self.assertEqual(operations_status, 200)

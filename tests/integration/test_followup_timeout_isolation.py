@@ -48,9 +48,7 @@ class TimeoutIsolationTests(unittest.TestCase):
             (1, "ControlDeadlineExceeded"),
         ):
             with self.subTest(remaining=remaining), self.environment(remaining):
-                runner = mock.Mock(
-                    side_effect=subprocess.TimeoutExpired(["git", "status"], 5)
-                )
+                runner = mock.Mock(side_effect=subprocess.TimeoutExpired(["git", "status"], 5))
                 with self.assertRaises(subprocess.TimeoutExpired) as caught:
                     common.run_command(["git", "status"], runner=runner, timeout=5)
                 self.assertEqual(type(caught.exception).__name__, expected)
@@ -69,9 +67,7 @@ class TimeoutIsolationTests(unittest.TestCase):
             db = fixture.data_dir / "dd.sqlite3"
             now = datetime.now(timezone.utc).isoformat()
             with closing(sqlite3.connect(db)) as conn, conn:
-                old_attempt, old_task = conn.execute(
-                    "SELECT attempt_id,task_id FROM attempts"
-                ).fetchone()
+                old_attempt, old_task = conn.execute("SELECT attempt_id,task_id FROM attempts").fetchone()
                 conn.execute(
                     "UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,worktree_path=?",
                     (now, now, str(fixture.repo_root)),
@@ -81,9 +77,7 @@ class TimeoutIsolationTests(unittest.TestCase):
             events.append({**events[0], "id": "independent-comment", "number": 124})
             fixture.fixture_path.write_text(json.dumps({"events": events}))
             with (
-                mock.patch.object(
-                    attempt_process, "dispatch_status", return_value={"status": "dead"}
-                ),
+                mock.patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}),
                 mock.patch.object(
                     evidence,
                     "run_inspection_command",
@@ -99,20 +93,14 @@ class TimeoutIsolationTests(unittest.TestCase):
             self.assertTrue(outcome["ok"], outcome)
             with closing(sqlite3.connect(db)) as conn:
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT status FROM attempts WHERE attempt_id=?", (old_attempt,)
-                    ).fetchone()[0],
+                    conn.execute("SELECT status FROM attempts WHERE attempt_id=?", (old_attempt,)).fetchone()[0],
                     "running",
                 )
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT lifecycle FROM tasks WHERE task_id=?", (old_task,)
-                    ).fetchone()[0],
+                    conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (old_task,)).fetchone()[0],
                     "running",
                 )
-                self.assertEqual(
-                    conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2
-                )
+                self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
 
     def test_audit_scope_timeout_defers_result_without_rejecting_it(self):
         fixture = result_fixture.DurableResultFixture()
@@ -150,15 +138,9 @@ class TimeoutIsolationTests(unittest.TestCase):
             self.assertEqual(count, 0)
             self.assertNotIn(
                 "audit",
-                json.loads(
-                    conn.execute("SELECT metadata_json FROM worker_results").fetchone()[
-                        0
-                    ]
-                ),
+                json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]),
             )
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running")
 
     def test_route_command_timeout_does_not_block_an_independent_event(self):
         fixture = self.fixture()
@@ -186,9 +168,7 @@ class TimeoutIsolationTests(unittest.TestCase):
 
         with (
             self.environment(),
-            mock.patch.object(
-                assigned_workspace, "prepare_worktree", side_effect=prepare
-            ),
+            mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=prepare),
         ):
             outcome = run_once.run_once(
                 fixture.config_path,
@@ -218,9 +198,7 @@ class TimeoutIsolationTests(unittest.TestCase):
 
     def test_budget_can_expire_while_a_shorter_command_cap_is_in_effect(self):
         runner = mock.Mock(
-            side_effect=subprocess.TimeoutExpired(
-                ["git", "status"], 5, output="partial", stderr="diagnostic"
-            )
+            side_effect=subprocess.TimeoutExpired(["git", "status"], 5, output="partial", stderr="diagnostic")
         )
         with (
             mock.patch.dict(os.environ, {"_ROBERT_CONTROL_DEADLINE": "100"}),

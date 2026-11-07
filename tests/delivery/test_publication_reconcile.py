@@ -19,9 +19,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         now = "2026-10-29T00:00:00+00:00"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             metadata = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM github_actions WHERE action_id='action-1'"
-                ).fetchone()[0]
+                conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
             )
             metadata["publish"] = {
                 "attempt_count": retry_policy.MAX_ATTEMPTS - 1,
@@ -44,9 +42,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             self.assertFalse(first["ok"])
             with closing(sqlite3.connect(self.db_path)) as conn:
                 self.assertEqual(
-                    conn.execute("SELECT status FROM publication_intents").fetchone()[
-                        0
-                    ],
+                    conn.execute("SELECT status FROM publication_intents").fetchone()[0],
                     "executing",
                 )
 
@@ -80,13 +76,9 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         with self.assertRaises(RuntimeError):
             publish.publish_ready_actions(self.db_path, run_command=crash)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM github_actions").fetchone()[0]
-            )
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM github_actions").fetchone()[0])
             metadata["publish"]["attempt_count"] = retry_policy.MAX_ATTEMPTS
-            conn.execute(
-                "UPDATE github_actions SET metadata_json=?", (json.dumps(metadata),)
-            )
+            conn.execute("UPDATE github_actions SET metadata_json=?", (json.dumps(metadata),))
         reads = []
 
         def absent(command, **kwargs):
@@ -103,9 +95,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
                 "attention",
             )
         self.assertEqual(
-            publish.publish_ready_actions(self.db_path, run_command=absent)[
-                "pending_count"
-            ],
+            publish.publish_ready_actions(self.db_path, run_command=absent)["pending_count"],
             0,
         )
 
@@ -150,12 +140,10 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         ]
         self.assertEqual(calls.count(write_command), 1)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            status = conn.execute(
-                "SELECT publish_status FROM github_actions WHERE action_id = 'action-1'"
-            ).fetchone()[0]
-            intent = conn.execute(
-                "SELECT status FROM publication_intents WHERE action_id = 'action-1'"
-            ).fetchone()[0]
+            status = conn.execute("SELECT publish_status FROM github_actions WHERE action_id = 'action-1'").fetchone()[
+                0
+            ]
+            intent = conn.execute("SELECT status FROM publication_intents WHERE action_id = 'action-1'").fetchone()[0]
         self.assertEqual(status, "published")
         self.assertEqual(intent, "published")
 
@@ -229,9 +217,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
                 )
             )
 
-        result = publication_reconcile.classify_remote_state(
-            action, {"repo": "x/y", "sources": []}, runner
-        )
+        result = publication_reconcile.classify_remote_state(action, {"repo": "x/y", "sources": []}, runner)
         self.assertEqual(result["status"], "confirmed_effect")
         self.assertEqual(result["reason_code"], "open_pr_marker_match")
         self.assertEqual(len(commands), 2)
@@ -241,9 +227,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             "action_id": "action-push",
             "action_type": "push_existing_pr",
             "target_url": "",
-            "metadata_json": json.dumps(
-                {"worktree_path": "/worktree", "branch": "feature"}
-            ),
+            "metadata_json": json.dumps({"worktree_path": "/worktree", "branch": "feature"}),
         }
         scope = {"repo": "x/y", "branch_name": "feature", "result_head_sha": "a" * 40}
         absent = publication_reconcile.classify_remote_state(
@@ -279,9 +263,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         def fail(*_args, **_kwargs):
             raise OSError("credentials must never be retained")
 
-        result = publication_reconcile.classify_remote_state(
-            action, {"repo": "x/y", "sources": []}, fail
-        )
+        result = publication_reconcile.classify_remote_state(action, {"repo": "x/y", "sources": []}, fail)
         self.assertEqual(result["status"], "unknown")
         self.assertEqual(result["reason_code"], "comment_query_failed")
         self.assertNotIn("credentials", json.dumps(result).lower())
@@ -302,9 +284,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(self.db_path)) as retry_conn:
             due = json.loads(
-                retry_conn.execute(
-                    "SELECT metadata_json FROM github_actions WHERE action_id='action-1'"
-                ).fetchone()[0]
+                retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
             )["publish"]["next_retry_at"]
         retry_clock = mock.patch.object(publication_values, "now", return_value=due)
         retry_clock.start()
@@ -318,9 +298,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             count, status = conn.execute(
                 "SELECT COUNT(*), MAX(status) FROM notifications WHERE notification_type = 'workflow_attention_required'"
             ).fetchone()
-            intent = conn.execute(
-                "SELECT status FROM publication_intents WHERE action_id = 'action-1'"
-            ).fetchone()[0]
+            intent = conn.execute("SELECT status FROM publication_intents WHERE action_id = 'action-1'").fetchone()[0]
         self.assertEqual(count, 1)
         self.assertEqual(status, "recorded")
         self.assertEqual(intent, "attention")
@@ -398,9 +376,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         result = publish.publish_ready_actions(self.db_path, run_command=retry_runner)
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["deduplicated_count"], 1)
-        self.assertEqual(
-            sum(command[:3] == ["gh", "pr", "create"] for command in calls), 1
-        )
+        self.assertEqual(sum(command[:3] == ["gh", "pr", "create"] for command in calls), 1)
 
     def test_open_pr_scope_conflict_reconciles_to_attention_without_remote_query(self):
         body = "<!-- robert-workstream task_id=task-1 -->\nPR"
@@ -508,9 +484,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         result = publish.publish_ready_actions(self.db_path, run_command=retry_runner)
 
         self.assertFalse(result["ok"])
-        self.assertEqual(
-            sum(command[:3] == ["gh", "pr", "create"] for command in calls), 1
-        )
+        self.assertEqual(sum(command[:3] == ["gh", "pr", "create"] for command in calls), 1)
         with closing(sqlite3.connect(self.db_path)) as conn:
             intent_status = conn.execute(
                 "SELECT status FROM publication_intents WHERE action_id = 'action-1'"
@@ -613,11 +587,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             if command == ["git", "rev-parse", "HEAD"]:
                 return Completed(source_sha + "\n")
             if command == ["git", "ls-remote", "--heads", "origin", "feature"]:
-                stdout = (
-                    f"{source_sha}\trefs/heads/feature\n"
-                    if state["remote_effect"]
-                    else ""
-                )
+                stdout = f"{source_sha}\trefs/heads/feature\n" if state["remote_effect"] else ""
                 return Completed(stdout)
             if command[:2] == ["git", "push"]:
                 state["push_count"] += 1
@@ -632,9 +602,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(self.db_path)) as retry_conn:
             due = json.loads(
-                retry_conn.execute(
-                    "SELECT metadata_json FROM github_actions WHERE action_id='action-1'"
-                ).fetchone()[0]
+                retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
             )["publish"]["next_retry_at"]
         retry_clock = mock.patch.object(publication_values, "now", return_value=due)
         retry_clock.start()
@@ -722,9 +690,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(self.db_path)) as retry_conn:
             due = json.loads(
-                retry_conn.execute(
-                    "SELECT metadata_json FROM github_actions WHERE action_id='action-1'"
-                ).fetchone()[0]
+                retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
             )["publish"]["next_retry_at"]
         retry_clock = mock.patch.object(publication_values, "now", return_value=due)
         retry_clock.start()
@@ -754,13 +720,9 @@ class PublicationReconcileTests(PublicationReconcileFixture):
                 "UPDATE github_actions SET action_type = 'push_existing_pr', metadata_json = ? WHERE action_id = 'action-1'",
                 (json.dumps({"worktree_path": str(worktree), "branch": "feature"}),),
             )
-            binding = execution_store.ensure_subject(
-                conn, "task", "task-1", "human_request", "now"
-            )
+            binding = execution_store.ensure_subject(conn, "task", "task-1", "human_request", "now")
             execution_store.close_binding(conn, "task", "task-1", "now")
-            execution_store.prepare_publication_intent(
-                conn, "action-1", "k", "f", "now"
-            )
+            execution_store.prepare_publication_intent(conn, "action-1", "k", "f", "now")
             execution_store.transition_publication_intent(
                 conn,
                 binding["workflow_id"] or "publication-" + "0" * 24,
@@ -770,15 +732,11 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             publication_id = conn.execute(
                 "SELECT publication_id FROM publication_intents WHERE action_id='action-1'"
             ).fetchone()[0]
-            execution_store.transition_publication_intent(
-                conn, publication_id, "executing", "now"
-            )
+            execution_store.transition_publication_intent(conn, publication_id, "executing", "now")
         calls = []
         result = publish.publish_ready_actions(
             self.db_path,
-            run_command=lambda command, **kwargs: (
-                calls.append(command) or Completed("")
-            ),
+            run_command=lambda command, **kwargs: calls.append(command) or Completed(""),
         )
         self.assertFalse(result["ok"])
         self.assertEqual(calls, [["git", "ls-remote", "--heads", "origin", "feature"]])
@@ -787,9 +745,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         from robert_agent.adapters.sqlite import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            execution_store.ensure_subject(
-                conn, "task", "task-1", "human_request", "2026-08-02T00:00:00+00:00"
-            )
+            execution_store.ensure_subject(conn, "task", "task-1", "human_request", "2026-08-02T00:00:00+00:00")
             conn.execute(
                 "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": []}}),),
@@ -811,8 +767,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
                 1,
             )
             binding_status = conn.execute(
-                "SELECT binding_status FROM execution_subjects "
-                "WHERE subject_type = 'task' AND subject_id = 'task-1'"
+                "SELECT binding_status FROM execution_subjects WHERE subject_type = 'task' AND subject_id = 'task-1'"
             ).fetchone()[0]
         self.assertEqual(binding_status, "attention")
 
@@ -820,9 +775,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         from robert_agent.adapters.sqlite import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            execution_store.ensure_subject(
-                conn, "task", "task-1", "human_request", "2026-08-02T00:00:00+00:00"
-            )
+            execution_store.ensure_subject(conn, "task", "task-1", "human_request", "2026-08-02T00:00:00+00:00")
             conn.execute(
                 "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
                 (json.dumps({"audit": {"status": "accepted", "action_scope": {}}}),),
@@ -831,17 +784,14 @@ class PublicationReconcileTests(PublicationReconcileFixture):
 
         result = publish.publish_ready_actions(
             self.db_path,
-            run_command=lambda command, **_kwargs: (
-                calls.append(command) or Completed("[]")
-            ),
+            run_command=lambda command, **_kwargs: calls.append(command) or Completed("[]"),
         )
 
         self.assertFalse(result["ok"])
         self.assertEqual(calls, [])
         with closing(sqlite3.connect(self.db_path)) as conn:
             binding_status = conn.execute(
-                "SELECT binding_status FROM execution_subjects "
-                "WHERE subject_type = 'task' AND subject_id = 'task-1'"
+                "SELECT binding_status FROM execution_subjects WHERE subject_type = 'task' AND subject_id = 'task-1'"
             ).fetchone()[0]
         self.assertEqual(binding_status, "attention")
 

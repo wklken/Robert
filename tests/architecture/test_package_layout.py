@@ -40,9 +40,7 @@ class PackageLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             shadow = Path(temporary) / "robert_agent"
             shadow.mkdir()
-            (shadow / "__init__.py").write_text(
-                'raise RuntimeError("untrusted checkout imported")'
-            )
+            (shadow / "__init__.py").write_text('raise RuntimeError("untrusted checkout imported")')
             result = subprocess.run(
                 [
                     sys.executable,

@@ -40,9 +40,7 @@ def _review_point_evaluation(verdict="correct", action="implement"):
     ]
 
 
-def _verification_evidence(
-    command="python -m unittest", status="passed", required=True
-):
+def _verification_evidence(command="python -m unittest", status="passed", required=True):
     entry = {
         "command": command,
         "status": status,
@@ -191,11 +189,7 @@ repos:
                         timestamp,
                         timestamp,
                         timestamp,
-                        (
-                            None
-                            if failure is None
-                            else json.dumps(failure, sort_keys=True)
-                        ),
+                        (None if failure is None else json.dumps(failure, sort_keys=True)),
                     ),
                 )
             if not same_task:
@@ -308,9 +302,7 @@ repos:
                     "fixture",
                 ],
             ):
-                subprocess.run(
-                    ["git", *argv], cwd=path, check=True, capture_output=True
-                )
+                subprocess.run(["git", *argv], cwd=path, check=True, capture_output=True)
 
     def _new_pr_actions_for_attempt(
         self,
@@ -412,9 +404,7 @@ repos:
         db_path = self.data_dir / "dd.sqlite3"
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute("UPDATE tasks SET lifecycle = 'running'")
             conn.execute(
                 "UPDATE attempts SET status='running', started_at=?, heartbeat_at=?, metadata_json = json_set(?, '$.result_contract', 'compact-v1')",
@@ -448,12 +438,8 @@ repos:
                 )
         return db_path, task_id, attempt_id
 
-    def _rate_limited_attempt(
-        self, *, fallback="model-fallback", model="model-primary", phase=False
-    ):
-        db_path, task_id, attempt_id = self._interrupted_attempt(
-            phase=phase, transport=True
-        )
+    def _rate_limited_attempt(self, *, fallback="model-fallback", model="model-primary", phase=False):
+        db_path, task_id, attempt_id = self._interrupted_attempt(phase=phase, transport=True)
         log = self.data_dir / "artifacts" / task_id / f"{attempt_id}.stdout.log"
         log.write_text(
             json.dumps(

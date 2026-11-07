@@ -29,9 +29,7 @@ class GitHubReadCacheTests(unittest.TestCase):
     def session(self, runner, **kwargs):
         from robert_agent.adapters.github.read import GitHubReadSession
 
-        return GitHubReadSession(
-            self.db, account="robert-bot", runner=runner, now=lambda: 1000, **kwargs
-        )
+        return GitHubReadSession(self.db, account="robert-bot", runner=runner, now=lambda: 1000, **kwargs)
 
     def test_successful_reads_are_copied_and_failures_are_retried(self):
         calls = []
@@ -104,9 +102,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.session(runner).collect_notifications([REPO])
         with closing(__import__("sqlite3").connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM github_read_cache").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM github_read_cache").fetchone()[0], 0)
 
     def test_source_cache_is_replayed_copied_and_context_invalidates(self):
         session = self.session(lambda *_a, **_k: None)
@@ -125,12 +121,8 @@ class GitHubReadCacheTests(unittest.TestCase):
         kwargs = {"known_workstreams": set(), "review_author_allowlist": []}
         first = session.source_events(REPO, raw, load, **kwargs)
         first[0]["body"] = "mutated"
-        self.assertEqual(
-            session.source_events(REPO, raw, load, **kwargs)[0]["body"], "hello"
-        )
-        session.source_events(
-            REPO, raw, load, known_workstreams={"github:example/backend!7"}
-        )
+        self.assertEqual(session.source_events(REPO, raw, load, **kwargs)[0]["body"], "hello")
+        session.source_events(REPO, raw, load, known_workstreams={"github:example/backend!7"})
         self.assertEqual(len(count), 2)
 
     def test_incomplete_source_results_are_not_cached_and_empty_results_are(self):
@@ -168,9 +160,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
         self.assertEqual(self.session(runner).collect_notifications([REPO]), {})
         with closing(__import__("sqlite3").connect(self.db)) as conn:
-            payload = json.loads(
-                conn.execute("SELECT payload_json FROM github_read_cache").fetchone()[0]
-            )
+            payload = json.loads(conn.execute("SELECT payload_json FROM github_read_cache").fetchone()[0])
         self.assertEqual(payload["last_modified"], "stamp")
         self.assertEqual(len(calls), 2)
 
@@ -239,9 +229,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         self.assertEqual(warm_session.collect_events(REPO, **kwargs), cold)
         self.assertEqual(len(calls), 8)
         cold[0]["body"] = "mutated after delivery"
-        self.assertNotEqual(
-            warm_session.collect_events(REPO, **kwargs)[0]["body"], cold[0]["body"]
-        )
+        self.assertNotEqual(warm_session.collect_events(REPO, **kwargs)[0]["body"], cold[0]["body"])
         hint["event_at"] = "v2"
         self.session(runner).collect_events(REPO, **kwargs)
         self.assertEqual(len(calls), 16)
@@ -284,9 +272,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         kwargs = {"notification_hints": [hint], "include_notifications": False}
         discover.collect_live_events(REPO, read_session=self.session(runner), **kwargs)
         failures[0] = False
-        events = discover.collect_live_events(
-            REPO, read_session=self.session(runner), **kwargs
-        )
+        events = discover.collect_live_events(REPO, read_session=self.session(runner), **kwargs)
         self.assertEqual(events[0]["assignment_actor_login"], "wklken")
         self.assertEqual(sum(a[2].endswith("/issues/7") for a in calls), 2)
 
@@ -314,9 +300,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
 
     def test_invalid_json_is_not_a_successful_source_observation(self):
-        session = self.session(
-            lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "badJSON", "")
-        )
+        session = self.session(lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "badJSON", ""))
         raw = {
             "number": 7,
             "source_type": "issue",
@@ -327,9 +311,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
         def load():
             count.append(1)
-            github_client.try_read_json(
-                ["gh", "api", "repos/example/backend/issues/7"], runner=session
-            )
+            github_client.try_read_json(["gh", "api", "repos/example/backend/issues/7"], runner=session)
             return []
 
         session.source_events(REPO, raw, load)
@@ -345,18 +327,14 @@ class GitHubReadCacheTests(unittest.TestCase):
             calls.append((args, kwargs))
             return subprocess.CompletedProcess(args, 0, "[]", "")
 
-        session = GitHubReadSession(
-            self.db, account="bot", host="enterprise.example", runner=runner
-        )
+        session = GitHubReadSession(self.db, account="bot", host="enterprise.example", runner=runner)
         session(["gh", "api", "repos/example/backend/issues"], check=True)
         self.assertEqual(calls[-1][0][-2:], ["--hostname", "enterprise.example"])
         session(["gh", "search", "issues", "--repo", "example/backend"])
         self.assertEqual(calls[-1][1]["env"]["GH_HOST"], "enterprise.example")
         raw = {"number": 7, "source_type": "issue", "event_type": "mention"}
         session.source_events(REPO, raw, lambda: [{"body": "private"}])
-        other = GitHubReadSession(
-            self.db, account="other", host="enterprise.example", runner=runner
-        )
+        other = GitHubReadSession(self.db, account="other", host="enterprise.example", runner=runner)
         self.assertEqual(other.source_events(REPO, raw, lambda: []), [])
 
     def test_notifications_for_other_repo_do_not_invalidate_current_search(self):
@@ -417,9 +395,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         result = session.cached_notifications([REPO])
         self.assertEqual(list(result), [REPO["full_name"]])
         result[REPO["full_name"]][0]["id"] = "mutated"
-        self.assertEqual(
-            session.cached_notifications([REPO])[REPO["full_name"]][0]["id"], "one"
-        )
+        self.assertEqual(session.cached_notifications([REPO])[REPO["full_name"]][0]["id"], "one")
         runner.assert_not_called()
 
     def test_search_quota_fallback_survives_unrelated_writes_with_bounded_age(self):
@@ -442,9 +418,7 @@ class GitHubReadCacheTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, '[{"number":7}]', "")
 
         def session():
-            return GitHubReadSession(
-                self.db, account="robert-bot", runner=runner, now=lambda: clock[0]
-            )
+            return GitHubReadSession(self.db, account="robert-bot", runner=runner, now=lambda: clock[0])
 
         self.assertEqual(session().search(args), [{"number": 7}])
         clock[0] += 301  # Expired for normal search but within stale fallback horizon.
@@ -475,14 +449,10 @@ class GitHubReadCacheTests(unittest.TestCase):
 
         def runner(command, **kwargs):
             calls.append(command)
-            return subprocess.CompletedProcess(
-                command, 0, '[{"number":%d}]' % len(calls), ""
-            )
+            return subprocess.CompletedProcess(command, 0, '[{"number":%d}]' % len(calls), "")
 
         def session():
-            return GitHubReadSession(
-                self.db, account="robert-bot", runner=runner, now=lambda: clock[0]
-            )
+            return GitHubReadSession(self.db, account="robert-bot", runner=runner, now=lambda: clock[0])
 
         self.assertEqual(session().search(args), [{"number": 1}])
         clock[0] = 1299

@@ -86,9 +86,7 @@ repos:
                 "INSERT INTO worker_phases(phase_id,attempt_id,phase,status,summary,created_at) VALUES ('phase','a','analyze','running','Working',?)",
                 (self.now.isoformat(),),
             )
-            execution_store.ensure_subject(
-                conn, "task", "t", "human_request", self.now.isoformat()
-            )
+            execution_store.ensure_subject(conn, "task", "t", "human_request", self.now.isoformat())
 
     def connect(self):
         connection = sqlite3.connect(self.db)
@@ -102,9 +100,7 @@ repos:
 
     def runnable(self, **kwargs):
         with self.connect() as conn:
-            return loop_engine.has_runnable_local_work(
-                conn, repo_ids=["repo:example/repo"], **kwargs
-            )
+            return loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/repo"], **kwargs)
 
     def result(self):
         with self.connect() as conn:

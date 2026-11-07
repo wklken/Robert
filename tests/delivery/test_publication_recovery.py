@@ -98,11 +98,7 @@ class PublicationRecoveryTests(unittest.TestCase):
                 )
                 conn.execute(
                     "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES ('r', 't', 'a', 'update_pr', 'now', json_set(?, '$.result_contract', 'compact-v1'))",
-                    (
-                        json.dumps(
-                            {"audit": {"status": "accepted", "action_scope": scope}}
-                        ),
-                    ),
+                    (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),),
                 )
                 for aid, kind, payload in [
                     (
@@ -113,9 +109,7 @@ class PublicationRecoveryTests(unittest.TestCase):
                     (
                         "2",
                         "comment",
-                        {
-                            "body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"
-                        },
+                        {"body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"},
                     ),
                 ]:
                     conn.execute(
@@ -178,17 +172,13 @@ class PublicationRecoveryTests(unittest.TestCase):
             action = {
                 "result_id": "r",
                 "target_url": "",
-                "metadata_json": json.dumps(
-                    {"worktree_path": "/assigned", "branch": "codex/fix"}
-                ),
+                "metadata_json": json.dumps({"worktree_path": "/assigned", "branch": "codex/fix"}),
             }
             writes = []
 
             def runner(command, **kwargs):
                 writes.append(command)
-                return completed(
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/codex/fix"
-                )
+                return completed("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/codex/fix")
 
             result = publication_effects.publish_push_existing_pr(action, runner, conn)
             self.assertFalse(result["ok"])
@@ -200,16 +190,12 @@ class PublicationRecoveryTests(unittest.TestCase):
             action = {
                 "result_id": "r",
                 "target_url": "",
-                "metadata_json": json.dumps(
-                    {"worktree_path": "/assigned", "branch": "codex/fix"}
-                ),
+                "metadata_json": json.dumps({"worktree_path": "/assigned", "branch": "codex/fix"}),
             }
             from unittest.mock import Mock
 
             runner = Mock(return_value=completed())
-            self.assertFalse(
-                publication_effects.publish_push_existing_pr(action, runner, conn)["ok"]
-            )
+            self.assertFalse(publication_effects.publish_push_existing_pr(action, runner, conn)["ok"])
             runner.assert_not_called()
 
     def test_marker_cannot_override_missing_fork_owner(self):

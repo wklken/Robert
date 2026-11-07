@@ -53,10 +53,7 @@ def validate_server_options(host, writable, allow_remote):
         return {
             "ok": False,
             "status": "security_refusal",
-            "safe_error": (
-                "non-loopback binding requires --allow-remote and an "
-                "authenticated reverse proxy"
-            ),
+            "safe_error": ("non-loopback binding requires --allow-remote and an authenticated reverse proxy"),
         }
     return {
         "ok": True,
@@ -91,9 +88,7 @@ def build_http_response(path, db_path, control_context=None):
     parsed = urlsplit(path)
     route = parsed.path
     if route in WEB_ASSETS:
-        asset_route = (
-            "/work" if route == "/" and "bucket" in parse_qs(parsed.query) else route
-        )
+        asset_route = "/work" if route == "/" and "bucket" in parse_qs(parsed.query) else route
         filename, content_type = WEB_ASSETS[asset_route]
         try:
             payload = (WEB_ASSET_ROOT / filename).read_bytes()
@@ -104,9 +99,7 @@ def build_http_response(path, db_path, control_context=None):
         context = control_context
         payload = {
             "writes_enabled": bool(context and context.writes_enabled),
-            "write_error": context.write_error
-            if context
-            else "Start with --config to enable writes.",
+            "write_error": context.write_error if context else "Start with --config to enable writes.",
             "csrf_token": context.csrf_token if context else None,
             "operator_identity": context.operator_identity if context else None,
             "allowed_repo_ids": sorted(context.allowed_repo_ids) if context else [],
@@ -126,8 +119,7 @@ def build_http_response(path, db_path, control_context=None):
                 query=(query.get("q") or [""])[0],
                 limit=_query_limit(query),
                 cursor=(query.get("cursor") or [None])[0],
-                include_history=(query.get("include_history") or ["false"])[0].lower()
-                in {"1", "true", "yes"},
+                include_history=(query.get("include_history") or ["false"])[0].lower() in {"1", "true", "yes"},
             )
         except board.BoardQueryError as exc:
             return _json_response(
@@ -202,9 +194,7 @@ def build_http_response(path, db_path, control_context=None):
             try:
                 limit = int(raw_limit)
             except (TypeError, ValueError) as exc:
-                raise workbench.WorkItemQueryError(
-                    "limit must be between 1 and 100"
-                ) from exc
+                raise workbench.WorkItemQueryError("limit must be between 1 and 100") from exc
             payload = workbench.list_work_items(
                 db_path,
                 bucket=(query.get("bucket") or [None])[0],
@@ -231,9 +221,7 @@ def build_http_response(path, db_path, control_context=None):
             )
         return _json_response(payload)
     if route in {"/data.json", "/history"}:
-        payload = json.dumps(
-            dashboard.build_dashboard_data(db_path), ensure_ascii=False
-        ).encode()
+        payload = json.dumps(dashboard.build_dashboard_data(db_path), ensure_ascii=False).encode()
         return 200, {"content-type": "application/json; charset=utf-8"}, payload
     if route == "/artifact.txt":
         query = parse_qs(parsed.query)
@@ -283,9 +271,7 @@ def _control_request_error(control_context, headers, *, json_required):
             {"ok": False, "status": "unavailable", "safe_error": "writes are disabled"},
             503,
         )
-    allowed_hosts = {
-        urlsplit(origin).netloc for origin in control_context.allowed_origins
-    }
+    allowed_hosts = {urlsplit(origin).netloc for origin in control_context.allowed_origins}
     if headers.get("host") not in allowed_hosts:
         return _json_response(
             {"ok": False, "status": "forbidden", "safe_error": "invalid Host"},
@@ -302,9 +288,7 @@ def _control_request_error(control_context, headers, *, json_required):
             403,
         )
     content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    expected = (
-        "application/json" if json_required else "application/x-www-form-urlencoded"
-    )
+    expected = "application/json" if json_required else "application/x-www-form-urlencoded"
     if content_type != expected:
         return _json_response(
             {
@@ -373,9 +357,7 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
         if route == "/api/work-items":
             mode = payload.get("mode", "backlog")
             if mode not in {"backlog", "start"}:
-                raise work_items.WorkItemValidationError(
-                    "mode must be backlog or start"
-                )
+                raise work_items.WorkItemValidationError("mode must be backlog or start")
             result = work_items.create_work_item(
                 db_path,
                 context=_work_item_context(control_context),
@@ -423,9 +405,7 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
     except work_items.WorkItemConflictError as exc:
         current = None
         if route.startswith("/api/work-items/"):
-            work_item_id = unquote(route[len("/api/work-items/") :]).removesuffix(
-                "/commands"
-            )
+            work_item_id = unquote(route[len("/api/work-items/") :]).removesuffix("/commands")
             current = board.get_work_item_detail(db_path, work_item_id)
         return _json_response(
             {
@@ -504,9 +484,7 @@ def _handle_task_retrigger_post(route, body, db_path, control_context, headers):
         )
 
 
-def handle_dashboard_post(
-    path, body, db_path, control_context=None, request_headers=None
-):
+def handle_dashboard_post(path, body, db_path, control_context=None, request_headers=None):
     route = urlsplit(path).path
     if len(body) > 64 * 1024:
         return _json_response(
@@ -518,18 +496,12 @@ def handle_dashboard_post(
             413,
         )
     headers = _lower_headers(request_headers)
-    if route == "/api/work-items" or (
-        route.startswith("/api/work-items/") and route.endswith("/commands")
-    ):
+    if route == "/api/work-items" or (route.startswith("/api/work-items/") and route.endswith("/commands")):
         return _handle_work_item_post(route, body, db_path, control_context, headers)
     if route.startswith("/api/tasks/") and route.endswith("/retrigger"):
-        return _handle_task_retrigger_post(
-            route, body, db_path, control_context, headers
-        )
+        return _handle_task_retrigger_post(route, body, db_path, control_context, headers)
     if control_context and route.startswith("/knowledge/"):
-        request_error = _control_request_error(
-            control_context, headers, json_required=False
-        )
+        request_error = _control_request_error(control_context, headers, json_required=False)
         if request_error:
             return request_error
         if not control_context.writes_enabled:
@@ -710,14 +682,8 @@ def _allowed_web_origins(host, port, public_origin=None):
             # urlsplit strips some control characters; reject them before parsing.
             if (
                 not public_origin
-                or any(
-                    character.isspace() or ord(character) < 32
-                    for character in public_origin
-                )
-                or any(
-                    character in public_origin
-                    for character in ("\\", "%", "*", "?", "#")
-                )
+                or any(character.isspace() or ord(character) < 32 for character in public_origin)
+                or any(character in public_origin for character in ("\\", "%", "*", "?", "#"))
                 or parsed.scheme not in {"http", "https"}
                 or not parsed.hostname
                 or parsed.username is not None
@@ -732,11 +698,7 @@ def _allowed_web_origins(host, port, public_origin=None):
         if ":" in public_host:
             public_host = f"[{public_host}]"
         default_port = 443 if parsed.scheme == "https" else 80
-        authority = (
-            public_host
-            if public_port in {None, default_port}
-            else f"{public_host}:{public_port}"
-        )
+        authority = public_host if public_port in {None, default_port} else f"{public_host}:{public_port}"
         origins.add(f"{parsed.scheme}://{authority}")
     return frozenset(origins)
 
@@ -760,9 +722,7 @@ def build_control_context_from_config(
         db_path=db_path,
         operator_identity=operator_identity,
         allowed_repo_ids=allowed_repo_ids,
-        allowed_workers=frozenset(
-            worker["name"] for worker in config_result["workers"]
-        ),
+        allowed_workers=frozenset(worker["name"] for worker in config_result["workers"]),
         allowed_origins=allowed_origins,
         csrf_token=csrf_token or secrets.token_urlsafe(32),
         writes_enabled=True,

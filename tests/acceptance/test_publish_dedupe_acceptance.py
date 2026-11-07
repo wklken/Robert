@@ -29,9 +29,7 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
                                     "status": "accepted",
                                     "action_scope": {
                                         "repo": "x/y",
-                                        "sources": [
-                                            {"source_type": "issue", "number": 1}
-                                        ],
+                                        "sources": [{"source_type": "issue", "number": 1}],
                                     },
                                 }
                             },
@@ -48,9 +46,7 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
                                     "status": "accepted",
                                     "action_scope": {
                                         "repo": "x/y",
-                                        "sources": [
-                                            {"source_type": "issue", "number": 1}
-                                        ],
+                                        "sources": [{"source_type": "issue", "number": 1}],
                                     },
                                 }
                             },
@@ -66,9 +62,7 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
             "_insert_fixture",
             original_insert,
         )
-        result = publish_dedupe_acceptance.publish_dedupe_acceptance(
-            workspace_dir=self.root / "publish-dedupe"
-        )
+        result = publish_dedupe_acceptance.publish_dedupe_acceptance(workspace_dir=self.root / "publish-dedupe")
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["status"], "completed")
@@ -76,20 +70,11 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
         self.assertEqual(result["publish_result"]["deduplicated_count"], 2)
         self.assertEqual(result["action_counts"], {"published": 2, "deduplicated": 2})
         commands = [call["command"] for call in result["gh_calls"]]
-        self.assertEqual(
-            commands[0][:3], ["gh", "api", "repos/x/y/issues/1/comments?per_page=100"]
-        )
+        self.assertEqual(commands[0][:3], ["gh", "api", "repos/x/y/issues/1/comments?per_page=100"])
         self.assertEqual(commands[1][:3], ["gh", "pr", "list"])
         self.assertEqual(commands[2][:3], ["gh", "pr", "view"])
-        self.assertFalse(
-            any(
-                command[:3] == ["gh", "api", "repos/x/y/issues/1/comments"]
-                for command in commands
-            )
-        )
-        self.assertFalse(
-            any(command[:3] == ["gh", "pr", "create"] for command in commands)
-        )
+        self.assertFalse(any(command[:3] == ["gh", "api", "repos/x/y/issues/1/comments"] for command in commands))
+        self.assertFalse(any(command[:3] == ["gh", "pr", "create"] for command in commands))
 
 
 if __name__ == "__main__":

@@ -58,11 +58,7 @@ class ReviewFilesTests(unittest.TestCase):
         review_files.atomic_json(self.path, self.result)
 
     def record(self, worker_id="codex"):
-        path = (
-            self.path
-            if worker_id == "codex"
-            else self.root / "runs" / worker_id / "attempt-1" / "result.json"
-        )
+        path = self.path if worker_id == "codex" else self.root / "runs" / worker_id / "attempt-1" / "result.json"
         review_files.atomic_json(path, self.result)
         report_path = path.with_name("report.md")
         report_path.write_text(
@@ -86,19 +82,14 @@ class ReviewFilesTests(unittest.TestCase):
             "reason": "Verified source and exact diff",
             "sources": [{"worker_id": "codex", "finding_id": "F1"}],
         }
-        return {
-            key: self.result[key]
-            for key in ("schema_version", "round_id", "snapshot_id", "head_sha")
-        } | {
+        return {key: self.result[key] for key in ("schema_version", "round_id", "snapshot_id", "head_sha")} | {
             "items": [item],
             "merge_recommendation": "merge after fixes",
             "merge_reason": "修复崩溃后合并",
         }
 
     def test_reads_only_committed_result_and_rejects_wrong_round_and_schema(self):
-        self.assertEqual(
-            review_files.read_result(self.path, self.manifest), self.result
-        )
+        self.assertEqual(review_files.read_result(self.path, self.manifest), self.result)
         for mutation in ({"round_id": "old"}, {"coverage": {}}, {"head_sha": "b" * 40}):
             review_files.atomic_json(self.path, self.result | mutation)
             with self.assertRaises(ValueError):
@@ -143,9 +134,7 @@ class ReviewFilesTests(unittest.TestCase):
     def test_dynamic_report_and_model_independent_prompt(self):
         records = [self.record(name) for name in ("codex", "claude", "third")]
         evaluation = self.evaluation()
-        evaluation["items"][0]["sources"] += [
-            {"worker_id": name, "finding_id": "F1"} for name in ("claude", "third")
-        ]
+        evaluation["items"][0]["sources"] += [{"worker_id": name, "finding_id": "F1"} for name in ("claude", "third")]
         report = review_files.render_merged(self.manifest, records, evaluation)
         for heading in (
             "# PR #42 Code Review 汇总报告",
@@ -171,18 +160,14 @@ class ReviewFilesTests(unittest.TestCase):
 
         for record in records:
             record["model"] = "same-model"
-        same_model_report = review_files.render_merged(
-            self.manifest, records, evaluation
-        )
+        same_model_report = review_files.render_merged(self.manifest, records, evaluation)
         self.assertIn("多 reviewer review", same_model_report)
         self.assertNotIn("多模型 review", same_model_report)
 
     def test_native_review_prompts_require_redacted_public_output(self):
         for prompt in (
             review_files.build_reviewer_prompt(self.manifest),
-            review_files.build_synthesis_prompt(
-                self.manifest, self.root / "inputs.json"
-            ),
+            review_files.build_synthesis_prompt(self.manifest, self.root / "inputs.json"),
         ):
             self.assertIn("Redact", prompt)
             self.assertIn("<redacted>", prompt)
@@ -214,9 +199,9 @@ class ReviewFilesTests(unittest.TestCase):
                 "merge_reason": "已检查范围未发现缺陷",
             },
         )
-        coverage = report.split("### Review Coverage and Limitations\n", 1)[1].split(
-            "### Agent Agreement Summary", 1
-        )[0]
+        coverage = report.split("### Review Coverage and Limitations\n", 1)[1].split("### Agent Agreement Summary", 1)[
+            0
+        ]
         first_section, second_section = coverage.split("#### claude (claude)", 1)
         self.assertIn("#### codex (codex)", first_section)
         self.assertIn("已审查：`src/main.py`", first_section)
@@ -233,9 +218,7 @@ class ReviewFilesTests(unittest.TestCase):
             "unreviewed_paths": [],
             "notes": "未检查源码",
         }
-        report = review_files.render_merged(
-            self.manifest, [self.record()], self.evaluation()
-        )
+        report = review_files.render_merged(self.manifest, [self.record()], self.evaluation())
         self.assertIn("已审查：未列出", report)
         self.assertIn("未审查：未列出（不表示完整覆盖）", report)
         self.assertIn("未检查源码", report)
@@ -243,9 +226,7 @@ class ReviewFilesTests(unittest.TestCase):
     def test_native_review_keeps_human_decisions_and_evidence_limits_visible(self):
         prepare = review_files.build_prepare_prompt(self.manifest)
         reviewer = review_files.build_reviewer_prompt(self.manifest)
-        synthesis = review_files.build_synthesis_prompt(
-            self.manifest, self.root / "inputs.json"
-        )
+        synthesis = review_files.build_synthesis_prompt(self.manifest, self.root / "inputs.json")
         self.assertIn("original request", prepare)
         self.assertIn("undisclosed decisions", reviewer)
         self.assertIn("not a defect by itself", reviewer)
@@ -257,9 +238,7 @@ class ReviewFilesTests(unittest.TestCase):
     def test_reviewer_and_synthesis_prompts_require_adversarial_review(self):
         prompts = {
             "reviewer": review_files.build_reviewer_prompt(self.manifest),
-            "synthesis": review_files.build_synthesis_prompt(
-                self.manifest, self.root / "inputs.json"
-            ),
+            "synthesis": review_files.build_synthesis_prompt(self.manifest, self.root / "inputs.json"),
         }
         for phase, prompt in prompts.items():
             with self.subTest(phase=phase):
@@ -267,29 +246,21 @@ class ReviewFilesTests(unittest.TestCase):
                 self.assertIn("counterexamples", prompt)
                 self.assertIn("evidence", prompt)
         self.assertIn("never add an unsourced finding", prompts["synthesis"])
-        self.assertNotIn(
-            "adversarial review", review_files.build_prepare_prompt(self.manifest)
-        )
+        self.assertNotIn("adversarial review", review_files.build_prepare_prompt(self.manifest))
 
     def test_review_policy_preserves_native_phase_and_result_contracts(self):
         manifest = self.manifest | {"github_account": "robert-bot"}
         reviewer = review_files.build_reviewer_prompt(manifest)
-        synthesis = review_files.build_synthesis_prompt(
-            manifest, self.root / "inputs.json"
-        )
+        synthesis = review_files.build_synthesis_prompt(manifest, self.root / "inputs.json")
         for prompt in (reviewer, synthesis):
-            self.assertIn(
-                "Treat every review round as a fresh independent judgment", prompt
-            )
+            self.assertIn("Treat every review round as a fresh independent judgment", prompt)
             self.assertIn("Security review is required and proportional", prompt)
             self.assertIn("A blocking finding needs", prompt)
             self.assertIn("stop repeating the review", prompt)
             self.assertIn("case-insensitively", prompt)
             self.assertIn("@wklken", prompt)
             self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
-        self.assertNotIn(
-            "Review judgment policy:", review_files.build_prepare_prompt(manifest)
-        )
+        self.assertNotIn("Review judgment policy:", review_files.build_prepare_prompt(manifest))
         self.assertIn("coverage.notes", reviewer)
         self.assertIn("Do not invent a finding to carry a decision request", reviewer)
         self.assertIn("merge_reason", synthesis)
@@ -309,9 +280,7 @@ class ReviewFilesTests(unittest.TestCase):
             "merge_reason": "当前快照的兼容性要求待决，请 @wklken 确认支持范围。",
         }
         self.result["findings"] = []
-        self.result["coverage"]["notes"] = (
-            "当前快照的兼容性要求待决，请 @wklken 确认支持范围。"
-        )
+        self.result["coverage"]["notes"] = "当前快照的兼容性要求待决，请 @wklken 确认支持范围。"
         self.result["merge_recommendation"] = "merge after fixes"
         record = self.record()
         path = self.root / "synthesis" / "attempt-1" / "evaluation.json"

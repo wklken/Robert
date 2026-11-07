@@ -49,9 +49,7 @@ class BoardLifecycleTests(unittest.TestCase):
 
     def test_home_is_board_and_legacy_list_remains_accessible(self):
         self.assertIn(b'id="board-app"', web.build_http_response("/", self.db)[2])
-        self.assertIn(
-            b'id="workbench-app"', web.build_http_response("/work", self.db)[2]
-        )
+        self.assertIn(b'id="workbench-app"', web.build_http_response("/work", self.db)[2])
 
     def test_expired_route_approval_does_not_activate_a_completed_workstream(self):
         item = self.create(start=True)
@@ -74,18 +72,12 @@ class BoardLifecycleTests(unittest.TestCase):
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertIsNone(detail["activated_at"])
         self.assertEqual(detail["version"], item["version"])
-        self.assertEqual(
-            detail["attention_signals"][0]["event_id"], decision["event_id"]
-        )
+        self.assertEqual(detail["attention_signals"][0]["event_id"], decision["event_id"])
         self.assertNotIn("approve", detail["valid_commands"])
         with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM work_item_events WHERE event_type='approved'"
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type='approved'").fetchone()[0],
                 0,
             )
 
@@ -209,9 +201,7 @@ class BoardLifecycleTests(unittest.TestCase):
     def test_execution_history_identifies_missing_logs_per_attempt(self):
         item = self.fixture._seed_six_columns()["doing"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            task_id = conn.execute(
-                "SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'"
-            ).fetchone()[0]
+            task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
             conn.execute(
                 "INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at) VALUES (?,?,?,?,?,?)",
                 (
@@ -285,9 +275,7 @@ class BoardLifecycleTests(unittest.TestCase):
             self.command(canceled, "retry")
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertEqual(detail["valid_commands"], [])
-        self.assertEqual(
-            board.list_board(self.db, include_history=True)["counts"]["history"], 1
-        )
+        self.assertEqual(board.list_board(self.db, include_history=True)["counts"]["history"], 1)
 
     def test_verified_running_worker_can_be_canceled_and_replayed(self):
         item = self.fixture._seed_six_columns()["doing"]
@@ -301,9 +289,7 @@ class BoardLifecycleTests(unittest.TestCase):
             terminate.assert_called_once()
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT status FROM attempts WHERE attempt_id='attempt-doing'"
-                ).fetchone()[0],
+                conn.execute("SELECT status FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0],
                 "canceled",
             )
             self.assertEqual(
@@ -319,13 +305,9 @@ class BoardLifecycleTests(unittest.TestCase):
             "robert_agent.adapters.processes.attempt.terminate_attempt",
             return_value={"status": "not_signalled", "reason": "missing_pid"},
         ):
-            with self.assertRaisesRegex(
-                work_items.WorkItemConflictError, "missing_pid"
-            ):
+            with self.assertRaisesRegex(work_items.WorkItemConflictError, "missing_pid"):
                 self.command(item, "cancel")
-        self.assertIsNone(
-            board.get_work_item_detail(self.db, item["work_item_id"])["canceled_at"]
-        )
+        self.assertIsNone(board.get_work_item_detail(self.db, item["work_item_id"])["canceled_at"])
 
     def test_active_attempt_blocks_duplicate_followup(self):
         item = self.fixture._seed_six_columns()["doing"]
@@ -343,9 +325,7 @@ class BoardLifecycleTests(unittest.TestCase):
                 "SELECT active_task_id FROM workstreams WHERE workstream_id=?",
                 (item["workstream_id"],),
             ).fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task_id,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task_id,))
             metadata = (
                 {
                     "publish": {
@@ -356,11 +336,7 @@ class BoardLifecycleTests(unittest.TestCase):
                 if failed
                 else {}
             )
-            metadata.update(
-                {
-                    "body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"
-                }
-            )
+            metadata.update({"body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"})
             if audited:
                 conn.execute(
                     "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('publication-attempt',?,1,'completed')",
@@ -374,9 +350,7 @@ class BoardLifecycleTests(unittest.TestCase):
                     "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES ('result', ?, 'publication-attempt', 'comment_analysis', '2026-10-22', json_set(?, '$.result_contract', 'compact-v1'))",
                     (
                         task_id,
-                        json.dumps(
-                            {"audit": {"status": "accepted", "action_scope": scope}}
-                        ),
+                        json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),
                     ),
                 )
             conn.execute(
@@ -401,9 +375,7 @@ class BoardLifecycleTests(unittest.TestCase):
         result = self.command(item, "retry_publish")
         self.assertEqual(result["task_id"], task_id)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(
                 conn.execute(
                     "SELECT count(*) FROM wakeups WHERE json_extract(metadata_json,'$.kind')='publication_retry'"
@@ -436,9 +408,7 @@ class BoardLifecycleTests(unittest.TestCase):
                     ),
                 ),
             )
-        action = board.get_work_item_detail(self.db, item["work_item_id"])["tasks"][0][
-            "publication_actions"
-        ][0]
+        action = board.get_work_item_detail(self.db, item["work_item_id"])["tasks"][0]["publication_actions"][0]
         self.assertEqual(action["action_type"], "comment")
         self.assertEqual(action["status"], "publish_failed")
         self.assertIn("<local-path>", action["safe_error"])
@@ -459,9 +429,7 @@ class BoardLifecycleTests(unittest.TestCase):
                     ),
                 ),
             )
-        action = board.get_work_item_detail(self.db, item["work_item_id"])["tasks"][0][
-            "publication_actions"
-        ][0]
+        action = board.get_work_item_detail(self.db, item["work_item_id"])["tasks"][0]["publication_actions"][0]
         self.assertEqual(action["status"], "published")
         self.assertEqual(action["published_at"], "2026-10-22T03:14:14Z")
 
@@ -471,9 +439,7 @@ class BoardLifecycleTests(unittest.TestCase):
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertIn("cancel", detail["valid_commands"])
         self.command(item, "cancel")
-        with patch(
-            "robert_agent.delivery.application.effects.publish_action"
-        ) as publisher:
+        with patch("robert_agent.delivery.application.effects.publish_action") as publisher:
             result = publish.publish_ready_actions(self.db)
         publisher.assert_not_called()
         self.assertEqual(result["pending_count"], 0)
@@ -492,9 +458,7 @@ class BoardLifecycleTests(unittest.TestCase):
     def test_closed_child_pr_exposes_its_running_worker(self):
         item = self.fixture._seed_six_columns()["review"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE github_sources SET state='closed' WHERE source_id='pr-review'"
-            )
+            conn.execute("UPDATE github_sources SET state='closed' WHERE source_id='pr-review'")
             conn.execute(
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('child-task','github:example/repo!12','running','2026-10-22','2026-10-22')"
             )
@@ -516,9 +480,7 @@ class BoardLifecycleTests(unittest.TestCase):
             self.command(item, "cancel")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT lifecycle FROM tasks WHERE task_id='child-task'"
-                ).fetchone()[0],
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id='child-task'").fetchone()[0],
                 "canceled",
             )
 
@@ -540,12 +502,8 @@ class BoardLifecycleTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO leases(lease_id,resource_type,resource_key,owner_id,status,acquired_at,expires_at,heartbeat_at) VALUES ('lease','agent_run','repo-1','engine','active','2026-10-22','9999-01-01','2026-10-22')"
             )
-        with patch(
-            "robert_agent.adapters.processes.attempt.terminate_attempt"
-        ) as terminate:
-            with self.assertRaisesRegex(
-                work_items.WorkItemConflictError, "processing a cycle"
-            ):
+        with patch("robert_agent.adapters.processes.attempt.terminate_attempt") as terminate:
+            with self.assertRaisesRegex(work_items.WorkItemConflictError, "processing a cycle"):
                 self.command(item, "cancel")
         terminate.assert_not_called()
 
@@ -569,17 +527,13 @@ class BoardLifecycleTests(unittest.TestCase):
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertIn("retry", detail["valid_commands"])
         self.command(item, "retry")
-        self.assertEqual(
-            board.get_work_item_detail(self.db, item["work_item_id"])["column"], "todo"
-        )
+        self.assertEqual(board.get_work_item_detail(self.db, item["work_item_id"])["column"], "todo")
 
     def test_manual_unavailable_prepared_task_can_change_worker(self):
         item = self.create(start=True)
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle='queued',routing_mode='manual',requested_worker='removed-worker'"
-            )
+            conn.execute("UPDATE tasks SET lifecycle='queued',routing_mode='manual',requested_worker='removed-worker'")
             conn.execute(
                 "INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at) VALUES ('prepared',?,1,'prepared','2026-10-22')",
                 (task,),
@@ -592,15 +546,11 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertNotEqual(result["task_id"], task)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT status FROM attempts WHERE attempt_id='prepared'"
-                ).fetchone()[0],
+                conn.execute("SELECT status FROM attempts WHERE attempt_id='prepared'").fetchone()[0],
                 "canceled",
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT lifecycle FROM tasks WHERE task_id=?", (task,)
-                ).fetchone()[0],
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task,)).fetchone()[0],
                 "canceled",
             )
         self.assertEqual(
@@ -616,9 +566,7 @@ class BoardLifecycleTests(unittest.TestCase):
             with closing(sqlite3.connect(self.db, timeout=0)) as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.rollback()
-            with self.assertRaisesRegex(
-                work_items.WorkItemConflictError, "publication"
-            ):
+            with self.assertRaisesRegex(work_items.WorkItemConflictError, "publication"):
                 self.command(item, "cancel")
             return {"status": "published", "ok": True}
 
@@ -645,9 +593,7 @@ class BoardLifecycleTests(unittest.TestCase):
 
     def test_reply_rejects_a_different_question_even_at_the_same_version(self):
         item = self.fixture._seed_six_columns()["waiting"]
-        old = board.get_work_item_detail(self.db, item["work_item_id"])[
-            "attention_signals"
-        ][0]["event_id"]
+        old = board.get_work_item_detail(self.db, item["work_item_id"])["attention_signals"][0]["event_id"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.row_factory = sqlite3.Row
             work_items.record_system_event(
@@ -658,9 +604,7 @@ class BoardLifecycleTests(unittest.TestCase):
                 body="New question",
             )
         with self.assertRaisesRegex(work_items.WorkItemConflictError, "attention"):
-            self.command(
-                item, "reply", body="Answer to the old question", expected_event_id=old
-            )
+            self.command(item, "reply", body="Answer to the old question", expected_event_id=old)
 
     def test_busy_publisher_cannot_skip_failed_push_and_publish_its_comment(self):
         from concurrent.futures import ThreadPoolExecutor
@@ -671,9 +615,7 @@ class BoardLifecycleTests(unittest.TestCase):
         item = self.create(start=True)
         self.seed_publication(item)
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE github_actions SET action_id='a-push',result_id='result'"
-            )
+            conn.execute("UPDATE github_actions SET action_id='a-push',result_id='result'")
             conn.execute(
                 "INSERT INTO github_actions(action_id,task_id,result_id,action_type,audit_status,publish_status,created_at,metadata_json) SELECT 'b-comment',task_id,'result','comment','accepted','not_published',created_at,'{}' FROM github_actions WHERE action_id='a-push'"
             )
@@ -729,9 +671,7 @@ class BoardLifecycleTests(unittest.TestCase):
     def test_execution_history_keeps_each_attempt_and_its_safe_phases(self):
         item = self.fixture._seed_six_columns()["doing"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            task_id = conn.execute(
-                "SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'"
-            ).fetchone()[0]
+            task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
             conn.execute(
                 "UPDATE attempts SET status='failed', failure_json=? WHERE attempt_id='attempt-doing'",
                 (
@@ -762,12 +702,8 @@ class BoardLifecycleTests(unittest.TestCase):
 
         item = self.fixture._seed_six_columns()["doing"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            task_id = conn.execute(
-                "SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'"
-            ).fetchone()[0]
-            execution_store.ensure_subject(
-                conn, "task", task_id, "human_request", "2026-10-22"
-            )
+            task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
+            execution_store.ensure_subject(conn, "task", task_id, "human_request", "2026-10-22")
         with patch(
             "robert_agent.adapters.processes.attempt.terminate_attempt",
             return_value={"status": "already_dead"},
@@ -775,9 +711,7 @@ class BoardLifecycleTests(unittest.TestCase):
             self.command(item, "cancel")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT binding_status FROM execution_subjects"
-                ).fetchone()[0],
+                conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
                 "terminal",
             )
 
@@ -787,9 +721,7 @@ class BoardLifecycleTests(unittest.TestCase):
         publish.publish_ready_actions(self.db)
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertEqual(detail["column"], "waiting")
-        self.assertIn(
-            "audited_scope_missing", json.dumps(detail["publication"]["failures"])
-        )
+        self.assertIn("audited_scope_missing", json.dumps(detail["publication"]["failures"]))
         self.assertIn("cancel", detail["valid_commands"])
 
     def test_terminal_publication_attention_offers_cancel_without_false_retry(self):
@@ -845,9 +777,7 @@ class BoardLifecycleTests(unittest.TestCase):
         before = Path(self.db).read_bytes()
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                execution_store.read_binding(conn, "task", "historical")[
-                    "binding_status"
-                ],
+                execution_store.read_binding(conn, "task", "historical")["binding_status"],
                 "attention",
             )
         self.assertEqual(Path(self.db).read_bytes(), before)

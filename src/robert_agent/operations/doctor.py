@@ -90,9 +90,7 @@ def doctor(config_path, skip_external=False):
                 }
             )
     checks["skills"] = {
-        "status": (
-            "passed" if all(item["runnable"] for item in route_checks) else "failed"
-        ),
+        "status": ("passed" if all(item["runnable"] for item in route_checks) else "failed"),
         "routes": route_checks,
     }
 

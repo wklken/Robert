@@ -98,9 +98,7 @@ class BrokerFixture:
         self.git("commit", "-qam", "fixture repair", cwd=self.tree)
         if launcher is None:
             passthrough = self.root / "launcher.py"
-            passthrough.write_text(
-                "import os,sys\nos.execv(sys.argv[2],sys.argv[2:])\n"
-            )
+            passthrough.write_text("import os,sys\nos.execv(sys.argv[2],sys.argv[2:])\n")
             passthrough.chmod(0o600)
             launcher = [sys.executable, str(passthrough)]
         self.config = {
@@ -177,12 +175,8 @@ class BrokerFixture:
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.row_factory = sqlite3.Row
             if task_id is None:
-                policy = supervision_repair.normalize_repair(
-                    self.config["supervision"]["repair"]
-                )
-                auth = supervision_repair._auto_authorization(
-                    self.config, policy, self.config["repos"][0]
-                )
+                policy = supervision_repair.normalize_repair(self.config["supervision"]["repair"])
+                auth = supervision_repair._auto_authorization(self.config, policy, self.config["repos"][0])
                 repair, _ = work_items.create_supervision_repair(
                     conn,
                     repo_id="repo",

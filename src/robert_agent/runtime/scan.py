@@ -19,9 +19,7 @@ def main(argv=None):
     parser.add_argument("--refresh-context", action="store_true")
     args = parser.parse_args(argv)
     if args.list_batches or args.retry_batch:
-        result = scan_batch_operations.manage_batches(
-            args.config, retry=args.retry_batch, dry_run=args.dry_run
-        )
+        result = scan_batch_operations.manage_batches(args.config, retry=args.retry_batch, dry_run=args.dry_run)
     else:
         result = (
             delivery_lane.publish(args.config, dry_run=args.dry_run)

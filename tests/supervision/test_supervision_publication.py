@@ -29,9 +29,7 @@ class SupervisedPublicationTests(unittest.TestCase):
             conn.execute("UPDATE workstreams SET active_task_id='t'")
             conn.execute("""UPDATE tasks SET metadata_json=json_object(
                 'supervision_lineage_key','lineage','trigger_work_item_event_id','operator-event')""")
-            execution_store.ensure_subject(
-                conn, "task", "t", "human_request", self.now.isoformat()
-            )
+            execution_store.ensure_subject(conn, "task", "t", "human_request", self.now.isoformat())
         self.config = {
             "repos": [{"full_name": "x/y"}],
             "supervision": {
@@ -51,26 +49,18 @@ class SupervisedPublicationTests(unittest.TestCase):
         if command[:2] == ["git", "ls-remote"]:
             return SimpleNamespace(returncode=0, stdout=self.remote, stderr="")
         if command[:2] == ["git", "push"]:
-            return SimpleNamespace(
-                returncode=int(bool(self.error)), stdout="", stderr=self.error
-            )
+            return SimpleNamespace(returncode=int(bool(self.error)), stdout="", stderr=self.error)
         raise AssertionError(command)
 
     def cycle(self, seconds=0, config=None):
         self.now += timedelta(seconds=seconds)
-        with mock.patch.object(
-            publication_values, "now", return_value=self.now.isoformat()
-        ):
+        with mock.patch.object(publication_values, "now", return_value=self.now.isoformat()):
             kwargs = {"config": config} if config is not None else {}
-            return publish.publish_ready_actions(
-                self.db, run_command=self.runner, **kwargs
-            )
+            return publish.publish_ready_actions(self.db, run_command=self.runner, **kwargs)
 
     def intent(self):
         with closing(sqlite3.connect(self.db)) as conn:
-            status, raw = conn.execute(
-                "SELECT status,remote_evidence_json FROM publication_intents"
-            ).fetchone()
+            status, raw = conn.execute("SELECT status,remote_evidence_json FROM publication_intents").fetchone()
         return status, json.loads(raw)
 
     def actions(self):
@@ -82,9 +72,7 @@ class SupervisedPublicationTests(unittest.TestCase):
     def verify(self, seconds=60):
         self.now += timedelta(seconds=seconds)
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            return supervision_actions.verify(
-                conn, observations=[], now=self.now.isoformat()
-            )
+            return supervision_actions.verify(conn, observations=[], now=self.now.isoformat())
 
     def request(self, kind, seconds=0):
         self.now += timedelta(seconds=seconds)
@@ -101,14 +89,10 @@ class SupervisedPublicationTests(unittest.TestCase):
                         "lineage_key": "lineage",
                         "classification": "confirmed",
                         "rule_id": "publication_stalled",
-                        "reason_code": "publication_effect_unresolved"
-                        if reconcile
-                        else "publication_waiting_consumer",
+                        "reason_code": "publication_effect_unresolved" if reconcile else "publication_waiting_consumer",
                         "evidence": {
                             "action_id": "push",
-                            "intent_status": "executing"
-                            if reconcile
-                            else "confirmed_absent",
+                            "intent_status": "executing" if reconcile else "confirmed_absent",
                         },
                     }
                 ],
@@ -139,9 +123,7 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.assertTrue(ready.wait(5))
         try:
             started = time.monotonic()
-            verdict = supervision_publication.begin(
-                self.db, action, None, self.now.isoformat()
-            )
+            verdict = supervision_publication.begin(self.db, action, None, self.now.isoformat())
             self.assertEqual(verdict["status"], "legacy")
             self.assertLess(time.monotonic() - started, 1)
         finally:
@@ -157,15 +139,11 @@ class SupervisedPublicationTests(unittest.TestCase):
                 ("worker_results", "r", "r2", "result_id"),
                 ("github_actions", "push", "push2", "action_id"),
             ]:
-                columns = [
-                    row[1] for row in conn.execute(f"PRAGMA table_info({table})")
-                ]
+                columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
                 row = dict(
                     zip(
                         columns,
-                        conn.execute(
-                            f"SELECT * FROM {table} WHERE {key}=?", (old,)
-                        ).fetchone(),
+                        conn.execute(f"SELECT * FROM {table} WHERE {key}=?", (old,)).fetchone(),
                     )
                 )
                 row[key] = new
@@ -201,11 +179,7 @@ class SupervisedPublicationTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(state, "not_published")
             self.assertNotIn("publish", json.loads(raw))
-            self.assertFalse(
-                conn.execute(
-                    "SELECT 1 FROM publication_intents WHERE action_id='push'"
-                ).fetchone()
-            )
+            self.assertFalse(conn.execute("SELECT 1 FROM publication_intents WHERE action_id='push'").fetchone())
 
     def test_absence_reconciliation_never_writes_until_new_claim(self):
         self.cycle()
@@ -257,9 +231,7 @@ class SupervisedPublicationTests(unittest.TestCase):
         with mock.patch.object(
             supervision_publication,
             "guard",
-            side_effect=lambda db, action, state, config, now: original(
-                db, action, state, {}, now
-            ),
+            side_effect=lambda db, action, state, config, now: original(db, action, state, {}, now),
         ):
             self.cycle(config=self.config)
         self.assertEqual(self.commands.count(["git", "push"]), 1)
@@ -295,9 +267,7 @@ class SupervisedPublicationTests(unittest.TestCase):
     def test_unrequested_native_reconciliation_keeps_original_retry_authority(self):
         self.cycle()
         self.error = ""
-        self.config["supervision"]["recovery"]["allowed_actions"] = [
-            "publication_retry"
-        ]
+        self.config["supervision"]["recovery"]["allowed_actions"] = ["publication_retry"]
         self.cycle(60, self.config)
         self.assertEqual(self.commands.count(["git", "push"]), 2)
         self.assertEqual(self.intent()[0], "published")

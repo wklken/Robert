@@ -16,9 +16,7 @@ class WorkerProtocolFixture(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
-    def _init_attempt_db(
-        self, *, output_type="comment_analysis", route_id="comment-analysis"
-    ):
+    def _init_attempt_db(self, *, output_type="comment_analysis", route_id="comment-analysis"):
         from robert_agent.adapters.sqlite import database as storage
         from robert_agent.workflows import routes as route
 
@@ -53,9 +51,7 @@ class WorkerProtocolFixture(unittest.TestCase):
                 """,
                 (now, now),
             )
-            conn.execute(
-                "UPDATE attempts SET metadata_json=json_set(metadata_json,'$.result_contract','compact-v1')"
-            )
+            conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.result_contract','compact-v1')")
             conn.execute("UPDATE repos SET full_name='x/y'")
             conn.execute(
                 "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number) VALUES('source-1','repo-1','x/y#1','issue',1)"
@@ -134,10 +130,7 @@ class WorkerProtocolFixture(unittest.TestCase):
         return payload
 
     def _dd_comment_body(self, text):
-        return (
-            "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n"
-            + text
-        )
+        return "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n" + text
 
     def _review_response_action(self, text="Responded to the review report."):
         return {

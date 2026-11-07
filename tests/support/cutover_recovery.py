@@ -58,9 +58,7 @@ class CutoverRecoveryFixture(unittest.TestCase):
 
     def context(self):
         with closing(daemon_state.connect(self.db)) as conn, conn:
-            run = daemon_state.start_daemon_run(
-                conn, config_path="config", owner_id="owner", now=self.now
-            )
+            run = daemon_state.start_daemon_run(conn, config_path="config", owner_id="owner", now=self.now)
         return daemon.DaemonContext(
             "config",
             None,
@@ -83,9 +81,7 @@ class CutoverRecoveryFixture(unittest.TestCase):
             conn.execute(
                 "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
             )
-            conn.execute(
-                "UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'"
-            )
+            conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
             conn.execute(
                 "UPDATE work_items SET origin_type='github',origin_source_id='source' WHERE work_item_id='item'"
             )

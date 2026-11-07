@@ -158,9 +158,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["event_type"], "notification")
-        self.assertEqual(
-            decisions[0]["authorization_status"], "ignored_untrusted_trigger"
-        )
+        self.assertEqual(decisions[0]["authorization_status"], "ignored_untrusted_trigger")
         self.assertFalse(decisions[0]["creates_task"])
 
     def test_notification_review_request_resolves_to_review_request_trigger(self):
@@ -226,9 +224,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["event_type"], "review_request")
-        self.assertEqual(
-            decisions[0]["event_fingerprint"], "review_request:review-request-3103"
-        )
+        self.assertEqual(decisions[0]["event_fingerprint"], "review_request:review-request-3103")
         self.assertEqual(decisions[0]["requester_login"], "wklken")
         self.assertEqual(decisions[0]["requested_reviewer"], "robert-bot")
         self.assertEqual(decisions[0]["base_branch"], "master")
@@ -332,9 +328,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["event_type"], "review_comment")
-        self.assertEqual(
-            decisions[0]["event_fingerprint"], "review_comment:review-comment-latest"
-        )
+        self.assertEqual(decisions[0]["event_fingerprint"], "review_comment:review-comment-latest")
         self.assertEqual(decisions[0]["body"], "@robert-bot latest diff feedback")
         self.assertEqual(decisions[0]["authorization_status"], "context_only")
         self.assertFalse(decisions[0]["drives_execution"])
@@ -382,12 +376,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
         events = self.collect_normalized(fake_runner)
 
         self.assertEqual(events, [])
-        self.assertFalse(
-            any(
-                call[:3] == ["gh", "api", "repos/example/backend/issues/3105/comments"]
-                for call in calls
-            )
-        )
+        self.assertFalse(any(call[:3] == ["gh", "api", "repos/example/backend/issues/3105/comments"] for call in calls))
 
 
 if __name__ == "__main__":

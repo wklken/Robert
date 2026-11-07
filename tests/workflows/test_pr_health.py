@@ -90,9 +90,7 @@ class PrHealthTests(unittest.TestCase):
         snapshot = pr_health.fetch_pr_snapshot(
             "example/backend",
             14,
-            runner=FixtureRunner(
-                {("gh", "api", "repos/example/backend/pulls/14"): payload}
-            ),
+            runner=FixtureRunner({("gh", "api", "repos/example/backend/pulls/14"): payload}),
         )
         self.assertIsNone(snapshot["mergeable"])
         self.assertEqual(snapshot["head_repo_full_name"], "fork/backend")
@@ -163,8 +161,7 @@ class PrHealthTests(unittest.TestCase):
                 "api",
                 "repos/example/backend/actions/jobs/501/logs",
             ): (
-                "\x1b[31m2026-07-26T00:00:01Z FAIL "
-                "/home/runner/work/backend/tests/test_api.py: expected 1 got 2\x1b[0m"
+                "\x1b[31m2026-07-26T00:00:01Z FAIL /home/runner/work/backend/tests/test_api.py: expected 1 got 2\x1b[0m"
             ),
             (
                 "gh",
@@ -470,8 +467,7 @@ class PrHealthTests(unittest.TestCase):
                 {
                     "check_name": "unit",
                     "failure_summary": (
-                        "2026-07-26T00:00:01Z \x1b[31mFAIL "
-                        "/home/runner/work/backend/test.py expected 1 got 2\x1b[0m"
+                        "2026-07-26T00:00:01Z \x1b[31mFAIL /home/runner/work/backend/test.py expected 1 got 2\x1b[0m"
                     ),
                 }
             ]
@@ -480,10 +476,7 @@ class PrHealthTests(unittest.TestCase):
             [
                 {
                     "check_name": "unit",
-                    "failure_summary": (
-                        "2026-07-27T08:09:10Z FAIL "
-                        "/Users/dev/project/test.py expected 1 got 2"
-                    ),
+                    "failure_summary": ("2026-07-27T08:09:10Z FAIL /Users/dev/project/test.py expected 1 got 2"),
                 }
             ]
         )

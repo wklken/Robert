@@ -147,10 +147,7 @@ class ReviewCoordinatorFixture(unittest.TestCase):
             )
         elif stage == "review":
             if not self.stdout_only:
-                payload = {
-                    key: manifest[key]
-                    for key in ("round_id", "snapshot_id", "head_sha")
-                }
+                payload = {key: manifest[key] for key in ("round_id", "snapshot_id", "head_sha")}
                 payload.update(
                     schema_version=1,
                     findings=[],
@@ -173,9 +170,7 @@ class ReviewCoordinatorFixture(unittest.TestCase):
             inputs = json.loads(Path(inputs_path).read_text())
             for record in inputs["records"]:
                 self.assertTrue(Path(record["result_path"]).is_file())
-            payload = {
-                key: manifest[key] for key in ("round_id", "snapshot_id", "head_sha")
-            }
+            payload = {key: manifest[key] for key in ("round_id", "snapshot_id", "head_sha")}
             payload.update(
                 schema_version=1,
                 items=[],
@@ -187,18 +182,12 @@ class ReviewCoordinatorFixture(unittest.TestCase):
 
     def coordinator(self):
         task, attempt = self.current()
-        return review_coordinator.Coordinator(
-            self.db, task, attempt, fetch_pr=self.pr, launcher=self.launcher
-        )
+        return review_coordinator.Coordinator(self.db, task, attempt, fetch_pr=self.pr, launcher=self.launcher)
 
     def finish_task(self, task):
         with review_store.connect(self.db) as conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task,)
-            )
-            conn.execute(
-                "UPDATE attempts SET status='completed' WHERE task_id=?", (task,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task,))
+            conn.execute("UPDATE attempts SET status='completed' WHERE task_id=?", (task,))
             conn.execute(
                 "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL WHERE active_task_id=?",
                 (task,),
@@ -220,36 +209,21 @@ sys.stdin.read()
 subprocess.Popen([sys.executable,'-c','import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)'])
 Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
 """
-            + (
-                "time.sleep(30)\n"
-                if mode == "timeout"
-                else f"sys.exit({1 if mode == 'failure' else 0})\n"
-            )
+            + ("time.sleep(30)\n" if mode == "timeout" else f"sys.exit({1 if mode == 'failure' else 0})\n")
         )
         driver.launcher = dispatch.dispatch_worker
-        driver.request["workers"][0].update(
-            agent="command", command_argv=[sys.executable, str(binary)]
-        )
+        driver.request["workers"][0].update(agent="command", command_argv=[sys.executable, str(binary)])
         driver.request["workers"] = driver.request["workers"][:1]
         if mode == "timeout":
             driver.request["workers"][0]["timeout_seconds"] = 1
         try:
-            expected_error = (
-                RuntimeError if mode == "failure" else review_coordinator.StageStopped
-            )
-            expected_message = (
-                "worker exited immediately" if mode == "failure" else "process group"
-            )
+            expected_error = RuntimeError if mode == "failure" else review_coordinator.StageStopped
+            expected_message = "worker exited immediately" if mode == "failure" else "process group"
             with self.assertRaisesRegex(expected_error, expected_message):
                 driver.run()
             with review_store.connect(self.db) as conn:
                 runs = review_store.runs(conn, driver.round_id)
-                self.assertFalse(
-                    any(
-                        run["stage"] == "review" and run["status"] == "succeeded"
-                        for run in runs
-                    )
-                )
+                self.assertFalse(any(run["stage"] == "review" and run["status"] == "succeeded" for run in runs))
                 self.assertEqual(
                     review_store.session(conn, task_id=driver.task_id)["status"],
                     "failed" if mode == "failure" else "attention",
@@ -257,15 +231,9 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
                 if mode == "failure":
                     for run in runs:
                         if run["stage"] == "review":
-                            self.assertFalse(
-                                worker_identity.live_process_group(
-                                    run["dispatch"]["pid"]
-                                )
-                            )
+                            self.assertFalse(worker_identity.live_process_group(run["dispatch"]["pid"]))
                             self.assertFalse(run["slot_reserved"])
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0
-                )
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
         finally:
             # These groups were created exclusively by this fixture's launcher.
             with review_store.connect(self.db) as conn:

@@ -141,9 +141,7 @@ sys.exit(int(sys.argv[3]))
                             "UPDATE tasks SET lifecycle='canceled' WHERE task_id=?",
                             (driver.task_id,),
                         )
-                        outcome = model_execution.terminate_children(
-                            conn, driver.task_id, store=review_store
-                        )
+                        outcome = model_execution.terminate_children(conn, driver.task_id, store=review_store)
                         self.assertNotEqual(outcome, "attention")
                     return
             time.sleep(0.02)
@@ -169,19 +167,10 @@ sys.exit(int(sys.argv[3]))
         driver.synthesize(records)
         self.assertEqual(self.pool(), {"limit": 2, "in_use": 0})
         self.assertTrue(all(count >= 1 for stage, count in self.slot_observations))
-        self.assertTrue(
-            any(
-                stage.startswith("synthesis-prompt")
-                for stage, count in self.slot_observations
-            )
-        )
+        self.assertTrue(any(stage.startswith("synthesis-prompt") for stage, count in self.slot_observations))
         with review_store.connect(self.fixture.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
 
     def test_released_gate_keeps_child_alive_until_identity_capture(self):
         self.configure(1)
@@ -201,9 +190,7 @@ sys.exit(int(sys.argv[3]))
             time.sleep(0.2)
             return capture(pid)
 
-        with patch.object(
-            worker_identity, "capture_process_identity", side_effect=delayed_capture
-        ) as observed:
+        with patch.object(worker_identity, "capture_process_identity", side_effect=delayed_capture) as observed:
             records = driver.review()
         self.assertEqual(observed.call_count, 1)
         self.assertEqual(len(records), 1)
@@ -251,9 +238,7 @@ sys.exit(int(sys.argv[3]))
                 self.set_limit(1)
                 time.sleep(0.1)
                 self.assertEqual(self.pool(), {"limit": 1, "in_use": 2})
-                self.assertFalse(
-                    any((output / "finished").exists() for _, output in self.launched)
-                )
+                self.assertFalse(any((output / "finished").exists() for _, output in self.launched))
             finally:
                 self.gate.touch()
             self.assertEqual(len(future.result(timeout=5)), 2)
@@ -291,14 +276,10 @@ sys.exit(int(sys.argv[3]))
             finally:
                 self.gate.touch()
         self.assertEqual(len(self.launched), 1)
-        self.assertTrue(
-            all(model_execution._group_finished(run) for run, _ in self.launched)
-        )
+        self.assertTrue(all(model_execution._group_finished(run) for run, _ in self.launched))
         self.assertEqual(self.pool()["in_use"], 0)
         with review_store.connect(self.fixture.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
 
     def test_restart_adopts_parallel_children_and_files_without_duplicate_launch(self):
         self.configure(2)
@@ -340,9 +321,7 @@ sys.exit(int(sys.argv[3]))
         first = self.driver()
         first.request["workers"] = first.request["workers"][:1]
         self.gate.touch()
-        with patch.object(
-            first, "release_slot", side_effect=KeyboardInterrupt("before slot release")
-        ):
+        with patch.object(first, "release_slot", side_effect=KeyboardInterrupt("before slot release")):
             with self.assertRaises(KeyboardInterrupt):
                 first.review()
         self.assertEqual(self.pool()["in_use"], 1)
@@ -350,22 +329,14 @@ sys.exit(int(sys.argv[3]))
         second.run()
         self.assertEqual(self.pool()["in_use"], 0)
         with review_store.connect(self.fixture.db) as conn:
-            original = next(
-                run
-                for run in review_store.runs(conn, first.round_id)
-                if run["stage"] == "review"
-            )
-            self.assertEqual(
-                original["status"], "running"
-            )  # still available for file adoption
+            original = next(run for run in review_store.runs(conn, first.round_id) if run["stage"] == "review")
+            self.assertEqual(original["status"], "running")  # still available for file adoption
 
     def test_ambiguous_start_keeps_global_slot_across_recovery(self):
         self.configure(1)
         driver = self.driver()
         driver.request["workers"] = driver.request["workers"][:1]
-        driver.launcher = lambda **kwargs: (_ for _ in ()).throw(
-            OSError("unknown spawn result")
-        )
+        driver.launcher = lambda **kwargs: (_ for _ in ()).throw(OSError("unknown spawn result"))
         with self.assertRaisesRegex(review_coordinator.StageStopped, "unknown"):
             driver.run()
         self.assertEqual(self.pool()["in_use"], 1)
@@ -417,9 +388,9 @@ sys.exit(int(sys.argv[3]))
         self,
     ):
         with closing(sqlite3.connect(":memory:")) as conn:
-            legacy = review_store.SCHEMA.replace(
-                "  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", ""
-            ).replace("  started_at TEXT,\n", "")
+            legacy = review_store.SCHEMA.replace("  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", "").replace(
+                "  started_at TEXT,\n", ""
+            )
             conn.executescript(legacy)
             for state in ("starting", "running", "succeeded"):
                 conn.execute(
@@ -441,28 +412,20 @@ sys.exit(int(sys.argv[3]))
                     ),
                 )
             review_store.initialize(conn)
-            self.assertEqual(
-                review_store.process_pool_status(conn), {"limit": 4, "in_use": 2}
-            )
+            self.assertEqual(review_store.process_pool_status(conn), {"limit": 4, "in_use": 2})
             review_store.configure_process_pool(conn, 1)
             review_store.initialize(conn)
-            self.assertEqual(
-                review_store.process_pool_status(conn), {"limit": 1, "in_use": 2}
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM review_runs").fetchone()[0], 3
-            )
+            self.assertEqual(review_store.process_pool_status(conn), {"limit": 1, "in_use": 2})
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_runs").fetchone()[0], 3)
 
     def test_status_reads_existing_round_before_pool_migration_without_inventing_capacity(
         self,
     ):
         with closing(sqlite3.connect(":memory:")) as conn:
-            legacy = review_store.SCHEMA.split(
-                "CREATE TABLE IF NOT EXISTS review_process_pool"
-            )[0]
-            legacy = legacy.replace(
-                "  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", ""
-            ).replace("  started_at TEXT,\n", "")
+            legacy = review_store.SCHEMA.split("CREATE TABLE IF NOT EXISTS review_process_pool")[0]
+            legacy = legacy.replace("  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", "").replace(
+                "  started_at TEXT,\n", ""
+            )
             conn.executescript(legacy)
             conn.execute("""INSERT INTO review_sessions(round_id,repo,pr_number,workstream_id,trigger_fingerprint,
                 task_id,request_json,created_at,updated_at) VALUES ('round','repo',1,'stream','trigger','task','{}','now','now')""")
@@ -473,11 +436,7 @@ sys.exit(int(sys.argv[3]))
             board = review_store.board_status(conn, "task")
             self.assertIsNone(board["process_pool"])
             self.assertIsNone(board["runs"][0]["slot_reserved"])
-            self.assertFalse(
-                conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE name='review_process_pool'"
-                ).fetchone()
-            )
+            self.assertFalse(conn.execute("SELECT 1 FROM sqlite_master WHERE name='review_process_pool'").fetchone())
 
     def test_slot_reservation_is_atomic_between_processes(self):
         import subprocess
@@ -517,9 +476,7 @@ print(int(acquired))
         ]
         outputs = [process.communicate(timeout=5) for process in processes]
         self.assertTrue(all(process.returncode == 0 for process in processes), outputs)
-        self.assertEqual(
-            sorted(output.strip() for output, error in outputs), ["0", "1"]
-        )
+        self.assertEqual(sorted(output.strip() for output, error in outputs), ["0", "1"])
         self.assertEqual(self.pool()["in_use"], 1)
 
     def test_cancel_during_thread_submission_wakes_already_submitted_waiter(self):
@@ -533,10 +490,6 @@ print(int(acquired))
                 raise review_coordinator.StageStopped("termination during submission")
 
         with patch.object(model_execution, "ThreadPoolExecutor", InterruptedSubmission):
-            with self.assertRaisesRegex(
-                review_coordinator.StageStopped, "termination during submission"
-            ):
-                driver.parallel(
-                    [1, 2], lambda item: observed.append(driver.stopping.wait(0.5))
-                )
+            with self.assertRaisesRegex(review_coordinator.StageStopped, "termination during submission"):
+                driver.parallel([1, 2], lambda item: observed.append(driver.stopping.wait(0.5)))
         self.assertEqual(observed, [True])

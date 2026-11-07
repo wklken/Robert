@@ -26,9 +26,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
-            workstream_id = conn.execute("SELECT workstream_id FROM tasks").fetchone()[
-                0
-            ]
+            workstream_id = conn.execute("SELECT workstream_id FROM tasks").fetchone()[0]
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
                 (now, task_id),
@@ -54,9 +52,9 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         self.assertEqual(second["prompt_paths"], [])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-            trigger_count = conn.execute(
-                "SELECT COUNT(*) FROM task_events WHERE relationship = 'trigger'"
-            ).fetchone()[0]
+            trigger_count = conn.execute("SELECT COUNT(*) FROM task_events WHERE relationship = 'trigger'").fetchone()[
+                0
+            ]
         self.assertEqual(task_count, 1)
         self.assertEqual(trigger_count, 1)
 
@@ -194,9 +192,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
-            calls.append(
-                (kwargs["task_id"], kwargs["attempt_id"], kwargs["prompt_path"])
-            )
+            calls.append((kwargs["task_id"], kwargs["attempt_id"], kwargs["prompt_path"]))
             return {
                 "ok": True,
                 "status": "running",
@@ -285,9 +281,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         self.assertTrue(second["ok"], second)
         self.assertEqual(calls, [])
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            statuses = conn.execute(
-                "SELECT status FROM attempts ORDER BY started_at"
-            ).fetchall()
+            statuses = conn.execute("SELECT status FROM attempts ORDER BY started_at").fetchall()
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         self.assertEqual(statuses, [("running",), ("prepared",)])
         self.assertEqual(task_count, 2)
@@ -297,9 +291,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         from robert_agent.runtime import cycle as run_once
 
         self.config_path.write_text(
-            self.config_path.read_text(encoding="utf-8").replace(
-                "max_concurrency: 3", "max_concurrency: 1"
-            ),
+            self.config_path.read_text(encoding="utf-8").replace("max_concurrency: 3", "max_concurrency: 1"),
             encoding="utf-8",
         )
         first = run_once.run_once(
@@ -313,9 +305,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             repo_id = conn.execute("SELECT repo_id FROM repos").fetchone()[0]
-            parent_task_id, parent_attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            parent_task_id, parent_attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         self.fixture_path.write_text(
             json.dumps(

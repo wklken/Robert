@@ -33,11 +33,7 @@ def task_facts(**changes):
 
 
 def evaluate(rule, facts):
-    return next(
-        row
-        for row in supervision_rules.evaluate_task(facts, now=NOW)
-        if row["rule_id"] == rule
-    )
+    return next(row for row in supervision_rules.evaluate_task(facts, now=NOW) if row["rule_id"] == rule)
 
 
 class SupervisionProgressRulesTests(unittest.TestCase):
@@ -64,9 +60,7 @@ class SupervisionProgressRulesTests(unittest.TestCase):
         )
         waiting = evaluate("publication_stalled", facts)
         self.assertIsNone(waiting["eligible_since"])
-        facts.update(
-            publication_retry_at=OLD, checkpoints={"publication_stalled": waiting}
-        )
+        facts.update(publication_retry_at=OLD, checkpoints={"publication_stalled": waiting})
         ready = evaluate("publication_stalled", facts)
         self.assertEqual(ready["classification"], "expected_wait")
         self.assertEqual(ready["eligible_since"], NOW.isoformat())
@@ -156,15 +150,11 @@ class SupervisionAdmissionObservationTests(_SupervisionDatabaseFixture):
         self,
     ):
         self.receipt("missing")
-        self.receipt(
-            "deferred", disposition="deferred", consumer="github_route", due_at=LATER
-        )
+        self.receipt("deferred", disposition="deferred", consumer="github_route", due_at=LATER)
         rows = supervision_observe.collect(self.db, now=NOW)["observations"]
         by_scope = {row["scope_id"]: row for row in rows}
         self.assertEqual(by_scope["missing"]["rule_id"], "accepted_input_unowned")
-        self.assertEqual(
-            by_scope["missing"]["evidence"]["input_generation"], "generation"
-        )
+        self.assertEqual(by_scope["missing"]["evidence"]["input_generation"], "generation")
         self.assertNotIn("positive_evidence", by_scope["missing"])
         self.assertEqual(by_scope["deferred"]["classification"], "expected_wait")
         self.assertEqual(by_scope["deferred"]["next_check_at"], LATER)
@@ -184,19 +174,13 @@ class SupervisionAdmissionObservationTests(_SupervisionDatabaseFixture):
         cursor = ""
         for _ in range(6):
             page = supervision_observe.collect(self.db, now=NOW, limit=1, cursor=cursor)
-            scopes = {
-                row["scope_id"]
-                for row in page["observations"]
-                if row["scope_type"] != "controller"
-            }
+            scopes = {row["scope_id"] for row in page["observations"] if row["scope_type"] != "controller"}
             self.assertEqual(len(scopes), 1)
             seen.extend(scopes)
             cursor = page["cursor"]
         self.assertTrue(page["coverage_complete"])
         self.assertTrue(any(scope.startswith("receipt-") for scope in seen[:2]))
-        self.assertEqual(
-            set(seen), {"a", "b", "c", "receipt-a", "receipt-b", "receipt-c"}
-        )
+        self.assertEqual(set(seen), {"a", "b", "c", "receipt-a", "receipt-b", "receipt-c"})
 
     def test_admission_receipt_change_invalidates_decisive_snapshot(self):
         self.receipt("missing")
@@ -276,9 +260,7 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
         self.assertEqual(self.incidents(), [])
         self.successful_local()
         self.assertTrue(self.check(LATER)["ok"])
-        self.assertEqual(
-            self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")]
-        )
+        self.assertEqual(self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")])
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
                 conn.execute(
@@ -301,14 +283,10 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
         self.assertTrue(self.check(NOW.isoformat())["ok"])
         self.successful_local()
         self.assertTrue(self.check(LATER)["ok"])
-        self.assertEqual(
-            self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")]
-        )
+        self.assertEqual(self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")])
 
         self.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id='queued'")
-        self.execute(
-            "UPDATE attempts SET status='completed' WHERE attempt_id='attempt'"
-        )
+        self.execute("UPDATE attempts SET status='completed' WHERE attempt_id='attempt'")
         self.execute(
             """INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json)
             VALUES('result','queued','attempt','local_result',?,json_object('audit',json_object('status','accepted'),
@@ -316,9 +294,7 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
             (LATER,),
         )
         self.assertTrue(self.check("2026-11-06T11:10:00+00:00")["ok"])
-        self.assertEqual(
-            self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")]
-        )
+        self.assertEqual(self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")])
 
         occurred_at = "2026-11-06T11:15:00+00:00"
         self.execute(
@@ -330,19 +306,13 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
             (occurred_at,),
         )
         self.assertTrue(self.check("2026-11-06T11:20:00+00:00")["ok"])
-        self.assertEqual(
-            self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")]
-        )
+        self.assertEqual(self.incidents(), [("queued", "ready_not_dispatched", "open", "{}")])
 
-        self.execute(
-            "UPDATE worker_results SET attempt_id='attempt' WHERE result_id='result'"
-        )
+        self.execute("UPDATE worker_results SET attempt_id='attempt' WHERE result_id='result'")
         self.execute("DELETE FROM attempts WHERE attempt_id='other'")
         self.assertTrue(self.check("2026-11-06T11:30:00+00:00")["ok"])
         [(scope, rule, state, evidence)] = self.incidents()
-        self.assertEqual(
-            (scope, rule, state), ("queued", "ready_not_dispatched", "resolved")
-        )
+        self.assertEqual((scope, rule, state), ("queued", "ready_not_dispatched", "resolved"))
         self.assertEqual(json.loads(evidence)["attempt_id"], "attempt")
         self.assertEqual(json.loads(evidence)["result_id"], "result")
         self.assertEqual(json.loads(evidence)["occurred_at"], occurred_at)
@@ -368,9 +338,7 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
     ):
         self.task("failed", "failed")
         self.assertTrue(self.check(NOW.isoformat())["ok"])
-        self.assertEqual(
-            self.incidents(), [("failed", "execution_failed", "open", "{}")]
-        )
+        self.assertEqual(self.incidents(), [("failed", "execution_failed", "open", "{}")])
         self.task("unrelated", "completed")
         self.task("successor", "completed", parent="failed")
         for key in ("unrelated", "successor"):
@@ -390,18 +358,14 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
             (occurred_at,),
         )
         self.assertTrue(self.check("2026-11-06T10:35:00+00:00")["ok"])
-        self.assertEqual(
-            self.incidents(), [("failed", "execution_failed", "open", "{}")]
-        )
+        self.assertEqual(self.incidents(), [("failed", "execution_failed", "open", "{}")])
         self.execute(
             "UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.audited_at',?) WHERE result_id='successor'",
             (occurred_at,),
         )
         self.assertTrue(self.check(LATER)["ok"])
         [(scope, rule, state, evidence)] = self.incidents()
-        self.assertEqual(
-            (scope, rule, state), ("failed", "execution_failed", "resolved")
-        )
+        self.assertEqual((scope, rule, state), ("failed", "execution_failed", "resolved"))
         self.assertEqual(json.loads(evidence)["successor_task_id"], "successor")
         self.assertEqual(json.loads(evidence)["occurred_at"], occurred_at)
         self.assertTrue(self.check("2026-11-06T11:05:00+00:00")["ok"])

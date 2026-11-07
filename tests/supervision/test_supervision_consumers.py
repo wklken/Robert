@@ -51,9 +51,7 @@ class SupervisionSpoolConsumerTests(unittest.TestCase):
             seen.append(payload["attempt_id"])
             return {"ok": True, "status": "recorded"}
 
-        self.assertEqual(
-            result_spool.replay(self.db, writer, attempt_id="wanted")["recorded"], 1
-        )
+        self.assertEqual(result_spool.replay(self.db, writer, attempt_id="wanted")["recorded"], 1)
         self.assertEqual(seen, ["wanted"])
         self.assertFalse(exact.exists())
         self.assertTrue(unrelated.exists())
@@ -91,9 +89,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
 
         config = validate_config.validate_config(config_path, skip_external=True)
         self.assertTrue(config["ok"], config)
-        config.pop(
-            "config_path", None
-        )  # Pass the trusted in-memory fixture policy directly.
+        config.pop("config_path", None)  # Pass the trusted in-memory fixture policy directly.
         config["supervision"] = {
             "mode": "recover_known",
             "recovery": {
@@ -154,26 +150,18 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
                 values.utc_now(),
             )
         self.assertEqual(
-            result.replay_pending_results(db, config=config, attempt_id=attempt_id)[
-                "recorded"
-            ],
+            result.replay_pending_results(db, config=config, attempt_id=attempt_id)["recorded"],
             1,
         )
         self.assertEqual(
-            result.replay_pending_results(db, config=config, attempt_id=attempt_id)[
-                "recorded"
-            ],
+            result.replay_pending_results(db, config=config, attempt_id=attempt_id)["recorded"],
             0,
         )
         with closing(sqlite3.connect(db)) as conn:
             (result_id,) = conn.execute(
                 "SELECT result_id FROM worker_results WHERE attempt_id=?", (attempt_id,)
             ).fetchone()
-            self.assertTrue(
-                conn.execute(
-                    "SELECT 1 FROM wakeups WHERE result_id=?", (result_id,)
-                ).fetchone()
-            )
+            self.assertTrue(conn.execute("SELECT 1 FROM wakeups WHERE result_id=?", (result_id,)).fetchone())
             status, encoded = conn.execute(
                 "SELECT status,receipt_json FROM supervision_recovery_actions WHERE action_id=?",
                 (action_id,),
@@ -198,9 +186,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
         for number in (1, 2):
             if number == 2:
                 with closing(sqlite3.connect(db)) as conn, conn:
-                    columns = [
-                        row[1] for row in conn.execute("PRAGMA table_info(attempts)")
-                    ]
+                    columns = [row[1] for row in conn.execute("PRAGMA table_info(attempts)")]
                     previous = dict(
                         zip(
                             columns,
@@ -211,9 +197,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
                         )
                     )
                     attempt_id += "-successor"
-                    previous.update(
-                        attempt_id=attempt_id, attempt_no=2, status="running"
-                    )
+                    previous.update(attempt_id=attempt_id, attempt_no=2, status="running")
                     conn.execute(
                         f"INSERT INTO attempts({','.join(previous)}) VALUES ({','.join('?' for _ in previous)})",
                         list(previous.values()),
@@ -229,17 +213,11 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
             ):
                 saved = result.record_result(db, fixture.envelope(task_id, attempt_id))
             self.assertEqual(saved["status"], "deferred")
-            self.assertEqual(
-                result.replay_pending_results(db, config=config)["recorded"], 1
-            )
+            self.assertEqual(result.replay_pending_results(db, config=config)["recorded"], 1)
         with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 2)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 2
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM supervision_recovery_actions"
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM supervision_recovery_actions").fetchone()[0],
                 0,
             )
         self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
@@ -270,9 +248,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
 
         def cancel_during_inspection(*args, **kwargs):
             with closing(sqlite3.connect(db)) as writer, writer:
-                writer.execute(
-                    "UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (task_id,)
-                )
+                writer.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (task_id,))
             return original(*args, **kwargs)
 
         with (
@@ -304,9 +280,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
                 ("rejected", 0),
             )
             self.assertIsNone(
-                conn.execute(
-                    "SELECT json_extract(metadata_json,'$.audit') FROM worker_results"
-                ).fetchone()[0]
+                conn.execute("SELECT json_extract(metadata_json,'$.audit') FROM worker_results").fetchone()[0]
             )
 
     def test_unknown_audit_claim_does_not_keep_the_result_wakeup_runnable(self):
@@ -332,9 +306,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
                 now,
             )
             self.assertTrue(
-                loop_engine.has_runnable_local_work(
-                    conn, config_result=config, now=now, include_publication=False
-                )
+                loop_engine.has_runnable_local_work(conn, config_result=config, now=now, include_publication=False)
             )
             gate = supervision_actions.begin(
                 conn,
@@ -345,20 +317,12 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
                 config=config,
             )
             self.assertEqual(gate["status"], "claimed")
-            self.assertTrue(
-                supervision_actions.finish(
-                    conn, gate["claim"], outcome="unknown", receipt={}, now=now
-                )
-            )
+            self.assertTrue(supervision_actions.finish(conn, gate["claim"], outcome="unknown", receipt={}, now=now))
             self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, config_result=config, now=now, include_publication=False
-                )
+                loop_engine.has_runnable_local_work(conn, config_result=config, now=now, include_publication=False)
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT status FROM wakeups WHERE reason='worker_result_ready'"
-                ).fetchone(),
+                conn.execute("SELECT status FROM wakeups WHERE reason='worker_result_ready'").fetchone(),
                 ("pending",),
             )
 
@@ -374,9 +338,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
             conn.execute(
                 "UPDATE tasks SET lifecycle='completed',metadata_json=json_set(metadata_json,'$.pending_handoff.status','pending')"
             )
-            conn.execute(
-                "UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')"
-            )
+            conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')")
             conn.execute("UPDATE github_actions SET audit_status='accepted'")
             action_id = self.request(
                 conn,
@@ -387,9 +349,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
                 {},
                 now,
             )
-            self.assertTrue(
-                pending_handoff.ready_rows(conn, [repo_id], now, config=config)
-            )
+            self.assertTrue(pending_handoff.ready_rows(conn, [repo_id], now, config=config))
         original = assigned_workspace.prepare_worktree
         with (
             closing(sqlite3.connect(fixture.db)) as conn,
@@ -397,9 +357,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
             patch.object(
                 assigned_workspace,
                 "prepare_worktree",
-                side_effect=lambda repo, event, route, _dry_run: original(
-                    repo, event, route, True
-                ),
+                side_effect=lambda repo, event, route, _dry_run: original(repo, event, route, True),
             ),
         ):
             self.assertEqual(
@@ -417,18 +375,14 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
                 ),
                 1,
             )
-            (child,) = conn.execute(
-                "SELECT task_id FROM tasks WHERE parent_task_id=?", (fixture.task,)
-            ).fetchone()
+            (child,) = conn.execute("SELECT task_id FROM tasks WHERE parent_task_id=?", (fixture.task,)).fetchone()
             status, encoded = conn.execute(
                 "SELECT status,receipt_json FROM supervision_recovery_actions WHERE action_id=?",
                 (action_id,),
             ).fetchone()
             self.assertEqual(status, "observing")
             self.assertEqual(json.loads(encoded)["child_task_id"], child)
-            self.assertEqual(
-                pending_handoff.ready_rows(conn, [repo_id], now, config=config), []
-            )
+            self.assertEqual(pending_handoff.ready_rows(conn, [repo_id], now, config=config), [])
 
 
 if __name__ == "__main__":

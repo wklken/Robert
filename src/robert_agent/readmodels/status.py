@@ -69,17 +69,13 @@ def _compact_json(value, max_items=8, max_chars=240):
     if isinstance(value, dict):
         items = list(value.items())
         compact = {
-            key: _compact_json(item, max_items=max_items, max_chars=max_chars)
-            for key, item in items[:max_items]
+            key: _compact_json(item, max_items=max_items, max_chars=max_chars) for key, item in items[:max_items]
         }
         if len(items) > max_items:
             compact["_truncated_keys"] = len(items) - max_items
         return compact
     if isinstance(value, list):
-        compact = [
-            _compact_json(item, max_items=max_items, max_chars=max_chars)
-            for item in value[:max_items]
-        ]
+        compact = [_compact_json(item, max_items=max_items, max_chars=max_chars) for item in value[:max_items]]
         if len(value) > max_items:
             compact.append({"_truncated_items": len(value) - max_items})
         return compact
@@ -254,9 +250,7 @@ def _compact_task(task):
 
 def build_status(db_path, history_limit=5):
     db_path = Path(db_path).expanduser()
-    data = web.build_dashboard_data(
-        Path(db_path).expanduser(), history_limit=history_limit
-    )
+    data = web.build_dashboard_data(Path(db_path).expanduser(), history_limit=history_limit)
     with closing(sqlite3.connect(db_path)) as conn:
         timings = execution_metrics.summarize(conn)
         from robert_agent.supervision import store as supervision_store
@@ -278,10 +272,7 @@ def build_status(db_path, history_limit=5):
         "latest_loop": data.get("latest_loop") or {},
         "operator_alerts": (data.get("operator_alerts") or [])[:history_limit],
         "operator_next_steps": (data.get("operator_next_steps") or [])[:history_limit],
-        "recent_tasks": [
-            _compact_task(task)
-            for task in (data.get("recent_tasks") or [])[:history_limit]
-        ],
+        "recent_tasks": [_compact_task(task) for task in (data.get("recent_tasks") or [])[:history_limit]],
         "latest_run": {
             "run_id": latest_run.get("run_id"),
             "status": latest_run.get("status"),
@@ -439,9 +430,7 @@ def _latest_notification_for_task(conn, task_id):
     )
     if not notification:
         return None
-    notification["metadata"] = _compact_json(
-        _decode_json(notification.pop("metadata_json"), {}) or {}
-    )
+    notification["metadata"] = _compact_json(_decode_json(notification.pop("metadata_json"), {}) or {})
     return notification
 
 
@@ -468,9 +457,7 @@ def build_task(conn, task_id, result_limit=5):
     )
     if not task:
         return None
-    task["allowed_github_actions"] = _decode_json(
-        task.pop("allowed_github_actions_json"), []
-    )
+    task["allowed_github_actions"] = _decode_json(task.pop("allowed_github_actions_json"), [])
     task["recommended_skills"] = _decode_json(task.pop("recommended_skills_json"), [])
     task["latest_attempt"] = _latest_attempt_for_task(conn, task_id)
     if task["latest_attempt"]:
@@ -479,9 +466,7 @@ def build_task(conn, task_id, result_limit=5):
             task["latest_attempt"]["attempt_id"],
             limit=5,
         )
-        task["latest_phase"] = (
-            task["recent_phases"][0] if task["recent_phases"] else None
-        )
+        task["latest_phase"] = task["recent_phases"][0] if task["recent_phases"] else None
     else:
         task["recent_phases"] = []
         task["latest_phase"] = None
@@ -656,12 +641,8 @@ def build_run(conn, run_id):
         ]
         repo_order = {step: index for index, step in enumerate(REPO_STEP_ORDER)}
         for step in repo_steps:
-            step["output"] = _compact_json(
-                _decode_json(step.pop("output_json"), {}) or {}
-            )
-            step["error"] = _compact_json(
-                _decode_json(step.pop("error_json"), {}) or {}
-            )
+            step["output"] = _compact_json(_decode_json(step.pop("output_json"), {}) or {})
+            step["error"] = _compact_json(_decode_json(step.pop("error_json"), {}) or {})
         run["repo_steps"] = sorted(
             repo_steps,
             key=lambda step: (
@@ -883,9 +864,7 @@ def build_source(conn, identifier, limit=50):
     if not sources:
         return None
     for source in sources:
-        source["metadata"] = _compact_json(
-            _decode_json(source.pop("metadata_json"), {}) or {}
-        )
+        source["metadata"] = _compact_json(_decode_json(source.pop("metadata_json"), {}) or {})
     source_ids = [source["source_id"] for source in sources]
     placeholders = ",".join("?" for _source_id in source_ids)
     workstreams = [
@@ -1079,9 +1058,7 @@ def main(argv=None):
             if args.command == "status":
                 return emit(_ready("status", build_status(args.db, args.history_limit)))
             if args.command == "runs":
-                return emit(
-                    _ready("runs", build_runs(conn, args.limit or args.history_limit))
-                )
+                return emit(_ready("runs", build_runs(conn, args.limit or args.history_limit)))
             if args.command == "task":
                 payload = build_task(conn, args.task_id, result_limit=args.limit)
                 if not payload:
@@ -1100,21 +1077,15 @@ def main(argv=None):
             if args.command == "workstream":
                 payload = build_workstream(conn, args.workstream_id)
                 if not payload:
-                    return emit(
-                        _not_found("workstream", args.workstream_id), exit_code=3
-                    )
+                    return emit(_not_found("workstream", args.workstream_id), exit_code=3)
                 return emit(_ready("workstream", payload))
             if args.command == "event":
                 payload = build_event(conn, args.event_fingerprint)
                 if not payload:
-                    return emit(
-                        _not_found("event", args.event_fingerprint), exit_code=3
-                    )
+                    return emit(_not_found("event", args.event_fingerprint), exit_code=3)
                 return emit(_ready("event", payload))
             if args.command == "events":
-                return emit(
-                    _ready("events", build_events(conn, args.query, limit=args.limit))
-                )
+                return emit(_ready("events", build_events(conn, args.query, limit=args.limit)))
             if args.command == "source":
                 payload = build_source(conn, args.identifier, limit=args.limit)
                 if not payload:
@@ -1139,9 +1110,7 @@ def main(argv=None):
                 exit_code=3,
             )
 
-    return emit(
-        {"ok": False, "status": "unsupported", "safe_error": args.command}, exit_code=3
-    )
+    return emit({"ok": False, "status": "unsupported", "safe_error": args.command}, exit_code=3)
 
 
 if __name__ == "__main__":

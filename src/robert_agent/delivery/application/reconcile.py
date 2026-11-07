@@ -73,8 +73,7 @@ def _evidence(**values):
             result[key] = [_bounded(item) for item in value[:8]]
         elif isinstance(value, dict):
             result[key] = {
-                str(item_key)[:64]: _bounded(item_value)
-                for item_key, item_value in list(value.items())[:16]
+                str(item_key)[:64]: _bounded(item_value) for item_key, item_value in list(value.items())[:16]
             }
         else:
             result[key] = _bounded(value)
@@ -191,18 +190,14 @@ def derive_publication_keys(action, action_scope):
     }
     if not identity["action_id"] or not identity["action_type"]:
         raise ValueError("publication action identity is incomplete")
-    encoded = json.dumps(
-        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
+    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
     request_identity = {
         "action_type": identity["action_type"],
         "target_url": identity["target_url"],
         "scope": projection,
     }
-    request_encoded = json.dumps(
-        request_identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
+    request_encoded = json.dumps(request_identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     request_digest = hashlib.sha256(request_encoded.encode("utf-8")).hexdigest()
     return f"publication:{digest}", f"request:{request_digest}"
 
@@ -275,14 +270,7 @@ def _reconcile_open_pr(action, action_scope, run_command):
     base = scoped_base or metadata_base
     marker = _marker(metadata.get("body"), WORKSTREAM_MARKER_RE)
     expected_owner = scope.get("head_owner") or metadata.get("head_owner") or ""
-    if (
-        not isinstance(repo, str)
-        or not repo
-        or not isinstance(head, str)
-        or not head
-        or not base
-        or not marker
-    ):
+    if not isinstance(repo, str) or not repo or not isinstance(head, str) or not head or not base or not marker:
         return _result("unknown", "open_pr_scope_incomplete")
     branch = _head_branch(head)
     command = [
@@ -339,9 +327,7 @@ def _reconcile_open_pr(action, action_scope, run_command):
         try:
             viewed = run_command(view_command, capture_output=True, text=True)
         except Exception as exc:
-            return _result(
-                "unknown", "open_pr_query_failed", error_type=type(exc).__name__
-            )
+            return _result("unknown", "open_pr_query_failed", error_type=type(exc).__name__)
         if _command_failure(viewed, "open_pr_query_failed"):
             return _result("unknown", "open_pr_query_failed")
         try:
@@ -354,9 +340,7 @@ def _reconcile_open_pr(action, action_scope, run_command):
         actual_repo = f"{detail_repo[0]}/{detail_repo[1]}" if detail_repo else repo
         actual_base = detail.get("baseRefName") or candidate.get("baseRefName") or ""
         actual_head = detail.get("headRefName") or candidate.get("headRefName") or ""
-        actual_owner = _owner(detail.get("headRepositoryOwner")) or _owner(
-            candidate.get("headRepositoryOwner")
-        )
+        actual_owner = _owner(detail.get("headRepositoryOwner")) or _owner(candidate.get("headRepositoryOwner"))
         body = detail.get("body") if isinstance(detail.get("body"), str) else ""
         exact = (
             actual_repo.casefold() == repo.casefold()
@@ -370,16 +354,10 @@ def _reconcile_open_pr(action, action_scope, run_command):
             continue
         # A candidate on the requested branch/base but with a conflicting
         # marker/owner is ambiguity, never proof of absence.
-        if (
-            actual_repo.casefold() == repo.casefold()
-            and actual_base == base
-            and actual_head == branch
-        ):
+        if actual_repo.casefold() == repo.casefold() and actual_base == base and actual_head == branch:
             return _result("unknown", "open_pr_candidate_conflict")
     if len(matches) > 1:
-        return _result(
-            "unknown", "open_pr_candidate_conflict", match_count=len(matches)
-        )
+        return _result("unknown", "open_pr_candidate_conflict", match_count=len(matches))
     if matches:
         detail = matches[0]
         return _result(
@@ -405,13 +383,9 @@ def _remote_branch(action, action_scope, run_command):
             completed = supervision_git.remote_branch(scope, runner=run_command)
         else:
             command = ["git", "ls-remote", "--heads", remote, branch]
-            completed = run_command(
-                command, cwd=worktree, capture_output=True, text=True
-            )
+            completed = run_command(command, cwd=worktree, capture_output=True, text=True)
     except Exception as exc:
-        return _result(
-            "unknown", "remote_branch_query_failed", error_type=type(exc).__name__
-        )
+        return _result("unknown", "remote_branch_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "remote_branch_query_failed"):
         return _result("unknown", "remote_branch_query_failed")
     lines = (getattr(completed, "stdout", "") or "").strip().splitlines()
@@ -423,24 +397,16 @@ def _remote_branch(action, action_scope, run_command):
         if len(parts) < 2 or not re.fullmatch(r"[0-9a-fA-F]{7,64}", parts[0]):
             return _result("unknown", "remote_branch_response_malformed")
         remote_sha = parts[0]
-    expected_sha = (
-        scope.get("result_head_sha")
-        or scope.get("result_sha")
-        or metadata.get("result_head_sha")
-    )
+    expected_sha = scope.get("result_head_sha") or scope.get("result_sha") or metadata.get("result_head_sha")
     pre_push_sha = scope.get("existing_pr_head_sha")
     if not expected_sha:
         return _result("unknown", "result_sha_missing")
     if remote_sha and remote_sha.casefold() == str(expected_sha).casefold():
-        return _result(
-            "confirmed_effect", "remote_sha_match", remote_sha=remote_sha, branch=branch
-        )
+        return _result("confirmed_effect", "remote_sha_match", remote_sha=remote_sha, branch=branch)
     if not remote_sha:
         if pre_push_sha:
             return _result("unknown", "existing_pr_branch_missing", branch=branch)
-        return _result(
-            "confirmed_absent", "remote_branch_lookup_complete_absent", branch=branch
-        )
+        return _result("confirmed_absent", "remote_branch_lookup_complete_absent", branch=branch)
     if pre_push_sha and remote_sha.casefold() == str(pre_push_sha).casefold():
         repo = scope.get("repo")
         pr_number = scope.get("pr_number")
@@ -458,14 +424,9 @@ def _remote_branch(action, action_scope, run_command):
             )
         if not snapshot or snapshot.get("state") != "open" or snapshot.get("merged"):
             return _result("unknown", "existing_pr_snapshot_changed")
-        if (
-            snapshot.get("head_sha") != observed_head
-            or snapshot.get("base_sha") != observed_base
-        ):
+        if snapshot.get("head_sha") != observed_head or snapshot.get("base_sha") != observed_base:
             return _result("unknown", "existing_pr_snapshot_changed")
-        return _result(
-            "confirmed_absent", "existing_pr_pre_push_head_match", remote_sha=remote_sha
-        )
+        return _result("confirmed_absent", "existing_pr_pre_push_head_match", remote_sha=remote_sha)
     return _result("unknown", "remote_sha_conflict", remote_sha=remote_sha)
 
 

@@ -31,11 +31,7 @@ def _existing_worktree_for_branch(repo_root, branch_name):
         if line.startswith("worktree "):
             worktree_path = Path(line.split(" ", 1)[1])
             continue
-        if (
-            worktree_path
-            and line.startswith(prefix)
-            and line[len(prefix) :] == branch_name
-        ):
+        if worktree_path and line.startswith(prefix) and line[len(prefix) :] == branch_name:
             return worktree_path
         if not line:
             worktree_path = None
@@ -66,16 +62,12 @@ def plan_worktree(
     else:
         mode = "new_branch"
 
-    worktree_path = existing_worktree_path or (
-        worktree_root / branch_name.replace("/", "__")
-    )
+    worktree_path = existing_worktree_path or (worktree_root / branch_name.replace("/", "__"))
     start_point = f"upstream/{base_branch}"
     commands = []
     if mode == "new_branch":
         commands.append(f"git fetch upstream {base_branch}")
-        commands.append(
-            f"git worktree add {worktree_path} -b {branch_name} {start_point}"
-        )
+        commands.append(f"git worktree add {worktree_path} -b {branch_name} {start_point}")
     elif mode == "reuse_existing_worktree":
         commands.append(f"reuse existing worktree {worktree_path}")
     else:
@@ -155,9 +147,7 @@ def prepare_existing_pr_worktree(
         repo_root,
         branch_name,
     )
-    worktree_path = existing_worktree_path or (
-        worktree_root / branch_name.replace("/", "__")
-    )
+    worktree_path = existing_worktree_path or (worktree_root / branch_name.replace("/", "__"))
     command_argvs = [
         [
             "git",
@@ -191,17 +181,11 @@ def prepare_existing_pr_worktree(
                 head_ref,
             ]
         )
-    commands = [
-        " ".join(shlex.quote(part) for part in command) for command in command_argvs
-    ]
+    commands = [" ".join(shlex.quote(part) for part in command) for command in command_argvs]
     result = {
         "ok": True,
         "status": "planned" if dry_run else "created",
-        "mode": (
-            "reuse_existing_worktree"
-            if existing_worktree_path
-            else "existing_pr_snapshot"
-        ),
+        "mode": ("reuse_existing_worktree" if existing_worktree_path else "existing_pr_snapshot"),
         "repo_root": str(repo_root),
         "worktree_root": str(worktree_root),
         "worktree_path": str(worktree_path),
@@ -340,9 +324,7 @@ def plan_review_worktree(
     review_ref = f"refs/robert/reviews/pr-{source_number}"
     existing_worktree_path = _existing_worktree_for_branch(repo_root, branch_name)
     mode = "reuse_existing_worktree" if existing_worktree_path else "review_pr"
-    worktree_path = existing_worktree_path or (
-        worktree_root / branch_name.replace("/", "__")
-    )
+    worktree_path = existing_worktree_path or (worktree_root / branch_name.replace("/", "__"))
     start_point = f"upstream/{base_branch}"
     commands = []
     if mode == "reuse_existing_worktree":
@@ -352,9 +334,7 @@ def plan_review_worktree(
     else:
         commands.append(f"git fetch upstream {base_branch}")
         commands.append(f"git fetch upstream +pull/{source_number}/head:{review_ref}")
-        commands.append(
-            f"git worktree add {worktree_path} -B {branch_name} {review_ref}"
-        )
+        commands.append(f"git worktree add {worktree_path} -B {branch_name} {review_ref}")
 
     result = {
         "ok": True,
@@ -455,8 +435,7 @@ def _registered_worktree(repo_root, expected_path):
         return False
     expected_path = Path(expected_path).resolve()
     return any(
-        line.startswith("worktree ")
-        and Path(line.split(" ", 1)[1]).resolve() == expected_path
+        line.startswith("worktree ") and Path(line.split(" ", 1)[1]).resolve() == expected_path
         for line in completed.stdout.splitlines()
     )
 
@@ -507,18 +486,14 @@ def plan_analysis_worktree(
     if not dry_run:
         worktree_root.mkdir(parents=True, exist_ok=True)
         for command in commands:
-            run_command(
-                command, cwd=repo_root, check=True, text=True, capture_output=True
-            )
+            run_command(command, cwd=repo_root, check=True, text=True, capture_output=True)
     return {
         "ok": True,
         "status": ("reused" if reused else ("planned" if dry_run else "prepared")),
         "mode": "analysis",
         "worktree_path": str(worktree_path),
         "branch_name": None,
-        "commands": [
-            " ".join(shlex.quote(part) for part in command) for command in commands
-        ],
+        "commands": [" ".join(shlex.quote(part) for part in command) for command in commands],
     }
 
 

@@ -9,11 +9,7 @@ from robert_agent.adapters.sqlite import execution_control as execution_store
 
 
 def pending_tasks(conn, repo_ids=(), *, task_id=None):
-    clause = (
-        " AND w.repo_id IN (" + ",".join("?" for _ in repo_ids) + ")"
-        if repo_ids
-        else ""
-    )
+    clause = " AND w.repo_id IN (" + ",".join("?" for _ in repo_ids) + ")" if repo_ids else ""
     if task_id:
         clause += " AND t.task_id=?"
     cursor = conn.execute(
@@ -40,9 +36,7 @@ def pending_tasks(conn, repo_ids=(), *, task_id=None):
 
 def source_read(conn, task):
     """Require a scanner observation after the accepted operator request."""
-    key = github_client.command_key(
-        ["gh", "api", f"repos/{task['full_name']}/issues/{task['number']}"]
-    )
+    key = github_client.command_key(["gh", "api", f"repos/{task['full_name']}/issues/{task['number']}"])
     row = conn.execute(
         """SELECT response_json FROM github_scan_reads
         WHERE repo_id=? AND command_key=? AND observed_at>=?""",
@@ -71,9 +65,4 @@ def waiting_wakeup_ids(conn, repo_ids=()):
 
 def blocked(conn, task):
     facts = control_queries.lifecycle_facts(conn, task)
-    return bool(
-        facts["running"]
-        or facts["actions"]
-        or facts["workflow_attention"]
-        or facts["cleanup_pending"]
-    )
+    return bool(facts["running"] or facts["actions"] or facts["workflow_attention"] or facts["cleanup_pending"])

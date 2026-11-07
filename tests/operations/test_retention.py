@@ -22,15 +22,11 @@ class RetentionTests(RetentionFixture):
         daemon._heartbeat(self.context, now=NOW)
         with self.connect() as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT heartbeat_at FROM leases WHERE lease_id=?", (self.lease,)
-                ).fetchone()[0],
+                conn.execute("SELECT heartbeat_at FROM leases WHERE lease_id=?", (self.lease,)).fetchone()[0],
                 NOW,
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM daemon_events WHERE event_type='daemon_heartbeat'"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM daemon_events WHERE event_type='daemon_heartbeat'").fetchone()[0],
                 0,
             )
 
@@ -40,19 +36,13 @@ class RetentionTests(RetentionFixture):
             "status": "failed",
             "safe_error": "failure " * 1000,
             "run_id": "run-a",
-            "cycle_results": [
-                {"run_id": "run-b", "status": "failed", "repo_summaries": ["x" * 10000]}
-            ],
+            "cycle_results": [{"run_id": "run-b", "status": "failed", "repo_summaries": ["x" * 10000]}],
             "child": {"returncode": 1, "stdout": "x" * 100000, "stderr": "diagnostic"},
         }
-        actual = daemon._run_live_poll(
-            self.context, child_runner=lambda *a, **k: result, now=NOW
-        )
+        actual = daemon._run_live_poll(self.context, child_runner=lambda *a, **k: result, now=NOW)
         self.assertEqual(actual, result)
         with self.connect() as conn:
-            raw = conn.execute(
-                "SELECT metadata_json FROM daemon_events WHERE status='failed'"
-            ).fetchone()[0]
+            raw = conn.execute("SELECT metadata_json FROM daemon_events WHERE status='failed'").fetchone()[0]
         payload = json.loads(raw)
         self.assertLess(len(raw), 5000)
         self.assertEqual(payload["run_id"], "run-a")
@@ -71,12 +61,8 @@ class RetentionTests(RetentionFixture):
                 "UPDATE agent_runs SET summary_json=? WHERE run_id='run'",
                 (json.dumps(summary),),
             )
-            run_journal.mark_run_step(
-                conn, "run", "summarize", "succeeded", NOW, output=summary
-            )
-            raw = conn.execute(
-                "SELECT output_json FROM run_steps WHERE run_id='run'"
-            ).fetchone()[0]
+            run_journal.mark_run_step(conn, "run", "summarize", "succeeded", NOW, output=summary)
+            raw = conn.execute("SELECT output_json FROM run_steps WHERE run_id='run'").fetchone()[0]
             self.assertNotIn("repo_summaries", raw)
             cli_run = status.build_run(conn, "run")
         self.assertEqual(cli_run["steps"][0]["output"], summary)
@@ -110,24 +96,18 @@ class RetentionTests(RetentionFixture):
         self.assertTrue(planned["ok"], planned)
         self.assertEqual(planned["counts"]["agent_runs"], 2)
         with self.connect() as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 9
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 9)
         applied = retention.prune_database(self.db, now=NOW, apply=True)
         self.assertEqual(applied["counts"], planned["counts"])
         self.assertEqual(self.core_rows(), before)
         with self.connect() as conn:
             self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM leases WHERE lease_id IN ('active','running-owner')"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM leases WHERE lease_id IN ('active','running-owner')").fetchone()[0],
                 2,
             )
             self.assertIsNotNone(
-                conn.execute(
-                    "SELECT 1 FROM daemon_events WHERE daemon_event_id='recent-error'"
-                ).fetchone()
+                conn.execute("SELECT 1 FROM daemon_events WHERE daemon_event_id='recent-error'").fetchone()
             )
         again = retention.prune_database(self.db, now=NOW, apply=True)
         self.assertEqual(sum(again["counts"].values()), 0)
@@ -149,20 +129,14 @@ class RetentionTests(RetentionFixture):
                             "UPDATE agent_runs SET status='completed', summary_json=? WHERE run_id='run'",
                             (json.dumps(summary),),
                         )
-                        run_journal.mark_run_step(
-                            writer, "run", "summarize", "succeeded", NOW, output=summary
-                        )
+                        run_journal.mark_run_step(writer, "run", "summarize", "succeeded", NOW, output=summary)
                 return super().execute(sql, parameters)
 
         for reader in ("cli", "web"):
             with self.subTest(reader=reader):
                 with self.connect() as conn:
-                    conn.execute(
-                        "UPDATE agent_runs SET status='running', summary_json='{}' WHERE run_id='run'"
-                    )
-                    conn.execute(
-                        "UPDATE run_steps SET status='running', output_json='{}' WHERE run_id='run'"
-                    )
+                    conn.execute("UPDATE agent_runs SET status='running', summary_json='{}' WHERE run_id='run'")
+                    conn.execute("UPDATE run_steps SET status='running', output_json='{}' WHERE run_id='run'")
                 with closing(real_connect(db, factory=CompletingConnection)) as conn:
                     conn.row_factory = sqlite3.Row
                     if reader == "cli":
@@ -170,9 +144,7 @@ class RetentionTests(RetentionFixture):
                     else:
                         with mock.patch(
                             "robert_agent.interfaces.web.server.sqlite3.connect",
-                            side_effect=lambda *a, **k: real_connect(
-                                *a, **k, factory=CompletingConnection
-                            ),
+                            side_effect=lambda *a, **k: real_connect(*a, **k, factory=CompletingConnection),
                         ):
                             run = dashboard.build_dashboard_data(db)["recent_runs"][0]
                     self.assertEqual(run["steps"][0]["status"], "succeeded")
@@ -189,61 +161,37 @@ class RetentionTests(RetentionFixture):
         self.add_run("recent-offset", when="2026-10-15T23:30:00-02:00")
         first = retention.prune_database(self.db, now=NOW, apply=True, batch_size=2)
         self.assertEqual(first["counts"]["agent_runs"], 2)
-        second = retention.prune_database(
-            self.db, now=NOW, apply=True, batch_size=2, max_batches=3
-        )
+        second = retention.prune_database(self.db, now=NOW, apply=True, batch_size=2, max_batches=3)
         self.assertEqual(second["counts"]["agent_runs"], 3)
         with self.connect() as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 3
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 3)
 
     @mock.patch(
         "robert_agent.runtime.daemon.loop_engine.has_runnable_local_work",
         return_value=False,
     )
-    def test_maintenance_runs_again_in_resident_daemon_and_can_be_disabled(
-        self, _local_work
-    ):
+    def test_maintenance_runs_again_in_resident_daemon_and_can_be_disabled(self, _local_work):
         self.add_run("old")
         self.add_run("latest", when=NOW)
         with mock.patch("robert_agent.runtime.daemon.time.monotonic", return_value=1):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
-            self.assertIsNone(
-                conn.execute("SELECT 1 FROM agent_runs WHERE run_id='old'").fetchone()
-            )
+            self.assertIsNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='old'").fetchone())
         self.add_run("another-old")
         with mock.patch("robert_agent.runtime.daemon.time.monotonic", return_value=2):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
-            self.assertIsNotNone(
-                conn.execute(
-                    "SELECT 1 FROM agent_runs WHERE run_id='another-old'"
-                ).fetchone()
-            )
-        with mock.patch(
-            "robert_agent.runtime.daemon.time.monotonic", return_value=10000
-        ):
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='another-old'").fetchone())
+        with mock.patch("robert_agent.runtime.daemon.time.monotonic", return_value=10000):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
-            self.assertIsNone(
-                conn.execute(
-                    "SELECT 1 FROM agent_runs WHERE run_id='another-old'"
-                ).fetchone()
-            )
+            self.assertIsNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='another-old'").fetchone())
         self.add_run("disabled")
         self.context.runtime_config["maintenance"]["enabled"] = False
-        with mock.patch(
-            "robert_agent.runtime.daemon.time.monotonic", return_value=20000
-        ):
+        with mock.patch("robert_agent.runtime.daemon.time.monotonic", return_value=20000):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
-            self.assertIsNotNone(
-                conn.execute(
-                    "SELECT 1 FROM agent_runs WHERE run_id='disabled'"
-                ).fetchone()
-            )
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='disabled'").fetchone())
 
     def test_busy_database_rolls_back_and_is_retryable(self):
         from robert_agent.operations import retention
@@ -256,9 +204,7 @@ class RetentionTests(RetentionFixture):
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "busy")
         with self.connect() as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 2)
 
     def test_missing_database_is_not_created(self):
         from robert_agent.operations import retention
@@ -287,9 +233,7 @@ class RetentionTests(RetentionFixture):
         ) as validate:
             output = io.StringIO()
             with redirect_stdout(output):
-                code = main(
-                    ["maintenance", "prune", "--output", "json", "--batch-size", "1"]
-                )
+                code = main(["maintenance", "prune", "--output", "json", "--batch-size", "1"])
             self.assertEqual(code, 0)
             self.assertTrue(json.loads(output.getvalue())["dry_run"])
             validate.assert_called_once_with(mock.ANY, skip_external=True)
@@ -343,12 +287,8 @@ class RetentionTests(RetentionFixture):
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "failed")
         with self.connect() as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM run_steps").fetchone()[0], 2
-            )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM run_steps").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 2)
 
     def test_reference_and_legacy_summary_have_identical_compact_cli_output(self):
         self.add_run("run")
@@ -363,13 +303,9 @@ class RetentionTests(RetentionFixture):
                 (json.dumps(summary),),
             )
             legacy = status.build_run(conn, "run")
-            run_journal.mark_run_step(
-                conn, "run", "summarize", "succeeded", NOW, output=summary
-            )
+            run_journal.mark_run_step(conn, "run", "summarize", "succeeded", NOW, output=summary)
             current = status.build_run(conn, "run")
-            self.assertEqual(
-                current["steps"][0]["output"], legacy["steps"][0]["output"]
-            )
+            self.assertEqual(current["steps"][0]["output"], legacy["steps"][0]["output"])
 
     def test_child_diagnostic_secret_is_omitted(self):
         result = {
@@ -377,12 +313,8 @@ class RetentionTests(RetentionFixture):
             "safe_error": "Authorization: sensitive",
             "status": "failed",
         }
-        daemon._run_local_drain(
-            self.context, child_runner=lambda *a, **k: result, now=NOW
-        )
+        daemon._run_local_drain(self.context, child_runner=lambda *a, **k: result, now=NOW)
         with self.connect() as conn:
-            raw = conn.execute(
-                "SELECT metadata_json FROM daemon_events WHERE status='failed'"
-            ).fetchone()[0]
+            raw = conn.execute("SELECT metadata_json FROM daemon_events WHERE status='failed'").fetchone()[0]
         self.assertNotIn("Authorization:", raw)
         self.assertIn("omitted", raw)

@@ -44,9 +44,7 @@ class DaemonSchedulingTests(DaemonFixture):
             result = daemon._resident_loop(context, listener_factory=Listener)
 
         with closing(sqlite3.connect(self.db_path)) as conn:
-            event_types = {
-                row[0] for row in conn.execute("SELECT event_type FROM daemon_events")
-            }
+            event_types = {row[0] for row in conn.execute("SELECT event_type FROM daemon_events")}
         self.assertTrue(result["ok"], result)
         self.assertEqual(
             calls,
@@ -90,9 +88,7 @@ class DaemonSchedulingTests(DaemonFixture):
             )
 
         with closing(sqlite3.connect(self.db_path)) as conn:
-            event_types = {
-                row[0] for row in conn.execute("SELECT event_type FROM daemon_events")
-            }
+            event_types = {row[0] for row in conn.execute("SELECT event_type FROM daemon_events")}
         self.assertTrue(result["ok"], result)
         self.assertEqual(sleeps, [5])
         self.assertIn("wakeup_listener_unavailable", event_types)
@@ -258,9 +254,7 @@ class DaemonSchedulingTests(DaemonFixture):
         self.assertIsNone(error)
         self.assertIsNotNone(context)
 
-        with mock.patch.object(
-            daemon.loop_engine, "has_runnable_local_work", return_value=False
-        ):
+        with mock.patch.object(daemon.loop_engine, "has_runnable_local_work", return_value=False):
             result = daemon.run_once_decision(context, now=now)
 
         self.assertEqual(result["decision"], "idle")
@@ -420,9 +414,7 @@ class DaemonSchedulingTests(DaemonFixture):
             rate_limit_runner=rate_limit_runner,
         )
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE attempts SET status = 'completed' WHERE attempt_id = 'attempt-1'"
-            )
+            conn.execute("UPDATE attempts SET status = 'completed' WHERE attempt_id = 'attempt-1'")
         second = daemon.run_once_decision(
             context,
             now="2026-07-03T00:01:00+00:00",
@@ -582,9 +574,7 @@ class DaemonSchedulingTests(DaemonFixture):
         def rate_limit_runner(command, **_kwargs):
             class Completed:
                 returncode = 0
-                stdout = (
-                    '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
-                )
+                stdout = '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
                 stderr = ""
 
             return Completed()
@@ -655,9 +645,7 @@ class DaemonSchedulingTests(DaemonFixture):
         def rate_limit_runner(command, **_kwargs):
             class Completed:
                 returncode = 0
-                stdout = (
-                    '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
-                )
+                stdout = '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
                 stderr = ""
 
             return Completed()
@@ -733,8 +721,6 @@ class DaemonSchedulingTests(DaemonFixture):
         self.assertEqual(result["status"], "disabled")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             lease_count = conn.execute("SELECT COUNT(*) FROM leases").fetchone()[0]
-            daemon_run_count = conn.execute(
-                "SELECT COUNT(*) FROM daemon_runs"
-            ).fetchone()[0]
+            daemon_run_count = conn.execute("SELECT COUNT(*) FROM daemon_runs").fetchone()[0]
         self.assertEqual(lease_count, 0)
         self.assertEqual(daemon_run_count, 0)

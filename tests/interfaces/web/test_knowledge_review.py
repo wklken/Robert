@@ -14,10 +14,7 @@ class KnowledgeReviewHTTPTests(DashboardFixture):
 
         status, headers, body = web.handle_dashboard_post(
             "/knowledge/approve",
-            (
-                "candidate_id=kc-1&scope_type=route&scope_value=update-existing-pr"
-                "&approved_by=wklken"
-            ).encode("utf-8"),
+            ("candidate_id=kc-1&scope_type=route&scope_value=update-existing-pr&approved_by=wklken").encode("utf-8"),
             db_path,
         )
 

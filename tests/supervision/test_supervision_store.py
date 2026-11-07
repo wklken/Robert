@@ -77,12 +77,8 @@ class SupervisionStoreTests(unittest.TestCase):
         (opened,) = self.apply(observation())
         for status in ("healthy", "expected_wait", "suspect", "unobservable"):
             with self.subTest(status=status):
-                self.assertEqual(
-                    self.apply(observation(classification=status), now=LATER), []
-                )
-                self.assertEqual(
-                    len(supervision_store.list_incidents(self.conn, status="active")), 1
-                )
+                self.assertEqual(self.apply(observation(classification=status), now=LATER), [])
+                self.assertEqual(len(supervision_store.list_incidents(self.conn, status="active")), 1)
         self.assertEqual(
             self.apply(
                 observation(
@@ -105,9 +101,7 @@ class SupervisionStoreTests(unittest.TestCase):
             [],
         )
         self.assertEqual(self.apply(now=LATER), [])
-        self.assertEqual(
-            len(supervision_store.list_incidents(self.conn, status="active")), 1
-        )
+        self.assertEqual(len(supervision_store.list_incidents(self.conn, status="active")), 1)
         (resolved,) = self.apply(
             observation(
                 classification="healthy",
@@ -120,21 +114,15 @@ class SupervisionStoreTests(unittest.TestCase):
             now=LATER,
         )
         self.assertEqual(resolved["transition"], "resolved")
-        self.assertEqual(
-            resolved["incident"]["incident_id"], opened["incident"]["incident_id"]
-        )
+        self.assertEqual(resolved["incident"]["incident_id"], opened["incident"]["incident_id"])
         self.assertEqual(
             resolved["incident"]["resolution_evidence"],
             {"audit": "accepted", "result_id": "result-one", "occurred_at": LATER},
         )
         self.assertEqual(resolved["incident"]["resolved_by"], "natural")
-        self.assertEqual(
-            supervision_store.list_incidents(self.conn, status="active"), []
-        )
+        self.assertEqual(supervision_store.list_incidents(self.conn, status="active"), [])
         (recurrence,) = self.apply(observation(), now=LATER)
-        self.assertNotEqual(
-            recurrence["incident"]["incident_id"], opened["incident"]["incident_id"]
-        )
+        self.assertNotEqual(recurrence["incident"]["incident_id"], opened["incident"]["incident_id"])
         self.assertEqual(
             recurrence["incident"]["prior_incident_id"],
             opened["incident"]["incident_id"],
@@ -143,39 +131,27 @@ class SupervisionStoreTests(unittest.TestCase):
     def test_observation_updates_checkpoint_without_overwriting_metadata(self):
         key = ("task", "task-one", "result_not_consumed")
         with self.conn:
-            supervision_store.update_checkpoint(
-                self.conn, *key, now=NOW, metadata={"cursor": "first"}
-            )
+            supervision_store.update_checkpoint(self.conn, *key, now=NOW, metadata={"cursor": "first"})
         self.apply(observation())
         checkpoint = supervision_store.get_checkpoint(self.conn, *key)
         self.assertEqual(checkpoint["metadata"], {"cursor": "first"})
         self.assertEqual(checkpoint["last_progress_at"], NOW)
         self.apply(observation(evidence={"spool_bytes": 20}), now=LATER)
-        self.assertEqual(
-            supervision_store.get_checkpoint(self.conn, *key)["last_progress_at"], NOW
-        )
+        self.assertEqual(supervision_store.get_checkpoint(self.conn, *key)["last_progress_at"], NOW)
         self.apply(observation(progress_token="audited:result-one"), now=LATER)
-        self.assertEqual(
-            supervision_store.get_checkpoint(self.conn, *key)["last_progress_at"], LATER
-        )
+        self.assertEqual(supervision_store.get_checkpoint(self.conn, *key)["last_progress_at"], LATER)
 
     def test_wait_resets_eligibility_but_heartbeat_does_not_reset_progress(self):
         self.apply(observation(eligible_since=NOW, progress_observed_at=NOW))
         self.apply(
-            observation(
-                eligible_since=None, classification="expected_wait", progress_token=None
-            ),
+            observation(eligible_since=None, classification="expected_wait", progress_token=None),
             now=LATER,
         )
-        checkpoint = supervision_store.get_checkpoint(
-            self.conn, "task", "task-one", "result_not_consumed"
-        )
+        checkpoint = supervision_store.get_checkpoint(self.conn, "task", "task-one", "result_not_consumed")
         self.assertIsNone(checkpoint["eligible_since"])
         self.assertEqual(checkpoint["last_progress_at"], NOW)
         self.apply(observation(eligible_since=LATER), now=LATER)
-        checkpoint = supervision_store.get_checkpoint(
-            self.conn, "task", "task-one", "result_not_consumed"
-        )
+        checkpoint = supervision_store.get_checkpoint(self.conn, "task", "task-one", "result_not_consumed")
         self.assertEqual(checkpoint["eligible_since"], LATER)
         self.assertEqual(checkpoint["last_progress_at"], NOW)
 
@@ -194,9 +170,7 @@ class SupervisionStoreTests(unittest.TestCase):
         self.conn.execute("DROP TABLE supervision_recovery_actions")
         self.conn.execute("DROP TABLE supervision_incidents")
         self.conn.execute("DROP TABLE supervision_checkpoints")
-        self.conn.execute(
-            "DELETE FROM schema_migrations WHERE name='robert-supervision-v1'"
-        )
+        self.conn.execute("DELETE FROM schema_migrations WHERE name='robert-supervision-v1'")
         self.conn.commit()
         self.assertFalse(supervision_store.has_schema(self.conn))
         storage.init_database(self.db)
@@ -204,9 +178,7 @@ class SupervisionStoreTests(unittest.TestCase):
         self.apply(observation())
         storage.init_database(self.db)
         self.assertEqual(
-            self.conn.execute(
-                "SELECT lifecycle,updated_at FROM tasks WHERE task_id='task-one'"
-            ).fetchone(),
+            self.conn.execute("SELECT lifecycle,updated_at FROM tasks WHERE task_id='task-one'").fetchone(),
             ("queued", NOW),
         )
         self.assertEqual(len(supervision_store.list_incidents(self.conn)), 1)

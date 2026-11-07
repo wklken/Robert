@@ -40,16 +40,12 @@ class RuntimeIdentityTests(unittest.TestCase):
         self.manifest = self.root / "build.json"
 
     def git(self, *args):
-        return subprocess.run(
-            ["git", *args], cwd=self.repo, check=True, capture_output=True, text=True
-        ).stdout.strip()
+        return subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
 
     def write_wheel(self, module):
         with ZipFile(self.wheel, "w") as output:
             output.writestr("robert_agent/__init__.py", module)
-            output.writestr(
-                "fixture-1.0.dist-info/METADATA", "Name: fixture\nVersion: 1.0\n"
-            )
+            output.writestr("fixture-1.0.dist-info/METADATA", "Name: fixture\nVersion: 1.0\n")
 
     def test_build_matches_clean_git_and_runtime_matches_actual_installed_files(self):
         manifest = self.runtime.build_manifest(self.repo, self.wheel)

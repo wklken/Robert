@@ -138,9 +138,7 @@ class DiscoveryTests(unittest.TestCase):
         events = discover.collect_live_events(REPO_CONFIG, runner=fake_runner)
 
         self.assertTrue(any("--mentions" in call for call in calls))
-        self.assertTrue(
-            any(call[:3] == ["gh", "api", "notifications"] for call in calls)
-        )
+        self.assertTrue(any(call[:3] == ["gh", "api", "notifications"] for call in calls))
         self.assertEqual(events[0]["event_type"], "mention")
         self.assertEqual(events[0]["actor_login"], "wklken")
         self.assertEqual(events[1]["event_type"], "notification")
@@ -196,9 +194,7 @@ class DiscoveryTests(unittest.TestCase):
 
         raw_events = discover.collect_live_events(REPO_CONFIG, runner=fake_runner)
         events = discover.normalize_events(raw_events, REPO_CONFIG)
-        decisions = authorize.authorize_events(
-            events, REPO_CONFIG, existing_workstreams=set()
-        )
+        decisions = authorize.authorize_events(events, REPO_CONFIG, existing_workstreams=set())
 
         self.assertEqual(events[0]["assignment_actor_login"], "wklken")
         self.assertEqual(events[0]["assigned_to"], "robert-bot")
@@ -236,9 +232,7 @@ class DiscoveryTests(unittest.TestCase):
 
         raw_events = discover.collect_live_events(REPO_CONFIG, runner=fake_runner)
         events = discover.normalize_events(raw_events, REPO_CONFIG)
-        decisions = authorize.authorize_events(
-            events, REPO_CONFIG, existing_workstreams=set()
-        )
+        decisions = authorize.authorize_events(events, REPO_CONFIG, existing_workstreams=set())
 
         self.assertEqual(decisions[0]["authorization_status"], "pending_authorization")
 
@@ -284,9 +278,7 @@ class DiscoveryTests(unittest.TestCase):
 
         raw_events = discover.collect_live_events(REPO_CONFIG, runner=fake_runner)
         events = discover.normalize_events(raw_events, REPO_CONFIG)
-        decisions = authorize.authorize_events(
-            events, REPO_CONFIG, existing_workstreams=set()
-        )
+        decisions = authorize.authorize_events(events, REPO_CONFIG, existing_workstreams=set())
 
         self.assertEqual(events[0]["actor_login"], "wklken")
         self.assertEqual(events[0]["event_fingerprint"], "comment:trusted-comment-1")
@@ -339,17 +331,11 @@ class DiscoveryTests(unittest.TestCase):
         events = discover.normalize_events(raw_events, REPO_CONFIG)
 
         self.assertEqual(events[0]["workstream_id"], "github:example/backend!601")
-        self.assertEqual(
-            events[0]["origin_workstream_id"], "github:example/backend#123"
-        )
+        self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#123")
         self.assertTrue(events[0]["has_open_dd_pr"])
-        self.assertEqual(
-            events[0]["existing_pr_head_branch"], "codex/dd-123-fix-timeout"
-        )
+        self.assertEqual(events[0]["existing_pr_head_branch"], "codex/dd-123-fix-timeout")
         self.assertEqual(events[0]["existing_pr_head_sha"], "head-sha-123")
-        self.assertEqual(
-            events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent"
-        )
+        self.assertEqual(events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent")
 
     def test_live_pr_followup_collects_all_trusted_comments(self):
         from robert_agent.adapters.github import discovery as discover
@@ -552,12 +538,8 @@ class DiscoveryTests(unittest.TestCase):
 
         self.assertTrue(events[0]["has_open_dd_pr"])
         self.assertEqual(events[0]["workstream_id"], "github:example/backend!602")
-        self.assertEqual(
-            events[0]["origin_workstream_id"], "github:example/backend#2878"
-        )
-        self.assertEqual(
-            events[0]["existing_pr_head_branch"], "codex/issue-2878-mcp-proxy"
-        )
+        self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#2878")
+        self.assertEqual(events[0]["existing_pr_head_branch"], "codex/issue-2878-mcp-proxy")
         self.assertEqual(events[0]["pr_author_login"], "robert-bot")
         self.assertEqual(route_result["expected_output"], "update_existing_pr")
         self.assertIn("push_existing_pr", route_result["allowed_github_actions"])

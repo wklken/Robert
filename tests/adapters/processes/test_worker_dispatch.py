@@ -51,9 +51,7 @@ class WorkerDispatchTests(TemporaryWorkspace):
         try:
             dispatch.subprocess.Popen = fake_popen
             dispatch._worker_environment = fake_worker_environment
-            dispatch.worker_identity.cleanup_new_process = lambda proc: (
-                cleaned.append(proc.pid) or True
-            )
+            dispatch.worker_identity.cleanup_new_process = lambda proc: cleaned.append(proc.pid) or True
             result = dispatch.dispatch_worker(
                 task_id="task-1",
                 attempt_id="attempt-1",
@@ -179,12 +177,10 @@ class WorkerDispatchTests(TemporaryWorkspace):
 
         try:
             dispatch.subprocess.Popen = lambda _command, **_kwargs: RunningProcess()
-            dispatch.worker_identity.capture_process_identity = lambda _pid: (
-                _ for _ in ()
-            ).throw(RuntimeError("identity unavailable"))
-            dispatch.worker_identity.cleanup_new_process = lambda proc: cleanup.append(
-                proc.pid
+            dispatch.worker_identity.capture_process_identity = lambda _pid: (_ for _ in ()).throw(
+                RuntimeError("identity unavailable")
             )
+            dispatch.worker_identity.cleanup_new_process = lambda proc: cleanup.append(proc.pid)
             result = dispatch.dispatch_worker(
                 task_id="task-identity-failed",
                 attempt_id="attempt-identity-failed",

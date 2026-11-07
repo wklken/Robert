@@ -55,9 +55,7 @@ def _supervision_transition_due(conn, repo_ids, config, now):
                 continue  # The executor cannot classify an incomplete launch yet.
             started_at = started_at or metadata.get("worker_started_at") or now
             heartbeat_at = heartbeat_at or now
-        timeout = ((metadata.get("dispatch") or {}).get("worker_launch") or {}).get(
-            "timeout_seconds"
-        )
+        timeout = ((metadata.get("dispatch") or {}).get("worker_launch") or {}).get("timeout_seconds")
         try:
             timeout = int(timeout)
         except (TypeError, ValueError):
@@ -87,15 +85,9 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             status["status"] == "running" and attempt_status == "stale"
         ):
             return True
-        if (now_dt - values.parse_time(started_at)).total_seconds() >= config.get(
-            "worker_startup_grace_seconds", 300
-        ):
-            phase = conn.execute(
-                "SELECT 1 FROM worker_phases WHERE attempt_id=? LIMIT 1", (attempt_id,)
-            ).fetchone()
-            if not phase and not evidence.attempt_command_records(
-                conn, attempt_id, task_id, persist=False
-            ):
+        if (now_dt - values.parse_time(started_at)).total_seconds() >= config.get("worker_startup_grace_seconds", 300):
+            phase = conn.execute("SELECT 1 FROM worker_phases WHERE attempt_id=? LIMIT 1", (attempt_id,)).fetchone()
+            if not phase and not evidence.attempt_command_records(conn, attempt_id, task_id, persist=False):
                 return True
     return False
 
@@ -104,9 +96,7 @@ def _queued_native_round(conn, repo_ids):
     tables = [
         name
         for name in ("review_sessions", "vote_sessions")
-        if conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (name,)
-        ).fetchone()
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (name,)).fetchone()
     ]
     clause, params = _repo_filter("r", repo_ids)
     for table in tables:
@@ -149,9 +139,7 @@ def _published_result_needs_finalization(conn, repo_ids):
     return any(results.result_actions_all_published(conn, row[0]) for row in rows)
 
 
-def has_local_work(
-    conn, repo_ids, *, config_result=None, now=None, include_publication=True
-):
+def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publication=True):
     now = now or wakeup.utc_now()
     if not isinstance(now, str):
         now = now.isoformat()
@@ -159,11 +147,7 @@ def has_local_work(
     from robert_agent.work import operator_queries as github_operator
 
     waiting_ids = github_operator.waiting_wakeup_ids(conn, repo_ids)
-    waiting_clause = (
-        " AND wakeup_id NOT IN (" + ",".join("?" for _ in waiting_ids) + ")"
-        if waiting_ids
-        else ""
-    )
+    waiting_clause = " AND wakeup_id NOT IN (" + ",".join("?" for _ in waiting_ids) + ")" if waiting_ids else ""
     pending_wakeup = conn.execute(
         f"""
         SELECT 1
@@ -215,9 +199,7 @@ def has_local_work(
         for result_id, task_id, retries in unaudited
     ):
         return True
-    if _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(
-        conn, repo_ids
-    ):
+    if _queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
         return True
     fact_repo_clause, fact_repo_params = _repo_filter("f", repo_ids)
     fact = conn.execute(
@@ -287,12 +269,10 @@ def has_local_work(
         global_limit = config_result.get("max_concurrency", 1)
         if capacity.running_attempt_count_for_repos(conn, scoped_repos) < global_limit:
             limits = {
-                repo["full_name"]: repo.get("max_concurrency", global_limit)
-                for repo in config_result.get("repos", [])
+                repo["full_name"]: repo.get("max_concurrency", global_limit) for repo in config_result.get("repos", [])
             }
             if any(
-                capacity.running_attempt_count(conn, candidate_id)
-                < limits.get(full_name, global_limit)
+                capacity.running_attempt_count(conn, candidate_id) < limits.get(full_name, global_limit)
                 for candidate_id, full_name in prepared
             ):
                 return True

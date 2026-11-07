@@ -43,9 +43,7 @@ class PublishPushTests(PublicationFixture):
             calls.append((command, kwargs))
             return Completed()
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -68,9 +66,7 @@ class PublishPushTests(PublicationFixture):
                 WHERE action_id = 'action-1'
                 """
             ).fetchone()
-        self.assertEqual(
-            row, ("published", "codex/dd-123", "https://github.com/x/y/pull/42")
-        )
+        self.assertEqual(row, ("published", "codex/dd-123", "https://github.com/x/y/pull/42"))
 
     def test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push(
         self,
@@ -112,9 +108,7 @@ class PublishPushTests(PublicationFixture):
             calls.append((command, kwargs))
             return Completed()
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -193,15 +187,11 @@ class PublishPushTests(PublicationFixture):
                 return completed
             return Completed()
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
-        self.assertEqual(
-            calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"]
-        )
+        self.assertEqual(calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"])
         self.assertEqual(
             calls[1][0],
             [
@@ -305,9 +295,7 @@ class PublishPushTests(PublicationFixture):
                 return Completed(returncode=1)
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 0)
@@ -429,9 +417,7 @@ class PublishPushTests(PublicationFixture):
                 return Completed("pushed\n")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -525,9 +511,7 @@ class PublishPushTests(PublicationFixture):
                 return Completed(returncode=128, stderr="bad object current-sha")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["failed_count"], 1)
@@ -578,9 +562,7 @@ class PublishPushTests(PublicationFixture):
             calls.append((command, kwargs))
             return Completed()
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)

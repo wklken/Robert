@@ -15,9 +15,7 @@ def _decision(event, status, creates_task=False, drives_execution=False):
     }
 
 
-def authorize_event(
-    event, repo_config, existing_workstreams=None, known_workstreams=None
-):
+def authorize_event(event, repo_config, existing_workstreams=None, known_workstreams=None):
     if known_workstreams is None:
         known_workstreams = existing_workstreams
     known_workstreams = set(known_workstreams or [])
@@ -26,10 +24,7 @@ def authorize_event(
     actor = event.get("actor_login")
     event_type = event.get("event_type")
 
-    if (
-        event.get("actor_kind") == "github_system"
-        or event.get("authorization_status") == "authorized_system_trigger"
-    ):
+    if event.get("actor_kind") == "github_system" or event.get("authorization_status") == "authorized_system_trigger":
         return _decision(
             event,
             "ignored_untrusted_system_event",
@@ -40,9 +35,7 @@ def authorize_event(
         if not assignment_actor:
             return _decision(event, "pending_authorization")
         if assignment_actor in trusted_actors:
-            return _decision(
-                event, "authorized_trigger", creates_task=True, drives_execution=True
-            )
+            return _decision(event, "authorized_trigger", creates_task=True, drives_execution=True)
         return _decision(event, "ignored_untrusted_trigger")
 
     if actor == github_account:
@@ -59,9 +52,7 @@ def authorize_event(
 
     if event_type == "notification":
         if event.get("trusted_trigger_found"):
-            return _decision(
-                event, "authorized_trigger", creates_task=True, drives_execution=True
-            )
+            return _decision(event, "authorized_trigger", creates_task=True, drives_execution=True)
         if not event.get("authorization_lookup_complete"):
             return _decision(event, "pending_authorization")
         return _decision(event, "ignored_untrusted_trigger")
@@ -74,26 +65,20 @@ def authorize_event(
     if event_type == "review_request" and requested_review:
         requester = event.get("requester_login") or actor
         if requester in trusted_actors:
-            return _decision(
-                event, "authorized_trigger", creates_task=True, drives_execution=True
-            )
+            return _decision(event, "authorized_trigger", creates_task=True, drives_execution=True)
         return _decision(event, "ignored_untrusted_trigger")
 
     if event.get("mentions_dd"):
         if event.get("authorization_lookup_complete") is False:
             return _decision(event, "pending_authorization")
         if actor in trusted_actors:
-            return _decision(
-                event, "authorized_trigger", creates_task=True, drives_execution=True
-            )
+            return _decision(event, "authorized_trigger", creates_task=True, drives_execution=True)
         return _decision(event, "ignored_untrusted_trigger")
 
     return _decision(event, "ignored_context")
 
 
-def authorize_events(
-    events, repo_config, existing_workstreams=None, known_workstreams=None
-):
+def authorize_events(events, repo_config, existing_workstreams=None, known_workstreams=None):
     return [
         authorize_event(
             event,

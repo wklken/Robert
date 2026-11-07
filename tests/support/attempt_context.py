@@ -83,9 +83,7 @@ class AttemptContextFixture(unittest.TestCase):
         self.db = self.data / "test.sqlite3"
         self.conn = sqlite3.connect(self.db)
         self.addCleanup(self.conn.close)
-        self.task_id, self.attempt_id = self.conn.execute(
-            "SELECT task_id,attempt_id FROM attempts"
-        ).fetchone()
+        self.task_id, self.attempt_id = self.conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         self.stream = self.conn.execute("SELECT workstream_id FROM tasks").fetchone()[0]
         self.prompt = Path(result["prompt_paths"][0])
         self.route = deepcopy(route.ROUTES["update-existing-pr"])
@@ -101,9 +99,7 @@ class AttemptContextFixture(unittest.TestCase):
         )
         self.prepare_mock = self.prepare.start()
         self.addCleanup(self.prepare.stop)
-        self.effective = patch.object(
-            workflow_routing, "effective_route", return_value=self.route
-        )
+        self.effective = patch.object(workflow_routing, "effective_route", return_value=self.route)
         self.effective.start()
         self.addCleanup(self.effective.stop)
 

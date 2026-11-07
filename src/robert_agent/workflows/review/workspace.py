@@ -25,9 +25,7 @@ PRIMARY_FILES = ("context-summary.md", "source-index.json")
 
 
 def _git(repo, *args):
-    return run_command(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout
+    return run_command(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
 
 
 def _digest(value):
@@ -103,24 +101,18 @@ def _trigger(github_context):
         return {}
     return {
         "trigger_event_fingerprint": event.get("event_fingerprint", ""),
-        "trigger_url": event.get("url")
-        or event.get("html_url")
-        or event.get("source_url", ""),
+        "trigger_url": event.get("url") or event.get("html_url") or event.get("source_url", ""),
     }
 
 
-def prepare_snapshot(
-    repo_root, worktree_root, artifact_root, round_id, pr_info, github_context
-):
+def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context):
     """Fetch a captured PR revision and create a new detached worktree.
 
     ``artifact_root`` is the configured review artifact base. Returned paths add
     round_id/snapshot_id. No existing worktree is reset, reused, or overwritten.
     GitHub metadata must be captured by the trusted caller before this function.
     """
-    if not isinstance(round_id, str) or not re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", round_id
-    ):
+    if not isinstance(round_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", round_id):
         raise ValueError("invalid review round_id")
     number = pr_info.get("number")
     if type(number) is not int or number < 1:
@@ -129,9 +121,7 @@ def prepare_snapshot(
     base = pr_info.get("base") or {}
     head_sha, base_sha, base_ref = head.get("sha"), base.get("sha"), base.get("ref")
     for value in (head_sha, base_sha):
-        if not isinstance(value, str) or not re.fullmatch(
-            r"[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", value
-        ):
+        if not isinstance(value, str) or not re.fullmatch(r"[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", value):
             raise ValueError("PR head/base SHA must be complete Git object ids")
     if not isinstance(base_ref, str) or base_ref.startswith("-"):
         raise ValueError("invalid PR base branch")
@@ -151,9 +141,7 @@ def prepare_snapshot(
     ):
         raise ValueError("PR snapshot changed while fetching; recapture PR metadata")
     merge_base = _git(repo_root, "merge-base", base_sha, head_sha).strip()
-    snapshot_id = _digest(
-        json.dumps([round_id, number, head_sha, base_sha, base_ref, merge_base])
-    )[:24]
+    snapshot_id = _digest(json.dumps([round_id, number, head_sha, base_sha, base_ref, merge_base]))[:24]
     tree = worktree_root / "review" / f"pr-{number}" / round_id / snapshot_id
     artifacts = artifact_root / round_id / snapshot_id
     context = artifacts / "context"
@@ -174,9 +162,7 @@ def prepare_snapshot(
         }
         if any(saved.get(key) != value for key, value in expected.items()):
             raise ValueError("existing round snapshot identity does not match")
-        if _trigger(github_context).get("trigger_event_fingerprint") != saved.get(
-            "trigger_event_fingerprint"
-        ):
+        if _trigger(github_context).get("trigger_event_fingerprint") != saved.get("trigger_event_fingerprint"):
             raise ValueError("existing round trigger identity does not match")
         verify_snapshot(saved)
         return saved
@@ -195,20 +181,12 @@ def prepare_snapshot(
     )
     content = {
         "pr-info.json": json.dumps(pr_info, ensure_ascii=False, indent=2) + "\n",
-        "github-context.json": json.dumps(github_context, ensure_ascii=False, indent=2)
-        + "\n",
-        "changed-files.txt": _git(
-            tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--"
-        ),
+        "github-context.json": json.dumps(github_context, ensure_ascii=False, indent=2) + "\n",
+        "changed-files.txt": _git(tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--"),
         "diff.patch": diff,
-        "diff-stat.txt": _git(
-            tree, "diff", "--no-ext-diff", "--stat", merge_base, head_sha, "--"
-        ),
+        "diff-stat.txt": _git(tree, "diff", "--no-ext-diff", "--stat", merge_base, head_sha, "--"),
         "diff-linecount.txt": str(len(diff.splitlines())) + "\n",
-        "runtime-info.json": json.dumps(
-            _runtime_info(tree), ensure_ascii=False, indent=2
-        )
-        + "\n",
+        "runtime-info.json": json.dumps(_runtime_info(tree), ensure_ascii=False, indent=2) + "\n",
     }
     for name, text in content.items():
         (context / name).write_text(text, encoding="utf-8")
@@ -228,10 +206,7 @@ def prepare_snapshot(
         "context_dir": str(context),
         "artifact_root": str(artifacts),
         "source_hashes": _source_hashes(tree),
-        "files": {
-            str(context / name): review_files.sha256_file(context / name)
-            for name in CONTEXT_FILES
-        },
+        "files": {str(context / name): review_files.sha256_file(context / name) for name in CONTEXT_FILES},
         "frozen": False,
         **_trigger(github_context),
     }
@@ -253,9 +228,7 @@ def verify_snapshot(manifest):
         ).strip():
             raise ValueError("review worktree source is dirty")
         if _git(tree, "ls-files", "--others", "-z"):
-            raise ValueError(
-                "review worktree contains unregistered files, including ignored files"
-            )
+            raise ValueError("review worktree contains unregistered files, including ignored files")
         if _source_hashes(tree) != manifest["source_hashes"]:
             raise ValueError("review worktree source hash changed")
         for name, expected in manifest["files"].items():
@@ -263,22 +236,12 @@ def verify_snapshot(manifest):
             if review_files.sha256_file(path) != expected:
                 raise ValueError("review context file hash changed")
         if manifest.get("frozen"):
-            path = review_files.safe_path(
-                manifest["prompt_path"], manifest["artifact_root"]
-            )
+            path = review_files.safe_path(manifest["prompt_path"], manifest["artifact_root"])
             if review_files.sha256_file(path) != manifest["prompt_sha256"]:
                 raise ValueError("review prompt hash changed")
-            if path.read_text(encoding="utf-8") != review_files.build_reviewer_prompt(
-                manifest
-            ):
-                raise ValueError(
-                    "review prompt no longer matches the built-in template"
-                )
-            saved = json.loads(
-                Path(manifest["context_dir"], "manifest.json").read_text(
-                    encoding="utf-8"
-                )
-            )
+            if path.read_text(encoding="utf-8") != review_files.build_reviewer_prompt(manifest):
+                raise ValueError("review prompt no longer matches the built-in template")
+            saved = json.loads(Path(manifest["context_dir"], "manifest.json").read_text(encoding="utf-8"))
             if saved != manifest:
                 raise ValueError("review manifest changed")
     except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
@@ -291,38 +254,23 @@ def freeze_context(manifest):
     verify_snapshot(manifest)
     if manifest.get("frozen"):
         return manifest
-    saved_path = review_files.safe_path(
-        Path(manifest["context_dir"]) / "manifest.json", manifest["artifact_root"]
-    )
+    saved_path = review_files.safe_path(Path(manifest["context_dir"]) / "manifest.json", manifest["artifact_root"])
     saved = review_files._read_json(saved_path)
     if saved.get("frozen"):
         # The manifest may have committed before the controller registered it.
         excluded = {"files", "frozen", "prompt_path", "prompt_sha256"}
-        if any(
-            saved.get(key) != value
-            for key, value in manifest.items()
-            if key not in excluded
-        ):
+        if any(saved.get(key) != value for key, value in manifest.items() if key not in excluded):
             raise ValueError("frozen manifest identity differs from prepared context")
-        if any(
-            saved.get("files", {}).get(key) != value
-            for key, value in manifest["files"].items()
-        ):
+        if any(saved.get("files", {}).get(key) != value for key, value in manifest["files"].items()):
             raise ValueError("frozen manifest changed prepared file hashes")
-        expected_files = set(manifest["files"]) | {
-            str(Path(manifest["context_dir"]) / name) for name in PRIMARY_FILES
-        }
+        expected_files = set(manifest["files"]) | {str(Path(manifest["context_dir"]) / name) for name in PRIMARY_FILES}
         if set(saved.get("files", {})) != expected_files:
             raise ValueError("frozen manifest has unexpected context files")
         verify_snapshot(saved)
         return saved
     context = Path(manifest["context_dir"])
-    summary = review_files.safe_path(
-        context / "context-summary.md", manifest["artifact_root"]
-    )
-    index_path = review_files.safe_path(
-        context / "source-index.json", manifest["artifact_root"]
-    )
+    summary = review_files.safe_path(context / "context-summary.md", manifest["artifact_root"])
+    index_path = review_files.safe_path(context / "source-index.json", manifest["artifact_root"])
     try:
         if not summary.read_text(encoding="utf-8").strip():
             raise ValueError("primary context summary is empty")
@@ -331,18 +279,11 @@ def freeze_context(manifest):
         raise ValueError("primary context files are missing or invalid") from exc
     if not isinstance(index, dict) or not isinstance(index.get("files"), list):
         raise ValueError("source-index requires files array")
-    if (
-        not isinstance(index.get("reading_notes"), str)
-        or not index["reading_notes"].strip()
-    ):
+    if not isinstance(index.get("reading_notes"), str) or not index["reading_notes"].strip():
         raise ValueError("source-index requires actual reading_notes")
     tree = Path(manifest["worktree_path"])
     for entry in index["files"]:
-        if (
-            not isinstance(entry, dict)
-            or not isinstance(entry.get("reason"), str)
-            or not entry["reason"].strip()
-        ):
+        if not isinstance(entry, dict) or not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
             raise ValueError("source-index entries require path and reason")
         name = review_files._source_path(entry.get("path"))
         path = review_files.safe_path(tree / name, tree)

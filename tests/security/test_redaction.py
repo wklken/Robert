@@ -68,14 +68,8 @@ class RedactionTests(unittest.TestCase):
     ):
         from robert_agent.security import redaction
 
-        self.assertTrue(
-            redaction.redact_text("Authorization: <redacted>\nCookie: <redacted>")["ok"]
-        )
-        self.assertTrue(
-            redaction.redact_text(
-                "Authorization:  <redacted>  \r\nCookie:\t<redacted>\r\n"
-            )["ok"]
-        )
+        self.assertTrue(redaction.redact_text("Authorization: <redacted>\nCookie: <redacted>")["ok"])
+        self.assertTrue(redaction.redact_text("Authorization:  <redacted>  \r\nCookie:\t<redacted>\r\n")["ok"])
         for text in (
             "Authorization: <redacted>suffix",
             "Cookie: <redacted>suffix",
@@ -88,11 +82,7 @@ class RedactionTests(unittest.TestCase):
         import base64
         from robert_agent.security import redaction
 
-        header = (
-            base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}')
-            .decode()
-            .rstrip("=")
-        )
+        header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
         payload = base64.urlsafe_b64encode(b'{"sub":"test-user"}').decode().rstrip("=")
         for text in (
             "password = " + "hunter2",
@@ -127,8 +117,7 @@ class RedactionTests(unittest.TestCase):
         from robert_agent.security import redaction
 
         result = redaction.redact_text(
-            "failed in /Users/sample-user/workspace/project "
-            "at 10.0.0.12 while running test_gateway"
+            "failed in /Users/sample-user/workspace/project at 10.0.0.12 while running test_gateway"
         )
 
         self.assertTrue(result["ok"])

@@ -33,9 +33,7 @@ class ChildRoutePolicyTests(unittest.TestCase):
             )
             config = yaml.safe_load(config_path.read_text())
             config["data_dir"] = str(root / "data")
-            config["routes"] = {
-                "new-pr": {"required_skills": ["missing-required-review-repro"]}
-            }
+            config["routes"] = {"new-pr": {"required_skills": ["missing-required-review-repro"]}}
             config_path.write_text(yaml.safe_dump(config, sort_keys=False))
             fixture = root / "fixture.json"
             fixture.write_text(
@@ -55,15 +53,11 @@ class ChildRoutePolicyTests(unittest.TestCase):
                     }
                 )
             )
-            first = run_once(
-                config_path, fixture_path=fixture, dry_run=True, skip_external=True
-            )
+            first = run_once(config_path, fixture_path=fixture, dry_run=True, skip_external=True)
             self.assertTrue(first["ok"], first)
             db = root / "data" / "robert.sqlite3"
             with closing(sqlite3.connect(db)) as conn:
-                task_id, attempt_id = conn.execute(
-                    "SELECT task_id,attempt_id FROM attempts"
-                ).fetchone()
+                task_id, attempt_id = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
             result = record_result(
                 db,
                 {
@@ -85,11 +79,9 @@ class ChildRoutePolicyTests(unittest.TestCase):
             second = run_once(config_path, dry_run=True, skip_external=True)
             self.assertTrue(second["ok"], second)
             with closing(sqlite3.connect(db)) as conn:
-                lifecycle, required = (
-                    conn.execute("""SELECT t.lifecycle,rd.required_skills_json
+                lifecycle, required = conn.execute("""SELECT t.lifecycle,rd.required_skills_json
                     FROM tasks t JOIN route_decisions rd ON rd.task_id=t.task_id
                     WHERE t.route_id='new-pr' """).fetchone()
-                )
             self.assertEqual(lifecycle, "failed")
             self.assertEqual(json.loads(required), ["missing-required-review-repro"])
             self.assertEqual(second["dispatch_count"], 0)
@@ -116,9 +108,7 @@ class ChildRoutePolicyTests(unittest.TestCase):
             )
             config = yaml.safe_load(config_path.read_text())
             config["data_dir"] = str(root / "data")
-            config["routes"] = {
-                "local-result": {"required_skills": ["missing-required-review-repro"]}
-            }
+            config["routes"] = {"local-result": {"required_skills": ["missing-required-review-repro"]}}
             config_path.write_text(yaml.safe_dump(config, sort_keys=False))
             run_once(config_path, dry_run=True, skip_external=True)
             db = root / "data" / "robert.sqlite3"
@@ -126,9 +116,7 @@ class ChildRoutePolicyTests(unittest.TestCase):
                 repo_id = conn.execute("SELECT repo_id FROM repos").fetchone()[0]
             work_items.create_work_item(
                 db,
-                context=work_items.CommandContext(
-                    "operator", "owner", frozenset({repo_id}), frozenset()
-                ),
+                context=work_items.CommandContext("operator", "owner", frozenset({repo_id}), frozenset()),
                 repo_id=repo_id,
                 title="Analyze this code",
                 description="Please analyze the code",

@@ -14,9 +14,7 @@ def event_priority(event):
     event_at = event.get("event_at") or ""
     fingerprint = event.get("event_fingerprint") or ""
     if event.get("authorization_status") == "authorized_system_trigger":
-        episode_kind = ((event.get("metadata") or {}).get("remediation") or {}).get(
-            "episode_kind"
-        )
+        episode_kind = ((event.get("metadata") or {}).get("remediation") or {}).get("episode_kind")
         return (
             -1,
             0 if episode_kind == "merge_conflict" else 1,
@@ -78,10 +76,8 @@ def resume_waiting_vote(conn, repo, event, run_now, admission=None):
         event.get("actor_login") not in repo.get("trusted_actors", [])
         or not event.get("mentions_dd")
         or not discover.bot_requests(event.get("body"), repo["github_account"])
-        or event.get("authorization_status")
-        not in {"accepted_context", "authorized_trigger"}
-        or event.get("intent")
-        not in {None, "unclear", "analysis", "discussion", "requirement_analysis"}
+        or event.get("authorization_status") not in {"accepted_context", "authorized_trigger"}
+        or event.get("intent") not in {None, "unclear", "analysis", "discussion", "requirement_analysis"}
     ):
         return False
     row = conn.execute(
@@ -117,8 +113,7 @@ def resume_waiting_vote(conn, repo, event, run_now, admission=None):
         if (
             not event_time
             or not question
-            or values.parse_time(event_time)
-            < values.parse_time(question[0]).replace(microsecond=0)
+            or values.parse_time(event_time) < values.parse_time(question[0]).replace(microsecond=0)
         ):
             supervision_lineage.record_disposition(
                 conn,

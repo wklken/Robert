@@ -42,10 +42,7 @@ class VoteFileFixture(unittest.TestCase):
             ],
         }
         self.manifest = vote_workspace.freeze(self.manifest, self.prepared)
-        self.ballot = {
-            k: self.manifest[k]
-            for k in ("schema_version", "round_id", "snapshot_id", "ballot_spec_sha256")
-        }
+        self.ballot = {k: self.manifest[k] for k in ("schema_version", "round_id", "snapshot_id", "ballot_spec_sha256")}
         self.ballot.update(
             choice_id="A",
             reason_summary="Public reason",

@@ -46,9 +46,7 @@ class WakeupReasonTests(unittest.TestCase):
                     "SELECT reason,dedupe_key FROM wakeups WHERE wakeup_id=?",
                     (created["wakeup_id"],),
                 ).fetchone()
-                self.assertEqual(
-                    (stored_reason, stored_dedupe), ("manual_operator_request", kind)
-                )
+                self.assertEqual((stored_reason, stored_dedupe), ("manual_operator_request", kind))
         rows = wakeup.list_wakeups(self.conn)
         self.assertEqual(
             {row["reason"] for row in rows},
@@ -73,9 +71,7 @@ class WakeupReasonTests(unittest.TestCase):
                 dedupe_key=kind,
                 metadata={"kind": kind},
             )
-        self.conn.execute(
-            "UPDATE wakeups SET metadata_json='bad-json' WHERE dedupe_key='operator_decision'"
-        )
+        self.conn.execute("UPDATE wakeups SET metadata_json='bad-json' WHERE dedupe_key='operator_decision'")
         wakeup.request_wakeup(
             self.conn,
             repo_id="repo",
@@ -109,13 +105,7 @@ class WakeupReasonTests(unittest.TestCase):
         )
         self.conn.commit()
         data = dashboard.build_dashboard_data(self.db)
-        self.assertEqual(
-            data["wakeup_summary"]["by_reason"], {"github_observation_ready": 1}
-        )
-        self.assertEqual(
-            data["recent_wakeups"][0]["reason"], "github_observation_ready"
-        )
+        self.assertEqual(data["wakeup_summary"]["by_reason"], {"github_observation_ready": 1})
+        self.assertEqual(data["recent_wakeups"][0]["reason"], "github_observation_ready")
         serialized = status.build_status(self.db)
-        self.assertEqual(
-            serialized["wakeup_summary"]["by_reason"], {"github_observation_ready": 1}
-        )
+        self.assertEqual(serialized["wakeup_summary"]["by_reason"], {"github_observation_ready": 1})

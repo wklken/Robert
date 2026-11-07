@@ -31,9 +31,7 @@ def available_worker_agents():
     package_dir = Path(__file__).parent
     return tuple(
         sorted(
-            path.stem
-            for path in package_dir.glob("*.py")
-            if path.stem != "__init__" and not path.stem.startswith("_")
+            path.stem for path in package_dir.glob("*.py") if path.stem != "__init__" and not path.stem.startswith("_")
         )
     )
 
@@ -65,13 +63,9 @@ def _load_adapter(agent):
     required = ["AGENT_NAME", "DEFAULT_COMMAND", "build_launch"]
     missing = [name for name in required if not hasattr(module, name)]
     if missing:
-        raise ValueError(
-            f"worker_agent {agent} adapter missing required symbols: {', '.join(missing)}"
-        )
+        raise ValueError(f"worker_agent {agent} adapter missing required symbols: {', '.join(missing)}")
     if module.AGENT_NAME != agent:
-        raise ValueError(
-            f"worker_agent adapter name mismatch: {agent} != {module.AGENT_NAME}"
-        )
+        raise ValueError(f"worker_agent adapter name mismatch: {agent} != {module.AGENT_NAME}")
     return module
 
 
@@ -81,9 +75,7 @@ def normalize_worker_agent_config(config):
     if not agent:
         raise ValueError("worker_agent must not be empty")
     adapter = _load_adapter(agent)
-    command = config.get(
-        "worker_command", config.get("command_argv", config.get("command"))
-    )
+    command = config.get("worker_command", config.get("command_argv", config.get("command")))
     if command is None:
         command = adapter.DEFAULT_COMMAND
     if agent == "command" and not isinstance(command, (list, tuple)):

@@ -15,9 +15,7 @@ def utc_now():
 
 
 def runtime_dir(config):
-    identity = hashlib.sha256(
-        str(Path(config["db_path"]).resolve()).encode()
-    ).hexdigest()[:16]
+    identity = hashlib.sha256(str(Path(config["db_path"]).resolve()).encode()).hexdigest()[:16]
     return Path(config["data_dir"]) / "supervision" / identity
 
 
@@ -53,47 +51,27 @@ def health(config, result, now):
         "checked_at": now,
         "status": result["status"],
         "ok": result["ok"],
-        "last_successful_check_at": now
-        if result["ok"]
-        else previous.get("last_successful_check_at"),
-        "last_complete_check_at": (
-            now
-            if result.get("coverage_complete")
-            else previous.get("last_complete_check_at")
-        ),
-        "notification_delivery": "configured"
-        if os.environ.get("ROBERT_NOTIFICATION_COMMAND")
-        else "not_configured",
+        "last_successful_check_at": now if result["ok"] else previous.get("last_successful_check_at"),
+        "last_complete_check_at": (now if result.get("coverage_complete") else previous.get("last_complete_check_at")),
+        "notification_delivery": "configured" if os.environ.get("ROBERT_NOTIFICATION_COMMAND") else "not_configured",
         "error_class": result.get("error_class"),
         "pid": os.getpid(),
     }
     if not result["ok"]:
-        data["first_failed_at"] = (
-            previous.get("first_failed_at", now)
-            if not previous.get("ok", True)
-            else now
-        )
+        data["first_failed_at"] = previous.get("first_failed_at", now) if not previous.get("ok", True) else now
         continuing = not previous.get("ok", True)
-        data["consecutive_failures"] = (
-            previous.get("consecutive_failures", 1) + 1 if continuing else 1
-        )
+        data["consecutive_failures"] = previous.get("consecutive_failures", 1) + 1 if continuing else 1
         from robert_agent.supervision.rules import timestamp
 
         first_failed = timestamp(data["first_failed_at"])
-        poll = config.get("supervision", {}).get(
-            "poll_seconds", supervision_config.DEFAULTS["poll_seconds"]
-        )
-        data["notification_eligible_at"] = (
-            first_failed + timedelta(seconds=poll)
-        ).isoformat()
+        poll = config.get("supervision", {}).get("poll_seconds", supervision_config.DEFAULTS["poll_seconds"])
+        data["notification_eligible_at"] = (first_failed + timedelta(seconds=poll)).isoformat()
         data["delivery"] = previous.get("delivery", {}) if continuing else {}
         data["delivery_id"] = (
             "supervisor-health-"
-            + hashlib.sha256(
-                (
-                    str(Path(config["db_path"]).resolve()) + data["first_failed_at"]
-                ).encode()
-            ).hexdigest()[:24]
+            + hashlib.sha256((str(Path(config["db_path"]).resolve()) + data["first_failed_at"]).encode()).hexdigest()[
+                :24
+            ]
         )
     atomic_json(health_path(config), data)
     if not result["ok"] and previous.get("ok", True):
@@ -131,11 +109,7 @@ def runtime_status(config):
             import stat
 
             info = os.fstat(stream.fileno())
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_mode & 0o022
-                or info.st_uid not in {0, os.geteuid()}
-            ):
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or info.st_uid not in {0, os.geteuid()}:
                 return None
             value = json.loads(stream.read(32768))
         return value if isinstance(value, dict) else None

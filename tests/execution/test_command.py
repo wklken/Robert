@@ -50,12 +50,8 @@ class CommandJournalTests(WorkerProtocolFixture):
         self.assertTrue(Path(command_result["stdout_path"]).exists())
         self.assertTrue(Path(command_result["stderr_path"]).exists())
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            phase_count = conn.execute("SELECT COUNT(*) FROM worker_phases").fetchone()[
-                0
-            ]
-            summaries = [
-                row[0] for row in conn.execute("SELECT summary FROM worker_phases")
-            ]
+            phase_count = conn.execute("SELECT COUNT(*) FROM worker_phases").fetchone()[0]
+            summaries = [row[0] for row in conn.execute("SELECT summary FROM worker_phases")]
         self.assertGreaterEqual(phase_count, 3)
         self.assertTrue(any("still running" in summary for summary in summaries))
 
@@ -84,9 +80,7 @@ class CommandJournalTests(WorkerProtocolFixture):
         self.assertNotIn("stdout", command_result)
         self.assertEqual(command_result["stdout_tail"], "AAAAAAAAAAAATAIL")
         self.assertTrue(command_result["stdout_truncated"])
-        self.assertGreater(
-            command_result["stdout_bytes"], len(command_result["stdout_tail"])
-        )
+        self.assertGreater(command_result["stdout_bytes"], len(command_result["stdout_tail"]))
         self.assertEqual(
             Path(command_result["stdout_path"]).read_text(encoding="utf-8"),
             "A" * 200 + "TAIL",
@@ -110,9 +104,7 @@ class CommandJournalTests(WorkerProtocolFixture):
                         raise sqlite3.OperationalError("database is locked")
                     return original(**kwargs)
 
-                with patch.object(
-                    heartbeat.snapshot, "record_snapshot", side_effect=record_snapshot
-                ):
+                with patch.object(heartbeat.snapshot, "record_snapshot", side_effect=record_snapshot):
                     try:
                         result = heartbeat.run_command_with_heartbeat(
                             db_path,
@@ -128,9 +120,7 @@ class CommandJournalTests(WorkerProtocolFixture):
                             heartbeat_interval_seconds=0.1,
                         )
                     except sqlite3.OperationalError as exc:
-                        self.fail(
-                            f"SQLite contention must not lose command completion: {exc}"
-                        )
+                        self.fail(f"SQLite contention must not lose command completion: {exc}")
                 self.assertEqual(result["returncode"], 0)
                 self.assertEqual(result["stdout_tail"].strip(), "delivered")
                 record = json.loads(Path(result["command_record_path"]).read_text())
@@ -150,12 +140,8 @@ class CommandJournalTests(WorkerProtocolFixture):
 
         def record_snapshot(**kwargs):
             if kwargs["summary"] == "Command exited 7":
-                records = list(
-                    (self.root / "artifacts" / "task-1").glob("*.command.json")
-                )
-                self.assertEqual(
-                    len(records), 1, "Persist exit evidence before the SQLite write"
-                )
+                records = list((self.root / "artifacts" / "task-1").glob("*.command.json"))
+                self.assertEqual(len(records), 1, "Persist exit evidence before the SQLite write")
                 record = json.loads(records[0].read_text())
                 self.assertEqual(record["returncode"], 7)
                 self.assertEqual(record["status"], "failed")
@@ -163,9 +149,7 @@ class CommandJournalTests(WorkerProtocolFixture):
                 raise sqlite3.OperationalError("database is locked")
             return original(**kwargs)
 
-        with patch.object(
-            heartbeat.snapshot, "record_snapshot", side_effect=record_snapshot
-        ):
+        with patch.object(heartbeat.snapshot, "record_snapshot", side_effect=record_snapshot):
             result = heartbeat.run_command_with_heartbeat(
                 db_path,
                 "task-1",
@@ -261,9 +245,7 @@ class CommandJournalTests(WorkerProtocolFixture):
                 raise sqlite3.OperationalError("no such table: worker_phases")
             return original(**kwargs)
 
-        with patch.object(
-            heartbeat.snapshot, "record_snapshot", side_effect=record_snapshot
-        ):
+        with patch.object(heartbeat.snapshot, "record_snapshot", side_effect=record_snapshot):
             with self.assertRaises(sqlite3.OperationalError):
                 heartbeat.run_command_with_heartbeat(
                     db_path,
@@ -273,11 +255,7 @@ class CommandJournalTests(WorkerProtocolFixture):
                     [sys.executable, "-c", "import time; time.sleep(30)"],
                     heartbeat_interval_seconds=0.1,
                 )
-        record = json.loads(
-            next(
-                (self.root / "artifacts" / "task-1").glob("*.command.json")
-            ).read_text()
-        )
+        record = json.loads(next((self.root / "artifacts" / "task-1").glob("*.command.json")).read_text())
         self.assertEqual(record["status"], "failed")
         self.assertIsNotNone(record["returncode"])
 
@@ -305,9 +283,7 @@ class CommandJournalTests(WorkerProtocolFixture):
         )
         pid = int(pid_path.read_text())
         try:
-            self.assertEqual(
-                cycle_evidence._command_process_status(pid, ""), "not_found"
-            )
+            self.assertEqual(cycle_evidence._command_process_status(pid, ""), "not_found")
         finally:
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -346,17 +322,13 @@ class CommandJournalTests(WorkerProtocolFixture):
             output_dir=self.root / "external-output",
             heartbeat_interval_seconds=0.1,
         )
-        self.assertEqual(
-            Path(result["stdout_path"]).parent, self.root / "external-output"
-        )
+        self.assertEqual(Path(result["stdout_path"]).parent, self.root / "external-output")
         self.assertEqual(
             Path(result["command_record_path"]).parent,
             self.root / "artifacts" / "task-1",
         )
         with closing(sqlite3.connect(db_path)) as conn:
-            recovery = cycle_evidence.inspect_attempt_recovery(
-                conn, "attempt-1", "task-1", None
-            )
+            recovery = cycle_evidence.inspect_attempt_recovery(conn, "attempt-1", "task-1", None)
         self.assertEqual(recovery["commands"][0]["returncode"], 0)
 
     def test_command_cleanup_reaps_parent_when_process_inspection_fails(self):
@@ -367,16 +339,12 @@ class CommandJournalTests(WorkerProtocolFixture):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
-        with patch.object(
-            heartbeat.subprocess, "run", side_effect=OSError("ps unavailable")
-        ):
+        with patch.object(heartbeat.subprocess, "run", side_effect=OSError("ps unavailable")):
             try:
                 heartbeat._kill_command(proc)
             except OSError:
                 pass
-            self.assertIsNotNone(
-                proc.poll(), "Inspection failure must not skip reaping the command"
-            )
+            self.assertIsNotNone(proc.poll(), "Inspection failure must not skip reaping the command")
 
     def test_command_start_failure_has_terminal_journal(self):
         from robert_agent.execution import command as heartbeat
@@ -390,15 +358,9 @@ class CommandJournalTests(WorkerProtocolFixture):
                 "verify",
                 [str(self.root / "missing-executable")],
             )
-        record = json.loads(
-            next(
-                (self.root / "artifacts" / "task-1").glob("*.command.json")
-            ).read_text()
-        )
+        record = json.loads(next((self.root / "artifacts" / "task-1").glob("*.command.json")).read_text())
         self.assertEqual(record["status"], "failed")
-        self.assertEqual(
-            record["summary"], "Command failed to start: FileNotFoundError"
-        )
+        self.assertEqual(record["summary"], "Command failed to start: FileNotFoundError")
 
     def test_replay_after_completion_snapshot_does_not_duplicate_phase(self):
         from robert_agent.execution import command as heartbeat

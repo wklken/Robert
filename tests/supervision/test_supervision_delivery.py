@@ -19,11 +19,7 @@ class DeliveryReceiptTests(unittest.TestCase):
             publish_dedupe_acceptance._insert_fixture(db)
             with sqlite3.connect(db) as conn:
                 conn.row_factory = sqlite3.Row
-                action = dict(
-                    conn.execute(
-                        "SELECT * FROM github_actions WHERE action_id='action-comment'"
-                    ).fetchone()
-                )
+                action = dict(conn.execute("SELECT * FROM github_actions WHERE action_id='action-comment'").fetchone())
                 intent = execution_store.prepare_publication_intent(
                     conn,
                     action_id=action["action_id"],
@@ -55,9 +51,7 @@ class DeliveryReceiptTests(unittest.TestCase):
                     intent=intent,
                 )
                 persisted = json.loads(
-                    conn.execute(
-                        "SELECT remote_evidence_json FROM publication_intents"
-                    ).fetchone()[0]
+                    conn.execute("SELECT remote_evidence_json FROM publication_intents").fetchone()[0]
                 )
                 self.assertEqual(persisted["source_sha"], "a" * 40)
                 self.assertEqual(persisted["reconciliation"], evidence)
@@ -68,8 +62,6 @@ class DeliveryReceiptTests(unittest.TestCase):
                 )["publish"]["receipt"]
                 self.assertEqual(receipt["action_id"], action["action_id"])
                 self.assertEqual(receipt["result_id"], action["result_id"])
-                self.assertEqual(
-                    receipt["confirmation_method"], "remote_reconciliation"
-                )
+                self.assertEqual(receipt["confirmation_method"], "remote_reconciliation")
                 self.assertEqual(receipt["external_id"], "987")
                 self.assertEqual(persisted["receipt"], receipt)

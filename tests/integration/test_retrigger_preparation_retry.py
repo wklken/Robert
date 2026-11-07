@@ -31,9 +31,7 @@ class RetriggerPreparationRetryTests(unittest.TestCase):
             idempotency_key="recover",
             notifier=lambda _: None,
         )
-        self.config = validate_config.validate_config(
-            self.fixture.fixture.config_path, skip_external=True
-        )
+        self.config = validate_config.validate_config(self.fixture.fixture.config_path, skip_external=True)
 
     def cycle(self):
         return run_once.run_once(
@@ -56,9 +54,7 @@ class RetriggerPreparationRetryTests(unittest.TestCase):
         with mock.patch.object(
             assigned_workspace,
             "prepare_worktree",
-            side_effect=subprocess.CalledProcessError(
-                1, ["git", "fetch"], stderr="permission denied"
-            ),
+            side_effect=subprocess.CalledProcessError(1, ["git", "fetch"], stderr="permission denied"),
         ) as prepare:
             for _ in range(5):
                 self.cycle()
@@ -79,9 +75,7 @@ class RetriggerPreparationRetryTests(unittest.TestCase):
                 ).fetchone()[0],
                 1,
             )
-        self.assertIn(
-            "retrigger", board.get_work_item_detail(self.db, item)["valid_commands"]
-        )
+        self.assertIn("retrigger", board.get_work_item_detail(self.db, item)["valid_commands"])
 
     def test_transient_error_backs_off_and_budget_survives_cycles(self):
         for count in range(1, 4):
@@ -101,12 +95,8 @@ class RetriggerPreparationRetryTests(unittest.TestCase):
             self.assertEqual(status, "pending" if count < 3 else "canceled")
             if count < 3:
                 with (
-                    mock.patch.object(
-                        values, "utc_now", return_value=retry["failed_at"]
-                    ),
-                    mock.patch.object(
-                        assigned_workspace, "prepare_worktree"
-                    ) as prepare,
+                    mock.patch.object(values, "utc_now", return_value=retry["failed_at"]),
+                    mock.patch.object(assigned_workspace, "prepare_worktree") as prepare,
                 ):
                     self.cycle()
                     prepare.assert_not_called()

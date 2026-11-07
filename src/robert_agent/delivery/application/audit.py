@@ -156,9 +156,7 @@ def _audit_issue_linking(actions, action_scope):
         issue_number = int(source_match.group(1))
         if issue_number not in scoped_issues:
             return f"open_pr source_issue #{issue_number} is outside the workstream"
-        closing_reference = re.compile(
-            rf"(?im)^\s*(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\s+#{issue_number}\b"
-        )
+        closing_reference = re.compile(rf"(?im)^\s*(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\s+#{issue_number}\b")
         resolution = _string_value(action, "issue_resolution")
         if resolution not in {"complete", "partial"}:
             return "issue-sourced open_pr requires issue_resolution complete or partial"
@@ -212,9 +210,7 @@ def action_scope_violation(actions, action_scope):
     if not isinstance(raw_sources, list):
         return "action scope sources must be a list"
     scoped_sources = {
-        (source.get("source_type"), source.get("number"))
-        for source in raw_sources
-        if isinstance(source, dict)
+        (source.get("source_type"), source.get("number")) for source in raw_sources if isinstance(source, dict)
     }
     for action in actions:
         action_type = action.get("type")
@@ -237,9 +233,7 @@ def action_scope_violation(actions, action_scope):
             if scoped_repo and repo.lower() != scoped_repo.lower():
                 return f"comment target repository {repo} is outside {scoped_repo}"
             if scoped_sources and (source_type, number) not in scoped_sources:
-                return (
-                    f"comment target {source_type} #{number} is outside the workstream"
-                )
+                return f"comment target {source_type} #{number} is outside the workstream"
             continue
         if action_type == "open_pr":
             repo = _string_value(action, "repo")
@@ -251,9 +245,7 @@ def action_scope_violation(actions, action_scope):
             scoped_branch = action_scope.get("branch_name", "")
             raw_head = _string_value(action, "head")
             head = raw_head.split(":", 1)[-1]
-            expected_owner = (
-                action_scope.get("head_owner") or scoped_repo.split("/", 1)[0]
-            )
+            expected_owner = action_scope.get("head_owner") or scoped_repo.split("/", 1)[0]
             supplied_owner = raw_head.split(":", 1)[0] if ":" in raw_head else ""
             for owner in [supplied_owner] + [
                 _string_value(action, name)
@@ -296,48 +288,31 @@ def _audit_expected_actions(output_type, actual_types):
         return f"output_type {output_type} requires no publication actions"
     if output_type == "pr_review_comment" and actual_types != ["comment"]:
         return "pr_review_comment requires exactly one comment"
-    if output_type == "waiting_for_user" and any(
-        kind != "comment" for kind in actual_types
-    ):
+    if output_type == "waiting_for_user" and any(kind != "comment" for kind in actual_types):
         return "waiting_for_user only allows question comments"
     if output_type == "multi_agent_vote_report" and actual_types != ["comment"]:
         return "multi_agent_vote_report requires exactly one comment"
     expected_types = EXPECTED_ACTIONS_FOR_OUTPUT.get(output_type, set())
-    if output_type == "multi_agent_review_report" and actual_types != [
-        "submit_pr_review"
-    ]:
+    if output_type == "multi_agent_review_report" and actual_types != ["submit_pr_review"]:
         return "multi_agent_review_report requires exactly one submit_pr_review action"
     if not expected_types:
         return None
     if output_type == "update_existing_pr":
         if "comment" not in actual_types:
-            return (
-                f"output_type {output_type} requires planned_github_actions "
-                "to include comment"
-            )
+            return f"output_type {output_type} requires planned_github_actions to include comment"
         if "push_existing_pr" in actual_types:
             last_push = max(
-                index
-                for index, action_type in enumerate(actual_types)
-                if action_type == "push_existing_pr"
+                index for index, action_type in enumerate(actual_types) if action_type == "push_existing_pr"
             )
             if not any(
-                index > last_push and action_type == "comment"
-                for index, action_type in enumerate(actual_types)
+                index > last_push and action_type == "comment" for index, action_type in enumerate(actual_types)
             ):
-                return (
-                    f"output_type {output_type} requires comment after push_existing_pr"
-                )
+                return f"output_type {output_type} requires comment after push_existing_pr"
         return None
     missing = sorted(expected_types.difference(actual_types))
     if missing:
-        return (
-            f"output_type {output_type} requires planned_github_actions to include "
-            f"{missing}"
-        )
-    if output_type == "new_pr" and actual_types.index(
-        "push_existing_pr"
-    ) > actual_types.index("open_pr"):
+        return f"output_type {output_type} requires planned_github_actions to include {missing}"
+    if output_type == "new_pr" and actual_types.index("push_existing_pr") > actual_types.index("open_pr"):
         return "output_type new_pr requires push_existing_pr before open_pr"
     return None
 
@@ -371,9 +346,7 @@ def _audit_review_point_evaluation(result, actual_types, input_policy="required"
         kind = result.get("review_input_kind")
         if kind not in ("request", "review_feedback", "mixed"):
             return ["invalid_review_input_kind"]
-        if kind == "mixed" and (
-            not isinstance(result.get("handoff"), str) or not result["handoff"].strip()
-        ):
+        if kind == "mixed" and (not isinstance(result.get("handoff"), str) or not result["handoff"].strip()):
             return ["missing_mixed_request_handoff"]
         if kind == "request" and (evaluation is None or evaluation == []):
             return None
@@ -389,17 +362,12 @@ def _audit_review_point_evaluation(result, actual_types, input_policy="required"
             return ["invalid_review_point_evaluation"]
         if entry["action"] not in policies.VALID_REVIEW_ACTIONS:
             return ["invalid_review_point_evaluation"]
-        if (
-            entry["action"] == "implement"
-            and entry["verdict"] not in policies.IMPLEMENTABLE_VERDICTS
-        ):
+        if entry["action"] == "implement" and entry["verdict"] not in policies.IMPLEMENTABLE_VERDICTS:
             return ["invalid_review_point_evaluation"]
     if (
         output_type == "update_existing_pr"
         and "push_existing_pr" in actual_types
-        and not (
-            input_policy == "classify" and result.get("review_input_kind") == "mixed"
-        )
+        and not (input_policy == "classify" and result.get("review_input_kind") == "mixed")
     ):
         if not any(entry.get("action") == "implement" for entry in evaluation):
             return ["no_implemented_review_points"]
@@ -432,10 +400,7 @@ def _audit_remediation_evidence(
     }
     if task_kind == "ci_remediation":
         required_fields.add("failure_signature")
-    if any(
-        not isinstance(evidence.get(field), str) or not evidence[field].strip()
-        for field in required_fields
-    ):
+    if any(not isinstance(evidence.get(field), str) or not evidence[field].strip() for field in required_fields):
         return ["invalid_remediation_evidence"]
     comparisons = {
         "kind": context.get("episode_kind"),
@@ -451,9 +416,7 @@ def _audit_remediation_evidence(
         return ["remediation_evidence_mismatch"]
     if not require_attestation:
         return None
-    if not isinstance(remediation_attestation, dict) or (
-        remediation_attestation.get("status") != "accepted"
-    ):
+    if not isinstance(remediation_attestation, dict) or (remediation_attestation.get("status") != "accepted"):
         return ["remediation_attestation_failed"]
     if (
         not isinstance(
@@ -478,16 +441,10 @@ def _audit_classification_recommendation(result):
         return f"classification_result recommended_route is not supported: {recommended_route}"
     branch_slug = result.get("branch_slug")
     if branch_slug in (None, ""):
-        return (
-            "classification_result new-pr requires branch_slug"
-            if recommended_route == "new-pr"
-            else None
-        )
+        return "classification_result new-pr requires branch_slug" if recommended_route == "new-pr" else None
     if not isinstance(branch_slug, str):
         return "classification_result branch_slug must be a string"
-    if len(branch_slug) > MAX_BRANCH_SLUG_LENGTH or not BRANCH_SLUG_RE.fullmatch(
-        branch_slug
-    ):
+    if len(branch_slug) > MAX_BRANCH_SLUG_LENGTH or not BRANCH_SLUG_RE.fullmatch(branch_slug):
         return (
             "classification_result branch_slug must be lowercase ASCII kebab-case "
             f"and at most {MAX_BRANCH_SLUG_LENGTH} characters"
@@ -554,8 +511,7 @@ def _audit_verification_contract(result, verification_policy, actual_types):
         return None
     required_statuses = set(verification_policy.get("required_statuses") or ["passed"])
     has_required_pass = any(
-        entry.get("required") is True and entry.get("status") in required_statuses
-        for entry in verification
+        entry.get("required") is True and entry.get("status") in required_statuses for entry in verification
     )
     if not has_required_pass:
         return _verification_policy_error(
@@ -618,9 +574,7 @@ def audit_result(
             "status": "failed",
             "safe_error": "consumed_event_fingerprints must list handled events",
         }
-    skill_guidance = (
-        recommended_skills if recommended_skills is not None else required_skills
-    )
+    skill_guidance = recommended_skills if recommended_skills is not None else required_skills
     if skill_guidance is not None:
         used_skills, skill_error = _validate_used_skills(result.get("used_skills"))
         if skill_error:
@@ -651,27 +605,21 @@ def audit_result(
             "safe_error": action_error,
         }
 
-    violations = sorted(
-        {action_type for action_type in actual_types if action_type not in allowed}
-    )
+    violations = sorted({action_type for action_type in actual_types if action_type not in allowed})
     if violations:
         return {
             "ok": False,
             "status": "policy_violation",
             "violations": violations,
         }
-    if origin_type == "web" and any(
-        kind in {"comment", "submit_pr_review"} for kind in actual_types
-    ):
+    if origin_type == "web" and any(kind in {"comment", "submit_pr_review"} for kind in actual_types):
         return {
             "ok": False,
             "status": "policy_violation",
             "violations": ["web_origin_github_action"],
         }
     if result.get("output_type") == "multi_agent_vote_report" and (
-        len(actions) != 1
-        or not vote_publish.is_vote(actions[0])
-        or not isinstance(action_scope, dict)
+        len(actions) != 1 or not vote_publish.is_vote(actions[0]) or not isinstance(action_scope, dict)
     ):
         return {
             "ok": False,
@@ -763,9 +711,7 @@ def audit_result(
             "safe_error": pr_review_author_error,
         }
 
-    verification_error = _audit_verification_contract(
-        result, verification_policy, actual_types
-    )
+    verification_error = _audit_verification_contract(result, verification_policy, actual_types)
     if verification_error:
         return {
             "ok": False,
@@ -785,11 +731,7 @@ def audit_result(
             }
         worktree_status = action_scope.get("worktree_status")
         if worktree_status != "clean":
-            violation = (
-                "uncommitted_worktree"
-                if worktree_status == "dirty"
-                else "worktree_status_unavailable"
-            )
+            violation = "uncommitted_worktree" if worktree_status == "dirty" else "worktree_status_unavailable"
             return {
                 "ok": False,
                 "status": "policy_violation",
@@ -841,9 +783,7 @@ def audit_result(
     if final and task_kind in REMEDIATION_TASK_KINDS and not waiting_alternate:
         accepted["remediation_attestation"] = remediation_attestation
         if action_scope is not None:
-            accepted["action_scope"]["result_head_sha"] = remediation_attestation[
-                "result_head_sha"
-            ]
+            accepted["action_scope"]["result_head_sha"] = remediation_attestation["result_head_sha"]
     return accepted
 
 

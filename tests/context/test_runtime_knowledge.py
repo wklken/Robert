@@ -28,18 +28,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 repo_id=self.repo_id,
                 run_now=self.now,
             )
-            proposed = runtime_knowledge.propose_candidates(
-                conn, self.repo_id, self.now
-            )
+            proposed = runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
             candidate = conn.execute(
                 """
                 SELECT status, title, candidate_type, source_memory_ids_json
                 FROM knowledge_candidates
                 """
             ).fetchone()
-            runtime_count = conn.execute(
-                "SELECT COUNT(*) FROM runtime_knowledge"
-            ).fetchone()[0]
+            runtime_count = conn.execute("SELECT COUNT(*) FROM runtime_knowledge").fetchone()[0]
 
         self.assertEqual(proposed["status"], "proposed")
         self.assertEqual(proposed["candidate_count"], 1)
@@ -61,9 +57,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 run_now=self.now,
             )
             runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
-            candidate_id = conn.execute(
-                "SELECT candidate_id FROM knowledge_candidates"
-            ).fetchone()[0]
+            candidate_id = conn.execute("SELECT candidate_id FROM knowledge_candidates").fetchone()[0]
             approved = runtime_knowledge.approve_candidate(
                 conn,
                 candidate_id=candidate_id,
@@ -105,9 +99,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 run_now=self.now,
             )
             runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
-            candidate_id = conn.execute(
-                "SELECT candidate_id FROM knowledge_candidates"
-            ).fetchone()[0]
+            candidate_id = conn.execute("SELECT candidate_id FROM knowledge_candidates").fetchone()[0]
             rejected = runtime_knowledge.reject_candidate(
                 conn,
                 candidate_id=candidate_id,
@@ -142,9 +134,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 run_now=self.now,
             )
             runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
-            candidate_id = conn.execute(
-                "SELECT candidate_id FROM knowledge_candidates"
-            ).fetchone()[0]
+            candidate_id = conn.execute("SELECT candidate_id FROM knowledge_candidates").fetchone()[0]
 
         output = memory_curator.run_command(
             [
@@ -165,9 +155,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertTrue(output["ok"], output)
         self.assertEqual(output["status"], "approved")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            runtime_count = conn.execute(
-                "SELECT COUNT(*) FROM runtime_knowledge"
-            ).fetchone()[0]
+            runtime_count = conn.execute("SELECT COUNT(*) FROM runtime_knowledge").fetchone()[0]
         self.assertEqual(runtime_count, 1)
 
     def _init_db(self):
@@ -202,9 +190,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                         "symbols": ["_is_dd_pr_followup_event"],
                         "keywords": ["dd-pr-followup", "update-existing-pr"],
                         "confidence": "medium",
-                        "evidence": [
-                            {"type": "test", "value": "python -B -m unittest"}
-                        ],
+                        "evidence": [{"type": "test", "value": "python -B -m unittest"}],
                     }
                 ],
             },

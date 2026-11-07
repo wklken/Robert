@@ -20,9 +20,7 @@ def load_review_participants(conn, repo_id):
         review_participants = metadata.get("review_participants")
         if not isinstance(review_participants, list):
             continue
-        scoped = [
-            login for login in review_participants if isinstance(login, str) and login
-        ]
+        scoped = [login for login in review_participants if isinstance(login, str) and login]
         if scoped:
             participants[workstream_id] = scoped
     return participants
@@ -56,9 +54,7 @@ def record_review_participant(conn, workstream_id, event, route_result, run_now)
     if pr_author not in participants:
         participants.append(pr_author)
     metadata["review_participants"] = participants
-    metadata["review_authorized_by"] = (
-        event.get("requester_login") or event.get("actor_login") or ""
-    )
+    metadata["review_authorized_by"] = event.get("requester_login") or event.get("actor_login") or ""
     metadata["review_authorized_event"] = event.get("event_fingerprint") or ""
     metadata["review_authorized_at"] = event.get("event_at") or run_now
     conn.execute(

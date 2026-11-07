@@ -38,7 +38,5 @@ class DeliveryBudgetTests(unittest.TestCase):
         notify.deliver_pending(db, command=["test-notifier"], runner=runner)
         self.assertEqual(runner.call_count, 1)
         with closing(sqlite3.connect(db)) as c:
-            metadata = json.loads(
-                c.execute("SELECT metadata_json FROM notifications").fetchone()[0]
-            )
+            metadata = json.loads(c.execute("SELECT metadata_json FROM notifications").fetchone()[0])
             self.assertEqual(metadata["delivery"]["status"], "sent")

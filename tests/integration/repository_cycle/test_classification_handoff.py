@@ -45,9 +45,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -75,12 +73,8 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertTrue(finalized["ok"], finalized)
         self.assertEqual(finalized["dispatch_count"], 0)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed")
 
     def test_classification_result_child_keeps_canonical_trigger_payload(self):
         from robert_agent.delivery.application import submission as result
@@ -135,9 +129,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -343,9 +335,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -417,9 +407,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
                 """,
                 (tasks[1][0],),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
         self.assertEqual(len(tasks), 2)
         self.assertEqual(tasks[0][2], "completed")
         self.assertEqual(tasks[1][1], tasks[0][0])
@@ -487,9 +475,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             context_event_id = conn.execute(
                 "SELECT event_id FROM github_events WHERE event_fingerprint = 'comment:context-old'"
             ).fetchone()[0]
@@ -566,9 +552,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         child_context = json.loads(Path(child_context_path).read_text(encoding="utf-8"))
         child_event = child_context["events"][0]
         self.assertEqual(child_event["event_fingerprint"], "assigned:assign-16")
-        self.assertEqual(
-            child_event["body"], "remove the DCO check from GitHub Actions"
-        )
+        self.assertEqual(child_event["body"], "remove the DCO check from GitHub Actions")
         self.assertEqual(branch_name, "codex/dd-16-remove-dco-from-ci")
 
     def test_classification_result_branch_slug_names_child_worktree(self):
@@ -610,9 +594,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -664,9 +646,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
             "model": "gpt-5.6-sol",
             "effort": "medium",
         }
-        config["routes"] = {
-            "classification-result": {"worker": "classifier", "effort": "xhigh"}
-        }
+        config["routes"] = {"classification-result": {"worker": "classifier", "effort": "xhigh"}}
         self.config_path.write_text(yaml.safe_dump(config))
         self.fixture_path.write_text(
             json.dumps(

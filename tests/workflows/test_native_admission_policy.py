@@ -32,9 +32,7 @@ class NativeAdmissionPolicyTests(unittest.TestCase):
                     fixture.cycle([event("second")])
                     config = yaml.safe_load(fixture.config_path.read_text())
                     if change == "trust":
-                        config["repos"][0]["trusted_actors"] = [
-                            "replacement-maintainer"
-                        ]
+                        config["repos"][0]["trusted_actors"] = ["replacement-maintainer"]
                     else:
                         config["routes"]["vote" if vote else "review-pr"][
                             "multi_agent_vote" if vote else "multi_agent_review"
@@ -43,9 +41,7 @@ class NativeAdmissionPolicyTests(unittest.TestCase):
                     fixture.finish_task(first)
                     fixture.cycle([])
                     with closing(sqlite3.connect(fixture.db)) as conn:
-                        self.assertEqual(
-                            conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-                        )
+                        self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
                         table = "vote_sessions" if vote else "review_sessions"
                         row = conn.execute(
                             f"SELECT status,error FROM {table} WHERE trigger_fingerprint='comment:second'"
@@ -64,15 +60,11 @@ class NativeAdmissionPolicyTests(unittest.TestCase):
                 config = yaml.safe_load(fixture.config_path.read_text())
                 config["repos"][0]["trusted_actors"] = ["replacement-maintainer"]
                 fixture.config_path.write_text(yaml.safe_dump(config))
-                current = validate_config.validate_config(
-                    fixture.config_path, skip_external=True
-                )
+                current = validate_config.validate_config(fixture.config_path, skip_external=True)
                 repo = current["repos"][0]
                 queue = []
                 with closing(sqlite3.connect(fixture.db)) as conn:
-                    dispatch_queue.queue_prepared_attempts(
-                        conn, "repo:example/backend", repo, queue, 3
-                    )
+                    dispatch_queue.queue_prepared_attempts(conn, "repo:example/backend", repo, queue, 3)
                 self.assertTrue(queue)
                 with mock.patch.object(worker, "dispatch_worker") as launch:
                     dispatch_queue.dispatch_queued(

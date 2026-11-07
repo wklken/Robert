@@ -32,19 +32,13 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.git(self.repo, "remote", "rename", "origin", "upstream")
 
     def git(self, cwd, *args):
-        return subprocess.run(
-            ["git", *args], cwd=cwd, text=True, capture_output=True, check=True
-        ).stdout.strip()
+        return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=True).stdout.strip()
 
     def test_review_rejects_unmanaged_worktree(self):
         human = Path(self.tmp.name) / "human"
-        self.git(
-            self.repo, "worktree", "add", "-b", "review/pr-42-title", str(human), "HEAD"
-        )
+        self.git(self.repo, "worktree", "add", "-b", "review/pr-42-title", str(human), "HEAD")
         (human / "data").write_text("human changes")
-        result = plan_review_worktree(
-            self.repo, self.managed, 42, "title", "main", dry_run=False
-        )
+        result = plan_review_worktree(self.repo, self.managed, 42, "title", "main", dry_run=False)
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "blocked_unmanaged_worktree")
         self.assertEqual((human / "data").read_text(), "human changes")
@@ -76,38 +70,26 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertTrue(Path(payload["worktree_path"]).is_dir())
 
     def test_review_rejects_dirty_managed_worktree(self):
-        first = plan_review_worktree(
-            self.repo, self.managed, 42, "title", "main", dry_run=False
-        )
+        first = plan_review_worktree(self.repo, self.managed, 42, "title", "main", dry_run=False)
         tree = Path(first["worktree_path"])
         (tree / "data").write_text("human changes")
-        result = plan_review_worktree(
-            self.repo, self.managed, 42, "title", "main", dry_run=False
-        )
+        result = plan_review_worktree(self.repo, self.managed, 42, "title", "main", dry_run=False)
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "blocked_dirty_worktree")
         self.assertEqual((tree / "data").read_text(), "human changes")
 
     def test_analysis_refreshes_clean_reused_worktree(self):
-        first = plan_analysis_worktree(
-            self.repo, self.managed, 42, "main", dry_run=False
-        )
+        first = plan_analysis_worktree(self.repo, self.managed, 42, "main", dry_run=False)
         (self.upstream / "data").write_text("v2")
         self.git(self.upstream, "commit", "-am", "advance")
-        result = plan_analysis_worktree(
-            self.repo, self.managed, 42, "main", dry_run=False
-        )
+        result = plan_analysis_worktree(self.repo, self.managed, 42, "main", dry_run=False)
         self.assertTrue(result["ok"])
         self.assertEqual(Path(first["worktree_path"], "data").read_text(), "v2")
 
     def test_analysis_preserves_dirty_reused_worktree(self):
-        first = plan_analysis_worktree(
-            self.repo, self.managed, 42, "main", dry_run=False
-        )
+        first = plan_analysis_worktree(self.repo, self.managed, 42, "main", dry_run=False)
         tree = Path(first["worktree_path"])
         (tree / "data").write_text("local changes")
-        result = plan_analysis_worktree(
-            self.repo, self.managed, 42, "main", dry_run=False
-        )
+        result = plan_analysis_worktree(self.repo, self.managed, 42, "main", dry_run=False)
         self.assertFalse(result["ok"])
         self.assertEqual((tree / "data").read_text(), "local changes")

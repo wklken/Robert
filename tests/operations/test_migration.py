@@ -22,9 +22,7 @@ class MigrationTests(unittest.TestCase):
         self.assertIsNone(audit_result.COMMENT_MARKER_RE.search(legacy_comment))
         self.assertIsNone(audit_result.WORKSTREAM_MARKER_RE.search(legacy_workstream))
         self.assertIsNone(publication_effects.COMMENT_MARKER_RE.search(legacy_comment))
-        self.assertIsNone(
-            publication_effects.WORKSTREAM_MARKER_RE.search(legacy_workstream)
-        )
+        self.assertIsNone(publication_effects.WORKSTREAM_MARKER_RE.search(legacy_workstream))
 
     def test_database_init_adds_remediation_columns_to_legacy_schema(self):
         schema_path = self.root / "legacy-schema.sql"
@@ -47,13 +45,8 @@ class MigrationTests(unittest.TestCase):
         storage.init_database(db_path, schema_path=schema_path)
 
         with sqlite3.connect(db_path) as conn:
-            event_columns = {
-                row[1]: row[4]
-                for row in conn.execute("PRAGMA table_info(github_events)")
-            }
-            task_columns = {
-                row[1]: row[4] for row in conn.execute("PRAGMA table_info(tasks)")
-            }
+            event_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(github_events)")}
+            task_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(tasks)")}
         self.assertEqual(event_columns["actor_kind"], "'github_user'")
         self.assertEqual(task_columns["task_kind"], "'human_request'")
 
@@ -68,9 +61,7 @@ class MigrationTests(unittest.TestCase):
                 "SELECT version, checksum FROM schema_migrations WHERE name = ?",
                 (storage.WORKFLOW_MIGRATION_NAME,),
             ).fetchone()
-            indexes = {
-                row[1] for row in conn.execute("PRAGMA index_list(workflow_bindings)")
-            }
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list(workflow_bindings)")}
         self.assertEqual(
             (storage.WORKFLOW_MIGRATION_VERSION, storage.WORKFLOW_MIGRATION_CHECKSUM),
             marker,
@@ -83,9 +74,7 @@ class MigrationTests(unittest.TestCase):
                 (storage.WORKFLOW_MIGRATION_NAME,),
             )
             conn.commit()
-        with self.assertRaisesRegex(
-            RuntimeError, "workflow migration checksum mismatch"
-        ):
+        with self.assertRaisesRegex(RuntimeError, "workflow migration checksum mismatch"):
             storage.init_database(db_path)
 
     def test_database_init_preserves_legacy_migration_versions(self):
@@ -109,12 +98,8 @@ class MigrationTests(unittest.TestCase):
         storage.init_database(db_path)
 
         with sqlite3.connect(db_path) as conn:
-            markers = conn.execute(
-                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
-            ).fetchall()
-        self.assertEqual(
-            markers[1], (2, "dd-github-agent-work-item-control-v1", "legacy-checksum")
-        )
+            markers = conn.execute("SELECT version, name, checksum FROM schema_migrations ORDER BY version").fetchall()
+        self.assertEqual(markers[1], (2, "dd-github-agent-work-item-control-v1", "legacy-checksum"))
         self.assertEqual(markers[2][0], 3)
         self.assertEqual(
             markers[3],

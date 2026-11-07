@@ -16,8 +16,7 @@ class CompactResultFixture(unittest.TestCase):
             "attempt_id": attempt,
             "output_type": "update_existing_pr",
             "submission": {
-                "planned_github_actions": actions
-                or [{"type": "comment", "body": "Already correct."}],
+                "planned_github_actions": actions or [{"type": "comment", "body": "Already correct."}],
                 "consumed_event_fingerprints": ["comment:request-1"],
                 "used_skills": [],
                 "verification": [],

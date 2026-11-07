@@ -244,9 +244,7 @@ def queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
             capacity,
             max(
                 0,
-                int(repo["max_concurrency"])
-                - attempt_capacity.running_attempt_count(conn, repo_id)
-                - reserved,
+                int(repo["max_concurrency"]) - attempt_capacity.running_attempt_count(conn, repo_id) - reserved,
             ),
         )
     if capacity <= 0:
@@ -406,8 +404,7 @@ def _prepared_attempt_event_and_route(conn, attempt_id):
     task_metadata = values.json_object(row[5])
     event = {
         "origin_type": "web",
-        "number": task_metadata.get("local_source_reference")
-        or row[0].removeprefix("wi-")[:12],
+        "number": task_metadata.get("local_source_reference") or row[0].removeprefix("wi-")[:12],
         "title": row[1],
         "body": row[2],
         "existing_pr_head_branch": row[3],
@@ -441,15 +438,11 @@ def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
-        event, route_result = _prepared_attempt_event_and_route(
-            conn, task_info["attempt_id"]
-        )
+        event, route_result = _prepared_attempt_event_and_route(conn, task_info["attempt_id"])
     if not event or not route_result.get("needs_worktree"):
         return worktree_result
 
-    refreshed = assigned_workspace.prepare_worktree(
-        repo, event, route_result, dry_run=False
-    )
+    refreshed = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run=False)
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
@@ -476,12 +469,8 @@ def _model_for_dispatch(
     primary_model,
 ):
     fallback_model = selected_worker.get("fallback_model")
-    current = conn.execute(
-        "SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)
-    ).fetchone()
-    model_fallback = (
-        values.json_object(current[0] if current else None).get("resume") or {}
-    ).get("model_fallback")
+    current = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+    model_fallback = (values.json_object(current[0] if current else None).get("resume") or {}).get("model_fallback")
     if (
         model_fallback
         and model_fallback.get("worker_name") == selected_worker.get("name")
@@ -507,8 +496,7 @@ def _model_for_dispatch(
         return primary_model
     failures = [values.json_object(row[0]) for row in rows]
     if all(
-        failure.get("status") == "failed_timeout"
-        or failure.get("original_status") == "failed_timeout"
+        failure.get("status") == "failed_timeout" or failure.get("original_status") == "failed_timeout"
         for failure in failures
     ):
         return fallback_model
@@ -535,14 +523,10 @@ def dispatch_queued(
             with closing(sqlite3.connect(db_path)) as conn:
                 dispatch_queue = sorted(
                     dispatch_queue,
-                    key=lambda item: _prepared_attempt_dispatch_priority(
-                        conn, item["task_info"]["attempt_id"]
-                    ),
+                    key=lambda item: _prepared_attempt_dispatch_priority(conn, item["task_info"]["attempt_id"]),
                 )
         for item in dispatch_queue:
-            with task_publication_lock(
-                db_path, item["task_info"]["task_id"]
-            ) as acquired:
+            with task_publication_lock(db_path, item["task_info"]["task_id"]) as acquired:
                 if acquired:
                     results.extend(
                         dispatch_queued_locked(
@@ -574,9 +558,7 @@ def dispatch_queued_locked(
         return [cutover]
     results = []
     default_worker = default_worker or (workers or [])[0]
-    workers_by_name = {
-        worker["name"]: worker for worker in (workers or [default_worker])
-    }
+    workers_by_name = {worker["name"]: worker for worker in (workers or [default_worker])}
     for item in dispatch_queue:
         task_info = item["task_info"]
         worktree_result = item["worktree_result"]
@@ -586,10 +568,7 @@ def dispatch_queued_locked(
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("PRAGMA busy_timeout = 5000")
-                if (
-                    attempt_capacity.running_attempt_count_for_repos(conn, repo_ids)
-                    >= max_concurrency
-                ):
+                if attempt_capacity.running_attempt_count_for_repos(conn, repo_ids) >= max_concurrency:
                     continue
                 if attempt_capacity.running_attempt_count(conn, repo_id) >= int(
                     (repo or {}).get("max_concurrency", max_concurrency)
@@ -599,9 +578,7 @@ def dispatch_queued_locked(
                 if current_target is None:
                     continue
                 task_info, worktree_result = current_target
-            worktree_result = ensure_dispatch_worktree(
-                db_path, repo, task_info, worktree_result
-            )
+            worktree_result = ensure_dispatch_worktree(db_path, repo, task_info, worktree_result)
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("PRAGMA busy_timeout = 5000")
@@ -680,9 +657,7 @@ def dispatch_queued_locked(
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
         if not native_review and config_result:
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                if not work_admission.ordinary_dispatch_allowed(
-                    conn, task_info["task_id"], repo
-                ):
+                if not work_admission.ordinary_dispatch_allowed(conn, task_info["task_id"], repo):
                     now = values.utc_now()
                     conn.execute(
                         "UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'",
@@ -710,9 +685,7 @@ def dispatch_queued_locked(
         if (
             native_review
             and config_result
-            and not workflow_routing.native_request_allowed(
-                native_review, repo, config_result
-            )
+            and not workflow_routing.native_request_allowed(native_review, repo, config_result)
         ):
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -731,18 +704,14 @@ def dispatch_queued_locked(
                         "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL,updated_at=? WHERE active_task_id=?",
                         (now, task_info["task_id"]),
                     )
-                    round_store = (
-                        vote_store if "source_type" in native_review else review_store
-                    )
+                    round_store = vote_store if "source_type" in native_review else review_store
                     round_store.update(
                         conn,
                         native_review["round_id"],
                         status="canceled",
                         error="current authorization or native route no longer permits this request",
                     )
-                    execution_ownership.close_terminal_task(
-                        conn, task_info["task_id"], now
-                    )
+                    execution_ownership.close_terminal_task(conn, task_info["task_id"], now)
                     execution_notifications.insert(
                         conn,
                         "native_request_canceled",
@@ -790,21 +759,15 @@ def dispatch_queued_locked(
                         worker as supervision_repair_worker,
                     )
 
-                    worker_kwargs["worker_agent_config"] = (
-                        supervision_repair_worker.launch_profile(
-                            config_result,
-                            task_info["task_id"],
-                            task_info["attempt_id"],
-                            repair_authorization["worker"],
-                        )
+                    worker_kwargs["worker_agent_config"] = supervision_repair_worker.launch_profile(
+                        config_result,
+                        task_info["task_id"],
+                        task_info["attempt_id"],
+                        repair_authorization["worker"],
                     )
         if native_review:
             configured = native_review["request"]["workers"]
-            timeout = (
-                sum(w["timeout_seconds"] for w in configured)
-                + 2 * configured[0]["timeout_seconds"]
-                + 600
-            )
+            timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
             environment_names = sorted(
                 {
                     "GH_TOKEN",
@@ -847,13 +810,9 @@ def dispatch_queued_locked(
                 task_info, worktree_result = target
                 if not execution_ownership.claim_task(conn, task_info["task_id"]):
                     continue
-                subject_type, subject_id = execution_ownership.subject_for_task(
-                    conn, task_info["task_id"]
-                )
+                subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])
                 binding = execution_store.get_binding(conn, subject_type, subject_id)
-                metadata = (
-                    values.json_object(binding["metadata_json"]) if binding else {}
-                )
+                metadata = values.json_object(binding["metadata_json"]) if binding else {}
                 if metadata.get("dispatch_inflight"):
                     if binding:
                         metadata["reason_code"] = "dispatch_outcome_unknown"
@@ -884,20 +843,14 @@ def dispatch_queued_locked(
                 "attempt_id": task_info["attempt_id"],
             }
         dispatch_logs = (
-            {
-                kind: {"tail": evidence.tail_file(dispatch_result.get(f"{kind}_path"))}
-                for kind in ("stdout", "stderr")
-            }
+            {kind: {"tail": evidence.tail_file(dispatch_result.get(f"{kind}_path"))} for kind in ("stdout", "stderr")}
             if not dispatch_result.get("ok", True) and dispatch_result.get("pid")
             else {}
         )
         if (
             not dispatch_result.get("ok", True)
             and dispatch_result.get("pid")
-            and (
-                evidence.terminal_transport_failure(dispatch_logs)
-                or retry_policy.terminal_rate_limit(dispatch_logs)
-            )
+            and (evidence.terminal_transport_failure(dispatch_logs) or retry_policy.terminal_rate_limit(dispatch_logs))
         ):
             # Even an exit during the startup probe must pass through the same
             # supervised, bounded continuation path as a later stream failure.
@@ -921,9 +874,7 @@ def dispatch_queued_locked(
             if not execution_ownership.claim_task(conn, task_info["task_id"]):
                 continue
             _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
-            subject_type, subject_id = execution_ownership.subject_for_task(
-                conn, task_info["task_id"]
-            )
+            subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])
             binding = execution_store.get_binding(conn, subject_type, subject_id)
             if binding:
                 metadata = values.json_object(binding["metadata_json"])
@@ -932,9 +883,7 @@ def dispatch_queued_locked(
                     "UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?",
                     (json.dumps(metadata), subject_type, subject_id),
                 )
-            _record_dispatch_artifacts(
-                conn, task_info, dispatch_result, values.utc_now()
-            )
+            _record_dispatch_artifacts(conn, task_info, dispatch_result, values.utc_now())
             if dispatch_result.get("cleanup_pending"):
                 execution_notifications.insert(
                     conn,
@@ -952,8 +901,7 @@ def dispatch_queued_locked(
                 results.append(dispatch_result)
                 continue
             if (
-                not dispatch_result.get("ok", True)
-                or dispatch_result.get("status") == "failed"
+                not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed"
             ) and _completed_by_worker_result(conn, task_info["attempt_id"]):
                 dispatch_result = {
                     **dispatch_result,
@@ -961,10 +909,7 @@ def dispatch_queued_locked(
                     "status": "completed_by_worker_result",
                     "original_status": dispatch_result.get("status"),
                 }
-            if (
-                not dispatch_result.get("ok", True)
-                or dispatch_result.get("status") == "failed"
-            ):
+            if not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed":
                 run_now = values.utc_now()
                 work_application_lifecycle.finalize_failed_task(
                     conn,

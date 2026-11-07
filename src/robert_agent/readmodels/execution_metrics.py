@@ -20,11 +20,7 @@ def _time(value):
 
 def _seconds(start, end):
     start, end = _time(start), _time(end)
-    return (
-        round((end - start).total_seconds(), 3)
-        if start and end and end >= start
-        else None
-    )
+    return round((end - start).total_seconds(), 3) if start and end and end >= start else None
 
 
 def _rows(conn, query, args=()):
@@ -56,9 +52,7 @@ def task_timing(conn, task_id):
         metadata = json.loads(attempt["metadata_json"] or "{}")
         dispatch = metadata.get("dispatch") or {}
         attempt["worker_started_at"] = metadata.get("worker_started_at") or (
-            attempt["started_at"]
-            if attempt["status"] != "prepared" and dispatch.get("status") == "running"
-            else None
+            attempt["started_at"] if attempt["status"] != "prepared" and dispatch.get("status") == "running" else None
         )
     result_by_attempt = {row["attempt_id"]: row for row in results}
     worker, ingestion, audit = [], [], []
@@ -71,9 +65,7 @@ def task_timing(conn, task_id):
         )
         if elapsed is not None:
             worker.append(elapsed)
-        elapsed = _seconds(
-            metadata.get("result_saved_at"), metadata.get("result_ingested_at")
-        )
+        elapsed = _seconds(metadata.get("result_saved_at"), metadata.get("result_ingested_at"))
         if elapsed is not None:
             ingestion.append(elapsed)
         elapsed = _seconds(
@@ -87,15 +79,9 @@ def task_timing(conn, task_id):
         "SELECT publish_status,metadata_json FROM github_actions WHERE task_id=?",
         (task_id,),
     )
-    publication = [
-        json.loads(row["metadata_json"]).get("publish", {}) for row in actions
-    ]
-    published = [
-        row.get("published_at") for row in publication if _time(row.get("published_at"))
-    ]
-    next_retry = [
-        row["next_retry_at"] for row in publication if row.get("next_retry_at")
-    ]
+    publication = [json.loads(row["metadata_json"]).get("publish", {}) for row in actions]
+    published = [row.get("published_at") for row in publication if _time(row.get("published_at"))]
+    next_retry = [row["next_retry_at"] for row in publication if row.get("next_retry_at")]
     wait = json.loads(task["metadata_json"] or "{}").get("wait_state", {})
     reason = "unknown"
     if task["lifecycle"] in {"completed", "failed", "canceled", "ignored"}:
@@ -104,10 +90,7 @@ def task_timing(conn, task_id):
         next_retry = []
     elif task["lifecycle"] == "waiting_for_user":
         reason = "human_input"
-    elif any(
-        row.get("retryable") is False and row.get("status") != "published"
-        for row in publication
-    ):
+    elif any(row.get("retryable") is False and row.get("status") != "published" for row in publication):
         reason = "publication_attention"
     elif next_retry:
         reason = "publication_backoff"
@@ -131,23 +114,15 @@ def task_timing(conn, task_id):
         "queue_seconds": _seconds(
             task["created_at"],
             next(
-                (
-                    row["worker_started_at"]
-                    for row in attempts
-                    if row["worker_started_at"]
-                ),
+                (row["worker_started_at"] for row in attempts if row["worker_started_at"]),
                 None,
             ),
         ),
         "worker_seconds": round(sum(worker), 3) if worker else None,
         "result_ingestion_seconds": round(sum(ingestion), 3) if ingestion else None,
         "result_to_audit_seconds": round(sum(audit), 3) if audit else None,
-        "result_to_publication_seconds": _seconds(
-            results[-1]["created_at"], max(published, key=_time)
-        )
-        if results
-        and published
-        and all(row["publish_status"] in {"published", "skipped"} for row in actions)
+        "result_to_publication_seconds": _seconds(results[-1]["created_at"], max(published, key=_time))
+        if results and published and all(row["publish_status"] in {"published", "skipped"} for row in actions)
         else None,
         "attempt_count": len(attempts),
     }
@@ -161,13 +136,9 @@ def summarize(conn, limit=500):
         (limit,),
     ).fetchall():
         timing = task_timing(conn, task_id)
-        groups[
-            timing["task_kind"]
-            + ":"
-            + str(timing["route_id"] or "unknown")
-            + ":"
-            + timing["lifecycle"]
-        ].append(timing)
+        groups[timing["task_kind"] + ":" + str(timing["route_id"] or "unknown") + ":" + timing["lifecycle"]].append(
+            timing
+        )
     result = {}
     for key, timings in groups.items():
         metrics = {"tasks": len(timings)}

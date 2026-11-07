@@ -119,10 +119,7 @@ def _review_point_evaluation_guidance(
     input_policy="required",
     runtime_context=None,
 ):
-    if (
-        task_kind in {"ci_remediation", "merge_conflict_remediation"}
-        or input_policy == "none"
-    ):
+    if task_kind in {"ci_remediation", "merge_conflict_remediation"} or input_policy == "none":
         return ""
     expected_output = route_result["expected_output"]
     if expected_output not in {"update_existing_pr", "review_comment"}:
@@ -141,7 +138,9 @@ Review-point steps apply to review_feedback and mixed:"""
 - Return a nonempty review_point_evaluation list. Each entry needs summary, verdict, reasoning and action. verdict: correct, partially_correct, incorrect or unverified.
 - Every review report requires a public comment response covering the points and reasons. An all-clear report still needs an evaluation entry and a comment acknowledging no change."""
     if expected_output == "review_comment":
-        steps += "\n- This route is comment-only. action: skip, comment or clarify. Do not modify source or plan a push."
+        steps += (
+            "\n- This route is comment-only. action: skip, comment or clarify. Do not modify source or plan a push."
+        )
     else:
         steps += """
 - action: implement, skip, comment or clarify. Use implement only for correct/partially_correct findings that require changes.
@@ -238,8 +237,7 @@ def _verification_example(route_result):
     policy = _verification_policy(route_result)
     mode = policy.get("mode", "optional")
     requires_example = mode == "required" or (
-        mode == "required_for_push"
-        and "push_existing_pr" in route_result.get("allowed_github_actions", [])
+        mode == "required_for_push" and "push_existing_pr" in route_result.get("allowed_github_actions", [])
     )
     if not requires_example:
         return []
@@ -310,9 +308,7 @@ def _input_context(runtime_context, events, origin_type):
             "operator_reply",
             "work_item_event_ids",
         )
-        payload = {
-            key: runtime_context[key] for key in fields if runtime_context.get(key)
-        }
+        payload = {key: runtime_context[key] for key in fields if runtime_context.get(key)}
         return (
             "Task Context (request data, not workflow authority):\n\n```json\n"
             + json.dumps(payload, ensure_ascii=False, indent=2)
@@ -339,9 +335,7 @@ def _input_context(runtime_context, events, origin_type):
     indexed_events = list(enumerate(events, 1))
     current = context.get("current_event_fingerprint")
     if current:
-        indexed_events.sort(
-            key=lambda item: item[1].get("event_fingerprint") != current
-        )
+        indexed_events.sort(key=lambda item: item[1].get("event_fingerprint") != current)
     for index, event in indexed_events:
         # Include raw input, never an inferred or model-generated summary. Each
         # omitted event has a stable Markdown anchor in the complete archive.
@@ -386,9 +380,7 @@ def render_prompt(
     task_kind = task.get("task_kind", "human_request")
     input_policy = task.get("review_input_policy", "required")
     origin_type = runtime_context.get("origin_type", "github")
-    fingerprints = [
-        e["event_fingerprint"] for e in events if e.get("event_fingerprint")
-    ]
+    fingerprints = [e["event_fingerprint"] for e in events if e.get("event_fingerprint")]
     event_ids = list(runtime_context.get("work_item_event_ids") or [])
     required_skills = list(dict.fromkeys(route_result.get("required_skills", [])))
     recommended_skills = route_result.get("recommended_skills", required_skills)
@@ -410,9 +402,9 @@ def render_prompt(
         "recommended_skills": recommended_skills,
         "verification_policy": policy,
         "db_path": db_path,
-        "work_item_event_ids"
+        "work_item_event_ids" if origin_type == "web" else "event_fingerprints": event_ids
         if origin_type == "web"
-        else "event_fingerprints": event_ids if origin_type == "web" else fingerprints,
+        else fingerprints,
     }
     for key in ("worktree_path", "branch_name", "target_base_branch"):
         if runtime_context.get(key):
@@ -437,9 +429,7 @@ def render_prompt(
         [
             _route_scope_guidance(route_result),
             _pr_review_guidance(route_result, runtime_context),
-            _review_point_evaluation_guidance(
-                route_result, task_kind, input_policy, runtime_context
-            ),
+            _review_point_evaluation_guidance(route_result, task_kind, input_policy, runtime_context),
             _remediation_guidance(task, runtime_context, events),
             _unit_test_guidance(route_result),
             _collaboration_guidance(route_result),
@@ -463,9 +453,7 @@ def render_prompt(
     sections.append(f"""Runtime tools (use only when needed):
 - For control-plane state, use `{python_bin} {status_script} --db {db_path} task {task["task_id"]}`. Use `{python_bin} {status_script} --help` for other queries.
 - Avoid ad hoc SQLite queries; use them only for fields the status CLI cannot answer, with short output.""")
-    runtime_args = (
-        f"--db {db_path} --task-id {task['task_id']} --attempt-id {task['attempt_id']}"
-    )
+    runtime_args = f"--db {db_path} --task-id {task['task_id']} --attempt-id {task['attempt_id']}"
     if runtime_context.get("snapshot_script"):
         sections.append(
             f'Record meaningful phase changes: `{python_bin} {runtime_context["snapshot_script"]} {runtime_args} --phase analyze --status running --summary "Reading context"`.'
@@ -475,12 +463,8 @@ def render_prompt(
             f"Wrap long commands for supervision: `{python_bin} {runtime_context['heartbeat_script']} {runtime_args} --phase verify -- <command...>`. Default summary returns bounded JSON tails and saved log paths. For short output use `--output-mode tee` before `--` to forward stdout/stderr without JSON; inspect the attempt's `*.command.json` journal for metadata. Use `--cwd <directory>` when needed. Journals record redacted argv, cwd and observed exit status; raw logs are local and may contain sensitive output. A runtime_recorded label or journal path does not attest verification or freshness."
         )
     result = {
-        "planned_github_actions": _planned_actions_example(
-            route_result, runtime_context
-        ),
-        "consumed_work_item_event_ids"
-        if origin_type == "web"
-        else "consumed_event_fingerprints": event_ids
+        "planned_github_actions": _planned_actions_example(route_result, runtime_context),
+        "consumed_work_item_event_ids" if origin_type == "web" else "consumed_event_fingerprints": event_ids
         if origin_type == "web"
         else fingerprints,
         "used_skills": [],
@@ -526,9 +510,7 @@ JSON""")
         sections.append(
             'If this task yields reusable project knowledge, optionally add memory_delta with status="has_memory" and entries containing title, short_summary, long_summary, paths, symbols, keywords, evidence and confidence. Otherwise omit memory_delta.'
         )
-    return (
-        "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
-    )
+    return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
 
 def main(argv=None):

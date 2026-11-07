@@ -47,9 +47,7 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed("[]")
             return Completed("https://github.com/x/y/pull/42\n")
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -172,9 +170,7 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed("https://github.com/x/y/pull/42\n")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 2)
@@ -297,18 +293,14 @@ class PublishPullRequestTests(PublicationFixture):
             calls.append((command, kwargs))
             if command[:4] == ["git", "remote", "get-url", "origin"]:
                 self.assertEqual(kwargs["cwd"], str(worktree))
-                return Completed(
-                    "https://github.com/robert-bot/blueking-apigateway.git\n"
-                )
+                return Completed("https://github.com/robert-bot/blueking-apigateway.git\n")
             if command[:3] == ["gh", "pr", "list"]:
                 return Completed("[]")
             if command[:3] == ["gh", "pr", "create"]:
                 return Completed("https://github.com/example/backend/pull/42\n")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -316,9 +308,7 @@ class PublishPullRequestTests(PublicationFixture):
         self.assertEqual(calls[1][0][:3], ["gh", "pr", "list"])
         self.assertEqual(calls[1][0][calls[1][0].index("--head") + 1], branch)
         self.assertEqual(calls[2][0][:3], ["gh", "pr", "create"])
-        self.assertEqual(
-            calls[2][0][calls[2][0].index("--head") + 1], f"robert-bot:{branch}"
-        )
+        self.assertEqual(calls[2][0][calls[2][0].index("--head") + 1], f"robert-bot:{branch}")
 
     def test_publish_ready_new_pr_stops_open_pr_when_branch_push_fails(self):
         from robert_agent.delivery.application import publish
@@ -386,9 +376,7 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed(returncode=1, stderr="push rejected")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["published_count"], 0)
@@ -487,9 +475,7 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed(returncode=128, stderr="network unavailable")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["published_count"], 0)
@@ -500,9 +486,7 @@ class PublishPullRequestTests(PublicationFixture):
                 ["git", "ls-remote", "--heads", "origin", "codex/dd-123"],
             ],
         )
-        self.assertIn(
-            "remote branch lookup failed", result["failures"][0]["safe_error"]
-        )
+        self.assertIn("remote branch lookup failed", result["failures"][0]["safe_error"])
 
     def test_publish_ready_open_pr_reuses_existing_head_pr(self):
         from robert_agent.delivery.application import publish
@@ -570,9 +554,7 @@ class PublishPullRequestTests(PublicationFixture):
                 )
             )
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -600,9 +582,7 @@ class PublishPullRequestTests(PublicationFixture):
                 WHERE action_id = 'action-1'
                 """
             ).fetchone()
-        self.assertEqual(
-            action[:3], ("published", "42", "https://github.com/x/y/pull/42")
-        )
+        self.assertEqual(action[:3], ("published", "42", "https://github.com/x/y/pull/42"))
         self.assertTrue(json.loads(action[3])["publish"]["deduplicated"])
 
     def test_publish_ready_open_pr_ignores_same_head_pr_without_marker(self):
@@ -671,9 +651,7 @@ class PublishPullRequestTests(PublicationFixture):
             self.assertEqual(command[:3], ["gh", "pr", "create"])
             return Completed("https://github.com/x/y/pull/43\n")
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -690,9 +668,7 @@ class PublishPullRequestTests(PublicationFixture):
                 WHERE action_id = 'action-1'
                 """
             ).fetchone()
-        self.assertEqual(
-            action[:3], ("published", "43", "https://github.com/x/y/pull/43")
-        )
+        self.assertEqual(action[:3], ("published", "43", "https://github.com/x/y/pull/43"))
         self.assertFalse(json.loads(action[3])["publish"]["deduplicated"])
 
     def test_publish_ready_open_pr_reuses_same_owner_head_pr_with_different_marker(
@@ -776,18 +752,14 @@ class PublishPullRequestTests(PublicationFixture):
                             "baseRefName": "master",
                             "headRefName": "codex/dd-123",
                             "headRepositoryOwner": {"login": "robert-bot"},
-                            "body": self._dd_pr_body(
-                                "Existing DD PR", task_id="task-old"
-                            ),
+                            "body": self._dd_pr_body("Existing DD PR", task_id="task-old"),
                         },
                         sort_keys=True,
                     )
                 )
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -798,13 +770,9 @@ class PublishPullRequestTests(PublicationFixture):
         )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             metadata = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM github_actions WHERE action_id = 'action-1'"
-                ).fetchone()[0]
+                conn.execute("SELECT metadata_json FROM github_actions WHERE action_id = 'action-1'").fetchone()[0]
             )
-        self.assertEqual(
-            metadata["publish"]["response"]["dedupe_reason"], "matching_head"
-        )
+        self.assertEqual(metadata["publish"]["response"]["dedupe_reason"], "matching_head")
 
     def test_publish_ready_open_pr_does_not_reuse_different_owner_head_pr(self):
         from robert_agent.delivery.application import publish
@@ -875,9 +843,7 @@ class PublishPullRequestTests(PublicationFixture):
             self.assertEqual(command[:3], ["gh", "pr", "create"])
             return Completed("https://github.com/x/y/pull/43\n")
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -927,9 +893,7 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed("[]")
             return Completed("")
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)

@@ -27,22 +27,12 @@ class WaitingResultTests(DurableResultFixture):
         response = result.record_result(self.db, self.payload)
         self.assertEqual(response["status"], "failed_validation")
         with closing(sqlite3.connect(self.db)) as c:
-            self.assertEqual(
-                c.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running"
-            )
-            self.assertEqual(
-                c.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
-            self.assertIsNone(
-                c.execute("SELECT failure_json FROM attempts").fetchone()[0]
-            )
+            self.assertEqual(c.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running")
+            self.assertEqual(c.execute("SELECT status FROM attempts").fetchone()[0], "running")
+            self.assertIsNone(c.execute("SELECT failure_json FROM attempts").fetchone()[0])
         with closing(sqlite3.connect(self.db)) as c:
-            self.assertEqual(
-                c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0
-            )
-            self.assertEqual(
-                c.execute("SELECT count(*) FROM notifications").fetchone()[0], 0
-            )
+            self.assertEqual(c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(c.execute("SELECT count(*) FROM notifications").fetchone()[0], 0)
         self.payload["output_type"] = "local_result"
         self.payload["submission"].pop("operator_question")
         self.assertTrue(result.record_result(self.db, self.payload)["ok"])

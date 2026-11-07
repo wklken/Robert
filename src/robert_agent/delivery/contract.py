@@ -56,9 +56,7 @@ ISSUE_REFERENCE = re.compile(
 
 
 class InvalidSubmission(ValueError):
-    def __init__(
-        self, field, message, code="invalid_submission", *, allowed_target_urls=None
-    ):
+    def __init__(self, field, message, code="invalid_submission", *, allowed_target_urls=None):
         super().__init__(message)
         self.field, self.code = field, code
         self.allowed_target_urls = allowed_target_urls
@@ -71,11 +69,7 @@ class InvalidSubmission(ValueError):
             "field_path": self.field,
             "safe_error": str(self),
             "required_action": "Correct the indicated field and submit again in this attempt.",
-            **(
-                {"allowed_target_urls": self.allowed_target_urls}
-                if self.allowed_target_urls is not None
-                else {}
-            ),
+            **({"allowed_target_urls": self.allowed_target_urls} if self.allowed_target_urls is not None else {}),
         }
 
 
@@ -94,11 +88,7 @@ def validate_submission(submission, output_type, origin_type):
         "Submission contains unsupported or program-owned fields.",
         "program_owned_field",
     )
-    consumed = (
-        "consumed_work_item_event_ids"
-        if origin_type == "web"
-        else "consumed_event_fingerprints"
-    )
+    consumed = "consumed_work_item_event_ids" if origin_type == "web" else "consumed_event_fingerprints"
     for field in ("planned_github_actions", "used_skills", "verification", consumed):
         _require(
             field in submission and isinstance(submission[field], list),
@@ -113,22 +103,17 @@ def validate_submission(submission, output_type, origin_type):
     ):
         if field in submission:
             _require(
-                isinstance(submission[field], list)
-                and all(isinstance(v, str) and v for v in submission[field]),
+                isinstance(submission[field], list) and all(isinstance(v, str) and v for v in submission[field]),
                 field,
                 field + " must contain non-empty strings.",
             )
     for field in ("handoff", "recommended_route", "branch_slug"):
         if field in submission:
-            _require(
-                isinstance(submission[field], str), field, field + " must be a string."
-            )
+            _require(isinstance(submission[field], str), field, field + " must be a string.")
     for index, action in enumerate(submission["planned_github_actions"]):
         field = f"planned_github_actions[{index}]"
         _require(
-            isinstance(action, dict)
-            and isinstance(action.get("type"), str)
-            and action["type"] in ACTION_FIELDS,
+            isinstance(action, dict) and isinstance(action.get("type"), str) and action["type"] in ACTION_FIELDS,
             field + ".type",
             "Action type is unsupported.",
         )
@@ -179,17 +164,14 @@ def validate_submission(submission, output_type, origin_type):
         )
     if output_type == "waiting_for_user":
         _require(
-            not types
-            if origin_type == "web"
-            else bool(types) and all(kind == "comment" for kind in types),
+            not types if origin_type == "web" else bool(types) and all(kind == "comment" for kind in types),
             "planned_github_actions",
             "Waiting requires only deliverable question comments; Web waiting has no publication actions.",
         )
     if "operator_question" in submission:
         question = submission["operator_question"]
         _require(
-            isinstance(question, dict)
-            and not (set(question) - {"kind", "summary", "choices"}),
+            isinstance(question, dict) and not (set(question) - {"kind", "summary", "choices"}),
             "operator_question",
             "Question contains unsupported fields.",
         )
@@ -198,11 +180,7 @@ def validate_submission(submission, output_type, origin_type):
             "operator_question.kind",
             "Question kind must be a string.",
         )
-        for choice in (
-            question.get("choices", [])
-            if isinstance(question.get("choices", []), list)
-            else []
-        ):
+        for choice in question.get("choices", []) if isinstance(question.get("choices", []), list) else []:
             _require(
                 isinstance(choice, dict) and not (set(choice) - {"id", "label"}),
                 "operator_question.choices",
@@ -217,8 +195,7 @@ def validate_submission(submission, output_type, origin_type):
     if "review_input_kind" in submission:
         _require(
             isinstance(submission["review_input_kind"], str)
-            and submission["review_input_kind"]
-            in {"request", "review_feedback", "mixed"},
+            and submission["review_input_kind"] in {"request", "review_feedback", "mixed"},
             "review_input_kind",
             "Review input kind is invalid.",
         )
@@ -255,16 +232,13 @@ def validate_submission(submission, output_type, origin_type):
                 "Review action is invalid.",
             )
             _require(
-                item["action"] != "implement"
-                or item["verdict"] in policies.IMPLEMENTABLE_VERDICTS,
+                item["action"] != "implement" or item["verdict"] in policies.IMPLEMENTABLE_VERDICTS,
                 field + ".action",
                 "Implement requires a supported verdict.",
             )
     if "memory_delta" in submission:
         memory = submission["memory_delta"]
-        _require(
-            isinstance(memory, dict), "memory_delta", "Memory delta must be an object."
-        )
+        _require(isinstance(memory, dict), "memory_delta", "Memory delta must be an object.")
         for name in ("status", "reason"):
             _require(
                 name not in memory or isinstance(memory[name], str),
@@ -273,18 +247,13 @@ def validate_submission(submission, output_type, origin_type):
             )
         _require(
             "entries" not in memory
-            or (
-                isinstance(memory["entries"], list)
-                and all(isinstance(item, dict) for item in memory["entries"])
-            ),
+            or (isinstance(memory["entries"], list) and all(isinstance(item, dict) for item in memory["entries"])),
             "memory_delta.entries",
             "Memory entries must be objects.",
         )
     for index, entry in enumerate(submission["verification"]):
         field = f"verification[{index}]"
-        _require(
-            isinstance(entry, dict), field, "Verification entry must be an object."
-        )
+        _require(isinstance(entry, dict), field, "Verification entry must be an object.")
         allowed = {
             "command",
             "status",
@@ -319,8 +288,7 @@ def validate_submission(submission, output_type, origin_type):
             "Verification command must be non-empty text or an argument list.",
         )
         _require(
-            isinstance(entry["status"], str)
-            and entry["status"] in {"passed", "failed", "skipped"},
+            isinstance(entry["status"], str) and entry["status"] in {"passed", "failed", "skipped"},
             field + ".status",
             "Verification status is invalid.",
         )
@@ -336,8 +304,7 @@ def validate_submission(submission, output_type, origin_type):
         )
         if entry["status"] == "skipped":
             _require(
-                isinstance(entry.get("skipped_reason"), str)
-                and bool(entry["skipped_reason"].strip()),
+                isinstance(entry.get("skipped_reason"), str) and bool(entry["skipped_reason"].strip()),
                 field + ".skipped_reason",
                 "Skipped verification requires a reason.",
             )
@@ -348,8 +315,7 @@ def validate_submission(submission, output_type, origin_type):
             )
         _require(
             isinstance(entry["source"], str)
-            and entry["source"]
-            in {"worker_reported", "runtime_recorded", "external_ci"},
+            and entry["source"] in {"worker_reported", "runtime_recorded", "external_ci"},
             field + ".source",
             "Verification source is invalid.",
         )
@@ -366,15 +332,13 @@ def validate_submission(submission, output_type, origin_type):
             )
         if entry["source"] == "runtime_recorded":
             _require(
-                isinstance(entry.get("command_record_path"), str)
-                and bool(entry["command_record_path"]),
+                isinstance(entry.get("command_record_path"), str) and bool(entry["command_record_path"]),
                 field + ".command_record_path",
                 "Runtime evidence requires its command journal path.",
             )
         if entry["source"] == "external_ci":
             _require(
-                isinstance(entry.get("url"), str)
-                and entry["url"].startswith("https://"),
+                isinstance(entry.get("url"), str) and entry["url"].startswith("https://"),
                 field + ".url",
                 "CI evidence requires its HTTPS run URL.",
             )
@@ -454,9 +418,7 @@ def normalize(envelope, settings):
     output_type = envelope["output_type"]
     scope = settings["action_scope"]
     result = deepcopy(submission)
-    result.update(
-        {key: envelope[key] for key in ("task_id", "attempt_id", "output_type")}
-    )
+    result.update({key: envelope[key] for key in ("task_id", "attempt_id", "output_type")})
     result.setdefault("consumed_event_fingerprints", [])
     result.setdefault("consumed_work_item_event_ids", [])
     for index, action in enumerate(result["planned_github_actions"]):
@@ -490,8 +452,7 @@ def normalize(envelope, settings):
                     )
                     action[name] = scope[name]
                 _require(
-                    comment_marker(envelope["task_id"], envelope["attempt_id"], index)
-                    in action["body"],
+                    comment_marker(envelope["task_id"], envelope["attempt_id"], index) in action["body"],
                     field + ".body",
                     "Registered vote report requires its generated action marker.",
                 )
@@ -514,31 +475,18 @@ def normalize(envelope, settings):
                 if output_type == "pr_review_comment":
                     login = scope.get("pr_authors", {}).get(action["target_url"])
                     _require(
-                        isinstance(login, str)
-                        and bool(
-                            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", login)
-                        ),
+                        isinstance(login, str) and bool(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", login)),
                         field + ".body",
                         "Trusted PR author is unavailable.",
                     )
                     action["pr_author_login"] = login
                     action["body"] = f"@{login}\n\n" + action["body"]
-                action["body"] += "\n\n" + comment_marker(
-                    envelope["task_id"], envelope["attempt_id"], index
-                )
+                action["body"] += "\n\n" + comment_marker(envelope["task_id"], envelope["attempt_id"], index)
         elif kind == "open_pr":
             for source in ("repo", "branch_name", "base_branch"):
-                _require(
-                    bool(scope.get(source)), field, "Assigned PR target is unavailable."
-                )
-            action.update(
-                repo=scope["repo"], head=scope["branch_name"], base=scope["base_branch"]
-            )
-            issues = [
-                item["number"]
-                for item in scope.get("sources", [])
-                if item.get("source_type") == "issue"
-            ]
+                _require(bool(scope.get(source)), field, "Assigned PR target is unavailable.")
+            action.update(repo=scope["repo"], head=scope["branch_name"], base=scope["base_branch"])
+            issues = [item["number"] for item in scope.get("sources", []) if item.get("source_type") == "issue"]
             issue = None
             if "target_url" in action:
                 selected = _target(action, scope, index)
@@ -574,9 +522,7 @@ def normalize(envelope, settings):
                         field + ".remaining_scope",
                         "Partial delivery requires remaining_scope.",
                     )
-                action["body"] += (
-                    f"\n\n{'Fixes' if action['issue_resolution'] == 'complete' else 'Refs'} #{issue}"
-                )
+                action["body"] += f"\n\n{'Fixes' if action['issue_resolution'] == 'complete' else 'Refs'} #{issue}"
                 action.pop("target_url", None)
             action["body"] += (
                 f"\n\n<!-- robert-workstream\norigin_workstream_id: {scope['workstream_id']}\nsource_issue: {issue or ''}\ntask_id: {envelope['task_id']}\ncreated_by: robert\n-->"

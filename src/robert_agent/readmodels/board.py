@@ -107,8 +107,7 @@ def _safe_event_metadata(value):
     return {
         key: metadata[key]
         for key in SAFE_EVENT_METADATA_KEYS
-        if key in metadata
-        and isinstance(metadata[key], (str, int, float, bool, type(None)))
+        if key in metadata and isinstance(metadata[key], (str, int, float, bool, type(None)))
     }
 
 
@@ -188,9 +187,7 @@ def _valid_commands(column, attention, *, running=False, publishing=False):
         return ["cancel"]
     if running:
         return (
-            ["approve", "cancel"]
-            if attention and attention[0]["type"] == "operator_decision_required"
-            else ["cancel"]
+            ["approve", "cancel"] if attention and attention[0]["type"] == "operator_decision_required" else ["cancel"]
         )
     if column == "todo":
         return ["cancel"]
@@ -241,9 +238,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         (
             a
             for a in attention
-            if a["type"] == "manual_worker_unavailable"
-            and task
-            and a["metadata"].get("task_id") == task["task_id"]
+            if a["type"] == "manual_worker_unavailable" and task and a["metadata"].get("task_id") == task["task_id"]
         ),
         None,
     )
@@ -278,11 +273,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             "worker_cleanup_pending",
             "Worker cleanup is incomplete: " + facts["cleanup_pending"][0],
         )
-    elif (
-        task
-        and json.loads(task["metadata_json"] or "{}").get("audit_retry_required")
-        and not running
-    ):
+    elif task and json.loads(task["metadata_json"] or "{}").get("audit_retry_required") and not running:
         column, reason_code, reason_summary = (
             "waiting",
             "audit_inspection_exhausted",
@@ -342,11 +333,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         attention
         and (not running or attention[0]["type"] == "operator_decision_required")
         and not publication_in_progress
-        and not (
-            pr
-            and attention[0]["type"]
-            in {"publication_failed", "unmerged_pr_closed", "review_attention"}
-        )
+        and not (pr and attention[0]["type"] in {"publication_failed", "unmerged_pr_closed", "review_attention"})
     ):
         column, reason_code, reason_summary = (
             "waiting",
@@ -359,12 +346,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             ("publishing" if publication_in_progress and not running else "running"),
             "Agent execution or publication is in progress",
         )
-    elif (
-        pr
-        and attention
-        and attention[0]["type"]
-        in {"publication_failed", "unmerged_pr_closed", "review_attention"}
-    ):
+    elif pr and attention and attention[0]["type"] in {"publication_failed", "unmerged_pr_closed", "review_attention"}:
         column, reason_code, reason_summary = (
             "review",
             attention[0]["type"],
@@ -374,8 +356,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         column, reason_code, reason_summary = (
             "waiting",
             "execution_failed",
-            (execution or {}).get("failure")
-            or "Execution failed; inspect the attempt and retry.",
+            (execution or {}).get("failure") or "Execution failed; inspect the attempt and retry.",
         )
     elif facts["source_closed"]:
         column, reason_code, reason_summary = (
@@ -441,13 +422,9 @@ def _project_item(conn, row, *, controls=None, facts=None):
             if facts["publication_retry_blocked"]
             else None,
         },
-        "action_blocked_reason": "publication_in_progress"
-        if publication_in_progress and not failures
-        else None,
+        "action_blocked_reason": "publication_in_progress" if publication_in_progress and not failures else None,
         "branch": attempt["branch_name"] if attempt else None,
-        "worktree_label": Path(attempt["worktree_path"]).name
-        if attempt and attempt["worktree_path"]
-        else None,
+        "worktree_label": Path(attempt["worktree_path"]).name if attempt and attempt["worktree_path"] else None,
         "source": (
             {
                 "type": source["source_type"],
@@ -471,17 +448,13 @@ def _project_item(conn, row, *, controls=None, facts=None):
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
-    card["valid_commands"] = _valid_commands(
-        column, attention, running=running, publishing=publication_in_progress
-    )
+    card["valid_commands"] = _valid_commands(column, attention, running=running, publishing=publication_in_progress)
     if not row["canceled_at"] and not row["completed_at"]:
         if facts["source_closed"] or facts["cleanup_pending"]:
             card["valid_commands"] = ["cancel"]
         elif (
             task
-            and json.loads(task["metadata_json"] or "{}")
-            .get("execution_attention", {})
-            .get("reason_code")
+            and json.loads(task["metadata_json"] or "{}").get("execution_attention", {}).get("reason_code")
             == "result_contract_cutover"
         ):
             from robert_agent.execution import rounds as native_rounds
@@ -508,57 +481,37 @@ def _project_item(conn, row, *, controls=None, facts=None):
                 and not (running or publication_in_progress or prepared or pending)
             )
             card["valid_commands"] = (["retrigger"] if recoverable else []) + ["cancel"]
-        elif (
-            task
-            and json.loads(task["metadata_json"] or "{}").get("audit_retry_required")
-            and not running
-        ):
+        elif task and json.loads(task["metadata_json"] or "{}").get("audit_retry_required") and not running:
             card["valid_commands"] = ["retry", "cancel"]
         elif unavailable and not running and not publication_in_progress:
             card["valid_commands"] = ["retry", "cancel"]
         elif failures and not running:
             card["valid_commands"] = (
                 ["retry_publish"]
-                if not facts["publication_retry_pending"]
-                and not facts["publication_retry_blocked"]
+                if not facts["publication_retry_pending"] and not facts["publication_retry_blocked"]
                 else []
             ) + ["cancel"]
-        elif (
-            task
-            and task["lifecycle"] == "failed"
-            and not running
-            and not publication_in_progress
-        ):
+        elif task and task["lifecycle"] == "failed" and not running and not publication_in_progress:
             if row["origin_type"] != "web":
                 binding = execution_store.read_binding(conn, "task", task["task_id"])
                 ownership_blocked = binding and (
-                    binding["binding_status"] == "attention"
-                    or binding.get("owner_engine") == "dbos"
+                    binding["binding_status"] == "attention" or binding.get("owner_engine") == "dbos"
                 )
                 pending = conn.execute(
                     "SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json, '$.kind')='github_retrigger'",
                     (task["task_id"],),
                 ).fetchone()
-                operator_failure = json.loads(task["metadata_json"] or "{}").get(
-                    "trigger_work_item_event_id"
-                ) and any(
-                    a["type"] == "execution_failed"
-                    and a["metadata"].get("task_id") == task["task_id"]
+                operator_failure = json.loads(task["metadata_json"] or "{}").get("trigger_work_item_event_id") and any(
+                    a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"]
                     for a in attention
                 )
                 recovery_command = "retry" if operator_failure else "retrigger"
-                card["valid_commands"] = (
-                    [] if pending or ownership_blocked else [recovery_command]
-                ) + ["cancel"]
+                card["valid_commands"] = ([] if pending or ownership_blocked else [recovery_command]) + ["cancel"]
             else:
                 card["valid_commands"] = ["retry", "cancel"]
-    if not facts["approval_task_id"] and any(
-        a["type"] == "operator_decision_required" for a in attention
-    ):
+    if not facts["approval_task_id"] and any(a["type"] == "operator_decision_required" for a in attention):
         if not any(a["type"] == "completion_acceptance_requested" for a in attention):
-            card["valid_commands"] = [
-                command for command in card["valid_commands"] if command != "approve"
-            ]
+            card["valid_commands"] = [command for command in card["valid_commands"] if command != "approve"]
     if column == "done" and facts["source_closed"]:
         card["valid_commands"] = []
     return card
@@ -610,8 +563,7 @@ def workstream_projections(conn, *, workstream_ids=None, controls=None):
         # This shared read model stays internal to the workbench. A canceled
         # owner must not hide unfinished execution in a derived workstream.
         card["operator_cancellation_settled"] = bool(row["canceled_at"]) and not any(
-            facts[key]
-            for key in ("running", "actions", "workflow_attention", "cleanup_pending")
+            facts[key] for key in ("running", "actions", "workflow_attention", "cleanup_pending")
         )
         projections[row["workstream_id"]] = card
     return projections
@@ -668,9 +620,7 @@ def list_board(
     with closing(_connect(db_path)) as conn:
         projections = [
             item
-            for item in _all_projections(
-                conn, repo=repo, include_history=include_history
-            )
+            for item in _all_projections(conn, repo=repo, include_history=include_history)
             if _matches(
                 item,
                 repo=repo,
@@ -686,20 +636,14 @@ def list_board(
             for column_id in [name for name, _label in COLUMNS] + ["history"]
         }
         if cursor_value:
-            projections = [
-                item
-                for item in projections
-                if (item["updated_at"], item["work_item_id"]) < cursor_value
-            ]
+            projections = [item for item in projections if (item["updated_at"], item["work_item_id"]) < cursor_value]
         if column:
             projections = [item for item in projections if item["column"] == column]
         page = projections[: limit + 1]
         has_more = len(page) > limit
         items = page[:limit]
         next_cursor = (
-            _cursor_encode([items[-1]["updated_at"], items[-1]["work_item_id"]])
-            if has_more and items
-            else None
+            _cursor_encode([items[-1]["updated_at"], items[-1]["work_item_id"]]) if has_more and items else None
         )
         running_rows = conn.execute(
             """
@@ -718,16 +662,11 @@ def list_board(
                 "full_name": row[1],
                 "running": per_repo_running.get(row[0], 0),
             }
-            for row in conn.execute(
-                "SELECT repo_id, full_name FROM repos ORDER BY full_name"
-            )
+            for row in conn.execute("SELECT repo_id, full_name FROM repos ORDER BY full_name")
         ]
         agents = sorted({item["agent"] for item in projections} | {"Auto"})
     return {
-        "columns": [
-            {"id": column_id, "label": label, "count": counts[column_id]}
-            for column_id, label in COLUMNS
-        ],
+        "columns": [{"id": column_id, "label": label, "count": counts[column_id]} for column_id, label in COLUMNS],
         "counts": counts,
         "capacity": {
             "running": sum(per_repo_running.values()),
@@ -762,23 +701,14 @@ def _supervision_incidents(conn, tasks, work_item_id):
     result = []
     for row in rows:
         item = dict(row)
-        analysis = supervision_store.get_checkpoint(
-            conn, "diagnosis", row["incident_id"], "analysis"
-        )
+        analysis = supervision_store.get_checkpoint(conn, "diagnosis", row["incident_id"], "analysis")
         diagnosis = (analysis or {}).get("metadata", {}).get("diagnosis") or {}
         item["diagnosis"] = {
-            key: safe_text(diagnosis.get(key), 1000)
-            for key in ("diagnosis_class", "expected_progress")
+            key: safe_text(diagnosis.get(key), 1000) for key in ("diagnosis_class", "expected_progress")
         }
-        repair = supervision_store.get_checkpoint(
-            conn, "repair", row["incident_id"], "engineering"
-        )
-        verification = supervision_store.get_checkpoint(
-            conn, "repair", row["incident_id"], "verification"
-        )
-        item["repair_work_item_id"] = (
-            (repair or {}).get("metadata", {}).get("work_item_id")
-        )
+        repair = supervision_store.get_checkpoint(conn, "repair", row["incident_id"], "engineering")
+        verification = supervision_store.get_checkpoint(conn, "repair", row["incident_id"], "verification")
+        item["repair_work_item_id"] = (repair or {}).get("metadata", {}).get("work_item_id")
         item["repair_verification"] = {
             key: value.get("status")
             for key, value in (verification or {}).get("metadata", {}).items()
@@ -827,9 +757,7 @@ def get_work_item_detail(db_path, work_item_id):
                         **attempt_history(conn, attempt),
                         "status": attempt["status"],
                         "branch": attempt["branch_name"],
-                        "worktree_label": Path(attempt["worktree_path"]).name
-                        if attempt["worktree_path"]
-                        else None,
+                        "worktree_label": Path(attempt["worktree_path"]).name if attempt["worktree_path"] else None,
                         "started_at": attempt["started_at"],
                         "finished_at": attempt["finished_at"],
                     }
@@ -856,9 +784,7 @@ def get_work_item_detail(db_path, work_item_id):
                         "attempts": attempts,
                         "review": review_store.board_status(conn, task["task_id"]),
                         "vote": vote_store.board_status(conn, task["task_id"]),
-                        "publication_actions": publication_history(
-                            conn, task["task_id"]
-                        ),
+                        "publication_actions": publication_history(conn, task["task_id"]),
                     }
                 )
         timeline = list_work_item_events(db_path, work_item_id, limit=20)
@@ -918,9 +844,5 @@ def list_work_item_events(db_path, work_item_id, *, limit=50, cursor=None):
             }
             for row in rows
         ]
-        next_cursor = (
-            _cursor_encode([rows[-1]["created_at"], rows[-1]["event_id"]])
-            if has_more and rows
-            else None
-        )
+        next_cursor = _cursor_encode([rows[-1]["created_at"], rows[-1]["event_id"]]) if has_more and rows else None
     return {"events": events, "next_cursor": next_cursor}

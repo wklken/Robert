@@ -15,9 +15,7 @@ class ReviewHealthTests(unittest.TestCase):
 
     def test_non_crash_failures_are_counted_per_lane(self):
         for lane in ("scan", "local"):
-            for index, kind in enumerate(
-                ("child_timeout", "partial_failure", "repository_pipeline_failed")
-            ):
+            for index, kind in enumerate(("child_timeout", "partial_failure", "repository_pipeline_failed")):
                 with closing(daemon_state.connect(self.db)) as conn, conn:
                     daemon_state.record_event(
                         conn,
@@ -28,9 +26,7 @@ class ReviewHealthTests(unittest.TestCase):
                         now=f"2026-10-28T11:{index:02d}:00+00:00",
                     )
         self.assertEqual(
-            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])[
-                "control_failure_streak"
-            ],
+            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])["control_failure_streak"],
             3,
         )
         with closing(sqlite3.connect(self.db)) as conn:
@@ -46,17 +42,11 @@ class ReviewHealthTests(unittest.TestCase):
             self.event("child_failed", "failed", minute)
         with closing(sqlite3.connect(self.db)) as writer:
             writer.execute("BEGIN IMMEDIATE")
-            health = reliability_health.collect(
-                self.db, now=self.now, repo_ids=["repo"]
-            )
+            health = reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])
             self.assertGreater(health["database_bytes"], 0)
             self.assertEqual(health["control_failure_streak"], 3)
             self.assertFalse(health["alerts_persisted"])
-        self.assertTrue(
-            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])[
-                "alerts_persisted"
-            ]
-        )
+        self.assertTrue(reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])["alerts_persisted"])
 
     def test_alert_write_contention_retries_at_local_poll_interval(self):
         from tests.support import retention as health_fixtures
@@ -71,9 +61,7 @@ class ReviewHealthTests(unittest.TestCase):
                 "prune_database",
                 return_value={"ok": True, "status": "pruned", "counts": {}},
             ),
-            mock.patch.object(
-                reliability_health, "collect", return_value={"alerts_persisted": False}
-            ),
+            mock.patch.object(reliability_health, "collect", return_value={"alerts_persisted": False}),
             mock.patch.object(daemon.time, "monotonic", return_value=100),
         ):
             daemon._maybe_prune(fixture.context, now=self.now)
@@ -88,9 +76,7 @@ class ControlFailureHealthTests(fixtures.ControlFailureHealthFixture):
             self.event("child_failed", "failed", minute * 2)
             self.event("local_drain_completed", "ok", minute * 2 + 1)
         self.assertEqual(
-            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])[
-                "control_failure_streak"
-            ],
+            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])["control_failure_streak"],
             3,
         )
 
@@ -102,17 +88,10 @@ class ControlFailureHealthTests(fixtures.ControlFailureHealthFixture):
         reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])
         with closing(daemon_state.connect(self.db)) as conn, conn:
             for index in range(110):
-                when = (
-                    datetime(2026, 10, 28, 11, 10, tzinfo=timezone.utc)
-                    + timedelta(seconds=index)
-                ).isoformat()
-                daemon_state.record_event(
-                    conn, "daemon", "local_drain_completed", "ok", now=when
-                )
+                when = (datetime(2026, 10, 28, 11, 10, tzinfo=timezone.utc) + timedelta(seconds=index)).isoformat()
+                daemon_state.record_event(conn, "daemon", "local_drain_completed", "ok", now=when)
         self.assertEqual(
-            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])[
-                "control_failure_streak"
-            ],
+            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])["control_failure_streak"],
             3,
         )
         with closing(sqlite3.connect(self.db)) as conn:
@@ -136,9 +115,7 @@ class ControlFailureHealthTests(fixtures.ControlFailureHealthFixture):
                     ),
                 )
         self.assertEqual(
-            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])[
-                "control_failure_streak"
-            ],
+            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])["control_failure_streak"],
             3,
         )
         with closing(sqlite3.connect(self.db)) as conn:
@@ -153,9 +130,7 @@ class ControlFailureHealthTests(fixtures.ControlFailureHealthFixture):
         for minute in range(3):
             self.event("child_failed", "failed", minute)
         for _ in range(2):
-            health = reliability_health.collect(
-                self.db, now=self.now, repo_ids=["repo"]
-            )
+            health = reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])
             self.assertEqual(health["control_failure_streak"], 3)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
@@ -166,17 +141,13 @@ class ControlFailureHealthTests(fixtures.ControlFailureHealthFixture):
             )
         self.event("live_poll_completed", "ok", 3)
         self.assertEqual(
-            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])[
-                "control_failure_streak"
-            ],
+            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])["control_failure_streak"],
             0,
         )
         self.event("child_failed", "failed", 4)
         self.event("child_failed", "failed", 5)
         self.assertEqual(
-            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])[
-                "control_failure_streak"
-            ],
+            reliability_health.collect(self.db, now=self.now, repo_ids=["repo"])["control_failure_streak"],
             2,
         )
         self.event("child_failed", "failed", 6)

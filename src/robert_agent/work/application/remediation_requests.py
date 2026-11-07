@@ -22,16 +22,11 @@ def _system_event(
     episode_kind = episode["episode_kind"]
     if episode_kind == "merge_conflict":
         event_type = "pr_merge_conflict_detected"
-        fingerprint = (
-            f"github-system:merge-conflict:{number}:"
-            f"{snapshot['head_sha']}:{snapshot['base_sha']}"
-        )
+        fingerprint = f"github-system:merge-conflict:{number}:{snapshot['head_sha']}:{snapshot['base_sha']}"
         task_kind = "merge_conflict_remediation"
     else:
         source_kind = observation.get("source_kind") or "workflow_run"
-        event_type = (
-            "ci_check_completed" if source_kind == "check_run" else "ci_run_completed"
-        )
+        event_type = "ci_check_completed" if source_kind == "check_run" else "ci_run_completed"
         external_id = observation.get("external_id") or episode["episode_id"]
         attempt_no = observation.get("attempt_no") or 1
         fingerprint = f"github-system:{source_kind}:{external_id}:{attempt_no}"
@@ -43,11 +38,7 @@ def _system_event(
             "observed_head_sha": snapshot["head_sha"],
             "observed_base_sha": snapshot["base_sha"],
             "failure_signature": episode.get("failure_signature"),
-            "failure_summary": (
-                observation.get("failure_summary")
-                or episode["metadata"].get("failures")
-                or ""
-            ),
+            "failure_summary": (observation.get("failure_summary") or episode["metadata"].get("failures") or ""),
             "failures": episode["metadata"].get("failures", []),
             "details_url": observation.get("details_url"),
         }
@@ -208,11 +199,7 @@ def collect_pr_remediation_decisions(
         ci_episode = episodes.get("ci")
         if ci_episode:
             ci_observations = ci_summary.get("observations", []) if ci_summary else []
-            completed = [
-                observation
-                for observation in ci_observations
-                if observation.get("status") == "completed"
-            ]
+            completed = [observation for observation in ci_observations if observation.get("status") == "completed"]
             for observation in completed:
                 event = _system_event(
                     repo=repo,
@@ -250,9 +237,7 @@ def collect_pr_remediation_decisions(
         )
         if eligibility["status"] != "eligible":
             continue
-        policy_key = (
-            "conflict" if decision["episode_kind"] == "merge_conflict" else "ci"
-        )
+        policy_key = "conflict" if decision["episode_kind"] == "merge_conflict" else "ci"
         event["metadata"]["remediation"]["budget"] = {
             "limits": repo["pr_automation"][policy_key],
             "usage": decision["budget"],
@@ -269,9 +254,7 @@ def collect_pr_remediation_decisions(
         """,
         (repo_id,),
     ):
-        execution_ownership.close_subject(
-            conn, "remediation_episode", episode_id, run_now
-        )
+        execution_ownership.close_subject(conn, "remediation_episode", episode_id, run_now)
     return [
         event
         for event in events
@@ -319,7 +302,5 @@ def handle_blocked_remediation_worktree(
                 reason=reason,
                 now=run_now,
             )
-        execution_ownership.close_subject(
-            conn, "remediation_episode", episode_id, run_now
-        )
+        execution_ownership.close_subject(conn, "remediation_episode", episode_id, run_now)
     return True

@@ -93,9 +93,7 @@ class ExecutionJournalTests(unittest.TestCase):
             "-H",
             "Authorization: Bearer private",
         ]
-        result = heartbeat.run_command_with_heartbeat(
-            self.db, "t", "a", "verify", command
-        )
+        result = heartbeat.run_command_with_heartbeat(self.db, "t", "a", "verify", command)
         record = json.loads(Path(result["command_record_path"]).read_text())
         self.assertEqual(record["argv"][:3], command[:3])
         for index in (4, 5, 6, 7, 9):
@@ -111,16 +109,11 @@ class ExecutionJournalTests(unittest.TestCase):
         self.assertEqual(summary.returncode, 0)
         self.assertEqual(json.loads(summary.stdout)["returncode"], 7)
         self.assertEqual(summary.stderr, b"")
-        tee = subprocess.run(
-            self.cli(script, "--output-mode", "tee"), capture_output=True, check=False
-        )
+        tee = subprocess.run(self.cli(script, "--output-mode", "tee"), capture_output=True, check=False)
         self.assertEqual(tee.returncode, 7)
         self.assertEqual(tee.stdout, b"out\x00\xff")
         self.assertEqual(tee.stderr, b"err\xfe")
-        records = [
-            json.loads(p.read_text())
-            for p in (self.root / "artifacts/t").glob("*.command.json")
-        ]
+        records = [json.loads(p.read_text()) for p in (self.root / "artifacts/t").glob("*.command.json")]
         record = next(r for r in records if r.get("output_mode") == "tee")
         self.assertEqual(Path(record["stdout_path"]).read_bytes(), tee.stdout)
         self.assertEqual(Path(record["stderr_path"]).read_bytes(), tee.stderr)
@@ -155,9 +148,7 @@ class ExecutionJournalTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 124)
         self.assertEqual(proc.stdout, b"partial\n")
-        record = json.loads(
-            next((self.root / "artifacts/t").glob("*.command.json")).read_text()
-        )
+        record = json.loads(next((self.root / "artifacts/t").glob("*.command.json")).read_text())
         self.assertTrue(record["timed_out"])
         self.assertEqual(record["status"], "failed")
 
@@ -191,9 +182,7 @@ class ExecutionJournalTests(unittest.TestCase):
         self.assertEqual(proc.wait(timeout=5), 124)
         stdout, stderr = proc.communicate(timeout=5)
         self.assertEqual(stderr, b"")
-        record = json.loads(
-            next((self.root / "artifacts/t").glob("*.command.json")).read_text()
-        )
+        record = json.loads(next((self.root / "artifacts/t").glob("*.command.json")).read_text())
         self.assertTrue(record["tee_incomplete"])
         self.assertTrue(record["timed_out"])
         self.assertEqual(Path(record["stdout_path"]).read_bytes(), b"A" * 2000000)

@@ -22,17 +22,11 @@ def matches(facts, action, scope, receipt):
             "remote_deduplication",
             "publisher_acknowledgement",
         }
-        or any(
-            receipt.get(key) != action[key]
-            for key in ("action_id", "task_id", "action_type")
-        )
+        or any(receipt.get(key) != action[key] for key in ("action_id", "task_id", "action_type"))
     ):
         return False
     if action["action_type"] == "push_existing_pr":
-        return bool(
-            scope.get("result_head_sha")
-            and receipt.get("result_head_sha") == scope["result_head_sha"]
-        )
+        return bool(scope.get("result_head_sha") and receipt.get("result_head_sha") == scope["result_head_sha"])
     return bool(
         receipt.get("external_id")
         and str(receipt["external_id"]) == action["external_id"]

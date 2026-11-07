@@ -4,9 +4,7 @@ from robert_agent.adapters.git import workspace as worktree
 
 
 def prepare_worktree(repo, event, route_result, dry_run):
-    if route_result.get("native_review_workers") or route_result.get(
-        "native_vote_workers"
-    ):
+    if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         # The native coordinator fetches and pins this round after admission.
         return None
     skill_status = route_result.get("skill_status")
@@ -21,9 +19,7 @@ def prepare_worktree(repo, event, route_result, dry_run):
         )
     if workspace_mode == "none":
         return None
-    if workspace_mode == "analysis" and not route_result.get(
-        "enforce_workspace_policy", False
-    ):
+    if workspace_mode == "analysis" and not route_result.get("enforce_workspace_policy", False):
         return None
     if event.get("task_kind") in {
         "ci_remediation",

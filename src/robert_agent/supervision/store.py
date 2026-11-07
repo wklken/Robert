@@ -115,9 +115,7 @@ def _record_observation(conn, key, observation, now):
             observation.get("reason_code"),
             _json(observation.get("evidence") or {}),
             progress_token,
-            (observation.get("progress_observed_at") or now)
-            if progress_token is not None
-            else None,
+            (observation.get("progress_observed_at") or now) if progress_token is not None else None,
             observation.get("next_check_at"),
             now,
             observation.get("eligible_since"),
@@ -176,16 +174,8 @@ def apply_observations(conn, observations, now):
         _record_observation(conn, key, observation, now)
         classification = observation["classification"]
         positive = observation.get("positive_evidence")
-        occurred_at = (
-            timestamp(positive.get("occurred_at"))
-            if isinstance(positive, dict)
-            else None
-        )
-        can_resolve = (
-            classification == "healthy"
-            and occurred_at is not None
-            and occurred_at <= timestamp(now)
-        )
+        occurred_at = timestamp(positive.get("occurred_at")) if isinstance(positive, dict) else None
+        can_resolve = classification == "healthy" and occurred_at is not None and occurred_at <= timestamp(now)
         if classification != "confirmed" and not can_resolve:
             continue
         active = conn.execute(

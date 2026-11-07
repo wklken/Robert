@@ -39,9 +39,7 @@ def _config_summary(config_path):
     return {
         "version": raw.get("version") if isinstance(raw, dict) else None,
         "github_account": (github.get("account") if isinstance(github, dict) else None),
-        "repositories": [
-            repo.get("full_name") for repo in repos or [] if isinstance(repo, dict)
-        ],
+        "repositories": [repo.get("full_name") for repo in repos or [] if isinstance(repo, dict)],
         "workers": (list(workers) if isinstance(workers, dict) else []),
     }
 

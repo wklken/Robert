@@ -37,14 +37,10 @@ class WaitingEvidenceTests(unittest.TestCase):
         now = values.utc_now()
         with closing(sqlite3.connect(db)) as conn, conn:
             task = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
-            lease = execution_leases.acquire(
-                conn, "repo:example/backend", "other-run", now, 9
-            )
+            lease = execution_leases.acquire(conn, "repo:example/backend", "other-run", now, 9)
         saved = None
         for _ in range(2):
-            run_once.run_once(
-                fixture.config_path, dry_run=True, skip_external=True, skip_publish=True
-            )
+            run_once.run_once(fixture.config_path, dry_run=True, skip_external=True, skip_publish=True)
             with closing(sqlite3.connect(db)) as conn:
                 timing = execution_metrics.task_timing(conn, task)
                 self.assertEqual(timing["waiting_reason"], "repository_busy")
@@ -54,9 +50,7 @@ class WaitingEvidenceTests(unittest.TestCase):
                 saved = timing["waiting_since"]
         with closing(sqlite3.connect(db)) as conn, conn:
             execution_leases.release(conn, lease["lease_id"], values.utc_now())
-        run_once.run_once(
-            fixture.config_path, dry_run=True, skip_external=True, skip_publish=True
-        )
+        run_once.run_once(fixture.config_path, dry_run=True, skip_external=True, skip_publish=True)
         with closing(sqlite3.connect(db)) as conn:
             self.assertNotEqual(
                 execution_metrics.task_timing(conn, task)["waiting_reason"],

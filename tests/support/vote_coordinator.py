@@ -85,9 +85,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
                 unknowns=[],
             )
             if self.clarify:
-                value.update(
-                    status="needs_clarification", question="What is the latency target?"
-                )
+                value.update(status="needs_clarification", question="What is the latency target?")
             if self.need_code and not manifest.get("source_worktree"):
                 value.update(status="needs_code", question="Need source to compare")
             name = "prepared-request.json"
@@ -104,9 +102,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         else:
             # The input filename embeds the actual byte hash given to the model.
             candidates = list((prompt.parent / "synthesis").glob("inputs-*.json"))
-            inputs = next(
-                p for p in candidates if p.stem.removeprefix("inputs-") in prompt.name
-            )
+            inputs = next(p for p in candidates if p.stem.removeprefix("inputs-") in prompt.name)
             records = json.loads(inputs.read_text())["records"]
             value.update(
                 inputs_sha256=hashlib.sha256(inputs.read_bytes()).hexdigest(),
@@ -123,9 +119,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
 
     def driver(self):
         task, attempt = self.fixture.current()
-        return vote_coordinator.Coordinator(
-            self.db, task, attempt, source_reader=self.source, launcher=self.launcher
-        )
+        return vote_coordinator.Coordinator(self.db, task, attempt, source_reader=self.source, launcher=self.launcher)
 
     def start(self):
         self.fixture.cycle([self.event()])
@@ -160,17 +154,10 @@ class VoteCoordinatorFixture(unittest.TestCase):
         with vote_store.connect(self.db) as conn:
             action = dict(
                 zip(
-                    [
-                        d[0]
-                        for d in conn.execute(
-                            "SELECT * FROM github_actions"
-                        ).description
-                    ],
+                    [d[0] for d in conn.execute("SELECT * FROM github_actions").description],
                     conn.execute("SELECT * FROM github_actions").fetchone(),
                 )
             )
-            result = conn.execute(
-                "SELECT metadata_json FROM worker_results"
-            ).fetchone()[0]
+            result = conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
         scope = json.loads(result)["audit"]["action_scope"]
         return driver, action, scope

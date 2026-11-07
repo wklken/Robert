@@ -9,9 +9,7 @@ def budget(session, config):
     resources = payload.get("resources") or {}
     core = resources.get("core") or {}
     search = resources.get("search") or {}
-    session.search_allowed = (
-        search.get("remaining", 0) >= config["daemon"]["min_search_remaining"]
-    )
+    session.search_allowed = search.get("remaining", 0) >= config["daemon"]["min_search_remaining"]
     allowed = core.get("remaining", 0) >= config["daemon"]["min_core_remaining"]
     if not allowed:
         session.poll_interval_seconds = max(60, int(core.get("reset", 0) - time.time()))

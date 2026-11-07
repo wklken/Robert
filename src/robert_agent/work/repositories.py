@@ -2,9 +2,7 @@
 
 
 def upsert_repo(conn, repo):
-    existing = conn.execute(
-        "SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)
-    ).fetchone()
+    existing = conn.execute("SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)).fetchone()
     repo_id = existing[0] if existing else f"repo:{repo['full_name']}"
     conn.execute(
         """
@@ -33,9 +31,7 @@ def upsert_repo(conn, repo):
 
 
 def lookup_id(conn, full_name, *, fallback=None):
-    row = conn.execute(
-        "SELECT repo_id FROM repos WHERE full_name = ?", (full_name,)
-    ).fetchone()
+    row = conn.execute("SELECT repo_id FROM repos WHERE full_name = ?", (full_name,)).fetchone()
     return row[0] if row else fallback
 
 

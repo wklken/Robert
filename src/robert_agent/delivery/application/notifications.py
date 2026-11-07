@@ -17,9 +17,7 @@ from robert_agent.security import redaction
 from robert_agent.delivery.lock import task_publication_lock
 
 
-def record_notification(
-    db_path, notification_type, status, metadata=None, channel="local"
-):
+def record_notification(db_path, notification_type, status, metadata=None, channel="local"):
     metadata = metadata or {}
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
@@ -59,9 +57,7 @@ def main(argv=None):
     )
 
 
-def deliver_pending(
-    db_path, *, command=None, runner=subprocess.run, now=None, limit=100, repo_ids=None
-):
+def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, limit=100, repo_ids=None):
     """At-least-once operator delivery; receiver dedupes the stable delivery_id.
 
     No command is run unless configured. Secrets and command arguments are never
@@ -118,25 +114,19 @@ def deliver_pending(
                 )
                 if key in metadata
             }
-            digest = hashlib.sha256(
-                json.dumps([row[1], state], sort_keys=True).encode()
-            ).hexdigest()[:16]
+            digest = hashlib.sha256(json.dumps([row[1], state], sort_keys=True).encode()).hexdigest()[:16]
             delivery_id = notification_id + ":" + digest
             previous = metadata.get("delivery", {})
             if previous.get("delivery_id") != delivery_id:
                 previous = {}
             if previous.get("status") in {"sent", "exhausted"} or (
                 previous.get("next_retry_at")
-                and retry_policy.timestamp(previous["next_retry_at"])
-                > retry_policy.timestamp(now)
+                and retry_policy.timestamp(previous["next_retry_at"]) > retry_policy.timestamp(now)
             ):
                 continue
             if int(previous.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS or (
                 previous.get("first_failed_at")
-                and (
-                    retry_policy.timestamp(now)
-                    - retry_policy.timestamp(previous["first_failed_at"])
-                ).total_seconds()
+                and (retry_policy.timestamp(now) - retry_policy.timestamp(previous["first_failed_at"])).total_seconds()
                 >= retry_policy.MAX_ELAPSED_SECONDS
             ):
                 previous.update(status="exhausted", retryable=False, next_retry_at=None)
@@ -203,9 +193,7 @@ def deliver_pending(
             except (OSError, subprocess.SubprocessError):
                 sent = False
             state.update(
-                status="sent"
-                if sent
-                else ("failed" if state["retryable"] else "exhausted"),
+                status="sent" if sent else ("failed" if state["retryable"] else "exhausted"),
                 sent_at=now if sent else None,
             )
             with closing(sqlite3.connect(db_path)) as conn, conn:

@@ -106,9 +106,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
         self.assertNotIn("--ask-for-approval", command)
         self.assertIn("--json", command)
         self.assertIn("--cd", command)
-        self.assertEqual(
-            command[command.index("--cd") + 1], "/tmp/repo/.worktrees/dd-123"
-        )
+        self.assertEqual(command[command.index("--cd") + 1], "/tmp/repo/.worktrees/dd-123")
         self.assertIn("--add-dir", command)
         self.assertIn(str(prompt_path.parent), command)
         self.assertEqual(command[-1], "-")

@@ -5,6 +5,4 @@ from robert_agent.delivery.application import submission as result
 
 def internal_result(*args, **kwargs):
     envelope = result.build_result(*args, **kwargs)
-    return {
-        key: value for key, value in envelope.items() if key != "submission"
-    } | envelope["submission"]
+    return {key: value for key, value in envelope.items() if key != "submission"} | envelope["submission"]

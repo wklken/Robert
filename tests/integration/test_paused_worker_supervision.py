@@ -21,12 +21,8 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
         self.assertIsNotNone(proc.poll(), response)
         self.assertIn("local", self.context.control_attention)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "failed"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "failed")
             self.assertEqual(
                 conn.execute(
                     "SELECT COUNT(*) FROM leases WHERE resource_type='agent_run' AND status='active'"
@@ -58,12 +54,8 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
             result = worker_supervision.run(self.config_path)
             self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "failed"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "failed")
 
     def test_supervision_only_respects_repository_lease(self):
         from robert_agent.runtime import paused_monitor as worker_supervision
@@ -87,9 +79,7 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
 
         proc = self.process(age=0)
         with closing(sqlite3.connect(self.db)) as conn:
-            task, attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            task, attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         receipt = result.record_result(
             self.db,
             {
@@ -97,9 +87,7 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
                 "attempt_id": attempt,
                 "output_type": "comment_analysis",
                 "submission": {
-                    "planned_github_actions": [
-                        {"type": "comment", "body": "Analysis finished"}
-                    ],
+                    "planned_github_actions": [{"type": "comment", "body": "Analysis finished"}],
                     "consumed_event_fingerprints": ["comment:first"],
                     "verification": [],
                     "handoff": "done",
@@ -111,27 +99,19 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
         self.stop(proc)
         self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
             self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT audit_status,publish_status FROM github_actions"
-                ).fetchone(),
+                conn.execute("SELECT audit_status,publish_status FROM github_actions").fetchone(),
                 ("pending", "not_published"),
             )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
 
     def test_unknown_identity_keeps_capacity_and_does_not_signal(self):
         from robert_agent.runtime import paused_monitor as worker_supervision
 
         proc = self.process()
         with (
-            mock.patch.object(
-                attempt_process, "dispatch_status", return_value={"status": "unknown"}
-            ),
+            mock.patch.object(attempt_process, "dispatch_status", return_value={"status": "unknown"}),
             mock.patch.object(
                 monitor,
                 "terminate_owned_attempt",
@@ -141,13 +121,9 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
             self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         self.assertIsNone(proc.poll())
         with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT binding_status FROM execution_subjects"
-                ).fetchone()[0],
+                conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
                 "attention",
             )
 
@@ -168,18 +144,14 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES('busy-task','busy-stream','queued',?,?)",
                 (now, now),
             )
-            execution_store.ensure_subject(
-                conn, "task", "busy-task", "human_request", now
-            )
+            execution_store.ensure_subject(conn, "task", "busy-task", "human_request", now)
         with task_publication_lock(self.db, "busy-task") as locked:
             self.assertTrue(locked)
             self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         self.assertIsNotNone(proc.poll())
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT status FROM attempts WHERE task_id=?", (task,)
-                ).fetchone()[0],
+                conn.execute("SELECT status FROM attempts WHERE task_id=?", (task,)).fetchone()[0],
                 "failed",
             )
 
@@ -190,17 +162,13 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
 
         proc = self.process(age=0)
         with closing(sqlite3.connect(self.db)) as conn:
-            task, attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            task, attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         payload = {
             "task_id": task,
             "attempt_id": attempt,
             "output_type": "comment_analysis",
             "submission": {
-                "planned_github_actions": [
-                    {"type": "comment", "body": "Analysis finished"}
-                ],
+                "planned_github_actions": [{"type": "comment", "body": "Analysis finished"}],
                 "consumed_event_fingerprints": ["comment:first"],
                 "verification": [],
                 "handoff": "done",
@@ -212,18 +180,12 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
             "_record_result_db",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
-            self.assertEqual(
-                result.record_result(self.db, payload)["status"], "deferred"
-            )
+            self.assertEqual(result.record_result(self.db, payload)["status"], "deferred")
         self.stop(proc)
         self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
         self.assertFalse(list(result_spool.directory(self.db).glob("rejected/*.json")))
 
     def test_deferred_or_inflight_spool_prevents_failure_when_replay_is_busy(self):
@@ -233,24 +195,18 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
 
         proc = self.process(age=0)
         with closing(sqlite3.connect(self.db)) as conn:
-            task, attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            task, attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         self.stop(proc)
         with result_spool.locked_record(self.db, attempt):
             self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
         payload = {
             "task_id": task,
             "attempt_id": attempt,
             "output_type": "comment_analysis",
             "submission": {
-                "planned_github_actions": [
-                    {"type": "comment", "body": "Analysis finished"}
-                ],
+                "planned_github_actions": [{"type": "comment", "body": "Analysis finished"}],
                 "consumed_event_fingerprints": ["comment:first"],
                 "verification": [],
                 "handoff": "done",
@@ -262,16 +218,10 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
             "_record_result_db",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
-            self.assertEqual(
-                result.record_result(self.db, payload)["status"], "deferred"
-            )
+            self.assertEqual(result.record_result(self.db, payload)["status"], "deferred")
             self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
         self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")

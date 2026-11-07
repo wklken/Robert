@@ -24,16 +24,9 @@ def stage_environment(manifest, output_dir, data_dir, *, workflow_name):
             Path(manifest["worktree_path"]).resolve(),
             Path(manifest["context_dir"]).resolve(),
         ]
-        if any(
-            config == path or config in path.parents or path in config.parents
-            for path in protected
-        ):
-            raise RuntimeError(
-                "CLAUDE_CONFIG_DIR must not overlap review inputs or Robert data"
-            )
+        if any(config == path or config in path.parents or path in config.parents for path in protected):
+            raise RuntimeError("CLAUDE_CONFIG_DIR must not overlap review inputs or Robert data")
         if not config.is_dir():
-            raise RuntimeError(
-                "CLAUDE_CONFIG_DIR must be an existing, authenticated Claude configuration directory"
-            )
+            raise RuntimeError("CLAUDE_CONFIG_DIR must be an existing, authenticated Claude configuration directory")
         environment["CLAUDE_CONFIG_DIR"] = str(config)
     return environment

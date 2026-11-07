@@ -13,8 +13,7 @@ from robert_agent.delivery.application import publish
 
 
 COMMENT_BODY = (
-    "<!-- robert-comment task_id=task-comment attempt_id=attempt-comment "
-    "action_index=0 -->\nExisting comment"
+    "<!-- robert-comment task_id=task-comment attempt_id=attempt-comment action_index=0 -->\nExisting comment"
 )
 PR_BODY = (
     "<!-- robert-workstream\n"
@@ -244,9 +243,7 @@ def publish_dedupe_acceptance(workspace_dir=None):
     db_path = workspace / "dd.sqlite3"
     _insert_fixture(db_path)
     runner = _DedupeRunner()
-    publish_result = publish.publish_ready_actions(
-        db_path, dry_run=False, run_command=runner
-    )
+    publish_result = publish.publish_ready_actions(db_path, dry_run=False, run_command=runner)
     action_counts = _action_counts(db_path)
     create_commands = [
         call

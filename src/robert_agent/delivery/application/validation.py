@@ -43,9 +43,7 @@ def context(conn, task_id, attempt_id, *, include_scope=True):
     if json.loads(row[5] or "{}").get("result_validation"):
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     subject_type, subject_id = "task", task_id
-    if row[1] in audit_result.REMEDIATION_TASK_KINDS and metadata.get(
-        "remediation_episode_id"
-    ):
+    if row[1] in audit_result.REMEDIATION_TASK_KINDS and metadata.get("remediation_episode_id"):
         subject_type, subject_id = (
             "remediation_episode",
             metadata["remediation_episode_id"],
@@ -53,9 +51,7 @@ def context(conn, task_id, attempt_id, *, include_scope=True):
     owner = execution_store.get_binding(conn, subject_type, subject_id)
     if owner and owner["binding_status"] != "active":
         return None, {"ok": False, "status": "rejected_by_workflow_owner"}
-    origin = conn.execute(
-        "SELECT origin_type FROM work_items WHERE workstream_id=?", (row[0],)
-    ).fetchone()
+    origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=?", (row[0],)).fetchone()
     episode = (
         remediation.load_episode(conn, metadata.get("remediation_episode_id"))
         if row[1] in audit_result.REMEDIATION_TASK_KINDS
@@ -71,9 +67,7 @@ def context(conn, task_id, attempt_id, *, include_scope=True):
         "task_kind": row[1],
         "review_input_policy": metadata.get("review_input_policy", "required"),
         "remediation_context": episode,
-        "action_scope": action_scope.for_result(
-            conn, task_id, attempt_id, row[0], observe=False
-        )
+        "action_scope": action_scope.for_result(conn, task_id, attempt_id, row[0], observe=False)
         if include_scope
         else None,
     }, None
@@ -139,11 +133,7 @@ def failure(audit):
             break
     if "waiting_for_user requires" in message:
         code = "question_not_deliverable"
-        field = (
-            "operator_question"
-            if "operator_question" in message
-            else "planned_github_actions"
-        )
+        field = "operator_question" if "operator_question" in message else "planned_github_actions"
     elif "before open_pr" in message or "comment after push" in message:
         code = "invalid_action_order"
     elif "missing fields" in message:

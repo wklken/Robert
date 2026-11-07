@@ -54,9 +54,7 @@ repos:
         wrong_python = shadow_bin / "python3"
         wrong_python.write_text("#!/bin/sh\nexit 86\n", encoding="utf-8")
         wrong_python.chmod(0o755)
-        with patch.dict(
-            os.environ, {"PATH": str(shadow_bin) + os.pathsep + os.environ["PATH"]}
-        ):
+        with patch.dict(os.environ, {"PATH": str(shadow_bin) + os.pathsep + os.environ["PATH"]}):
             result = controlled_e2e_acceptance.controlled_e2e_acceptance(
                 self.config_path,
                 workspace_dir=self.root / "interpreter-e2e",
@@ -94,9 +92,7 @@ repos:
                 ("open_pr", "accepted", "published"),
             ],
         )
-        self.assertEqual(
-            result["published_pr_url"], "https://github.com/example/repo/pull/42"
-        )
+        self.assertEqual(result["published_pr_url"], "https://github.com/example/repo/pull/42")
         self.assertTrue(Path(result["worktree_path"]).is_dir())
         self.assertFalse((self.source_data_dir / "dd.sqlite3").exists())
         with closing(sqlite3.connect(result["db_path"])) as conn, conn:

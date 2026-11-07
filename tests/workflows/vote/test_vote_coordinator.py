@@ -12,9 +12,7 @@ from tests.support.vote_coordinator import VoteCoordinatorFixture
 class VoteCoordinatorTests(VoteCoordinatorFixture):
     def test_rate_limit_automatically_switches_only_affected_voter(self):
         config = yaml.safe_load(self.fixture.config_path.read_text())
-        config["workers"]["claude"].update(
-            model="primary-model", fallback_model="fallback-model"
-        )
+        config["workers"]["claude"].update(model="primary-model", fallback_model="fallback-model")
         self.fixture.config_path.write_text(yaml.safe_dump(config))
         driver = self.start()
         original = driver.launcher
@@ -60,12 +58,8 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertEqual(len(set(c[2] for c in self.calls if c[0] == "vote")), 1)
         self.fixture.cycle([])
         with vote_store.connect(self.db) as conn:
-            row = conn.execute(
-                "SELECT audit_status,target_url FROM github_actions"
-            ).fetchone()
-            self.assertEqual(
-                tuple(row), ("accepted", "https://github.com/example/backend/issues/42")
-            )
+            row = conn.execute("SELECT audit_status,target_url FROM github_actions").fetchone()
+            self.assertEqual(tuple(row), ("accepted", "https://github.com/example/backend/issues/42"))
 
     def test_partial_failure_only_retries_missing_model_and_keeps_prompt(self):
         driver = self.start()
@@ -84,16 +78,10 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self,
     ):
         first = self.start()
-        self.fixture.cycle(
-            [self.event("second"), self.event("second"), self.event("third")]
-        )
+        self.fixture.cycle([self.event("second"), self.event("second"), self.event("third")])
         with vote_store.connect(self.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 3
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 3)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
         first.run()
         self.fixture.finish_task(first.task_id)
         self.fixture.cycle([])
@@ -110,9 +98,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertTrue(report.is_file())
         self.fixture.cycle([])
         with vote_store.connect(self.db) as conn:
-            row = conn.execute(
-                "SELECT action_type,target_url,audit_status FROM github_actions"
-            ).fetchone()
+            row = conn.execute("SELECT action_type,target_url,audit_status FROM github_actions").fetchone()
             self.assertEqual(
                 tuple(row),
                 ("comment", "https://github.com/example/backend/pull/42", "accepted"),
@@ -125,13 +111,9 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertEqual(len(self.publish_all()), 1)
         self.fixture.cycle([], skip_publish=False)
         with vote_store.connect(self.db) as conn:
+            self.assertEqual(vote_store.session(conn, task_id=driver.task_id)["status"], "published")
             self.assertEqual(
-                vote_store.session(conn, task_id=driver.task_id)["status"], "published"
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT lifecycle FROM tasks WHERE task_id=?", (driver.task_id,)
-                ).fetchone()[0],
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (driver.task_id,)).fetchone()[0],
                 "completed",
             )
 
@@ -156,9 +138,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertNotEqual(next_driver.task_id, driver.task_id)
         next_driver.run()
         with vote_store.connect(self.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
 
     def test_repeated_or_historical_reply_cannot_answer_a_new_clarification(self):
         self.clarify = True
@@ -185,9 +165,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         ]:
             self.fixture.cycle([event])
         with vote_store.connect(self.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], before
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], before)
             entry = vote_store.session(conn, round_id=driver.round_id)
             self.assertEqual(len(entry["request"]["event"]["clarifications"]), 1)
             self.assertEqual(entry["status"], "waiting_for_user")
@@ -221,13 +199,9 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertTrue(result["ok"], result)
         self.fixture.cycle([])
         with vote_store.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT route_id FROM tasks WHERE parent_task_id=?", (task,)
-                ).fetchone()[0],
+                conn.execute("SELECT route_id FROM tasks WHERE parent_task_id=?", (task,)).fetchone()[0],
                 "vote",
             )
 
@@ -279,9 +253,9 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         with vote_store.connect(self.db) as conn:
             conn.row_factory = __import__("sqlite3").Row
             action = dict(conn.execute("SELECT * FROM github_actions").fetchone())
-            scope = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )["audit"]["action_scope"]
+            scope = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["audit"][
+                "action_scope"
+            ]
         calls = []
 
         def transport(command, **kwargs):
@@ -337,9 +311,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertEqual(len(posts), 1)
         # Attempt identity cannot create a new publication key for the same round.
         key = vote_publish.publication_keys(action, scope)
-        self.assertEqual(
-            key, vote_publish.publication_keys({**action, "action_id": "other"}, scope)
-        )
+        self.assertEqual(key, vote_publish.publication_keys({**action, "action_id": "other"}, scope))
 
     def test_changed_source_suppresses_publication(self):
         driver, action, scope = self.publication()
@@ -352,6 +324,4 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
             self.assertNotIn("--method", command)
             return SimpleNamespace(returncode=0, stdout=json.dumps(value))
 
-        self.assertEqual(
-            vote_publish.publish(action, scope, transport)["status"], "superseded"
-        )
+        self.assertEqual(vote_publish.publish(action, scope, transport)["status"], "superseded")

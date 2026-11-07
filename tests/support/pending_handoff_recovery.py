@@ -19,9 +19,7 @@ class PendingHandoffRecoveryFixture(unittest.TestCase):
         self.db = self.fixture.data_dir / "dd.sqlite3"
         self.cycle(self.fixture.fixture_path)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.task, self.attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            self.task, self.attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         self.fixture.fixture_path.write_text(
             json.dumps(
                 {
@@ -48,9 +46,7 @@ class PendingHandoffRecoveryFixture(unittest.TestCase):
                 "attempt_id": self.attempt,
                 "output_type": "new_pr",
                 "submission": {
-                    "planned_github_actions": self.fixture._new_pr_actions_for_attempt(
-                        self.db, self.task
-                    ),
+                    "planned_github_actions": self.fixture._new_pr_actions_for_attempt(self.db, self.task),
                     "consumed_event_fingerprints": ["comment:comment-1"],
                     "verification": [fixtures._verification_evidence()],
                     "handoff": "done",
@@ -63,9 +59,7 @@ class PendingHandoffRecoveryFixture(unittest.TestCase):
             conn.execute("UPDATE github_actions SET publish_status='published'")
         self.empty = self.fixture.root / "empty.json"
         self.empty.write_text('{"events":[]}')
-        self.config = validate_config.validate_config(
-            self.fixture.config_path, skip_external=True
-        )
+        self.config = validate_config.validate_config(self.fixture.config_path, skip_external=True)
 
     def cycle(self, fixture=None):
         return run_once.run_once(

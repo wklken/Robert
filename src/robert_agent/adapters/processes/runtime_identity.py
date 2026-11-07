@@ -28,9 +28,7 @@ _MAX_ARCHIVE = 64 * 1024 * 1024
 
 
 def _git(repo, *args):
-    result = subprocess.run(
-        ["git", *args], cwd=repo, check=False, capture_output=True, timeout=15
-    )
+    result = subprocess.run(["git", *args], cwd=repo, check=False, capture_output=True, timeout=15)
     if result.returncode:
         raise ValueError("could not read the Git build source")
     return result.stdout
@@ -54,9 +52,7 @@ def _add(entries, name, content):
 def _source_digest(entries):
     if "__init__.py" not in entries:
         raise ValueError("Robert package entry is missing")
-    return sha256(
-        json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    return sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _git_package_digest(repo, revision):
@@ -70,9 +66,7 @@ def _git_package_digest(repo, revision):
             if member.isdir():
                 continue
             if not member.isfile() or not member.name.startswith(_SOURCE + "/"):
-                raise ValueError(
-                    "Git build source contains an unsupported package member"
-                )
+                raise ValueError("Git build source contains an unsupported package member")
             total += member.size
             if total > _MAX_PACKAGE:
                 raise ValueError("Git build source exceeds the package limit")
@@ -119,12 +113,7 @@ def _installed_package_digest(root):
 
 
 def _build_id(fields):
-    return (
-        "robert-build-"
-        + sha256(
-            json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-    )
+    return "robert-build-" + sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def build_manifest(repo_root, wheel_path):
@@ -183,16 +172,10 @@ def _read_manifest(path):
         raise ValueError("unsupported build sidecar schema")
     for key in ("source_revision", "source_digest", "artifact_sha256"):
         item = value[key]
-        pattern = (
-            r"[0-9a-f]{40}|[0-9a-f]{64}"
-            if key == "source_revision"
-            else r"[0-9a-f]{64}"
-        )
+        pattern = r"[0-9a-f]{40}|[0-9a-f]{64}" if key == "source_revision" else r"[0-9a-f]{64}"
         if not isinstance(item, str) or not re.fullmatch(pattern, item):
             raise ValueError("invalid build sidecar digest")
-    if value["build_id"] != _build_id(
-        {key: item for key, item in value.items() if key != "build_id"}
-    ):
+    if value["build_id"] != _build_id({key: item for key, item in value.items() if key != "build_id"}):
         raise ValueError("build sidecar ID differs from its contents")
     return value
 
@@ -206,18 +189,14 @@ def runtime_snapshot(*, run_id, started_at, manifest_path=None, package_root=Non
         "build_status": "unverified",
     }
     try:
-        snapshot["process_identity"] = worker_identity.capture_process_identity(
-            os.getpid()
-        )
+        snapshot["process_identity"] = worker_identity.capture_process_identity(os.getpid())
     except (OSError, worker_identity.IdentityReadError):
         return {**snapshot, "reason_code": "runtime_process_unverified"}
     if manifest_path is None:
         return {**snapshot, "reason_code": "build_manifest_not_configured"}
     try:
         manifest = _read_manifest(Path(manifest_path).expanduser())
-        actual = _installed_package_digest(
-            package_root or Path(__file__).resolve().parents[2]
-        )
+        actual = _installed_package_digest(package_root or Path(__file__).resolve().parents[2])
     except (OSError, ValueError):
         return {**snapshot, "reason_code": "build_manifest_or_package_unreadable"}
     if actual != manifest["source_digest"]:

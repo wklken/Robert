@@ -60,18 +60,14 @@ class SupervisorTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             with closing(sqlite3.connect(self.db)) as conn:
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT count(*) FROM supervision_incidents"
-                    ).fetchone()[0],
+                    conn.execute("SELECT count(*) FROM supervision_incidents").fetchone()[0],
                     0,
                 )
             supervision_checks.check(self.config, record=True)
             supervision_checks.check(self.config, record=True)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute("SELECT count(*) FROM supervision_incidents").fetchone()[
-                    0
-                ],
+                conn.execute("SELECT count(*) FROM supervision_incidents").fetchone()[0],
                 1,
             )
             self.assertEqual(
@@ -115,36 +111,28 @@ class SupervisorTests(unittest.TestCase):
 
     def test_database_outage_notice_is_durable_and_deduplicated(self):
         self.config["db_path"] = str(self.root / "missing.sqlite3")
-        supervision_checks.check(
-            self.config, record=True, now="2026-11-06T00:00:00+00:00"
-        )
+        supervision_checks.check(self.config, record=True, now="2026-11-06T00:00:00+00:00")
         calls = []
 
         def sent(argv, **kwargs):
             calls.append(json.loads(kwargs["input"]))
             return subprocess.CompletedProcess(argv, 0)
 
-        with patch.dict(
-            "os.environ", {"ROBERT_NOTIFICATION_COMMAND": "notify-fixture"}
-        ):
+        with patch.dict("os.environ", {"ROBERT_NOTIFICATION_COMMAND": "notify-fixture"}):
             supervision_checks.deliver_health(
                 self.config["db_path"],
                 supervision_health.health_path(self.config),
                 runner=sent,
             )
             self.assertEqual(calls, [])
-            supervision_checks.check(
-                self.config, record=True, now="2026-11-06T00:00:59+00:00"
-            )
+            supervision_checks.check(self.config, record=True, now="2026-11-06T00:00:59+00:00")
             supervision_checks.deliver_health(
                 self.config["db_path"],
                 supervision_health.health_path(self.config),
                 runner=sent,
             )
             self.assertEqual(calls, [])
-            supervision_checks.check(
-                self.config, record=True, now="2026-11-06T00:01:00+00:00"
-            )
+            supervision_checks.check(self.config, record=True, now="2026-11-06T00:01:00+00:00")
             supervision_checks.deliver_health(
                 self.config["db_path"],
                 supervision_health.health_path(self.config),
@@ -168,9 +156,7 @@ class SupervisorTests(unittest.TestCase):
             calls.append(json.loads(kwargs["input"]))
             return subprocess.CompletedProcess(argv, 0)
 
-        with patch.dict(
-            "os.environ", {"ROBERT_NOTIFICATION_COMMAND": "notify-fixture"}
-        ):
+        with patch.dict("os.environ", {"ROBERT_NOTIFICATION_COMMAND": "notify-fixture"}):
             for minute in (0, 2):
                 with closing(sqlite3.connect(self.db)) as writer:
                     writer.execute("BEGIN IMMEDIATE")
@@ -186,9 +172,7 @@ class SupervisorTests(unittest.TestCase):
                         runner=sent,
                     )
                     self.assertEqual(calls, [])
-                result = supervision_checks.check(
-                    self.config, record=True, now=f"2026-11-06T00:0{minute}:01+00:00"
-                )
+                result = supervision_checks.check(self.config, record=True, now=f"2026-11-06T00:0{minute}:01+00:00")
                 self.assertTrue(result["ok"])
                 self.assertNotIn(
                     "first_failed_at",

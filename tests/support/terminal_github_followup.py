@@ -62,24 +62,16 @@ class TerminalGithubFollowupFixture(unittest.TestCase):
     def finish(self, lifecycle="completed"):
         self.deliver("first")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            self.parent_id, self.stream_id = conn.execute(
-                "SELECT task_id,workstream_id FROM tasks"
-            ).fetchone()
+            self.parent_id, self.stream_id = conn.execute("SELECT task_id,workstream_id FROM tasks").fetchone()
             conn.execute("UPDATE tasks SET lifecycle=?", (lifecycle,))
             conn.execute(
                 "UPDATE attempts SET status=?,finished_at=?,metadata_json=?",
                 (lifecycle, values.utc_now(), '{"result_contract":"compact-v1"}'),
             )
-            conn.execute(
-                "UPDATE workstreams SET lifecycle=?,active_task_id=NULL", (lifecycle,)
-            )
-            execution_store.close_binding(
-                conn, "task", self.parent_id, values.utc_now()
-            )
+            conn.execute("UPDATE workstreams SET lifecycle=?,active_task_id=NULL", (lifecycle,))
+            execution_store.close_binding(conn, "task", self.parent_id, values.utc_now())
             if lifecycle == "completed":
-                conn.execute(
-                    "UPDATE work_items SET completed_at=?", (values.utc_now(),)
-                )
+                conn.execute("UPDATE work_items SET completed_at=?", (values.utc_now(),))
             self.old_binding = execution_store.get_binding(conn, "task", self.parent_id)
 
     def tasks(self):

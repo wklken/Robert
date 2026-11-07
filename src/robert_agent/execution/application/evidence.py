@@ -154,9 +154,7 @@ def _command_process_status(pid, identity):
 
 def attempt_command_records(conn, attempt_id, task_id, *, persist=True):
     directories = set()
-    for (path,) in conn.execute(
-        "SELECT path FROM artifacts WHERE attempt_id = ?", (attempt_id,)
-    ):
+    for (path,) in conn.execute("SELECT path FROM artifacts WHERE attempt_id = ?", (attempt_id,)):
         directories.add(Path(path).parent.resolve())
     for _seq, name, path in conn.execute("PRAGMA database_list"):
         if name == "main" and path:
@@ -164,11 +162,7 @@ def attempt_command_records(conn, attempt_id, task_id, *, persist=True):
     commands = []
     seen_paths = set()
     for directory in sorted(directories):
-        for path in sorted(
-            directory.glob(
-                f"{command_heartbeat.safe_filename_part(attempt_id)}.*.command.json"
-            )
-        ):
+        for path in sorted(directory.glob(f"{command_heartbeat.safe_filename_part(attempt_id)}.*.command.json")):
             try:
                 path = path.resolve()
                 if path in seen_paths:
@@ -193,19 +187,11 @@ def attempt_command_records(conn, attempt_id, task_id, *, persist=True):
                 record["process_status"] = "finished"
             else:
                 statuses = [
-                    _command_process_status(
-                        record.get("pid"), record.get("process_identity")
-                    ),
-                    _command_process_status(
-                        record.get("wrapper_pid"), record.get("wrapper_identity")
-                    ),
+                    _command_process_status(record.get("pid"), record.get("process_identity")),
+                    _command_process_status(record.get("wrapper_pid"), record.get("wrapper_identity")),
                 ]
                 record["process_status"] = (
-                    "alive"
-                    if "alive" in statuses
-                    else "unknown"
-                    if "unknown" in statuses
-                    else "not_found"
+                    "alive" if "alive" in statuses else "unknown" if "unknown" in statuses else "not_found"
                 )
             commands.append(record)
     if persist:
@@ -233,10 +219,7 @@ def _backfill_command_phases(conn, attempt_id, commands):
             (attempt_id, record["phase"], record["status"], summary, finished_at),
         ).fetchone():
             continue
-        phase_id = (
-            "phase-command-"
-            + hashlib.sha256(record["command_record_path"].encode()).hexdigest()[:24]
-        )
+        phase_id = "phase-command-" + hashlib.sha256(record["command_record_path"].encode()).hexdigest()[:24]
         conn.execute(
             """INSERT OR IGNORE INTO worker_phases(
                  phase_id,attempt_id,phase,status,summary,next_step,created_at
@@ -267,9 +250,7 @@ def terminal_transport_failure(logs):
             if event.get("type") not in {"error", "turn.failed"}:
                 continue
             error = event.get("error") or event.get("message") or ""
-            message = (
-                error.get("message", "") if isinstance(error, dict) else str(error)
-            )
+            message = error.get("message", "") if isinstance(error, dict) else str(error)
             if any(
                 marker in message.lower()
                 for marker in (
@@ -290,12 +271,8 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
 
     review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
     if review:
-        row = conn.execute(
-            "SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)
-        ).fetchone()
-        diagnostic = values.json_object(row[0] if row else None).get(
-            "submission_validation", {}
-        )
+        row = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+        diagnostic = values.json_object(row[0] if row else None).get("submission_validation", {})
         return {
             "status": "recoverable_progress"
             if review["status"] not in {"canceled", "superseded", "attention"}
@@ -304,9 +281,7 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
             "round_id": review["round_id"],
             "task_id": task_id,
             "previous_attempt_id": attempt_id,
-            "worktree_path": str(
-                worktree_path or review["manifest"].get("worktree_path", "")
-            ),
+            "worktree_path": str(worktree_path or review["manifest"].get("worktree_path", "")),
             "progress_signals": ["native_review_checkpoint"],
             "logs": _attempt_log_tails(conn, attempt_id),
             "commands": [],
@@ -329,9 +304,7 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
     commands = attempt_command_records(conn, attempt_id, task_id, persist=False)
     logs = _attempt_log_tails(conn, attempt_id)
     git_summary = (
-        {}
-        if conn is not None and supervision_store.repair_task(conn, task_id)
-        else git_recovery_summary(worktree_path)
+        {} if conn is not None and supervision_store.repair_task(conn, task_id) else git_recovery_summary(worktree_path)
     )
     _backfill_command_phases(conn, attempt_id, commands)
     phases = _latest_worker_phases(conn, attempt_id)
@@ -403,12 +376,7 @@ def inspect_attempt_recovery_with_metadata(
         recorded = metadata.get("dispatch") or {}
         previous_fallback = (metadata.get("resume") or {}).get("model_fallback")
         fallback = recorded.get("fallback_model")
-        if (
-            fallback
-            and recorded.get("model")
-            and fallback != recorded["model"]
-            and not previous_fallback
-        ):
+        if fallback and recorded.get("model") and fallback != recorded["model"] and not previous_fallback:
             recovery["model_fallback"] = {
                 "worker_name": recorded.get("worker_name"),
                 "model": fallback,
@@ -425,6 +393,5 @@ def inspect_attempt_recovery_with_metadata(
 
 def inspection_due(state, now):
     return state.get("retryable", True) and (
-        not state.get("next_retry_at")
-        or retry_policy.timestamp(state["next_retry_at"]) <= retry_policy.timestamp(now)
+        not state.get("next_retry_at") or retry_policy.timestamp(state["next_retry_at"]) <= retry_policy.timestamp(now)
     )

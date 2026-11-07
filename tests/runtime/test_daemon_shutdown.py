@@ -10,9 +10,7 @@ class DaemonGracefulStopTests(DaemonFixture):
         import threading
         from robert_agent.runtime import daemon
 
-        timer = threading.Timer(
-            delay, daemon._request_stop, (daemon.signal.SIGTERM, None)
-        )
+        timer = threading.Timer(delay, daemon._request_stop, (daemon.signal.SIGTERM, None))
         timer.start()
         self.addCleanup(timer.cancel)
 
@@ -32,9 +30,7 @@ class DaemonGracefulStopTests(DaemonFixture):
         self._request_stop_later()
         started = time.monotonic()
 
-        result = daemon.run_child_json(
-            [sys.executable, "-c", script], timeout_seconds=60
-        )
+        result = daemon.run_child_json([sys.executable, "-c", script], timeout_seconds=60)
 
         self.assertLess(time.monotonic() - started, 15)
         self.assertFalse(result["ok"], result)

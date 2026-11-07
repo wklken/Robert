@@ -33,9 +33,7 @@ class FollowupDaemonTests(unittest.TestCase):
                     raise OSError("ps unavailable")
                 if mode == "timeout":
                     raise subprocess.TimeoutExpired(command, 5)
-                return subprocess.CompletedProcess(
-                    command, 1, "", "unsupported ps option"
-                )
+                return subprocess.CompletedProcess(command, 1, "", "unsupported ps option")
 
             # Enter after run_child_json selects its real Popen path.
             with mock.patch.object(subprocess, "run", side_effect=ps):
@@ -51,9 +49,7 @@ class FollowupDaemonTests(unittest.TestCase):
             storage.init_database(db)
             now = datetime.now(timezone.utc).isoformat()
             with closing(daemon_state.connect(db)) as conn, conn:
-                daemon_state.start_daemon_run(
-                    conn, config_path="/config", owner_id="daemon", now=now
-                )
+                daemon_state.start_daemon_run(conn, config_path="/config", owner_id="daemon", now=now)
             program = """import json,os,sqlite3,sys,time
 from pathlib import Path
 from robert_agent.execution import leases as execution_leases
@@ -93,11 +89,7 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
 
                 self.addCleanup(cleanup)
                 deadline = time.monotonic() + 10
-                while (
-                    not ready.exists()
-                    and process.poll() is None
-                    and time.monotonic() < deadline
-                ):
+                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.01)
                 self.assertTrue(ready.exists(), "child did not save its run and lease")
                 return process
@@ -137,15 +129,11 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                 self.assertEqual(result["child"]["returncode"], 0)
             with closing(sqlite3.connect(db)) as conn:
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT status FROM agent_runs WHERE run_id='owned'"
-                    ).fetchone()[0],
+                    conn.execute("SELECT status FROM agent_runs WHERE run_id='owned'").fetchone()[0],
                     "running",
                 )
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT status FROM leases WHERE owner_id='owned'"
-                    ).fetchone()[0],
+                    conn.execute("SELECT status FROM leases WHERE owner_id='owned'").fetchone()[0],
                     "active",
                 )
 
@@ -160,9 +148,7 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                 self._run_owned_child(mode, slow=True)
 
     def test_real_launch_failure_is_not_hidden_as_group_observation_failure(self):
-        with mock.patch.object(
-            daemon.subprocess, "Popen", side_effect=OSError("fork failed")
-        ):
+        with mock.patch.object(daemon.subprocess, "Popen", side_effect=OSError("fork failed")):
             with self.assertRaisesRegex(OSError, "fork failed"):
                 daemon.run_child_json(["control"], timeout_seconds=1)
 
@@ -190,35 +176,25 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                         ),
                     )
                     execution_leases.acquire(conn, "repo:x", "abandoned", now, 90)
-                probe = (
-                    (lambda _pid: False)
-                    if mode == "stopped"
-                    else self._group_probe(mode)
-                )
+                probe = (lambda _pid: False) if mode == "stopped" else self._group_probe(mode)
                 with (
                     mock.patch.object(
                         daemon.worker_identity,
                         "inspect_recorded_identity",
                         return_value="dead",
                     ),
-                    mock.patch.object(
-                        worker_identity, "live_process_group", side_effect=probe
-                    ),
+                    mock.patch.object(worker_identity, "live_process_group", side_effect=probe),
                 ):
                     result = daemon.run_daemon(config, once=True)
                 self.assertTrue(result["ok"], result)
                 self.assertEqual(result["status"], "stopped")
                 with closing(sqlite3.connect(fixture.db_path)) as conn:
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT status FROM agent_runs WHERE run_id='abandoned'"
-                        ).fetchone()[0],
+                        conn.execute("SELECT status FROM agent_runs WHERE run_id='abandoned'").fetchone()[0],
                         "failed" if mode == "stopped" else "running",
                     )
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT status FROM leases WHERE owner_id='abandoned'"
-                        ).fetchone()[0],
+                        conn.execute("SELECT status FROM leases WHERE owner_id='abandoned'").fetchone()[0],
                         "released" if mode == "stopped" else "active",
                     )
                     self.assertEqual(
@@ -226,9 +202,7 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                         "stopped",
                     )
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT status FROM leases WHERE resource_type='daemon'"
-                        ).fetchone()[0],
+                        conn.execute("SELECT status FROM leases WHERE resource_type='daemon'").fetchone()[0],
                         "released",
                     )
 
@@ -252,9 +226,7 @@ class FollowupIntentTests(unittest.TestCase):
                     "robot",
                 )
                 self.assertEqual(event["intent"], "bug_fix")
-                policy = route.route_task(
-                    {"intent": event["intent"], "source_type": "issue"}
-                )
+                policy = route.route_task({"intent": event["intent"], "source_type": "issue"})
                 self.assertEqual(policy["route_id"], "new-pr")
                 self.assertTrue(policy["needs_worktree"])
 
@@ -290,9 +262,7 @@ class FollowupIntentTests(unittest.TestCase):
             ),
         ]:
             with self.subTest(body=body):
-                self.assertEqual(
-                    discover.infer_intent(title, body, event_type, "robot"), expected
-                )
+                self.assertEqual(discover.infer_intent(title, body, event_type, "robot"), expected)
 
 
 if __name__ == "__main__":

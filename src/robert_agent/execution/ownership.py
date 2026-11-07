@@ -18,9 +18,7 @@ def _json_object(value):
 
 
 def subject_for_task(conn, task_id):
-    row = conn.execute(
-        "SELECT task_kind,metadata_json FROM tasks WHERE task_id=?", (task_id,)
-    ).fetchone()
+    row = conn.execute("SELECT task_kind,metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
     episode = _json_object(row[1]).get("remediation_episode_id") if row else None
     return (
         ("remediation_episode", episode)
@@ -43,9 +41,9 @@ def claim_task(conn, task_id, run_now=None):
         return False
     run_now = run_now or datetime.now(timezone.utc).isoformat()
     task_kind, metadata_json = row
-    if _json_object(metadata_json).get("execution_attention") or _json_object(
-        metadata_json
-    ).get("audit_retry_required"):
+    if _json_object(metadata_json).get("execution_attention") or _json_object(metadata_json).get(
+        "audit_retry_required"
+    ):
         return False
     if task_kind == "human_request":
         return (
@@ -129,11 +127,7 @@ def parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
             (retrigger_wakeup_id, parent_task_id),
         ).fetchone()
         return bool(requested) and (
-            not binding
-            or (
-                binding["binding_status"] == "terminal"
-                or (binding["binding_status"] == "active")
-            )
+            not binding or (binding["binding_status"] == "terminal" or (binding["binding_status"] == "active"))
         )
     return not binding or (binding["binding_status"] == "active")
 
@@ -201,9 +195,7 @@ def recovery_subject(conn, task_id):
         (task_id,),
     ).fetchone()
     episode_id = _json_object(row[0] if row else None).get("remediation_episode_id")
-    if episode_id and execution_store.get_binding(
-        conn, "remediation_episode", episode_id
-    ):
+    if episode_id and execution_store.get_binding(conn, "remediation_episode", episode_id):
         return "remediation_episode", episode_id
     return "task", task_id
 
@@ -216,9 +208,7 @@ def mark_attention(conn, task_id, run_now):
     for candidate_type, candidate_id in candidates:
         binding = execution_store.get_binding(conn, candidate_type, candidate_id)
         if binding and binding["binding_status"] == "active":
-            execution_store.mark_binding_attention(
-                conn, candidate_type, candidate_id, run_now
-            )
+            execution_store.mark_binding_attention(conn, candidate_type, candidate_id, run_now)
             return
 
 
@@ -238,8 +228,7 @@ def waiting_reply_allowed(conn, task_id, now):
         if (
             state
             and state[0] == "exhausted"
-            and _json_object(state[1]).get("last_transition_reason")
-            == "worker_waiting_for_user"
+            and _json_object(state[1]).get("last_transition_reason") == "worker_waiting_for_user"
         ):
             return True  # The trusted reply owns a fresh human subject, not the ended Episode.
     return claim_task(conn, task_id, now)

@@ -24,15 +24,9 @@ def _workers(config):
     }
     for name, raw in config["workers"].items():
         if name != name.strip():
-            raise ValueError(
-                f"workers.{name} name must not contain surrounding whitespace"
-            )
-        if credentials.intersection(
-            name.strip() for name in raw["environment_allowlist"]
-        ):
-            raise ValueError(
-                f"workers.{name}.environment_allowlist must not include GitHub credentials"
-            )
+            raise ValueError(f"workers.{name} name must not contain surrounding whitespace")
+        if credentials.intersection(name.strip() for name in raw["environment_allowlist"]):
+            raise ValueError(f"workers.{name}.environment_allowlist must not include GitHub credentials")
         normalized = worker_adapters.normalize_worker_agent_config(
             {
                 "worker_agent": raw["adapter"],
@@ -47,18 +41,14 @@ def _workers(config):
                 **normalized,
                 "default_model": raw["model"].strip(),
                 "default_effort": raw["effort"].strip(),
-                "fallback_model": raw["fallback_model"].strip()
-                if "fallback_model" in raw
-                else None,
+                "fallback_model": raw["fallback_model"].strip() if "fallback_model" in raw else None,
             }
         )
     return result
 
 
 def _normalize(config, path, skip_external):
-    schema = json.loads(
-        resource("schemas/config.schema.json").read_text(encoding="utf-8")
-    )
+    schema = json.loads(resource("schemas/config.schema.json").read_text(encoding="utf-8"))
     config = apply_schema(config, schema, schema, "config")
     data_dir = Path(config["data_dir"]).expanduser()
     database = config["database"].strip()
@@ -99,18 +89,10 @@ def _normalize(config, path, skip_external):
         "worker_startup_grace_seconds": supervision["startup_grace_seconds"],
         "routes": config["routes"],
         "repos": [],
-        "skills": {
-            "search_paths": [
-                str(Path(p).expanduser()) for p in config["skills"]["search_paths"]
-            ]
-        },
+        "skills": {"search_paths": [str(Path(p).expanduser()) for p in config["skills"]["search_paths"]]},
         "maintenance": config["maintenance"],
         "supervision": supervision_policy.normalize(
-            {
-                key: value
-                for key, value in supervision.items()
-                if key in supervision_policy.DEFAULTS
-            }
+            {key: value for key, value in supervision.items() if key in supervision_policy.DEFAULTS}
         ),
         # Runtime control-loop names; only the schema above defines accepted YAML.
         "daemon": {
@@ -118,19 +100,11 @@ def _normalize(config, path, skip_external):
             "run_on_start": daemon["scan_on_start"],
             "local_poll_seconds": scheduler["local_poll_seconds"],
             "github_poll_seconds": polling["fallback_seconds"],
-            "github_poll_when_full_seconds": polling["synchronous"][
-                "full_capacity_seconds"
-            ],
-            "rate_limit_cache_seconds": polling["synchronous"][
-                "rate_limit_cache_seconds"
-            ],
+            "github_poll_when_full_seconds": polling["synchronous"]["full_capacity_seconds"],
+            "rate_limit_cache_seconds": polling["synchronous"]["rate_limit_cache_seconds"],
             **config["github"]["rate_limit"],
-            "live_run_timeout_seconds": daemon["control_timeouts"][
-                "github_scan_seconds"
-            ],
-            "local_drain_timeout_seconds": daemon["control_timeouts"][
-                "local_cycle_seconds"
-            ],
+            "live_run_timeout_seconds": daemon["control_timeouts"]["github_scan_seconds"],
+            "local_drain_timeout_seconds": daemon["control_timeouts"]["local_cycle_seconds"],
         },
         "skip_external": bool(skip_external),
     }
@@ -145,27 +119,16 @@ def _normalize(config, path, skip_external):
             raise ValueError(f"repos[{index}] contains placeholder values")
         checkout = Path(raw["checkout"]).expanduser()
         if not checkout.exists() or not (checkout / ".git").exists():
-            raise ValueError(
-                f"repos[{index}].checkout is not a git checkout: {checkout}"
-            )
+            raise ValueError(f"repos[{index}].checkout is not a git checkout: {checkout}")
         limit = raw.get("max_concurrency", scheduler["max_concurrency"])
         if limit > scheduler["max_concurrency"]:
-            raise ValueError(
-                f"repos[{index}].max_concurrency exceeds global max_concurrency"
-            )
-        if (
-            raw["pr_automation"]["ci"]["enabled"]
-            and not raw["pr_automation"]["ci"]["check_allowlist"]
-        ):
-            raise ValueError(
-                f"repos[{index}].pr_automation.ci.check_allowlist must not be empty when enabled"
-            )
+            raise ValueError(f"repos[{index}].max_concurrency exceeds global max_concurrency")
+        if raw["pr_automation"]["ci"]["enabled"] and not raw["pr_automation"]["ci"]["check_allowlist"]:
+            raise ValueError(f"repos[{index}].pr_automation.ci.check_allowlist must not be empty when enabled")
         ci = raw["pr_automation"]["ci"]
         ci["check_allowlist"] = [check.strip() for check in ci["check_allowlist"]]
         if len(ci["check_allowlist"]) != len(set(ci["check_allowlist"])):
-            raise ValueError(
-                f"repos[{index}].pr_automation.ci.check_allowlist entries must be unique"
-            )
+            raise ValueError(f"repos[{index}].pr_automation.ci.check_allowlist entries must be unique")
         result["repos"].append(
             {
                 **raw,
@@ -174,17 +137,12 @@ def _normalize(config, path, skip_external):
                 "worktree_root": str(Path(raw["worktrees"]).expanduser()),
                 "default_base_branch": raw["default_branch"],
                 "max_concurrency": limit,
-                "github_account": raw.get(
-                    "github_account", config["github"]["account"]
-                ).strip(),
+                "github_account": raw.get("github_account", config["github"]["account"]).strip(),
             }
         )
     for label, routes in [
         ("routes", config["routes"]),
-        *[
-            (f"repos[{i}].routes", r.get("routes", {}))
-            for i, r in enumerate(result["repos"])
-        ],
+        *[(f"repos[{i}].routes", r.get("routes", {})) for i, r in enumerate(result["repos"])],
     ]:
         unknown = set(routes) - set(known_routes)
         if unknown:
@@ -199,15 +157,11 @@ def _normalize(config, path, skip_external):
             ):
                 if field in override:
                     if route_id != allowed_route:
-                        raise ValueError(
-                            f"{field} is only supported by {allowed_route}"
-                        )
+                        raise ValueError(f"{field} is only supported by {allowed_route}")
                     names.extend(override[field].get("workers", []))
             for name in names:
                 if name not in by_name:
-                    raise ValueError(
-                        f"{label}.{route_id} references unknown worker: {name}"
-                    )
+                    raise ValueError(f"{label}.{route_id} references unknown worker: {name}")
     for repo in result["repos"]:
         for policy in known_routes.values():
             resolve_route_config(result, repo, policy)

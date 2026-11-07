@@ -64,30 +64,20 @@ def initialize(conn):
     for statement in SCHEMA.split(";"):
         if statement.strip():
             conn.execute(statement)
-    if "model" not in {
-        row[1] for row in conn.execute("PRAGMA table_info(review_runs)")
-    }:
+    if "model" not in {row[1] for row in conn.execute("PRAGMA table_info(review_runs)")}:
         conn.execute("ALTER TABLE review_runs ADD COLUMN model TEXT")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(review_runs)")}
     if "slot_reserved" not in columns:
-        conn.execute(
-            "ALTER TABLE review_runs ADD COLUMN slot_reserved INTEGER NOT NULL DEFAULT 0"
-        )
+        conn.execute("ALTER TABLE review_runs ADD COLUMN slot_reserved INTEGER NOT NULL DEFAULT 0")
         # Existing children remain counted until their process groups are
         # proven to have exited, including ambiguous starts.
-        conn.execute(
-            "UPDATE review_runs SET slot_reserved=1 WHERE status IN ('starting','running')"
-        )
+        conn.execute("UPDATE review_runs SET slot_reserved=1 WHERE status IN ('starting','running')")
     if "started_at" not in columns:
         conn.execute("ALTER TABLE review_runs ADD COLUMN started_at TEXT")
-        conn.execute(
-            "UPDATE review_runs SET started_at=created_at WHERE status IN ('starting','running')"
-        )
+        conn.execute("UPDATE review_runs SET started_at=created_at WHERE status IN ('starting','running')")
 
     # Build after legacy columns are upgraded, not in the initial schema loop.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS review_runs_reserved ON review_runs(slot_reserved) WHERE slot_reserved=1"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS review_runs_reserved ON review_runs(slot_reserved) WHERE slot_reserved=1")
 
 
 @contextmanager
@@ -114,13 +104,10 @@ def decode(row):
 
 def session(conn, *, round_id=None, task_id=None):
     # Do not change a caller's row_factory.
-    if not conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_sessions'"
-    ).fetchone():
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_sessions'").fetchone():
         return None
     cursor = conn.execute(
-        "SELECT * FROM review_sessions WHERE "
-        + ("round_id=?" if round_id else "task_id=?"),
+        "SELECT * FROM review_sessions WHERE " + ("round_id=?" if round_id else "task_id=?"),
         (round_id or task_id,),
     )
     row = cursor.fetchone()
@@ -128,9 +115,7 @@ def session(conn, *, round_id=None, task_id=None):
 
 
 def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
-    trigger = event["event_fingerprint"] + (
-        ":recovery:" + recovery_key if recovery_key else ""
-    )
+    trigger = event["event_fingerprint"] + (":recovery:" + recovery_key if recovery_key else "")
     key = f"{repo['full_name']}:{event['number']}:{trigger}"
     round_id = "review-" + hashlib.sha256(key.encode()).hexdigest()[:24]
     request = {
@@ -171,9 +156,7 @@ def update(conn, round_id, **fields):
         raise ValueError("invalid review session update")
     fields["updated_at"] = now()
     conn.execute(
-        "UPDATE review_sessions SET "
-        + ",".join(f"{key}=?" for key in fields)
-        + " WHERE round_id=?",
+        "UPDATE review_sessions SET " + ",".join(f"{key}=?" for key in fields) + " WHERE round_id=?",
         [*fields.values(), round_id],
     )
 
@@ -187,9 +170,7 @@ def runs(conn, round_id):
     return [decode(dict(zip(names, row))) for row in cursor]
 
 
-def new_run(
-    conn, round_id, stage, worker_id, owner_attempt_id, root, prompt_sha256, model=None
-):
+def new_run(conn, round_id, stage, worker_id, owner_attempt_id, root, prompt_sha256, model=None):
     attempt_no = conn.execute(
         """SELECT COALESCE(MAX(attempt_no),0)+1 FROM review_runs
         WHERE round_id=? AND stage=? AND worker_id=?""",
@@ -231,9 +212,7 @@ def update_run(conn, run_id, **fields):
         raise ValueError("invalid review run update")
     fields["updated_at"] = now()
     conn.execute(
-        "UPDATE review_runs SET "
-        + ",".join(f"{key}=?" for key in fields)
-        + " WHERE run_id=?",
+        "UPDATE review_runs SET " + ",".join(f"{key}=?" for key in fields) + " WHERE run_id=?",
         [*fields.values(), run_id],
     )
 
@@ -241,9 +220,7 @@ def update_run(conn, run_id, **fields):
 def configure_process_pool(conn, limit):
     if type(limit) is not int or limit < 1:
         raise ValueError("model_max_concurrency must be a positive integer")
-    conn.execute(
-        "UPDATE review_process_pool SET max_concurrency=? WHERE singleton=1", (limit,)
-    )
+    conn.execute("UPDATE review_process_pool SET max_concurrency=? WHERE singleton=1", (limit,))
 
 
 def process_pool_status(conn):
@@ -269,11 +246,7 @@ def release_slot(conn, run_id):
 
 
 def can_abandon(run):
-    return (
-        run["status"] == "starting"
-        and not run["dispatch"]
-        and bool(run.get("slot_reserved"))
-    )
+    return run["status"] == "starting" and not run["dispatch"] and bool(run.get("slot_reserved"))
 
 
 def task_status(conn, task_id):
@@ -283,8 +256,7 @@ def task_status(conn, task_id):
     return {key: value for key, value in entry.items() if key != "request"} | {
         "process_pool": process_pool_status(conn),
         "runs": [
-            {key: value for key, value in run.items() if key != "dispatch"}
-            for run in runs(conn, entry["round_id"])
+            {key: value for key, value in run.items() if key != "dispatch"} for run in runs(conn, entry["round_id"])
         ],
     }
 
@@ -311,9 +283,7 @@ def board_status(conn, task_id):
                 "stage": run["stage"],
                 "worker_id": safe_text(run["worker_id"]),
                 "model": safe_text(run["model"] or ""),
-                "slot_reserved": bool(run["slot_reserved"])
-                if "slot_reserved" in run
-                else None,
+                "slot_reserved": bool(run["slot_reserved"]) if "slot_reserved" in run else None,
                 "attempt_no": run["attempt_no"],
                 "status": run["status"],
                 "error": safe_text(run["error"] or ""),

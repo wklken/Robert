@@ -30,9 +30,7 @@ class ReviewWorkspaceFixture(unittest.TestCase):
         self.git(self.repo, "remote", "rename", "origin", "upstream")
 
     def git(self, cwd, *args):
-        return subprocess.run(
-            ["git", *args], cwd=cwd, text=True, capture_output=True, check=True
-        ).stdout.strip()
+        return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=True).stdout.strip()
 
     def commit(self, contents):
         (self.upstream / "source.py").write_text(contents)
@@ -57,9 +55,7 @@ class ReviewWorkspaceFixture(unittest.TestCase):
 
     def freeze(self, manifest):
         context = Path(manifest["context_dir"])
-        (context / "context-summary.md").write_text(
-            "Read source.py and direct callers. No findings.\n"
-        )
+        (context / "context-summary.md").write_text("Read source.py and direct callers. No findings.\n")
         (context / "source-index.json").write_text(
             json.dumps(
                 {

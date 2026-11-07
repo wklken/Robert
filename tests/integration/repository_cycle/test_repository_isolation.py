@@ -92,9 +92,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             encoding="utf-8",
         )
 
-        def fake_collect(
-            repo, known_workstreams=None, notification_hints=None, **_kwargs
-        ):
+        def fake_collect(repo, known_workstreams=None, notification_hints=None, **_kwargs):
             if repo["full_name"] == "example/backend":
                 return [
                     {
@@ -136,9 +134,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["status"], "completed")
         with closing(sqlite3.connect(result["db_path"])) as conn:
-            repos = conn.execute(
-                "SELECT full_name FROM repos ORDER BY full_name"
-            ).fetchall()
+            repos = conn.execute("SELECT full_name FROM repos ORDER BY full_name").fetchall()
             tasks = conn.execute(
                 """
                 SELECT r.full_name, COUNT(*)
@@ -149,13 +145,9 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
                 ORDER BY r.full_name
                 """
             ).fetchall()
-            repo_steps = conn.execute(
-                "SELECT COUNT(*) FROM run_repo_steps WHERE step_key = 'route'"
-            ).fetchone()[0]
+            repo_steps = conn.execute("SELECT COUNT(*) FROM run_repo_steps WHERE step_key = 'route'").fetchone()[0]
             run_summary = json.loads(
-                conn.execute(
-                    "SELECT summary_json FROM agent_runs ORDER BY started_at DESC LIMIT 1"
-                ).fetchone()[0]
+                conn.execute("SELECT summary_json FROM agent_runs ORDER BY started_at DESC LIMIT 1").fetchone()[0]
             )
 
         self.assertEqual(

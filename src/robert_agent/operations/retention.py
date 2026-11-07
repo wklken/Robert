@@ -79,9 +79,7 @@ def _prune_batch(conn, cutoffs, batch_size, apply):
                 continue
             placeholders = ",".join("?" for _ in identifiers)
             where = f"{key} IN ({placeholders})"
-            counts[table] = conn.execute(
-                f"SELECT count(*) FROM {table} WHERE {where}", identifiers
-            ).fetchone()[0]
+            counts[table] = conn.execute(f"SELECT count(*) FROM {table} WHERE {where}", identifiers).fetchone()[0]
             if apply:
                 conn.execute(f"DELETE FROM {table} WHERE {where}", identifiers)
         conn.commit()
@@ -120,11 +118,7 @@ def prune_database(
         ("event_retention_days", event_retention_days),
     ):
         _positive_int(value, name)
-    when = (
-        datetime.fromisoformat(now.replace("Z", "+00:00"))
-        if now
-        else datetime.now(timezone.utc)
-    )
+    when = datetime.fromisoformat(now.replace("Z", "+00:00")) if now else datetime.now(timezone.utc)
     if when.tzinfo is None:
         raise ValueError("now must include a timezone")
     when = when.astimezone(timezone.utc)
@@ -143,9 +137,7 @@ def prune_database(
         "batch_size": batch_size,
         "batches": 0,
         "counts": dict.fromkeys(COUNT_TABLES, 0),
-        "cutoffs": dict(
-            zip(("successful_runs", "failed_runs", "daemon_events"), cutoffs)
-        ),
+        "cutoffs": dict(zip(("successful_runs", "failed_runs", "daemon_events"), cutoffs)),
         "more_work": False,
     }
     path = Path(db_path).expanduser().resolve()
@@ -161,17 +153,10 @@ def prune_database(
             if not apply:
                 conn.execute("PRAGMA query_only=ON")
             for _ in range(max_batches if apply else 1):
-                if (
-                    result["batches"]
-                    and max_seconds is not None
-                    and time.monotonic() - started >= max_seconds
-                ):
+                if result["batches"] and max_seconds is not None and time.monotonic() - started >= max_seconds:
                     break
                 counts = _prune_batch(conn, cutoffs, batch_size, apply)
-                result["more_work"] = any(
-                    counts[t] >= batch_size
-                    for t in ("agent_runs", "daemon_events", "leases")
-                )
+                result["more_work"] = any(counts[t] >= batch_size for t in ("agent_runs", "daemon_events", "leases"))
                 result["batches"] += 1
                 for table, count in counts.items():
                     result["counts"][table] += count
@@ -185,7 +170,5 @@ def prune_database(
             "database table is locked",
             "database schema is locked",
         }
-        result.update(
-            ok=False, status="busy" if busy else "failed", safe_error=str(exc)
-        )
+        result.update(ok=False, status="busy" if busy else "failed", safe_error=str(exc))
     return result

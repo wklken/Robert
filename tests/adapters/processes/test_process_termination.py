@@ -28,9 +28,7 @@ class ProcessTerminationTests(unittest.TestCase):
                     f"pending.write_text(str(p.pid)); pending.replace({str(ready)!r}); "
                     + ("" if leader_exits else "time.sleep(30)")
                 )
-                proc = subprocess.Popen(
-                    [sys.executable, "-c", parent], start_new_session=True
-                )
+                proc = subprocess.Popen([sys.executable, "-c", parent], start_new_session=True)
                 try:
                     deadline = time.monotonic() + 5
                     while not ready.exists() and time.monotonic() < deadline:
@@ -39,9 +37,7 @@ class ProcessTerminationTests(unittest.TestCase):
                     child_pid = int(ready.read_text())
                     if leader_exits:
                         proc.wait(timeout=5)
-                        outcome = attempt_process.terminate_attempt(
-                            {"dispatch": {"pid": proc.pid}}
-                        )
+                        outcome = attempt_process.terminate_attempt({"dispatch": {"pid": proc.pid}})
                         self.assertEqual(outcome["status"], "attention")
                         self.assertNotIn(
                             attempt_process.process_state(child_pid),
@@ -53,14 +49,11 @@ class ProcessTerminationTests(unittest.TestCase):
                     self.assertEqual(outcome["status"], "terminated", outcome)
                     deadline = time.monotonic() + 1
                     while (
-                        attempt_process.process_state(child_pid)
-                        not in (None, "Z", "X", "x")
+                        attempt_process.process_state(child_pid) not in (None, "Z", "X", "x")
                         and time.monotonic() < deadline
                     ):
                         time.sleep(0.01)
-                    self.assertIn(
-                        attempt_process.process_state(child_pid), (None, "Z", "X", "x")
-                    )
+                    self.assertIn(attempt_process.process_state(child_pid), (None, "Z", "X", "x"))
                 finally:
                     try:
                         os.killpg(proc.pid, signal.SIGKILL)
@@ -72,9 +65,7 @@ class ProcessTerminationTests(unittest.TestCase):
         from unittest.mock import patch
 
         with (
-            patch.object(
-                worker_identity, "inspect_recorded_identity", return_value="dead"
-            ),
+            patch.object(worker_identity, "inspect_recorded_identity", return_value="dead"),
             patch.object(worker_identity, "live_process_group", return_value=True),
         ):
             result = attempt_process.dispatch_status({"dispatch": {"pid": 1234}})
@@ -89,9 +80,7 @@ class ProcessTerminationTests(unittest.TestCase):
                 "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
                 f"Path({str(ready)!r}).touch(); time.sleep(30)"
             )
-            proc = subprocess.Popen(
-                [sys.executable, "-c", code], start_new_session=True
-            )
+            proc = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
             try:
                 deadline = time.monotonic() + 5
                 while not ready.exists() and time.monotonic() < deadline:

@@ -39,9 +39,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.db = self.fixture.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(self.db)) as conn:
-            self.task, self.attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            self.task, self.attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
 
     def cycle(self, now):
         with mock.patch.object(values, "utc_now", return_value=now):
@@ -69,17 +67,13 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             self.fail_timeout(conn, now)
             return 1
 
-        with mock.patch.object(
-            monitor, "supervise_running_attempts", side_effect=timeout
-        ):
+        with mock.patch.object(monitor, "supervise_running_attempts", side_effect=timeout):
             self.cycle(now)
         with closing(sqlite3.connect(self.db)) as conn, conn:
             control = execution_store.get_binding(conn, "task", self.task)
             self.assertEqual(control["binding_status"], "active")
             self.assertEqual(control["recovery_attempts"], 0)
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
             next_pass_runnable = loop_engine.has_runnable_local_work(conn)
 
         evidence = {
@@ -89,9 +83,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             "progress_signals": ["dirty_worktree"],
         }
         with (
-            mock.patch.object(
-                attempt_process, "dispatch_status", return_value={"status": "dead"}
-            ),
+            mock.patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}),
             mock.patch.object(
                 cycle_evidence,
                 "inspect_attempt_recovery_with_metadata",
@@ -103,12 +95,8 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             control = execution_store.get_binding(conn, "task", self.task)
             self.assertEqual(control["binding_status"], "active")
             self.assertEqual(control["recovery_attempts"], 1)
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 2
-            )
-            latest = conn.execute(
-                "SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1"
-            ).fetchone()[0]
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 2)
+            latest = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
             self.assertNotEqual(latest, self.attempt)
             self.assertIn(
                 conn.execute("SELECT lifecycle FROM tasks").fetchone()[0],
@@ -118,9 +106,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
 
         evidence["previous_attempt_id"] = latest
         with (
-            mock.patch.object(
-                attempt_process, "dispatch_status", return_value={"status": "dead"}
-            ),
+            mock.patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}),
             mock.patch.object(
                 cycle_evidence,
                 "inspect_attempt_recovery_with_metadata",
@@ -132,21 +118,15 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             control = execution_store.get_binding(conn, "task", self.task)
             self.assertEqual(control["binding_status"], "attention")
             self.assertEqual(control["recovery_attempts"], 1)
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 2)
             self.assertFalse(loop_engine.has_runnable_local_work(conn))
-        self.assertTrue(
-            next_pass_runnable, "A fresh timeout must schedule its recovery pass"
-        )
+        self.assertTrue(next_pass_runnable, "A fresh timeout must schedule its recovery pass")
 
     def test_unavailable_timeout_recovery_stops_with_attention(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             self.fail_timeout(conn, "2026-10-24T00:00:00+00:00")
         with (
-            mock.patch.object(
-                attempt_process, "dispatch_status", return_value={"status": "dead"}
-            ),
+            mock.patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}),
             mock.patch.object(
                 cycle_evidence,
                 "inspect_attempt_recovery_with_metadata",
@@ -159,12 +139,8 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             control = execution_store.get_binding(conn, "task", self.task)
             self.assertEqual(control["binding_status"], "attention")
             self.assertEqual(control["recovery_attempts"], 0)
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed"
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
             self.assertFalse(loop_engine.has_runnable_local_work(conn))
 
 
@@ -196,9 +172,7 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                 route.route_task(event),
                 workstream.plan_event(event, active_workstreams=set()),
                 "2026-07-26T00:01:00+00:00",
-                worktree_result=assigned_workspace.prepare_worktree(
-                    fixture.repo, event, route.route_task(event), True
-                ),
+                worktree_result=assigned_workspace.prepare_worktree(fixture.repo, event, route.route_task(event), True),
             )
             work_application_lifecycle.finalize_failed_task(
                 conn,
@@ -250,13 +224,9 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
         self.assertTrue(config["ok"], config)
         with (
             mock.patch.object(command, "validate_config", return_value=config),
-            mock.patch.object(
-                discovery, "collect_account_notifications", return_value={}
-            ),
+            mock.patch.object(discovery, "collect_account_notifications", return_value={}),
             mock.patch.object(discovery, "collect_live_events", return_value=[]),
-            mock.patch.object(
-                source_lifecycle, "reconcile_remote_source_states", return_value=0
-            ),
+            mock.patch.object(source_lifecycle, "reconcile_remote_source_states", return_value=0),
         ):
             for now in ("2026-07-26T00:03:00+00:00", "2026-07-26T00:04:00+00:00"):
                 with mock.patch.object(values, "utc_now", return_value=now):
@@ -268,12 +238,8 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                     )
                 self.assertTrue(result["ok"], result)
                 with closing(sqlite3.connect(fixture.db_path)) as conn:
-                    self.assertEqual(
-                        conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2
-                    )
-                    self.assertEqual(
-                        conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 2
-                    )
+                    self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
+                    self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 2)
                     row = conn.execute(
                         "SELECT status,attempt_count,observed_head_sha,observed_base_sha FROM pr_remediation_episodes WHERE episode_id=?",
                         (episode,),

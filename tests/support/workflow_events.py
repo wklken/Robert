@@ -51,6 +51,4 @@ class WorkflowEventApplicationFixture(unittest.TestCase):
 
     def _bind(self, owner):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            return execution_store.ensure_subject(
-                conn, "task", "task-1", "human_request", NOW
-            )
+            return execution_store.ensure_subject(conn, "task", "task-1", "human_request", NOW)

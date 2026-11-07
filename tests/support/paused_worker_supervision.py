@@ -25,9 +25,7 @@ class PausedWorkerSupervisionFixture(unittest.TestCase):
         self.fixture.deliver("first")
         self.db = self.fixture.db_path
         self.config_path = self.fixture.fixture.config_path
-        self.config = validate_config.validate_config(
-            self.config_path, skip_external=True
-        )
+        self.config = validate_config.validate_config(self.config_path, skip_external=True)
         self.now = datetime.now(timezone.utc)
         with closing(daemon_state.connect(self.db)) as conn, conn:
             owner = daemon_state.start_daemon_run(
@@ -50,9 +48,7 @@ class PausedWorkerSupervisionFixture(unittest.TestCase):
         )
         self.context.next_live_poll_at = "2099-01-01T00:00:00+00:00"
         self.context.background_lanes = {
-            name: SimpleNamespace(
-                process=None, poll=mock.Mock(return_value=None), start=mock.Mock()
-            )
+            name: SimpleNamespace(process=None, poll=mock.Mock(return_value=None), start=mock.Mock())
             for name in ("scan", "publish")
         }
         for _ in range(3):

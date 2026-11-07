@@ -118,9 +118,7 @@ class AcceptanceSuiteTests(unittest.TestCase):
         self.assertEqual(result["production_write"]["status"], "required")
         self.assertEqual(result["production_write"]["canary_plan"]["status"], "planned")
         self.assertFalse(result["production_write"]["canary_plan"]["write_confirmed"])
-        self.assertIn(
-            "--confirm-github-write", result["production_write"]["canary_command"]
-        )
+        self.assertIn("--confirm-github-write", result["production_write"]["canary_command"])
 
     def test_acceptance_suite_accepts_verified_production_canary_evidence(self):
         from robert_agent.acceptance import suite as acceptance_suite

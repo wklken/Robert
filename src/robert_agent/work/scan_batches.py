@@ -24,9 +24,7 @@ def save_reads(conn, repo_id, responses, when):
         )
 
 
-def save_batch(
-    db_path, repo_id, context, raw_events, responses, *, now=None, complete_sources=()
-):
+def save_batch(db_path, repo_id, context, raw_events, responses, *, now=None, complete_sources=()):
     when = time.time() if now is None else now
     identifier = uuid4().hex
     with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
@@ -34,11 +32,7 @@ def save_batch(
             "SELECT batch_id,context_digest,raw_events_json,attention_reason FROM github_scan_batches WHERE repo_id=? AND context_digest=? AND raw_events_json=? AND completed_at IS NULL ORDER BY created_at DESC LIMIT 1",
             (repo_id, context, json.dumps(raw_events)),
         ).fetchone()
-        if (
-            previous
-            and previous[1] == context
-            and previous[2] == json.dumps(raw_events)
-        ):
+        if previous and previous[1] == context and previous[2] == json.dumps(raw_events):
             identifier = previous[0]
             conn.execute(
                 "UPDATE github_scan_batches SET complete_sources_json=? WHERE batch_id=?",
@@ -61,9 +55,7 @@ def save_batch(
         save_reads(conn, repo_id, responses, when)
         if (
             not (previous and previous[3])
-            and conn.execute(
-                "SELECT 1 FROM repos WHERE repo_id=?", (repo_id,)
-            ).fetchone()
+            and conn.execute("SELECT 1 FROM repos WHERE repo_id=?", (repo_id,)).fetchone()
         ):
             wakeup.request_wakeup(
                 conn,
@@ -80,9 +72,7 @@ def next_batch(db_path, repo_id, *, now=None, context=None):
     with closing(sqlite3.connect(db_path, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
         clause = " AND context_digest=?" if context is not None else ""
-        params = [repo_id, time.time() if now is None else now] + (
-            [context] if context is not None else []
-        )
+        params = [repo_id, time.time() if now is None else now] + ([context] if context is not None else [])
         row = conn.execute(
             "SELECT * FROM github_scan_batches WHERE repo_id=? AND completed_at IS NULL AND attention_reason IS NULL AND retry_at<=?"
             + clause
@@ -192,9 +182,7 @@ def retry_batch(db_path, batch_id, repo_ids, *, now=None):
     return {"ok": True, "status": "retry_requested", "batch_id": batch_id}
 
 
-def finish_batch(
-    db_path, batch_id, *, success, now=None, failure_reason="local_processing_failed"
-):
+def finish_batch(db_path, batch_id, *, success, now=None, failure_reason="local_processing_failed"):
     when = time.time() if now is None else now
     with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
         if success:
@@ -204,25 +192,16 @@ def finish_batch(
             ).fetchone()
             if current:
                 covered = {tuple(source) for source in json.loads(current[3])}
-                replayed = {
-                    source_policy.event_identity(raw) for raw in json.loads(current[4])
-                }
+                replayed = {source_policy.event_identity(raw) for raw in json.loads(current[4])}
                 older = conn.execute(
                     "SELECT batch_id,raw_events_json FROM github_scan_batches WHERE repo_id=? AND context_digest!=? AND created_at<=? AND completed_at IS NULL",
                     (current[0], current[1], current[2]),
                 ).fetchall()
                 for old_id, encoded in older:
-                    sources = {
-                        (event.get("source_type", "issue"), event["number"])
-                        for event in json.loads(encoded)
-                    }
+                    sources = {(event.get("source_type", "issue"), event["number"]) for event in json.loads(encoded)}
                     if (
                         sources <= covered
-                        and {
-                            source_policy.event_identity(raw)
-                            for raw in json.loads(encoded)
-                        }
-                        <= replayed
+                        and {source_policy.event_identity(raw) for raw in json.loads(encoded)} <= replayed
                     ):
                         conn.execute(
                             "UPDATE github_scan_batches SET completed_at=? WHERE batch_id=?",
@@ -246,6 +225,4 @@ def finish_batch(
             "DELETE FROM wakeups WHERE status='consumed' AND json_extract(metadata_json,'$.kind') IN ('github_observation_ready','github_context_refresh')"
         )
         conn.execute("DELETE FROM github_scan_batches WHERE completed_at IS NOT NULL")
-        conn.execute(
-            "DELETE FROM github_scan_reads WHERE observed_at < ?", (when - 3600,)
-        )
+        conn.execute("DELETE FROM github_scan_reads WHERE observed_at < ?", (when - 3600,))

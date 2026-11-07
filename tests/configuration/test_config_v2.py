@@ -42,9 +42,7 @@ class ConfigV2Tests(ConfigV2Fixture):
                 self.assertFalse(result["ok"], result)
                 self.assertIn(field, result["safe_error"])
                 if field == "version" and value == 1:
-                    self.assertIn(
-                        "docs/reference.md#configuration", result["safe_error"]
-                    )
+                    self.assertIn("docs/reference.md#configuration", result["safe_error"])
 
     def test_duplicate_yaml_keys_fail(self):
         self.validate()
@@ -89,15 +87,11 @@ class ConfigV2Tests(ConfigV2Fixture):
             ("vote", "multi_agent_vote"),
         ):
             with self.subTest(route_id=route_id):
-                self.config["routes"] = {
-                    route_id: {field: {"enabled": True, "workers": ["a", "b"]}}
-                }
+                self.config["routes"] = {route_id: {field: {"enabled": True, "workers": ["a", "b"]}}}
                 self.config["repos"][0]["routes"] = {route_id: {"worker": "a"}}
                 result = self.validate()
                 self.assertTrue(result["ok"], result)
-                effective = resolve_route_config(
-                    result, result["repos"][0], {"id": route_id}
-                )
+                effective = resolve_route_config(result, result["repos"][0], {"id": route_id})
                 self.assertEqual(effective[field]["workers"][0], effective["worker"])
                 # A repository override must not hide unknown global references.
                 self.config["routes"][route_id][field]["workers"] = ["missing", "b"]
@@ -261,9 +255,7 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
             config = copy.deepcopy(self.config)
             parent = config
             for key in path[:-1]:
-                parent = (
-                    parent[key] if isinstance(key, int) else parent.setdefault(key, {})
-                )
+                parent = parent[key] if isinstance(key, int) else parent.setdefault(key, {})
             parent[path[-1]] = value
             with self.subTest(path=path, value=value):
                 result = self.validate(config)
@@ -312,9 +304,7 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["workers"][0]["command_argv"], ["custom", "--batch"])
         self.assertEqual(result["workers"][0]["fallback_model"], "fallback")
-        self.assertEqual(
-            result["repos"][0]["pr_automation"]["conflict"]["max_wall_minutes"], 33
-        )
+        self.assertEqual(result["repos"][0]["pr_automation"]["conflict"]["max_wall_minutes"], 33)
 
     def test_config_show_exposes_effective_repository_routes(self):
         from contextlib import redirect_stdout
@@ -327,9 +317,7 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
         self.validate()
         output = io.StringIO()
         with redirect_stdout(output):
-            code = main(
-                ["config", "show", "--config", str(self.path), "--output", "json"]
-            )
+            code = main(["config", "show", "--config", str(self.path), "--output", "json"])
         self.assertEqual(code, 0, output.getvalue())
         result = json.loads(output.getvalue())
         route = result["effective_routes"]["example/test"]["new-pr"]
@@ -357,12 +345,8 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
         now = datetime(2026, 11, 6, tzinfo=timezone.utc)
         storage.init_database(config["db_path"])
         with closing(sqlite3.connect(config["db_path"])) as conn, conn:
-            lease = execution_leases.acquire(
-                conn, "repo", "run", now.isoformat(), config["lease_ttl_seconds"]
-            )
-            expires = conn.execute(
-                "SELECT expires_at FROM leases WHERE lease_id=?", (lease["lease_id"],)
-            ).fetchone()[0]
+            lease = execution_leases.acquire(conn, "repo", "run", now.isoformat(), config["lease_ttl_seconds"])
+            expires = conn.execute("SELECT expires_at FROM leases WHERE lease_id=?", (lease["lease_id"],)).fetchone()[0]
         self.assertEqual(datetime.fromisoformat(expires) - now, timedelta(seconds=61))
         for elapsed, expected in (
             (30, "running"),

@@ -73,13 +73,9 @@ class SupervisionObservationTests(unittest.TestCase):
         for message, reason in cases.items():
             with (
                 self.subTest(message=message),
-                patch.object(
-                    sqlite3, "connect", side_effect=sqlite3.DatabaseError(message)
-                ),
+                patch.object(sqlite3, "connect", side_effect=sqlite3.DatabaseError(message)),
             ):
-                with self.assertRaises(
-                    supervision_observe.ObservationUnavailable
-                ) as caught:
+                with self.assertRaises(supervision_observe.ObservationUnavailable) as caught:
                     supervision_observe.collect(self.db, now=NOW)
                 self.assertEqual(caught.exception.reason_code, reason)
                 self.assertEqual(str(caught.exception), reason)
@@ -91,11 +87,7 @@ class SupervisionObservationTests(unittest.TestCase):
         cursor = ""
         for _ in range(3):
             page = supervision_observe.collect(self.db, now=NOW, limit=1, cursor=cursor)
-            scopes = {
-                row["scope_id"]
-                for row in page["observations"]
-                if row["scope_type"] == "task"
-            }
+            scopes = {row["scope_id"] for row in page["observations"] if row["scope_type"] == "task"}
             self.assertEqual(len(scopes), 1)
             seen.extend(scopes)
             cursor = page["cursor"]
@@ -120,20 +112,14 @@ class SupervisionObservationTests(unittest.TestCase):
         )
         with patch.object(supervision_observe, "_observe_process", return_value="dead"):
             rows = self.observations()
-        publication = next(
-            row for row in rows if row["rule_id"] == "publication_stalled"
-        )
+        publication = next(row for row in rows if row["rule_id"] == "publication_stalled")
         self.assertEqual(publication["classification"], "expected_wait")
         self.assertNotIn("positive_evidence", publication)
 
     def test_bound_publication_receipt_is_positive_after_confirmed_action(self):
         self.task("a")
-        self.execute(
-            "UPDATE tasks SET lifecycle='completed',expected_output='comment_analysis' WHERE task_id='a'"
-        )
-        self.execute(
-            "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('attempt','a',1,'completed')"
-        )
+        self.execute("UPDATE tasks SET lifecycle='completed',expected_output='comment_analysis' WHERE task_id='a'")
+        self.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('attempt','a',1,'completed')")
         url = "https://github.com/example/repo/issues/1"
         self.execute(
             """INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json)
@@ -158,18 +144,10 @@ class SupervisionObservationTests(unittest.TestCase):
             VALUES('intent','action','key','fingerprint','published',?,?,json_object('status','confirmed_effect','receipt',json(?)))""",
             (OLD, OLD, receipt),
         )
-        publication = next(
-            row
-            for row in self.observations()
-            if row["rule_id"] == "publication_stalled"
-        )
+        publication = next(row for row in self.observations() if row["rule_id"] == "publication_stalled")
         self.assertEqual(publication["positive_evidence"]["result_id"], "result")
         self.execute("DELETE FROM github_actions WHERE action_id='action'")
-        inconsistent = next(
-            row
-            for row in self.observations()
-            if row["rule_id"] == "delivery_inconsistent"
-        )
+        inconsistent = next(row for row in self.observations() if row["rule_id"] == "delivery_inconsistent")
         self.assertEqual(inconsistent["classification"], "confirmed")
         self.assertEqual(inconsistent["reason_code"], "planned_actions_do_not_match")
 
@@ -190,9 +168,7 @@ class SupervisionObservationTests(unittest.TestCase):
             "INSERT INTO daemon_events(daemon_event_id,daemon_run_id,event_type,status,created_at) VALUES('ok','run','local_drain_completed','ok',?)",
             (NOW.isoformat(),),
         )
-        row = next(
-            row for row in self.observations() if row["scope_id"] == "daemon:local"
-        )
+        row = next(row for row in self.observations() if row["scope_id"] == "daemon:local")
         self.assertEqual(row["classification"], "confirmed")
         self.assertNotIn("positive_evidence", row)
 
@@ -212,9 +188,7 @@ class SupervisionObservationTests(unittest.TestCase):
 
         with (
             patch.object(supervision_observe, "_observe_process", return_value="dead"),
-            patch.object(
-                supervision_observe, "_spool_facts", side_effect=ingest_before_probe
-            ),
+            patch.object(supervision_observe, "_spool_facts", side_effect=ingest_before_probe),
         ):
             rows = self.observations()
         worker = next(row for row in rows if row["rule_id"] == "worker_state_mismatch")

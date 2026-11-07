@@ -10,9 +10,7 @@ def utc_now():
 
 
 def _table_exists(conn):
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'wakeups'"
-    ).fetchone()
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'wakeups'").fetchone()
     return bool(row)
 
 
@@ -200,10 +198,7 @@ def summarize_wakeups(conn, now=None):
             "by_reason": {},
         }
     now = now or utc_now()
-    by_status = {
-        row[0]: row[1]
-        for row in conn.execute("SELECT status, COUNT(*) FROM wakeups GROUP BY status")
-    }
+    by_status = {row[0]: row[1] for row in conn.execute("SELECT status, COUNT(*) FROM wakeups GROUP BY status")}
     by_reason = {
         row[0]: row[1]
         for row in conn.execute(

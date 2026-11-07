@@ -53,9 +53,7 @@ class PublicationScopeTests(RepositoryCycleFixture):
                         task_id,
                         f"https://github.com/{full_name}/issues/1",
                         now,
-                        json.dumps(
-                            {"body": "[from-codex local repo] hi"}, sort_keys=True
-                        ),
+                        json.dumps({"body": "[from-codex local repo] hi"}, sort_keys=True),
                     ),
                 )
 

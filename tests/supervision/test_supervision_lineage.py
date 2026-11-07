@@ -67,9 +67,7 @@ class SupervisionLineageTests(unittest.TestCase):
                 )
             raise subprocess.CalledProcessError(1, "git", stderr="preparation failed")
 
-        with patch.object(
-            assigned_workspace, "prepare_worktree", side_effect=fail_after_commit
-        ):
+        with patch.object(assigned_workspace, "prepare_worktree", side_effect=fail_after_commit):
             self.assertFalse(self.cycle(fixture)["ok"])
         ((before_preparation, task_count),) = observed
         self.assertTrue(before_preparation["received_at"])
@@ -79,9 +77,7 @@ class SupervisionLineageTests(unittest.TestCase):
         self.assertTrue(self.cycle(fixture)["ok"])
         with closing(sqlite3.connect(db)) as conn:
             (task_id,) = conn.execute("SELECT task_id FROM tasks").fetchone()
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
             received = _receipt(conn, "github_event", event_id)
             self.assertEqual(received["disposition"], "admitted_task")
             self.assertEqual(received["target_id"], task_id)
@@ -97,9 +93,7 @@ class SupervisionLineageTests(unittest.TestCase):
             self.assertTrue(original)
             conn.execute("UPDATE tasks SET lifecycle='failed'")
             conn.execute("UPDATE attempts SET status='failed'")
-            conn.execute(
-                "UPDATE workstreams SET lifecycle='failed',active_task_id=NULL"
-            )
+            conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL")
             execution_ownership.close_terminal_task(conn, parent, values.utc_now())
         events = json.loads(fixture.fixture_path.read_text())["events"]
         fixture.fixture_path.write_text(
@@ -118,15 +112,11 @@ class SupervisionLineageTests(unittest.TestCase):
         )
         self.assertTrue(self.cycle(fixture)["ok"])
         with closing(sqlite3.connect(db)) as conn:
-            (child,) = conn.execute(
-                "SELECT task_id FROM tasks WHERE parent_task_id=?", (parent,)
-            ).fetchone()
+            (child,) = conn.execute("SELECT task_id FROM tasks WHERE parent_task_id=?", (parent,)).fetchone()
             current = _task_lineage(conn, child)
             self.assertTrue(current)
             self.assertNotEqual(current, original)
-            self.assertEqual(
-                _receipt(conn, "github_event", "event:comment:next")["target_id"], child
-            )
+            self.assertEqual(_receipt(conn, "github_event", "event:comment:next")["target_id"], child)
             self.assertEqual(
                 _receipt(conn, "github_event", "event:comment:comment-1")["target_id"],
                 parent,
@@ -149,29 +139,21 @@ class SupervisionLineageTests(unittest.TestCase):
         fixture.cycle()
         with closing(sqlite3.connect(fixture.db)) as conn:
             self.assertEqual(_task_lineage(conn, fixture.task_id), parent)
-            self.assertTrue(
-                conn.execute(
-                    "SELECT 1 FROM attempts WHERE task_id=?", (fixture.task_id,)
-                ).fetchone()
-            )
+            self.assertTrue(conn.execute("SELECT 1 FROM attempts WHERE task_id=?", (fixture.task_id,)).fetchone())
 
     def test_native_round_has_receipt_before_task_and_transfers_lineage(self):
         fixture = self.fixture(review_coordinator.ReviewCoordinatorFixture)
         with patch.object(ready_work, "prepare_queued_reviews"):
             fixture.cycle([fixture.event()])
         with closing(sqlite3.connect(fixture.db)) as conn:
-            round_id, task_id = conn.execute(
-                "SELECT round_id,task_id FROM review_sessions"
-            ).fetchone()
+            round_id, task_id = conn.execute("SELECT round_id,task_id FROM review_sessions").fetchone()
             self.assertIsNone(task_id)
             receipt = _receipt(conn, "github_event", "event:comment:first")
             self.assertEqual(receipt["disposition"], "queued_native_round")
             self.assertEqual(receipt["target_id"], round_id)
         fixture.cycle([])
         with closing(sqlite3.connect(fixture.db)) as conn:
-            (task_id,) = conn.execute(
-                "SELECT task_id FROM review_sessions WHERE round_id=?", (round_id,)
-            ).fetchone()
+            (task_id,) = conn.execute("SELECT task_id FROM review_sessions WHERE round_id=?", (round_id,)).fetchone()
             self.assertTrue(task_id)
             self.assertEqual(_task_lineage(conn, task_id), receipt["lineage_key"])
 
@@ -198,12 +180,8 @@ class SupervisionLineageTests(unittest.TestCase):
                 (now, attempt_id),
             )
             (repo_id,) = conn.execute("SELECT repo_id FROM workstreams").fetchone()
-        context = work_items.CommandContext(
-            "operator", "maintainer", frozenset({repo_id}), frozenset()
-        )
-        work_items.retrigger_failed_github_task(
-            fixture.db, parent, context=context, idempotency_key="retry"
-        )
+        context = work_items.CommandContext("operator", "maintainer", frozenset({repo_id}), frozenset())
+        work_items.retrigger_failed_github_task(fixture.db, parent, context=context, idempotency_key="retry")
         fixture.cycle([])
         child, _ = fixture.current()
         self.assertNotEqual(child, parent)
@@ -212,9 +190,7 @@ class SupervisionLineageTests(unittest.TestCase):
             self.assertNotEqual(replacement["round_id"], round_entry["round_id"])
             self.assertTrue(lineage)
             self.assertEqual(_task_lineage(conn, child), lineage)
-            self.assertEqual(
-                replacement["request"]["event"]["supervision_lineage_key"], lineage
-            )
+            self.assertEqual(replacement["request"]["event"]["supervision_lineage_key"], lineage)
 
     def test_old_input_disposition_cannot_overwrite_the_current_generation(self):
         fixture = self.fixture(test_run_once.RepositoryCycleFixture)

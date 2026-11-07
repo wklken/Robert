@@ -38,9 +38,7 @@ class PreSubmitAuditTests(unittest.TestCase):
         self.assertFalse(rejected["ok"], rejected)
         self.assertEqual(rejected["status"], "failed_validation")
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0)
             self.assertIsNone(
                 conn.execute(
                     "SELECT json_extract(metadata_json,'$.result_validation') FROM attempts WHERE attempt_id=?",
@@ -84,9 +82,7 @@ class PreSubmitAuditTests(unittest.TestCase):
         self.assertEqual(response["status"], "failed_validation")
         self.assertIn("reason_code", response)
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM github_actions").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM github_actions").fetchone()[0], 0)
             counts = json.loads(
                 conn.execute(
                     "SELECT json_extract(metadata_json,'$.submission_validation_counts') FROM attempts WHERE attempt_id=?",
@@ -94,9 +90,7 @@ class PreSubmitAuditTests(unittest.TestCase):
                 ).fetchone()[0]
             )
             self.assertEqual(counts, {"action_scope": 1})
-        payload["submission"]["planned_github_actions"][0]["target_url"] = (
-            "https://github.com/example/backend/pull/456"
-        )
+        payload["submission"]["planned_github_actions"][0]["target_url"] = "https://github.com/example/backend/pull/456"
         self.assertTrue(result.record_result(db, payload)["ok"])
 
     def test_redaction_rejection_preserves_body_location_and_can_be_corrected(self):
@@ -121,12 +115,8 @@ class PreSubmitAuditTests(unittest.TestCase):
         )
         self.assertNotIn("private-example-value", str(rejected))
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0
-            )
-        payload["submission"]["planned_github_actions"][0]["body"] = (
-            "Question\npassword=<redacted>"
-        )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+        payload["submission"]["planned_github_actions"][0]["body"] = "Question\npassword=<redacted>"
         self.assertTrue(result.record_result(db, payload)["ok"])
 
     def test_public_text_needing_normalization_has_a_redaction_error(self):
@@ -186,9 +176,7 @@ class PreSubmitAuditTests(unittest.TestCase):
     def test_canceled_task_is_not_a_correctable_submission(self):
         db, task, attempt, _, _ = self.prepare("comment")
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (task,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (task,))
         rejected = result.record_result(db, self.waiting(task, attempt, []))
         self.assertEqual(rejected["status"], "rejected_by_supervisor")
         self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
@@ -208,12 +196,7 @@ class PreSubmitAuditTests(unittest.TestCase):
         for task_kind in ("ci_remediation", "merge_conflict_remediation"):
             with self.subTest(task_kind=task_kind):
                 checked = audit_result.audit_result(
-                    {
-                        key: value
-                        for key, value in payload.items()
-                        if key != "submission"
-                    }
-                    | payload["submission"],
+                    {key: value for key, value in payload.items() if key != "submission"} | payload["submission"],
                     ["comment"],
                     task_kind=task_kind,
                 )

@@ -89,19 +89,10 @@ class WorkItemSchemaTests(unittest.TestCase):
         )
 
     def test_schema_creates_work_item_tables_and_control_columns(self):
-        table_names = {
-            row[0]
-            for row in self.conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
+        table_names = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         self.assertEqual(
             {"work_items", "work_item_events"},
-            {
-                name
-                for name in table_names
-                if name in {"work_items", "work_item_events"}
-            },
+            {name for name in table_names if name in {"work_items", "work_item_events"}},
         )
         self.assertIn("work_item_id", table_columns(self.conn, "wakeups"))
         self.assertIn("routing_mode", table_columns(self.conn, "tasks"))
@@ -272,9 +263,7 @@ class WorkItemMigrationTests(unittest.TestCase):
                 FROM work_items
                 """
             ).fetchone()
-            event_count = conn.execute(
-                "SELECT COUNT(*) FROM work_item_events"
-            ).fetchone()[0]
+            event_count = conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0]
             counts = tuple(
                 conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in ("tasks", "attempts", "worker_results")
@@ -297,9 +286,7 @@ class WorkItemMigrationTests(unittest.TestCase):
         from robert_agent.adapters.sqlite import database as storage
 
         self._create_legacy_database()
-        with mock.patch.object(
-            storage, "_backfill_work_items", side_effect=RuntimeError("stop")
-        ):
+        with mock.patch.object(storage, "_backfill_work_items", side_effect=RuntimeError("stop")):
             with self.assertRaisesRegex(RuntimeError, "stop"):
                 storage.init_database(self.db_path)
 
@@ -340,14 +327,10 @@ class WorkItemCommandTests(WorkItemCommandFixture):
             active_task_id, lifecycle = conn.execute(
                 "SELECT active_task_id, lifecycle FROM workstreams WHERE workstream_id = 'github:example/repo!21'"
             ).fetchone()
-            wakeups = conn.execute(
-                "SELECT reason, task_id, status, metadata_json FROM wakeups"
-            ).fetchall()
+            wakeups = conn.execute("SELECT reason, task_id, status, metadata_json FROM wakeups").fetchall()
         self.assertEqual((active_task_id, lifecycle), (None, "failed"))
         self.assertEqual(len(wakeups), 1)
-        self.assertEqual(
-            wakeups[0][:3], ("manual_operator_request", parent_task_id, "pending")
-        )
+        self.assertEqual(wakeups[0][:3], ("manual_operator_request", parent_task_id, "pending"))
         self.assertEqual(json.loads(wakeups[0][3])["parent_task_id"], parent_task_id)
         self.assertEqual(notifications, [self.db_path])
 
@@ -356,12 +339,8 @@ class WorkItemCommandTests(WorkItemCommandFixture):
 
         task_id = self._failed_github_task()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?", (task_id,)
-            )
-        with self.assertRaisesRegex(
-            work_items.WorkItemConflictError, "failed GitHub task"
-        ):
+            conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?", (task_id,))
+        with self.assertRaisesRegex(work_items.WorkItemConflictError, "failed GitHub task"):
             work_items.retrigger_failed_github_task(
                 self.db_path,
                 task_id,
@@ -370,15 +349,9 @@ class WorkItemCommandTests(WorkItemCommandFixture):
             )
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,)
-            )
-            conn.execute(
-                "UPDATE github_sources SET state = 'closed' WHERE source_id = 'source-pr-21'"
-            )
-        with self.assertRaisesRegex(
-            work_items.WorkItemConflictError, "open GitHub source"
-        ):
+            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,))
+            conn.execute("UPDATE github_sources SET state = 'closed' WHERE source_id = 'source-pr-21'")
+        with self.assertRaisesRegex(work_items.WorkItemConflictError, "open GitHub source"):
             work_items.retrigger_failed_github_task(
                 self.db_path,
                 task_id,
@@ -395,15 +368,9 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         self.assertIsNone(first["item"]["activated_at"])
         self.assertEqual(first["item"]["version"], 1)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 0)
 
     def test_create_backlog_without_runnable_work_does_not_notify(self):
         notifications = []
@@ -424,12 +391,8 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         self.assertEqual(item["workstream_id"], f"local:{item['work_item_id']}")
         self.assertIsNotNone(item["activated_at"])
         with closing(sqlite3.connect(self.db_path)) as conn:
-            task = conn.execute(
-                "SELECT lifecycle, priority, routing_mode, requested_worker FROM tasks"
-            ).fetchone()
-            wakeup = conn.execute(
-                "SELECT reason, work_item_id, task_id, status FROM wakeups"
-            ).fetchone()
+            task = conn.execute("SELECT lifecycle, priority, routing_mode, requested_worker FROM tasks").fetchone()
+            wakeup = conn.execute("SELECT reason, work_item_id, task_id, status FROM wakeups").fetchone()
         self.assertEqual(task, ("detected", "P1", "manual", "reviewer"))
         self.assertEqual(wakeup[:2], ("manual_operator_request", item["work_item_id"]))
         self.assertIsNotNone(wakeup[2])
@@ -474,9 +437,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
             with self.assertRaisesRegex(RuntimeError, "wakeup failed"):
                 self._create(start=True, idempotency_key="rollback")
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 0)
 
         item = self._create()["item"]
         with self.assertRaises(work_items.WorkItemConflictError):
@@ -514,9 +475,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         self.assertEqual(second, first)
         self.assertEqual(first["item"]["version"], 2)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
 
     def test_start_command_notifies_only_after_transaction_commits(self):
         from robert_agent.work.application import commands as work_items
@@ -566,12 +525,8 @@ class WorkItemCommandTests(WorkItemCommandFixture):
 
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
 
     def test_two_waiting_reply_cycles_keep_one_item_and_one_serial_workstream(self):
         from robert_agent.work.application import commands as work_items
@@ -600,20 +555,14 @@ class WorkItemCommandTests(WorkItemCommandFixture):
 
         self.assertEqual(first_reply["resolved_event_id"], first_question["event_id"])
         self.assertEqual(second_reply["resolved_event_id"], second_question["event_id"])
-        self.assertGreater(
-            second_reply["item"]["version"], first_reply["item"]["version"]
-        )
+        self.assertGreater(second_reply["item"]["version"], first_reply["item"]["version"])
         with closing(sqlite3.connect(self.db_path)) as conn:
             item_count = conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
             task_rows = conn.execute(
                 "SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at, task_id"
             ).fetchall()
-            workstream_count = conn.execute(
-                "SELECT COUNT(*) FROM workstreams"
-            ).fetchone()[0]
-            running_attempts = conn.execute(
-                "SELECT COUNT(*) FROM attempts WHERE status = 'running'"
-            ).fetchone()[0]
+            workstream_count = conn.execute("SELECT COUNT(*) FROM workstreams").fetchone()[0]
+            running_attempts = conn.execute("SELECT COUNT(*) FROM attempts WHERE status = 'running'").fetchone()[0]
             active_tasks = conn.execute(
                 """
                 SELECT COUNT(*) FROM tasks
@@ -703,17 +652,13 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         )
 
         detail = board.get_work_item_detail(self.db_path, item["work_item_id"])
-        self.assertEqual(
-            approved["resolved_event_id"], waiting["attention_signals"][0]["event_id"]
-        )
+        self.assertEqual(approved["resolved_event_id"], waiting["attention_signals"][0]["event_id"])
         self.assertIsNone(approved["task_id"])
         self.assertEqual(detail["column"], "doing")
         self.assertEqual(detail["attention_signals"], [])
         self.assertIsNotNone(detail["activated_at"])
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
     def test_cancel_is_terminal_for_start_and_reply(self):
         from robert_agent.readmodels import board
@@ -721,9 +666,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
 
         for command in ("start", "reply"):
             with self.subTest(command=command):
-                item = self._create(start=command == "reply", idempotency_key=command)[
-                    "item"
-                ]
+                item = self._create(start=command == "reply", idempotency_key=command)["item"]
                 if command == "reply":
                     self._question(item["work_item_id"], 1)
                 current = board.get_work_item_detail(self.db_path, item["work_item_id"])
@@ -769,9 +712,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
                 """,
                 (task_id,),
             )
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,))
 
         with self.assertRaises(work_items.WorkItemConflictError):
             work_items.execute_command(
@@ -783,9 +724,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
                 idempotency_key="cancel-running",
             )
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertIsNone(
-                conn.execute("SELECT canceled_at FROM work_items").fetchone()[0]
-            )
+            self.assertIsNone(conn.execute("SELECT canceled_at FROM work_items").fetchone()[0])
 
     def test_github_issue_and_derived_pr_resolve_to_one_stable_item(self):
         from robert_agent.work.application import commands as work_items

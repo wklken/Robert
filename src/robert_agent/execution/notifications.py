@@ -31,12 +31,8 @@ def update_failure(conn, kind, key, run_now, metadata=None):
                      json_extract(metadata_json,'$.source_key'),
                      json_extract(metadata_json,'$.repo_id'))=?"""
     if metadata is None:
-        conn.execute(
-            f"UPDATE notifications SET status='resolved' WHERE {predicate}", (kind, key)
-        )
-    elif not conn.execute(
-        f"SELECT 1 FROM notifications WHERE {predicate} LIMIT 1", (kind, key)
-    ).fetchone():
+        conn.execute(f"UPDATE notifications SET status='resolved' WHERE {predicate}", (kind, key))
+    elif not conn.execute(f"SELECT 1 FROM notifications WHERE {predicate} LIMIT 1", (kind, key)).fetchone():
         insert(conn, kind, "recorded", run_now, {**metadata, "failure_key": key})
 
 

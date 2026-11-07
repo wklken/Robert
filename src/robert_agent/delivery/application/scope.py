@@ -17,9 +17,7 @@ def _object(value):
     return json.loads(value or "{}")
 
 
-def for_result(
-    conn, task_id, attempt_id, workstream_id, *, observe=True, command_runner=None
-):
+def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, command_runner=None):
     command_runner = command_runner or subprocess.run
     row = conn.execute(
         """
@@ -54,9 +52,7 @@ def for_result(
     ):
         event = _object(payload_json)
         if event.get("source_type") == "pull_request" and event.get("pr_author_login"):
-            authors[f"https://github.com/{row[0]}/pull/{event.get('number')}"] = event[
-                "pr_author_login"
-            ]
+            authors[f"https://github.com/{row[0]}/pull/{event.get('number')}"] = event["pr_author_login"]
     action_scope["pr_authors"] = authors
     attempt_metadata = _object(row[4])
     task_metadata = _object(row[6])
@@ -68,9 +64,7 @@ def for_result(
         )
         if observe:
             try:
-                head, status = supervision_git.observe(
-                    action_scope, runner=command_runner
-                )
+                head, status = supervision_git.observe(action_scope, runner=command_runner)
             except (OSError, subprocess.SubprocessError):
                 action_scope["worktree_status"] = "unavailable"
             else:
@@ -98,9 +92,7 @@ def for_result(
                 if value:
                     action_scope[field] = value
         try:
-            action_scope["worktree_status"] = observe_worktree_status(
-                action_scope, command_runner=command_runner
-            )
+            action_scope["worktree_status"] = observe_worktree_status(action_scope, command_runner=command_runner)
         except OSError:
             action_scope["worktree_status"] = "unavailable"
     existing_pr_head_sha = attempt_metadata.get("existing_pr_head_sha")
@@ -220,11 +212,7 @@ def trusted_action_scope(conn, action):
     if not isinstance(audit, dict) or audit.get("status") != "accepted":
         return None
     scope = audit.get("action_scope")
-    if (
-        isinstance(scope, dict)
-        and row
-        and "supervision_repair" in publication_values.decode_json(row[1])
-    ):
+    if isinstance(scope, dict) and row and "supervision_repair" in publication_values.decode_json(row[1]):
         attempt = publication_values.decode_json(row[2])
         if scope.get("repair_git") != attempt.get("repair_git"):
             return {**scope, "supervision_repair": True, "repair_git": None}

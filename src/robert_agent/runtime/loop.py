@@ -28,9 +28,7 @@ def load_config_scope(config_path, skip_external=False, *, include_config=False)
     storage.init_database(db_path)
     with closing(run_journal.connect(db_path)) as conn:
         repo_ids = [
-            work_repositories.lookup_id(
-                conn, repo["full_name"], fallback=f"repo:{repo['full_name']}"
-            )
+            work_repositories.lookup_id(conn, repo["full_name"], fallback=f"repo:{repo['full_name']}")
             for repo in config["repos"]
         ]
     return (db_path, repo_ids, config) if include_config else (db_path, repo_ids)
@@ -57,9 +55,7 @@ def has_runnable_local_work(
                 matched_repo = work_repositories.lookup_id(conn, repo["full_name"])
                 if matched_repo and (not repo_ids or matched_repo in repo_ids):
                     known = work_queries.load_known_workstreams(conn, matched_repo)
-                    contexts[matched_repo] = synchronization.context_digest(
-                        repo, known, config=config_result
-                    )
+                    contexts[matched_repo] = synchronization.context_digest(repo, known, config=config_result)
         scoped = repo_ids or work_repositories.list_ids(conn)
         when = values.parse_time(now).timestamp() if now is not None else None
         if scan_batches.has_pending(conn, scoped, now=when, contexts=contexts):
@@ -98,9 +94,7 @@ def run_loop(
     started = time.monotonic()
     if max_publish_actions < 0:
         raise ValueError("max_publish_actions must be at least 0")
-    db_path, repo_ids, config = load_config_scope(
-        config_path, skip_external=skip_external, include_config=True
-    )
+    db_path, repo_ids, config = load_config_scope(config_path, skip_external=skip_external, include_config=True)
     cycle_results = []
     stop_reason = "max_cycles"
     publish_actions_used = 0
@@ -141,9 +135,7 @@ def run_loop(
             break
         with closing(run_journal.connect(db_path)) as conn, conn:
             before = progress.snapshot_progress(conn)
-        observation_kwargs = (
-            {"consume_observations": True} if consume_observations else {}
-        )
+        observation_kwargs = {"consume_observations": True} if consume_observations else {}
         result = runner(
             config_path,
             workflow_path=workflow_path,

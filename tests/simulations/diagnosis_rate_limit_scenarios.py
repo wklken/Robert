@@ -116,25 +116,13 @@ def restart_poll(config, *, now=None):
 
 def runner(db):
     with closing(sqlite3.connect(db)) as conn:
-        return supervision_store.get_checkpoint(
-            conn, "diagnostic", "installation", "runner"
-        )["metadata"]
+        return supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
 
 
 def assert_no_effect(db):
     with closing(sqlite3.connect(db)) as conn:
-        assert (
-            conn.execute(
-                "SELECT count(*) FROM supervision_recovery_actions"
-            ).fetchone()[0]
-            == 0
-        )
-        assert (
-            conn.execute(
-                "SELECT count(*) FROM supervision_incidents WHERE status='resolved'"
-            ).fetchone()[0]
-            == 0
-        )
+        assert conn.execute("SELECT count(*) FROM supervision_recovery_actions").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM supervision_incidents WHERE status='resolved'").fetchone()[0] == 0
 
 
 def recovered(root, header="3", *, kind="seconds"):
@@ -142,26 +130,18 @@ def recovered(root, header="3", *, kind="seconds"):
     db = root / "state.db"
     storage.init_database(db)
     if kind == "http_date":
-        header = format_datetime(
-            datetime.now(timezone.utc) + timedelta(seconds=5), usegmt=True
-        )
+        header = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=5), usegmt=True)
     with model_http({"/diagnosis": [(429, header), (200, None)]}) as endpoint:
         config = configure(root, db, endpoint.url + "/diagnosis")
         incident(db, "first")
         try:
             wait(config, "provider_rate_limited")
-            retry_at = datetime.fromisoformat(
-                runner(db)["provider_not_before"]
-            ).timestamp()
+            retry_at = datetime.fromisoformat(runner(db)["provider_not_before"]).timestamp()
             incident(db, "other")
             during_cooldown = (
-                datetime.fromisoformat(runner(db)["provider_not_before"])
-                - timedelta(seconds=1)
+                datetime.fromisoformat(runner(db)["provider_not_before"]) - timedelta(seconds=1)
             ).isoformat()
-            assert (
-                restart_poll(config, now=during_cooldown)["status"]
-                == "provider_cooldown"
-            )
+            assert restart_poll(config, now=during_cooldown)["status"] == "provider_cooldown"
             assert len(endpoint.requests()) == 1
             wait(config, "succeeded")
             calls = endpoint.requests()
@@ -170,9 +150,7 @@ def recovered(root, header="3", *, kind="seconds"):
             if kind == "seconds":
                 assert calls[1]["at"] - calls[0]["at"] >= int(header), calls
             elif kind == "http_date":
-                assert (
-                    calls[1]["wall_at"] >= parsedate_to_datetime(header).timestamp()
-                ), calls
+                assert calls[1]["wall_at"] >= parsedate_to_datetime(header).timestamp(), calls
             else:
                 assert calls[1]["at"] - calls[0]["at"] >= 2, calls
             assert len(runner(db)["hourly_calls"]) == 2 and runner(db)["claim"] is None
@@ -236,38 +214,23 @@ def simultaneous(root):
         model_http(routes) as endpoint,
         worker_runtime(root / "worker", endpoint, tries=2) as runtime,
     ):
-        config = configure(
-            root / "diagnosis", runtime.db, endpoint.url + "/diagnosis", budget=1
-        )
+        config = configure(root / "diagnosis", runtime.db, endpoint.url + "/diagnosis", budget=1)
         incident(runtime.db, "while_worker_waits")
         try:
             runtime.dispatch()
             wait(config, "provider_rate_limited")
             during_cooldown = (
-                datetime.fromisoformat(runner(runtime.db)["provider_not_before"])
-                - timedelta(seconds=1)
+                datetime.fromisoformat(runner(runtime.db)["provider_not_before"]) - timedelta(seconds=1)
             ).isoformat()
-            assert (
-                restart_poll(config, now=during_cooldown)["status"]
-                == "provider_cooldown"
-            )
+            assert restart_poll(config, now=during_cooldown)["status"] == "provider_cooldown"
             runtime.observe()
             runtime.finish()
             assert len(endpoint.requests("/diagnosis")) == 1
-            assert [
-                call["status"]
-                for call in endpoint.requests("/worker/123/model-primary")
-            ] == [429, 200]
+            assert [call["status"] for call in endpoint.requests("/worker/123/model-primary")] == [429, 200]
             with closing(sqlite3.connect(runtime.db)) as conn:
                 assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
-                assert (
-                    conn.execute("SELECT count(*) FROM worker_results").fetchone()[0]
-                    == 1
-                )
-                assert (
-                    conn.execute("SELECT count(*) FROM github_actions").fetchone()[0]
-                    == 0
-                )
+                assert conn.execute("SELECT count(*) FROM worker_results").fetchone()[0] == 1
+                assert conn.execute("SELECT count(*) FROM github_actions").fetchone()[0] == 0
             assert_no_effect(runtime.db)
             return {
                 "scenario": "worker_and_diagnosis_simultaneous_http_429",

@@ -83,12 +83,8 @@ def waiting_task_state(conn, workstream_id):
 
 
 def task_review_input_policy(conn, task_id):
-    row = conn.execute(
-        "SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)
-    ).fetchone()
-    return values.json_object(row[0] if row else None).get(
-        "review_input_policy", "required"
-    )
+    row = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    return values.json_object(row[0] if row else None).get("review_input_policy", "required")
 
 
 def insert_source_and_event(conn, repo_id, event, run_now):
@@ -238,9 +234,7 @@ def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
         ),
     ).fetchone()
     remote_canceled = bool(
-        parent
-        and parent[0] == "canceled"
-        and values.json_object(parent[3]).get("remote_reconciliation")
+        parent and parent[0] == "canceled" and values.json_object(parent[3]).get("remote_reconciliation")
     )
     if (
         not parent
@@ -251,10 +245,7 @@ def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
     ):
         return False
     item = work_items.resolve_work_item_for_workstream(conn, event["workstream_id"])
-    if not item or (
-        item["canceled_at"]
-        and (not remote_canceled or operator_canceled_item(conn, item))
-    ):
+    if not item or (item["canceled_at"] and (not remote_canceled or operator_canceled_item(conn, item))):
         return False
     facts = control_queries.lifecycle_facts(conn, item)
     if (

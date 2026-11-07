@@ -13,12 +13,8 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         second = self.freeze(self.prepare("round-2"))
         self.assertNotEqual(first["worktree_path"], second["worktree_path"])
         self.assertNotEqual(first["head_sha"], second["head_sha"])
-        self.assertEqual(
-            Path(first["worktree_path"], "source.py").read_text(), "value = 2\n"
-        )
-        self.assertEqual(
-            Path(second["worktree_path"], "source.py").read_text(), "value = 3\n"
-        )
+        self.assertEqual(Path(first["worktree_path"], "source.py").read_text(), "value = 2\n")
+        self.assertEqual(Path(second["worktree_path"], "source.py").read_text(), "value = 3\n")
         self.assertEqual(
             self.git(Path(first["worktree_path"]), "rev-parse", "--abbrev-ref", "HEAD"),
             "HEAD",
@@ -111,9 +107,7 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
 
     def test_unresolved_runtime_and_missing_primary_files(self):
         manifest = self.prepare("round-1")
-        runtime = json.loads(
-            Path(manifest["context_dir"], "runtime-info.json").read_text()
-        )
+        runtime = json.loads(Path(manifest["context_dir"], "runtime-info.json").read_text())
         self.assertEqual(runtime["python"]["status"], "UNRESOLVED")
         with self.assertRaises(ValueError):
             review_workspace.freeze_context(manifest)

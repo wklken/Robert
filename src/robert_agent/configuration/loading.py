@@ -25,9 +25,7 @@ _ConfigLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _m
 
 
 def load_config(path):
-    data = yaml.load(
-        Path(path).expanduser().read_text(encoding="utf-8"), Loader=_ConfigLoader
-    )
+    data = yaml.load(Path(path).expanduser().read_text(encoding="utf-8"), Loader=_ConfigLoader)
     if not isinstance(data, dict):
         raise ValueError("config root must be a mapping")
     return data

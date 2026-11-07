@@ -82,9 +82,7 @@ def read_ballot(path, manifest):
         raise ValueError("ballot spec hash mismatch")
     options = {o["id"] for o in manifest["spec"]["options"]}
     choice = value.get("choice_id")
-    if "choice_id" not in value or (
-        choice is not None and (not isinstance(choice, str) or choice not in options)
-    ):
+    if "choice_id" not in value or (choice is not None and (not isinstance(choice, str) or choice not in options)):
         raise ValueError("ballot has unknown choice")
     text(value.get("reason_summary"), "reason_summary", 1500)
     if choice is None or "abstain_reason" in value:
@@ -164,9 +162,7 @@ def prepare_prompt(manifest):
         "Read relevant source/callers/tests when source_worktree is present; collect facts and source references, not a recommendation. "
         "If source is necessary but source_worktree is null, return status needs_code and question explaining the required code. "
         "If a material question/options/constraint is ambiguous return status needs_clarification with a precise question. "
-        "Otherwise write prepared-request.json with this shape:\n"
-        + json.dumps(example, ensure_ascii=False)
-        + "\n"
+        "Otherwise write prepared-request.json with this shape:\n" + json.dumps(example, ensure_ascii=False) + "\n"
     )
 
 
@@ -208,14 +204,11 @@ def synthesis_prompt(manifest, inputs, inputs_hash, records):
         "open_questions": [],
     }
     return (
-        common_prompt(manifest)
-        + f"Read every sealed ballot and the program tally from {inputs}. "
+        common_prompt(manifest) + f"Read every sealed ballot and the program tally from {inputs}. "
         "Explain agreements, disagreements, evidence limitations and unknowns. Do not rewrite choices, reasons or counts. "
         "Your recommendation is separate from the vote outcome; explain any difference. "
         "Do not claim consensus on a tie, invent missing votes, or treat identical/default models as verified independent model identities. "
-        "Write synthesis.json using this shape:\n"
-        + json.dumps(example, ensure_ascii=False)
-        + "\n"
+        "Write synthesis.json using this shape:\n" + json.dumps(example, ensure_ascii=False) + "\n"
     )
 
 
@@ -234,17 +227,13 @@ def render(manifest, records, ballots, tally, synthesis, *, task_id, attempt_id)
         manifest["spec"]["question"],
         "",
     ]
-    lines += [
-        f"- **{o['id']}**：{o['description']}（来源：{o['origin']}）" for o in options
-    ]
+    lines += [f"- **{o['id']}**：{o['description']}（来源：{o['origin']}）" for o in options]
     for field, title in [
         ("criteria", "比较标准"),
         ("constraints", "约束"),
         ("unknowns", "已知未知项"),
     ]:
-        lines += ["", f"### {title}", ""] + [
-            "- " + x for x in manifest["spec"].get(field, [])
-        ]
+        lines += ["", f"### {title}", ""] + ["- " + x for x in manifest["spec"].get(field, [])]
     labels = {
         "majority": "达到全体参与者的严格多数",
         "plurality_only": "唯一领先，未达到严格多数",
@@ -262,11 +251,7 @@ def render(manifest, records, ballots, tally, synthesis, *, task_id, attempt_id)
         "| --- | --- | --- | --- |",
     ]
     for record, ballot in zip(records, ballots):
-        model = (
-            record["model"]
-            if record["model"] != "default"
-            else "CLI 默认（实际模型未验证）"
-        )
+        model = record["model"] if record["model"] != "default" else "CLI 默认（实际模型未验证）"
         lines.append(
             "| "
             + " | ".join(
@@ -288,10 +273,7 @@ def render(manifest, records, ballots, tally, synthesis, *, task_id, attempt_id)
         for field in ("abstain_reason", "tradeoffs", "evidence_refs", "uncertainties"):
             value = ballot.get(field, [])
             if value:
-                lines.append(
-                    f"- {field}: "
-                    + (value if isinstance(value, str) else "；".join(value))
-                )
+                lines.append(f"- {field}: " + (value if isinstance(value, str) else "；".join(value)))
     lines += [
         "",
         "## 主 Agent 汇总",
@@ -309,8 +291,7 @@ def render(manifest, records, ballots, tally, synthesis, *, task_id, attempt_id)
     ]:
         lines += ["", f"### {title}", ""] + ["- " + x for x in synthesis.get(field, [])]
     lines += ["", "## 本轮来源", ""] + [
-        f"- {key}: {value.get('url') or value.get('kind')}"
-        for key, value in manifest["sources"].items()
+        f"- {key}: {value.get('url') or value.get('kind')}" for key, value in manifest["sources"].items()
     ]
     lines += [
         "",

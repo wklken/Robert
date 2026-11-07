@@ -48,9 +48,4 @@ def repository_task_ids(conn, repo_id):
 
 
 def event_is_attached(conn, event_id):
-    return (
-        conn.execute(
-            "SELECT 1 FROM task_events WHERE event_id=? LIMIT 1", (event_id,)
-        ).fetchone()
-        is not None
-    )
+    return conn.execute("SELECT 1 FROM task_events WHERE event_id=? LIMIT 1", (event_id,)).fetchone() is not None

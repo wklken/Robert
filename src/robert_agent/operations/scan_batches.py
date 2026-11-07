@@ -17,9 +17,7 @@ def manage_batches(config_path, *, retry=None, dry_run=False):
         repo_ids = [
             row[0]
             for repo in config["repos"]
-            for row in conn.execute(
-                "SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)
-            )
+            for row in conn.execute("SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],))
         ]
         if retry and not dry_run:
             return scan_batches.retry_batch(config["db_path"], retry, repo_ids)

@@ -62,21 +62,17 @@ class SourceContextTests(unittest.TestCase):
         raw.update(changes)
         return {
             **discover.normalize_events([raw], REPO)[0],
-            "authorization_status": changes.get(
-                "authorization_status", "authorized_trigger"
-            ),
+            "authorization_status": changes.get("authorization_status", "authorized_trigger"),
         }
 
     def persist(self, *events):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             for event in events:
-                source_events.insert_source_and_event(
-                    conn, values.repository_id(REPO["full_name"]), event, NEW
-                )
+                source_events.insert_source_and_event(conn, values.repository_id(REPO["full_name"]), event, NEW)
             return json.loads(
-                conn.execute(
-                    "SELECT payload_json FROM github_events WHERE event_fingerprint='assigned:70'"
-                ).fetchone()[0]
+                conn.execute("SELECT payload_json FROM github_events WHERE event_fingerprint='assigned:70'").fetchone()[
+                    0
+                ]
             )
 
     def test_pre_upgrade_source_cache_is_refetched_even_before_expiry(self):
@@ -112,23 +108,13 @@ class SourceContextTests(unittest.TestCase):
 
     def test_pre_upgrade_scan_batch_is_not_admitted_to_current_context(self):
         legacy_values = [REPO["full_name"], "robot", ["human"], [], [], "github.com"]
-        legacy_digest = hashlib.sha256(
-            json.dumps(legacy_values, sort_keys=True).encode()
-        ).hexdigest()
+        legacy_digest = hashlib.sha256(json.dumps(legacy_values, sort_keys=True).encode()).hexdigest()
         repo_id = values.repository_id(REPO["full_name"])
-        scan_batches.save_batch(
-            self.db, repo_id, legacy_digest, [self.event(body="")], {}, now=100
-        )
+        scan_batches.save_batch(self.db, repo_id, legacy_digest, [self.event(body="")], {}, now=100)
         current = synchronization.context_digest(REPO, [])
-        self.assertIsNone(
-            scan_batches.next_batch(self.db, repo_id, context=current, now=101)
-        )
+        self.assertIsNone(scan_batches.next_batch(self.db, repo_id, context=current, now=101))
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertIsNone(
-                conn.execute("SELECT completed_at FROM github_scan_batches").fetchone()[
-                    0
-                ]
-            )
+            self.assertIsNone(conn.execute("SELECT completed_at FROM github_scan_batches").fetchone()[0])
 
     def test_incomplete_notification_does_not_overwrite_stored_assignment_body(self):
         assignment = self.event()
@@ -137,9 +123,7 @@ class SourceContextTests(unittest.TestCase):
         notification = discover.normalize_events([notification], REPO)[0]
         stored = self.persist(assignment, notification)
         self.assertEqual(stored["body"], BODY)
-        self.assertEqual(
-            stored["actor_login"], "github"
-        )  # Existing authorization policy is unchanged.
+        self.assertEqual(stored["actor_login"], "github")  # Existing authorization policy is unchanged.
 
     def test_missing_observation_marker_survives_repeated_normalization(self):
         raw = {"number": 70, "event_type": "notification", "id": 70}
@@ -174,12 +158,8 @@ class SourceContextTests(unittest.TestCase):
     def test_merged_body_keeps_its_timestamp_across_incomplete_observations(self):
         missing = self.event(source_updated_at=NEW)
         missing.pop("body")
-        middle = self.event(
-            body="Updated scope", source_updated_at="2026-10-30T20:00:00Z"
-        )
-        self.assertEqual(
-            self.persist(self.event(), missing, middle)["body"], "Updated scope"
-        )
+        middle = self.event(body="Updated scope", source_updated_at="2026-10-30T20:00:00Z")
+        self.assertEqual(self.persist(self.event(), missing, middle)["body"], "Updated scope")
 
     def test_legacy_empty_payload_is_unknown_until_a_fresh_body_is_observed(self):
         legacy = self.event(body="", source_updated_at=NEW)
@@ -207,9 +187,7 @@ class SourceContextTests(unittest.TestCase):
 
     def test_api_empty_body_overrides_search_body_with_observed_marker(self):
         def runner(args, **kwargs):
-            return subprocess.CompletedProcess(
-                args, 0, json.dumps({"body": None, "updated_at": NEW})
-            )
+            return subprocess.CompletedProcess(args, 0, json.dumps({"body": None, "updated_at": NEW}))
 
         raw, _ = discover._source_metadata(self.event(), REPO, runner)
         self.assertEqual(raw["body"], "")
@@ -223,9 +201,7 @@ class SourceContextTests(unittest.TestCase):
             self.event(body="Wrong issue", number=71),
         ]:
             with self.subTest(rejected=rejected):
-                self.assertEqual(
-                    discover.merge_event_body(preferred, rejected), preferred
-                )
+                self.assertEqual(discover.merge_event_body(preferred, rejected), preferred)
 
     def test_stored_complete_body_reaches_prompt_when_next_observation_is_incomplete(
         self,
@@ -243,9 +219,7 @@ class SourceContextTests(unittest.TestCase):
         db = fixture.data_dir / "dd.sqlite3"
         storage.init_database(db)
         with closing(sqlite3.connect(db)) as conn, conn:
-            repo_id = work_repositories.upsert_repo(
-                conn, {**REPO, "github_account": "robert-bot"}
-            )
+            repo_id = work_repositories.upsert_repo(conn, {**REPO, "github_account": "robert-bot"})
             source_events.insert_source_and_event(conn, repo_id, assignment, NEW)
         incomplete = dict(assignment)
         incomplete.pop("body")
@@ -277,9 +251,7 @@ class SourceContextTests(unittest.TestCase):
             trusted_trigger_found=True,
             authorization_lookup_complete=True,
         )
-        fixture.fixture_path.write_text(
-            json.dumps({"events": [assignment, notification]})
-        )
+        fixture.fixture_path.write_text(json.dumps({"events": [assignment, notification]}))
         result = run_once.run_once(
             fixture.config_path,
             fixture_path=fixture.fixture_path,
@@ -290,12 +262,8 @@ class SourceContextTests(unittest.TestCase):
         prompt = Path(result["prompt_paths"][0]).read_text()
         self.assertIn(BODY, prompt)
         with closing(sqlite3.connect(fixture.data_dir / "dd.sqlite3")) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
-            payload = json.loads(
-                conn.execute("SELECT payload_json FROM github_events").fetchone()[0]
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            payload = json.loads(conn.execute("SELECT payload_json FROM github_events").fetchone()[0])
         self.assertEqual(payload["actor_login"], "wklken")
         self.assertEqual(payload["event_type"], "assigned")
         self.assertEqual(payload["authorization_status"], "authorized_trigger")

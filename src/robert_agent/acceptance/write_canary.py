@@ -241,9 +241,7 @@ def production_write_canary(
     action_state = _action_state(db_path)
     status = "publish_failed"
     if publish_result.get("ok"):
-        status = (
-            "deduplicated" if publish_result.get("deduplicated_count") else "published"
-        )
+        status = "deduplicated" if publish_result.get("deduplicated_count") else "published"
     return {
         "ok": bool(publish_result.get("ok")),
         "status": status,

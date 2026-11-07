@@ -38,11 +38,7 @@ def _journal_argv(command):
             )
         )
         sensitive = sensitive or arg in {"-u", "--user", "--proxy-user"}
-        hidden = (
-            hide_next
-            or not redact_text(arg)["ok"]
-            or bool(re.search(r"://[^/\s]*@", arg))
-        )
+        hidden = hide_next or not redact_text(arg)["ok"] or bool(re.search(r"://[^/\s]*@", arg))
         result.append("<redacted>" if hidden or (sensitive and "=" in arg) else arg)
         hide_next = sensitive and "=" not in arg
     return result
@@ -128,9 +124,7 @@ def process_identity(pid):
     """Identify a process incarnation, not just a recyclable PID."""
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-        boot = (
-            Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
-        )
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
         return f"{boot}:{stat.rsplit(')', 1)[1].split()[19]}"
     except (OSError, IndexError):
         try:
@@ -147,9 +141,7 @@ def process_identity(pid):
 
 def _write_command_record(path, record):
     # Rename a flushed file so readers never see a partial terminal record.
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, delete=False
-    ) as handle:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as handle:
         temporary_path = Path(handle.name)
         try:
             json.dump(record, handle, ensure_ascii=False, sort_keys=True)
@@ -227,15 +219,9 @@ def run_command_with_heartbeat(
             (attempt_id, task_id),
         ).fetchone():
             raise ValueError("attempt_id does not belong to task_id")
-    output_dir = (
-        Path(output_dir).expanduser()
-        if output_dir
-        else default_output_dir(db_path, task_id)
-    )
+    output_dir = Path(output_dir).expanduser() if output_dir else default_output_dir(db_path, task_id)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_prefix = (
-        f"{safe_filename_part(attempt_id)}.{safe_filename_part(phase)}.{time.time_ns()}"
-    )
+    output_prefix = f"{safe_filename_part(attempt_id)}.{safe_filename_part(phase)}.{time.time_ns()}"
     stdout_path = output_dir / f"{output_prefix}.stdout.log"
     stderr_path = output_dir / f"{output_prefix}.stderr.log"
     record_dir = default_output_dir(db_path, task_id)
@@ -282,9 +268,7 @@ def run_command_with_heartbeat(
         stderr_path.open("rb") as stderr_reader,
     ):
         try:
-            proc = subprocess.Popen(
-                command, cwd=command_cwd, stdout=stdout_file, stderr=stderr_file
-            )
+            proc = subprocess.Popen(command, cwd=command_cwd, stdout=stdout_file, stderr=stderr_file)
         except OSError as exc:
             record.update(
                 status="failed",

@@ -49,22 +49,13 @@ def _finding(text, match, rule):
 
 
 def _synthetic_password(text, match):
-    if (
-        match["name"].lower() != "password"
-        or (match["quoted"] or match["bare"]).lower() != "secret"
-    ):
+    if match["name"].lower() != "password" or (match["quoted"] or match["bare"]).lower() != "secret":
         return False
     # A partial bare match (e.g. secret!suffix) must remain blocked.
-    return bool(
-        match["quoted"]
-        or match.end() == len(text)
-        or text[match.end()] in " \t\r\n&,;`)]}"
-    )
+    return bool(match["quoted"] or match.end() == len(text) or text[match.end()] in " \t\r\n&,;`)]}")
 
 
-LOCAL_PATH = re.compile(
-    r"(?<![\w.-])(?:/Users|/home|/root|/data|/tmp|/var/folders)/[^\s:;,)]+"
-)
+LOCAL_PATH = re.compile(r"(?<![\w.-])(?:/Users|/home|/root|/data|/tmp|/var/folders)/[^\s:;,)]+")
 INTERNAL_IP = re.compile(
     r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"
 )
@@ -80,25 +71,18 @@ def redact_text(text):
             replacements.append(match.span("quoted" if match["quoted"] else "bare"))
         elif (
             value.lower() not in PLACEHOLDER_VALUES
-            and not (
-                match["bare"] and value.startswith(("$", "os.environ", "os.getenv"))
-            )
+            and not (match["bare"] and value.startswith(("$", "os.environ", "os.getenv")))
             and len(value) >= 6
         ):
             findings.append(_finding(text, match, "credential_assignment"))
     for pattern in SECRET_PATTERNS:
-        findings.extend(
-            _finding(text, match, "high_risk_secret")
-            for match in pattern.finditer(text)
-        )
+        findings.extend(_finding(text, match, "high_risk_secret") for match in pattern.finditer(text))
     if findings:
         return {
             "ok": False,
             "status": "blocked_secret",
             "safe_error": "text contains a high-risk secret pattern",
-            "findings": sorted(
-                findings, key=lambda item: (item["line"], item["column"], item["rule"])
-            ),
+            "findings": sorted(findings, key=lambda item: (item["line"], item["column"], item["rule"])),
         }
 
     redacted = text

@@ -75,11 +75,7 @@ def _health(path, pid, *, after=""):
         payload = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    if (
-        payload.get("ok")
-        and payload.get("pid") == pid
-        and payload.get("checked_at", "") > after
-    ):
+    if payload.get("ok") and payload.get("pid") == pid and payload.get("checked_at", "") > after:
         return payload
     return None
 
@@ -157,9 +153,7 @@ def run(root):
             for target in ("daemon", "supervisor"):
                 definition = service_root / f"{target}.conf"
                 definition.write_text(
-                    service.render_supervisord_config(
-                        executable, config_path, service_data, target=target
-                    ),
+                    service.render_supervisord_config(executable, config_path, service_data, target=target),
                     encoding="utf-8",
                 )
                 with (fixture / f"{target}-manager.log").open("wb") as log:
@@ -185,9 +179,7 @@ def run(root):
                 lambda: _running(daemon, env, service.SUPERVISOR_PROGRAM),
                 "daemon RUNNING",
             )
-            web_pid = _wait(
-                lambda: _running(daemon, env, "robert-web"), "fixture web RUNNING"
-            )
+            web_pid = _wait(lambda: _running(daemon, env, "robert-web"), "fixture web RUNNING")
             original_pid = _wait(
                 lambda: _running(observer, env, service.SUPERVISION_PROGRAM),
                 "supervisor RUNNING",
@@ -195,14 +187,10 @@ def run(root):
             capture(daemon_pid)
             capture(web_pid)
             capture(original_pid)
-            before = _wait(
-                lambda: _health(health, original_pid), "initial supervisor heartbeat"
-            )
+            before = _wait(lambda: _health(health, original_pid), "initial supervisor heartbeat")
 
             _expect_ctl(daemon, env, "stop", service.SUPERVISOR_PROGRAM)
-            stopped = _ctl(
-                daemon, env, "status", service.SUPERVISOR_PROGRAM
-            ).stdout.split()
+            stopped = _ctl(daemon, env, "status", service.SUPERVISOR_PROGRAM).stdout.split()
             assert stopped[:2] == [service.SUPERVISOR_PROGRAM, "STOPPED"], stopped
             assert _running(daemon, env, "robert-web") == web_pid
             _wait(
@@ -213,31 +201,20 @@ def run(root):
 
             _expect_ctl(observer, env, "restart", service.SUPERVISION_PROGRAM)
             restarted_pid = _wait(
-                lambda: _running(
-                    observer, env, service.SUPERVISION_PROGRAM, not_pid=original_pid
-                ),
+                lambda: _running(observer, env, service.SUPERVISION_PROGRAM, not_pid=original_pid),
                 "restarted supervisor RUNNING",
             )
             restarted_identity = capture(restarted_pid)
-            restart_health = _wait(
-                lambda: _health(health, restarted_pid), "restarted supervisor heartbeat"
-            )
-            assert (
-                worker_identity.inspect_recorded_identity(restarted_identity)
-                == "alive_same"
-            )
+            restart_health = _wait(lambda: _health(health, restarted_pid), "restarted supervisor heartbeat")
+            assert worker_identity.inspect_recorded_identity(restarted_identity) == "alive_same"
             os.kill(restarted_pid, signal.SIGKILL)
             recovered_pid = _wait(
-                lambda: _running(
-                    observer, env, service.SUPERVISION_PROGRAM, not_pid=restarted_pid
-                ),
+                lambda: _running(observer, env, service.SUPERVISION_PROGRAM, not_pid=restarted_pid),
                 "automatic supervisor restart after SIGKILL",
             )
             capture(recovered_pid)
             _wait(
-                lambda: _health(
-                    health, recovered_pid, after=restart_health["checked_at"]
-                ),
+                lambda: _health(health, recovered_pid, after=restart_health["checked_at"]),
                 "recovered supervisor heartbeat",
             )
             assert _running(daemon, env, "robert-web") == web_pid
@@ -245,16 +222,10 @@ def run(root):
 
             _shutdown(observer, env, observer_manager)
             _shutdown(daemon, env, daemon_manager)
-            assert not list(sockets.iterdir()), (
-                "temporary socket or PID file remains after shutdown"
-            )
+            assert not list(sockets.iterdir()), "temporary socket or PID file remains after shutdown"
             for identity in identities:
-                assert worker_identity.inspect_recorded_identity(identity) == "dead", (
-                    identity
-                )
-                assert not worker_identity.live_process_group(
-                    identity["process_group_id"]
-                ), identity
+                assert worker_identity.inspect_recorded_identity(identity) == "dead", identity
+                assert not worker_identity.live_process_group(identity["process_group_id"]), identity
             for _, manager in managers:
                 assert not worker_identity.live_process_group(manager.pid), manager.pid
         finally:

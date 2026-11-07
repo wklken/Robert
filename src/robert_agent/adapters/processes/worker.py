@@ -101,16 +101,8 @@ def dispatch_worker(
             "worker_launch": launch.metadata(),
         }
 
-    stdout_path = (
-        Path(log_dir) / "stdout.log"
-        if log_dir
-        else prompt_path.parent / f"{attempt_id}.stdout.log"
-    )
-    stderr_path = (
-        Path(log_dir) / "stderr.log"
-        if log_dir
-        else prompt_path.parent / f"{attempt_id}.stderr.log"
-    )
+    stdout_path = Path(log_dir) / "stdout.log" if log_dir else prompt_path.parent / f"{attempt_id}.stdout.log"
+    stderr_path = Path(log_dir) / "stderr.log" if log_dir else prompt_path.parent / f"{attempt_id}.stderr.log"
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     environment = _worker_environment(launch.environment_allowlist)

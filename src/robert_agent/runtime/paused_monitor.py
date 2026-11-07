@@ -47,9 +47,7 @@ def run(config_path):
                 if repo_id is None:
                     continue
                 with conn:
-                    lease = execution_leases.acquire(
-                        conn, repo_id, run_id, now, config.get("lease_ttl_seconds", 540)
-                    )
+                    lease = execution_leases.acquire(conn, repo_id, run_id, now, config.get("lease_ttl_seconds", 540))
                 if not lease["ok"]:
                     continue
                 try:
@@ -82,20 +80,14 @@ def run(config_path):
                                 )
                 except ControlDeadlineExceeded:
                     conn.rollback()
-                    failures.append(
-                        {"repo_id": repo_id, "error_type": "ControlDeadlineExceeded"}
-                    )
+                    failures.append({"repo_id": repo_id, "error_type": "ControlDeadlineExceeded"})
                     raise
                 except Exception as exc:
                     conn.rollback()
-                    failures.append(
-                        {"repo_id": repo_id, "error_type": type(exc).__name__}
-                    )
+                    failures.append({"repo_id": repo_id, "error_type": type(exc).__name__})
                 finally:
                     with conn:
-                        execution_leases.release(
-                            conn, lease["lease_id"], values.utc_now()
-                        )
+                        execution_leases.release(conn, lease["lease_id"], values.utc_now())
         finally:
             with conn:
                 summary.update(supervised_count=supervised, failures=failures)

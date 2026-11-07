@@ -30,9 +30,7 @@ class IsolatedDaemonTests(unittest.TestCase):
         root = Path(fixture.tmp.name)
 
         def git(*args):
-            return subprocess.run(
-                ["git", *args], cwd=root, check=True, capture_output=True, text=True
-            ).stdout.strip()
+            return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
 
         git("init", "-b", "main")
         (root / "example.txt").write_text("isolated acceptance\n")
@@ -50,18 +48,12 @@ class IsolatedDaemonTests(unittest.TestCase):
         git("init", "--bare", str(root / "remote.git"))
         git("remote", "add", "origin", str(root / "remote.git"))
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
             metadata["audit"]["action_scope"]["result_head_sha"] = sha
-            conn.execute(
-                "UPDATE worker_results SET metadata_json=?", (json.dumps(metadata),)
-            )
+            conn.execute("UPDATE worker_results SET metadata_json=?", (json.dumps(metadata),))
             conn.execute("UPDATE repos SET repo_id='repo:x/y' WHERE repo_id='repo'")
             conn.execute("UPDATE workstreams SET repo_id='repo:x/y',active_task_id='t'")
-            execution_store.ensure_subject(
-                conn, "task", "t", "human_request", fixture.now.isoformat()
-            )
+            execution_store.ensure_subject(conn, "task", "t", "human_request", fixture.now.isoformat())
             conn.execute(
                 "INSERT INTO notifications(notification_id,task_id,notification_type,channel,status,created_at) VALUES ('notice','t','isolated','local','recorded',?)",
                 (fixture.now.isoformat(),),
@@ -102,9 +94,7 @@ repos:
             "GH_CONFIG_DIR": str(root / "empty-gh-config"),
             "GH_TOKEN": "",
             "GITHUB_TOKEN": "",
-            "ROBERT_NOTIFICATION_COMMAND": shlex.join(
-                [sys.executable, str(root / "receiver.py")]
-            ),
+            "ROBERT_NOTIFICATION_COMMAND": shlex.join([sys.executable, str(root / "receiver.py")]),
         }
         child = str(TEST_ROOT / "support" / "reliability_daemon_child.py")
         with (root / "daemon.log").open("w") as log:
@@ -121,14 +111,10 @@ repos:
                 process.wait(timeout=10)
 
             self.addCleanup(stop, first)
-            self.assertEqual(
-                first.wait(timeout=30), 73, (root / "daemon.log").read_text()
-            )
+            self.assertEqual(first.wait(timeout=30), 73, (root / "daemon.log").read_text())
             with closing(sqlite3.connect(fixture.db)) as conn, conn:
                 self.assertEqual(
-                    conn.execute("SELECT status FROM publication_intents").fetchone()[
-                        0
-                    ],
+                    conn.execute("SELECT status FROM publication_intents").fetchone()[0],
                     "executing",
                 )
                 # Simulate the lease grace period after confirmed process death.
@@ -146,39 +132,21 @@ repos:
             complete = False
             while time.monotonic() < deadline and second.poll() is None:
                 with closing(sqlite3.connect(fixture.db)) as conn:
-                    complete = (
-                        conn.execute(
-                            "SELECT status FROM publication_intents"
-                        ).fetchone()[0]
-                        == "published"
-                    )
-                    binding = conn.execute(
-                        "SELECT binding_status FROM execution_subjects"
-                    ).fetchone()[0]
+                    complete = conn.execute("SELECT status FROM publication_intents").fetchone()[0] == "published"
+                    binding = conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0]
                 if complete and binding == "terminal":
                     break
                 time.sleep(0.1)
-            self.assertTrue(
-                complete and binding == "terminal", (root / "daemon.log").read_text()
-            )
+            self.assertTrue(complete and binding == "terminal", (root / "daemon.log").read_text())
             second.terminate()
-            self.assertEqual(
-                second.wait(timeout=15), 0, (root / "daemon.log").read_text()
-            )
-        calls = [
-            json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()
-        ]
+            self.assertEqual(second.wait(timeout=15), 0, (root / "daemon.log").read_text())
+        calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
         self.assertEqual(sum(command[:2] == ["git", "push"] for command in calls), 1)
         self.assertIn(sha, git("ls-remote", "origin", "refs/heads/codex/fix"))
-        deliveries = [
-            json.loads(line)
-            for line in (root / "deliveries.jsonl").read_text().splitlines()
-        ]
+        deliveries = [json.loads(line) for line in (root / "deliveries.jsonl").read_text().splitlines()]
         self.assertEqual(len([v for v in deliveries if v["type"] == "isolated"]), 1)
         with closing(sqlite3.connect(fixture.db)) as conn:
             delivery = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM notifications WHERE notification_id='notice'"
-                ).fetchone()[0]
+                conn.execute("SELECT metadata_json FROM notifications WHERE notification_id='notice'").fetchone()[0]
             )["delivery"]
             self.assertEqual(delivery["status"], "sent")

@@ -101,14 +101,10 @@ def process_observation(root):
         "import json,sys; from robert_agent.runtime import supervisor; supervisor.run(json.load(open(sys.argv[1])))",
         str(config_file),
     ]
-    process = subprocess.Popen(
-        command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_for(
-            lambda: query(
-                db, "SELECT incident_id FROM supervision_incidents WHERE status='open'"
-            ),
+            lambda: query(db, "SELECT incident_id FROM supervision_incidents WHERE status='open'"),
             "independent incident",
         )
         wait_for(
@@ -118,16 +114,10 @@ def process_observation(root):
         initial_count = query(db, "SELECT count(*) FROM supervision_incidents")[0][0]
         stamp = read_json(supervision_health.health_path(config)).get("checked_at")
         wait_for(
-            lambda: (
-                read_json(supervision_health.health_path(config)).get("checked_at")
-                != stamp
-            ),
+            lambda: read_json(supervision_health.health_path(config)).get("checked_at") != stamp,
             "second observation",
         )
-        assert (
-            query(db, "SELECT count(*) FROM supervision_incidents")[0][0]
-            == initial_count
-        )
+        assert query(db, "SELECT count(*) FROM supervision_incidents")[0][0] == initial_count
         # A second OS process cannot become the same installation's observer.
         duplicate = subprocess.run(
             [
@@ -140,9 +130,7 @@ def process_observation(root):
             text=True,
             timeout=5,
         )
-        assert json.loads(duplicate.stdout)["status"] == "already_running", (
-            duplicate.stdout
-        )
+        assert json.loads(duplicate.stdout)["status"] == "already_running", duplicate.stdout
         # A real half-second writer collision is visible locally but sends no outage notice.
         stop(process)
         brief_locked = root / "brief-writer.locked"
@@ -157,10 +145,7 @@ def process_observation(root):
         )
         try:
             wait_for(brief_locked.exists, "brief writer acquired")
-            assert (
-                supervision_checks.check(config, record=True)["status"]
-                == "unobservable"
-            )
+            assert supervision_checks.check(config, record=True)["status"] == "unobservable"
             subprocess.run(
                 [
                     sys.executable,
@@ -174,18 +159,12 @@ def process_observation(root):
                 check=True,
                 timeout=5,
             )
-            assert (
-                not supervision_health.health_path(config)
-                .with_name("health-delivery.json")
-                .exists()
-            )
+            assert not supervision_health.health_path(config).with_name("health-delivery.json").exists()
             brief.wait(timeout=3)
         finally:
             stop(brief)
         assert supervision_checks.check(config, record=True)["ok"]
-        process = subprocess.Popen(
-            command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # Hold a real SQLite writer in another process; observation cannot mutate business state.
         locked = root / "writer.locked"
         holder = subprocess.Popen(
@@ -200,19 +179,12 @@ def process_observation(root):
         try:
             wait_for(locked.exists, "writer lock acquired")
             wait_for(
-                lambda: (
-                    read_json(supervision_health.health_path(config)).get("status")
-                    == "unobservable"
-                ),
+                lambda: read_json(supervision_health.health_path(config)).get("status") == "unobservable",
                 "DB degraded health",
             )
             wait_for(
                 lambda: (
-                    read_json(
-                        supervision_health.health_path(config).with_name(
-                            "health-delivery.json"
-                        )
-                    ).get("status")
+                    read_json(supervision_health.health_path(config).with_name("health-delivery.json")).get("status")
                     == "sent"
                 ),
                 "DB-independent notice",
@@ -221,34 +193,21 @@ def process_observation(root):
         finally:
             stop(holder)
         wait_for(
-            lambda: (
-                read_json(supervision_health.health_path(config)).get("status")
-                == "observed"
-            ),
+            lambda: read_json(supervision_health.health_path(config)).get("status") == "observed",
             "observation resumed",
         )
         stop(process)
-        process = subprocess.Popen(
-            command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         previous = read_json(supervision_health.health_path(config)).get("checked_at")
         wait_for(
-            lambda: (
-                read_json(supervision_health.health_path(config)).get("checked_at")
-                != previous
-            ),
+            lambda: read_json(supervision_health.health_path(config)).get("checked_at") != previous,
             "restart observation",
         )
-        assert (
-            query(db, "SELECT count(*) FROM supervision_incidents")[0][0]
-            == initial_count
-        )
+        assert query(db, "SELECT count(*) FROM supervision_incidents")[0][0] == initial_count
         assert not query(db, "SELECT action_id FROM supervision_recovery_actions")
         payloads = [json.loads(line) for line in notices.read_text().splitlines()]
         ids = [row["delivery_id"] for row in payloads]
-        assert len(ids) == len(set(ids)), (
-            "acknowledged notices duplicated across restart"
-        )
+        assert len(ids) == len(set(ids)), "acknowledged notices duplicated across restart"
         return {
             "scenario": "resident_observation_database_outage_restart",
             "passed": True,
@@ -333,16 +292,12 @@ json.dump({'bundle_id':packet['bundle_id'],'bundle_sha256':packet['bundle_sha256
                 assert status in {"running", "completion_pending"}, status
                 return status == "completion_pending"
 
-            wait_for(
-                pending, "reaped diagnosis retained during real SQLite writer lock"
-            )
+            wait_for(pending, "reaped diagnosis retained during real SQLite writer lock")
             writer.rollback()
         outcome = supervision_diagnose.poll(config, now=when)
         assert outcome["status"] == "succeeded", outcome
         with closing(sqlite3.connect(db)) as conn:
-            runner = supervision_store.get_checkpoint(
-                conn, "diagnostic", "installation", "runner"
-            )["metadata"]
+            runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
         assert runner["claim"] is None and len(runner["hourly_calls"]) == 1
         assert not query(db, "SELECT action_id FROM supervision_recovery_actions")
         return {
@@ -453,16 +408,9 @@ finally:
     }, rejected
     assert not calls.exists()
     with closing(sqlite3.connect(db)) as conn:
-        record = supervision_store.get_checkpoint(conn, "diagnosis", large, "analysis")[
-            "metadata"
-        ]
-        assert (
-            record["bundle_bytes"] > record["byte_limit"] == 49152
-            and len(json.dumps(record)) < 512
-        )
-        assert not supervision_store.get_checkpoint(
-            conn, "diagnostic", "installation", "runner"
-        )
+        record = supervision_store.get_checkpoint(conn, "diagnosis", large, "analysis")["metadata"]
+        assert record["bundle_bytes"] > record["byte_limit"] == 49152 and len(json.dumps(record)) < 512
+        assert not supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")
 
     assert cold_poll(when + timedelta(seconds=1))["status"] == "idle"
     with closing(sqlite3.connect(db)) as conn, conn:
@@ -505,9 +453,7 @@ finally:
     }, outcome
     assert calls.read_text().splitlines() == [json.dumps("small")]
     with closing(sqlite3.connect(db)) as conn, conn:
-        runner = supervision_store.get_checkpoint(
-            conn, "diagnostic", "installation", "runner"
-        )["metadata"]
+        runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
         assert runner["claim"] is None and len(runner["hourly_calls"]) == 1
         conn.execute(
             "UPDATE supervision_incidents SET evidence_json='{}',expected_progress_json='{}' WHERE incident_id=?",
@@ -534,9 +480,7 @@ finally:
 
 def main():
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(
-        prefix="robert-supervision-simulation-"
-    ) as directory:
+    with tempfile.TemporaryDirectory(prefix="robert-supervision-simulation-") as directory:
         root = Path(directory)
         from tests.simulations import (
             diagnosis_rate_limit_scenarios,

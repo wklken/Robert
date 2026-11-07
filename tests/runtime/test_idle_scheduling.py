@@ -20,9 +20,7 @@ class IdleSchedulingTests(unittest.TestCase):
             next_live_poll_at=(now + timedelta(seconds=0.4)).isoformat(),
         )
         waits = []
-        daemon._wait_for_next_decision(
-            context, {"decision": "idle"}, now=now, sleeper=waits.append
-        )
+        daemon._wait_for_next_decision(context, {"decision": "idle"}, now=now, sleeper=waits.append)
         self.assertEqual(waits, [0.4])
 
     def fixture(self):
@@ -31,11 +29,7 @@ class IdleSchedulingTests(unittest.TestCase):
         fixture = SchedulerRemediationFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        fixture.config.write_text(
-            fixture.config.read_text().replace(
-                "max_concurrency: 3", "max_concurrency: 1"
-            )
-        )
+        fixture.config.write_text(fixture.config.read_text().replace("max_concurrency: 3", "max_concurrency: 1"))
         now = fixture.now.isoformat()
         with fixture.connect() as conn:
             conn.execute(
@@ -54,14 +48,10 @@ class IdleSchedulingTests(unittest.TestCase):
 
     def test_full_capacity_prepared_work_does_not_create_runs(self):
         fixture = self.fixture()
-        result = loop_engine.run_loop(
-            fixture.config, dry_run=False, skip_external=True, skip_publish=True
-        )
+        result = loop_engine.run_loop(fixture.config, dry_run=False, skip_external=True, skip_publish=True)
         self.assertEqual(result["cycles"], 0)
         with fixture.connect() as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 0)
 
     def test_capacity_gate_preserves_supervision_and_manual_wakeups(self):
         fixture = self.fixture()
@@ -69,9 +59,7 @@ class IdleSchedulingTests(unittest.TestCase):
         self.assertFalse(fixture.runnable(config_result=config))
         fixture.stop_process()
         self.assertTrue(fixture.runnable(config_result=config))
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "alive_same"}
-        ):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "alive_same"}):
             with fixture.connect() as conn:
                 now = fixture.now.isoformat()
                 conn.execute(
@@ -90,11 +78,7 @@ class IdleSchedulingTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('other','example/other','robot','main','/repo','/worktrees')"
             )
-            conn.execute(
-                "UPDATE workstreams SET repo_id='other' WHERE workstream_id='waiting'"
-            )
+            conn.execute("UPDATE workstreams SET repo_id='other' WHERE workstream_id='waiting'")
             self.assertTrue(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/repo", "other"], config_result=config
-                )
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/repo", "other"], config_result=config)
             )

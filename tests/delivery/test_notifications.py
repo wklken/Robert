@@ -19,9 +19,7 @@ class NotificationTests(TemporaryWorkspace):
 
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            row = conn.execute(
-                "SELECT notification_type, status, task_id FROM notifications"
-            ).fetchone()
+            row = conn.execute("SELECT notification_type, status, task_id FROM notifications").fetchone()
         self.assertEqual(row, ("worker_stale", "sent", "task-1"))
 
     def test_notify_command_uses_argv_not_shell(self):

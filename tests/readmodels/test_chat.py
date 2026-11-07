@@ -31,9 +31,7 @@ class ChatStatusTests(SummaryFixture):
         self.assertTrue(payload["ok"])
         self.assertIn("Task task-1", payload["message"])
         self.assertIn("Lifecycle: completed", payload["message"])
-        self.assertIn(
-            "Next action: publish_accepted_github_actions", payload["message"]
-        )
+        self.assertIn("Next action: publish_accepted_github_actions", payload["message"])
         self.assertIn("worker_stderr", payload["message"])
 
     def test_chat_status_formats_run_steps(self):
@@ -115,9 +113,7 @@ class ChatStatusTests(SummaryFixture):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        code, payload = self._run_chat_status(
-            "--db", str(db_path), "task", "missing-task"
-        )
+        code, payload = self._run_chat_status("--db", str(db_path), "task", "missing-task")
 
         self.assertEqual(code, 3)
         self.assertFalse(payload["ok"])

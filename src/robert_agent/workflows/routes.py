@@ -32,9 +32,10 @@ def verification_policy_for(route_id):
 
 def review_input_policy(expected_output, trigger):
     """Select the review contract from controller-owned trigger metadata."""
-    if expected_output not in {"update_existing_pr", "review_comment"} or trigger.get(
-        "task_kind"
-    ) in {"ci_remediation", "merge_conflict_remediation"}:
+    if expected_output not in {"update_existing_pr", "review_comment"} or trigger.get("task_kind") in {
+        "ci_remediation",
+        "merge_conflict_remediation",
+    }:
         return "none"
     if trigger.get("event_type") in {"comment", "manual_operator_request"}:
         return "classify"
@@ -64,10 +65,7 @@ def route_task(task):
         "requirement_analysis",
     }:
         return dict(ROUTES["local-result"])
-    if (
-        task.get("source_type") == "pull_request"
-        and task.get("authorization_status") == "accepted_review_participant"
-    ):
+    if task.get("source_type") == "pull_request" and task.get("authorization_status") == "accepted_review_participant":
         return dict(ROUTES["review-comment"])
     if task.get("source_type") == "pull_request" and (
         task.get("event_type") == "review_request"
@@ -76,9 +74,7 @@ def route_task(task):
         or (
             intent == "review_request"
             and task.get("authorization_status") == "authorized_trigger"
-            and re.search(
-                r"@\S+\s+(?:please\s+)?review\b", task.get("body") or "", re.I
-            )
+            and re.search(r"@\S+\s+(?:please\s+)?review\b", task.get("body") or "", re.I)
         )
     ):
         return dict(ROUTES["review-pr"])

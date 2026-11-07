@@ -29,9 +29,7 @@ class CliTests(unittest.TestCase):
             )
         self.assertEqual(code, 0)
         argv = run.call_args.args[0]
-        self.assertEqual(
-            argv[argv.index("--public-origin") + 1], "https://robert.example.com"
-        )
+        self.assertEqual(argv[argv.index("--public-origin") + 1], "https://robert.example.com")
 
     def test_root_help_lists_public_commands(self):
         output = io.StringIO()

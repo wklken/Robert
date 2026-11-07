@@ -27,9 +27,7 @@ class RetentionFixture(unittest.TestCase):
             conn.execute(
                 "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('repo','example/repo','bot','main','/repo','/worktrees')"
             )
-            daemon_state.start_daemon_run(
-                conn, config_path="/config.yml", owner_id="daemon", now=OLD
-            )
+            daemon_state.start_daemon_run(conn, config_path="/config.yml", owner_id="daemon", now=OLD)
             self.lease = daemon_state.acquire_daemon_lease(
                 conn,
                 resource_key="database",

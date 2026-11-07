@@ -21,9 +21,7 @@ def validate_action(action, scope):
     data = review_publish.payload(action)
     if not isinstance(scope, dict) or not scope.get("vote_publisher"):
         raise ValueError("vote report requires trusted scope and publishing account")
-    if data.get("type") != "comment" or data.get("target_url") != scope.get(
-        "vote_target_url"
-    ):
+    if data.get("type") != "comment" or data.get("target_url") != scope.get("vote_target_url"):
         raise ValueError("vote report target differs from trigger source")
     for field in (
         "vote_round_id",
@@ -57,19 +55,13 @@ def validate_action(action, scope):
         expected_target != data["target_url"]
         or scope.get("repo", "").casefold() != manifest["repo"].casefold()
         or (manifest["source_type"], manifest["number"])
-        not in {
-            (s.get("source_type"), s.get("number")) for s in scope.get("sources", [])
-        }
+        not in {(s.get("source_type"), s.get("number")) for s in scope.get("sources", [])}
     ):
         raise ValueError("vote target is outside trusted source scope")
     vote_workspace.verify_snapshot(manifest)
     body = Path(data["vote_report_path"]).read_text()
     marker = f"<!-- robert-vote round={data['vote_round_id']} -->"
-    if (
-        body != data.get("body")
-        or body.count(marker) != 1
-        or "# 多 Agent 投票报告" not in body
-    ):
+    if body != data.get("body") or body.count(marker) != 1 or "# 多 Agent 投票报告" not in body:
         raise ValueError("vote body or marker differs from registered report")
     return data, manifest, marker
 
@@ -115,11 +107,7 @@ def reconcile(action, scope, run_command):
             for c in comments
         ):
             raise ValueError("malformed comment query response")
-        matches = [
-            c
-            for c in comments
-            if isinstance(c.get("body"), str) and marker in c["body"]
-        ]
+        matches = [c for c in comments if isinstance(c.get("body"), str) and marker in c["body"]]
         if not matches:
             return {
                 "status": "confirmed_absent",
@@ -132,8 +120,7 @@ def reconcile(action, scope, run_command):
         if (
             not comment.get("id")
             or comment.get("body") != data["body"]
-            or comment.get("user", {}).get("login", "").casefold()
-            != scope["vote_publisher"].casefold()
+            or comment.get("user", {}).get("login", "").casefold() != scope["vote_publisher"].casefold()
         ):
             raise ValueError("vote account or body conflict")
         return {
@@ -191,9 +178,7 @@ def publish(action, scope, run_command, scope_guard=None):
         if manifest.get("source_worktree") and manifest["source_type"] == "issue":
             same = (
                 same
-                and vote_workspace.api(
-                    manifest["repo"], "commits/HEAD", run_command=run_command
-                ).get("sha")
+                and vote_workspace.api(manifest["repo"], "commits/HEAD", run_command=run_command).get("sha")
                 == manifest["head_sha"]
             )
     except (ValueError, OSError, TypeError, KeyError, SubprocessError):
@@ -242,8 +227,7 @@ def publish(action, scope, run_command, scope_guard=None):
             not isinstance(response, dict)
             or not response.get("id")
             or response.get("body") != data["body"]
-            or response.get("user", {}).get("login", "").casefold()
-            != scope["vote_publisher"].casefold()
+            or response.get("user", {}).get("login", "").casefold() != scope["vote_publisher"].casefold()
         ):
             raise ValueError("ambiguous vote POST")
     except (ValueError, TypeError):

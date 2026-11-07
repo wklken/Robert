@@ -52,9 +52,7 @@ class PublicationBudgetTests(PublicationBudgetFixture):
                     "not_published",
                     "zzz",
                     json.dumps(
-                        {
-                            "body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"
-                        }
+                        {"body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"}
                     ),
                 ),
             )

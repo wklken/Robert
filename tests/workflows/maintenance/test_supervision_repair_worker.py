@@ -50,9 +50,7 @@ class BrokerProcessTests(unittest.TestCase):
         package = fixture.tree / "robert_agent"
         package.mkdir()
         marker = fixture.root / "host-import-marker"
-        (package / "__init__.py").write_text(
-            f"from pathlib import Path; Path({str(marker)!r}).touch()"
-        )
+        (package / "__init__.py").write_text(f"from pathlib import Path; Path({str(marker)!r}).touch()")
         prompt = fixture.root / "prompt.txt"
         prompt.write_text("fixture")
         profile = supervision_repair_worker.launch_profile(
@@ -70,23 +68,18 @@ class BrokerProcessTests(unittest.TestCase):
         self.assertFalse(marker.exists(), launched)
         self.assertEqual(launched.get("returncode"), 1, launched)
         stderr = Path(launched["stderr_path"]).read_text()
-        self.assertNotIn(
-            "No module named robert_agent.workflows.maintenance.worker", stderr
-        )
+        self.assertNotIn("No module named robert_agent.workflows.maintenance.worker", stderr)
 
     def test_valid_output_uses_existing_result_submission(self):
         fixture = self.fixture(
             "import json,sys\nrequest = json.load(sys.stdin)\n"
-            'assert request["result_transport"] == "stdout_compact_submission"\n'
-            + submission_source()
+            'assert request["result_transport"] == "stdout_compact_submission"\n' + submission_source()
         )
         report = broker_result(self.launch(fixture))
         self.assertTrue(report["ok"], report)
         self.assertEqual(fixture.counts(), (1, 2))
         with closing(sqlite3.connect(fixture.db)) as conn:
-            row = conn.execute(
-                "SELECT task_id,attempt_id,output_type FROM worker_results"
-            ).fetchone()
+            row = conn.execute("SELECT task_id,attempt_id,output_type FROM worker_results").fetchone()
             self.assertEqual(row, (fixture.task, fixture.attempt, "new_pr"))
 
     def test_invalid_and_oversized_output_cannot_reserve_a_result(self):
@@ -100,9 +93,7 @@ class BrokerProcessTests(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 fixture = self.fixture(source)
-                self.assertEqual(
-                    broker_result(self.launch(fixture))["status"], expected
-                )
+                self.assertEqual(broker_result(self.launch(fixture))["status"], expected)
                 self.assertEqual(fixture.counts(), (0, 0))
 
     def sleepy(self, timeout):

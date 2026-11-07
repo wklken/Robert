@@ -42,12 +42,8 @@ class VoteRequestRemediationTests(unittest.TestCase):
         path.write_text(yaml.safe_dump(config))
         self.vote.fixture.cycle([{**self.vote.event(), "body": body, "intent": intent}])
         with vote_store.connect(self.vote.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT route_id FROM tasks").fetchone()[0], "new-pr"
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT route_id FROM tasks").fetchone()[0], "new-pr")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
         task, _ = self.vote.fixture.current()
         self.vote.fixture.finish_task(task)
         config["routes"] = {
@@ -68,13 +64,9 @@ class VoteRequestRemediationTests(unittest.TestCase):
             ]
         )
         with vote_store.connect(self.vote.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM tasks WHERE route_id='new-pr'"
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM tasks WHERE route_id='new-pr'").fetchone()[0],
                 2,
             )
 
@@ -88,45 +80,31 @@ class VoteRequestRemediationTests(unittest.TestCase):
             "@robert-bot fix the vote implementation",
         ]:
             with self.subTest(body=body):
-                self.assertNotEqual(
-                    discover.infer_intent("", body, "comment", "robert-bot"), "vote"
-                )
+                self.assertNotEqual(discover.infer_intent("", body, "comment", "robert-bot"), "vote")
 
     def test_pr1_configured_account_is_required_in_discovery_and_classifier_routing(
         self,
     ):
         body = "@custom-bot 投票 A/B"
-        self.assertEqual(
-            discover.infer_intent("", body, "comment", "custom-bot"), "vote"
-        )
+        self.assertEqual(discover.infer_intent("", body, "comment", "custom-bot"), "vote")
+        self.assertNotEqual(discover.infer_intent("", body, "comment", "robert-bot"), "vote")
         self.assertNotEqual(
-            discover.infer_intent("", body, "comment", "robert-bot"), "vote"
-        )
-        self.assertNotEqual(
-            discover.infer_intent(
-                "", "@robert-bot-other vote A/B", "comment", "robert-bot"
-            ),
+            discover.infer_intent("", "@robert-bot-other vote A/B", "comment", "robert-bot"),
             "vote",
         )
         self.assertEqual(
-            discover._issue_search_to_raw(
-                {"number": 42, "body": body}, "mention", "custom-bot"
-            )["intent"],
+            discover._issue_search_to_raw({"number": 42, "body": body}, "mention", "custom-bot")["intent"],
             "vote",
         )
         from robert_agent.configuration import command as validate_config
 
-        config = validate_config.validate_config(
-            self.vote.fixture.config_path, skip_external=True
-        )
+        config = validate_config.validate_config(self.vote.fixture.config_path, skip_external=True)
         event = {
             **self.vote.event(),
             "body": "@alice choose A or B",
             "mentions_dd": True,
         }
-        route = workflow_routing.effective_route(
-            config, config["repos"][0], event, route_id="vote"
-        )
+        route = workflow_routing.effective_route(config, config["repos"][0], event, route_id="vote")
         self.assertNotIn("native_vote_workers", route)
 
     def test_pr1_polite_fix_and_explanation_requests_do_not_vote_on_a_function_name(
@@ -139,9 +117,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
             "@robert-bot explain why the vote function fails",
         ]:
             with self.subTest(body=body):
-                self.assertNotEqual(
-                    discover.infer_intent("", body, "comment", "robert-bot"), "vote"
-                )
+                self.assertNotEqual(discover.infer_intent("", body, "comment", "robert-bot"), "vote")
 
     def test_pr3_independent_fix_supersedes_waiting_vote_instead_of_orphaning_it(self):
         driver = self.waiting()
@@ -160,9 +136,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
             self.assertEqual(entry["status"], "superseded")
             self.assertEqual(entry["request"]["event"].get("clarifications", []), [])
             self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM tasks WHERE route_id='new-pr' AND lifecycle='queued'"
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM tasks WHERE route_id='new-pr' AND lifecycle='queued'").fetchone()[0],
                 1,
             )
 
@@ -173,12 +147,8 @@ class VoteRequestRemediationTests(unittest.TestCase):
         self.vote.fixture.finish_task(task)
         self.vote.fixture.cycle([event])
         with vote_store.connect(self.vote.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
     def test_pr2_enabling_vote_does_not_replay_a_previously_disabled_request(self):
         path = self.vote.fixture.config_path
@@ -194,12 +164,8 @@ class VoteRequestRemediationTests(unittest.TestCase):
         path.write_text(yaml.safe_dump(config))
         self.vote.fixture.cycle([event])
         with vote_store.connect(self.vote.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0
-            )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
     def test_pr3_waiting_vote_does_not_swallow_an_independent_pr_review_request(self):
         self.vote.issue = False
@@ -229,9 +195,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
             entry = vote_store.session(conn, round_id=driver.round_id)
             self.assertEqual(entry["status"], "waiting_for_user")
             self.assertEqual(entry["request"]["event"].get("clarifications", []), [])
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 1)
 
     def test_pr4_option_comparison_reply_continues_the_waiting_round(self):
         driver = self.waiting()
@@ -247,16 +211,12 @@ class VoteRequestRemediationTests(unittest.TestCase):
             ]
         )
         with vote_store.connect(self.vote.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
         resumed = self.vote.driver()
         self.assertEqual(resumed.round_id, driver.round_id)
         self.assertTrue(resumed.run().is_file())
         with vote_store.connect(self.vote.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
             entry = vote_store.session(conn, round_id=driver.round_id)
             self.assertEqual(len(entry["request"]["event"]["clarifications"]), 1)
 
@@ -280,12 +240,8 @@ class VoteRequestRemediationTests(unittest.TestCase):
         )
         resumed = self.vote.driver()
         self.assertTrue(resumed.run().is_file())
-        self.assertNotEqual(
-            first.manifest["source_worktree"], resumed.manifest["source_worktree"]
-        )
-        self.assertEqual(
-            resumed.manifest["head_sha"], self.vote.fixture.git_fixture.head
-        )
+        self.assertNotEqual(first.manifest["source_worktree"], resumed.manifest["source_worktree"])
+        self.assertEqual(resumed.manifest["head_sha"], self.vote.fixture.git_fixture.head)
         self.assertEqual((original_tree / "source.py").read_text(), original_contents)
         self.assertTrue(vote_workspace.verify_snapshot(resumed.manifest))
 
@@ -330,14 +286,10 @@ class VotePublicationRemediationTests(unittest.TestCase):
             if "comments?" in command[2]:
                 return SimpleNamespace(returncode=0, stdout="[[]]")
             if "/issues/comments/" in command[2]:
-                return SimpleNamespace(
-                    returncode=1, stdout='{"message":"Not Found","status":"404"}'
-                )
+                return SimpleNamespace(returncode=1, stdout='{"message":"Not Found","status":"404"}')
             return SimpleNamespace(returncode=0, stdout=json.dumps(source))
 
-        self.assertEqual(
-            vote_publish.publish(action, scope, transport)["status"], "superseded"
-        )
+        self.assertEqual(vote_publish.publish(action, scope, transport)["status"], "superseded")
 
     def test_pr7_many_adopted_comments_are_read_with_bounded_paginated_queries(self):
         source, adopted, _, action, scope = self.make_report(count=100)

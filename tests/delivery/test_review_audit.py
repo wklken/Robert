@@ -22,9 +22,7 @@ class ReviewAuditTests(WorkerProtocolFixture):
                 {
                     "type": "comment",
                     "target_url": "https://github.com/x/y/pull/1#pullrequestreview-9",
-                    "body": self._dd_comment_body(
-                        "Implemented the valid review point and pushed the branch."
-                    ),
+                    "body": self._dd_comment_body("Implemented the valid review point and pushed the branch."),
                 },
             ],
             consumed_event_fingerprints=["comment:1"],
@@ -78,9 +76,7 @@ class ReviewAuditTests(WorkerProtocolFixture):
             attempt_id="attempt-1",
             output_type="update_existing_pr",
             planned_github_actions=[
-                self._review_response_action(
-                    "Responding before the push is not allowed."
-                ),
+                self._review_response_action("Responding before the push is not allowed."),
                 {
                     "type": "push_existing_pr",
                     "worktree_path": "/repo/.worktrees/dd-123",
@@ -272,9 +268,7 @@ class ReviewAuditTests(WorkerProtocolFixture):
                 {
                     "type": "comment",
                     "target_url": "https://github.com/x/y/pull/1#pullrequestreview-9",
-                    "body": self._dd_comment_body(
-                        "The review report has no blocking items; no code change is needed."
-                    ),
+                    "body": self._dd_comment_body("The review report has no blocking items; no code change is needed."),
                 }
             ],
             consumed_event_fingerprints=["review:9"],
@@ -515,9 +509,7 @@ class ReviewAuditTests(WorkerProtocolFixture):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
-            planned_github_actions=[
-                {"action": "push_existing_pr", "url": "https://github.com/x/y/pull/1"}
-            ],
+            planned_github_actions=[{"action": "push_existing_pr", "url": "https://github.com/x/y/pull/1"}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="updated existing pr",

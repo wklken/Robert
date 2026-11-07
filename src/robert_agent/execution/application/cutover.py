@@ -41,17 +41,10 @@ def inspect(conn, db_path):
         """,
         (result_contract.CONTRACT_ID,),
     ):
-        if (
-            json.loads(metadata or "{}").get("result_contract")
-            == result_contract.CONTRACT_ID
-        ):
+        if json.loads(metadata or "{}").get("result_contract") == result_contract.CONTRACT_ID:
             continue
-        if status in {"running", "stale"} or (
-            status == "prepared" and lifecycle in {"queued", "running"}
-        ):
-            blockers.append(
-                {"kind": "legacy_" + status, "task_id": task, "attempt_id": attempt}
-            )
+        if status in {"running", "stale"} or (status == "prepared" and lifecycle in {"queued", "running"}):
+            blockers.append({"kind": "legacy_" + status, "task_id": task, "attempt_id": attempt})
     # Build unresolved ID sets once. Correlated EXISTS would rescan all historical
     # workstreams/actions for every legacy result on databases without matching indexes.
     for result, task in conn.execute(
@@ -68,9 +61,7 @@ def inspect(conn, db_path):
         """,
         (result_contract.CONTRACT_ID,),
     ):
-        blockers.append(
-            {"kind": "legacy_unresolved_result", "task_id": task, "result_id": result}
-        )
+        blockers.append({"kind": "legacy_unresolved_result", "task_id": task, "result_id": result})
     root = result_spool.directory(db_path)
     for path in sorted(root.glob("*.json")):
         try:
@@ -82,8 +73,7 @@ def inspect(conn, db_path):
             blockers.append({"kind": "legacy_or_invalid_spool", "path": str(path)})
     # Rejected old formats are preserved under this extension by the replay reader.
     blockers.extend(
-        {"kind": "unreconciled_invalid_spool", "path": str(path)}
-        for path in sorted(root.glob("*.invalid"))
+        {"kind": "unreconciled_invalid_spool", "path": str(path)} for path in sorted(root.glob("*.invalid"))
     )
     # Quarantined tasks cannot run, consume results or publish. Their evidence
     # remains intact, but it must not prevent unrelated tasks from proceeding.
@@ -101,9 +91,7 @@ def check(db_path):
     if not path.exists():
         return {"ok": True, "status": "ready", "blockers": []}
     try:
-        with closing(
-            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
-        ) as conn:
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
             return inspect(conn, path)
     except (sqlite3.Error, ValueError, OSError, TypeError):
         return {
@@ -142,9 +130,7 @@ def _prepare(db_path, *, now=None, isolated_only=False):
     checked = {"blockers": []} if isolated_only else check(db_path)
     if not Path(db_path).exists():
         return {"ok": True, "status": "ready", "blockers": []}
-    task_ids = {
-        item["task_id"] for item in checked.get("blockers", []) if item.get("task_id")
-    }
+    task_ids = {item["task_id"] for item in checked.get("blockers", []) if item.get("task_id")}
     # Isolation prevents admission and result consumption, but exit observation
     # must continue until every recorded process has released its capacity.
     with closing(sqlite3.connect(db_path, timeout=5)) as reader:
@@ -163,8 +149,7 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                 conn.row_factory = sqlite3.Row
                 snapshots = list(
                     conn.execute(
-                        "SELECT a.* FROM attempts a WHERE task_id=? AND "
-                        + supervise.occupied_attempt_sql(),
+                        "SELECT a.* FROM attempts a WHERE task_id=? AND " + supervise.occupied_attempt_sql(),
                         (task_id,),
                     )
                 )
@@ -178,27 +163,17 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                 native_exit = native_rounds.observe_exit(conn, task_id)
                 with conn:
                     conn.execute("BEGIN IMMEDIATE")
-                    task = conn.execute(
-                        "SELECT * FROM tasks WHERE task_id=?", (task_id,)
-                    ).fetchone()
+                    task = conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
                     if not task:
                         continue
                     isolated = (
-                        json.loads(task["metadata_json"] or "{}")
-                        .get("execution_attention", {})
-                        .get("reason_code")
+                        json.loads(task["metadata_json"] or "{}").get("execution_attention", {}).get("reason_code")
                         == "result_contract_cutover"
                     )
                     if not isolated:
-                        if (
-                            task["lifecycle"] in {"canceled", "ignored"}
-                            or isolated_only
-                        ):
+                        if task["lifecycle"] in {"canceled", "ignored"} or isolated_only:
                             continue
-                        if not any(
-                            item.get("task_id") == task_id
-                            for item in inspect(conn, db_path)["blockers"]
-                        ):
+                        if not any(item.get("task_id") == task_id for item in inspect(conn, db_path)["blockers"]):
                             continue
                     attention = {
                         "reason_code": "result_contract_cutover",
@@ -210,18 +185,10 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                             "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.execution_attention',json(?)),updated_at=? WHERE task_id=?",
                             (json.dumps(attention), now, task_id),
                         )
-                        if task["task_kind"] == "human_request" and task[
-                            "lifecycle"
-                        ] not in {"completed", "failed"}:
-                            execution_store.ensure_subject(
-                                conn, "task", task_id, "human_request", now
-                            )
-                            execution_store.mark_binding_attention(
-                                conn, "task", task_id, now
-                            )
-                    current_native = native_rounds.release_observed_slots(
-                        conn, task_id, native_exit
-                    )
+                        if task["task_kind"] == "human_request" and task["lifecycle"] not in {"completed", "failed"}:
+                            execution_store.ensure_subject(conn, "task", task_id, "human_request", now)
+                            execution_store.mark_binding_attention(conn, "task", task_id, now)
+                    current_native = native_rounds.release_observed_slots(conn, task_id, native_exit)
                     if not current_native or not native_exit["all_stopped"]:
                         stopped = []
                     for attempt in stopped:
@@ -265,25 +232,18 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                             json.dumps(attention),
                         ),
                     )
-                    item = work_items.resolve_work_item_for_workstream(
-                        conn, task["workstream_id"]
-                    )
+                    item = work_items.resolve_work_item_for_workstream(conn, task["workstream_id"])
                     if item:
                         work_items.record_system_event(
                             conn,
                             item["work_item_id"],
                             event_type="operator_decision_required",
                             idempotency_key="result-contract-cutover:" + task_id,
-                            body="Automatic execution stopped: incompatible worker result. "
-                            + RECOVERY,
+                            body="Automatic execution stopped: incompatible worker result. " + RECOVERY,
                             metadata={
                                 "kind": "result_contract_cutover",
                                 "task_id": task_id,
                             },
                             now=now,
                         )
-    return (
-        {"ok": True, "status": "isolated_processes_observed"}
-        if isolated_only
-        else check(db_path)
-    )
+    return {"ok": True, "status": "isolated_processes_observed"} if isolated_only else check(db_path)

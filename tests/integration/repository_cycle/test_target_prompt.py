@@ -12,11 +12,7 @@ class TargetPromptTests(unittest.TestCase):
     refresh = context_tests.AttemptContextFixture.refresh
 
     def targets(self, prompt):
-        return [
-            line[2:]
-            for line in prompt.splitlines()
-            if line.startswith("- https://github.com/")
-        ]
+        return [line[2:] for line in prompt.splitlines() if line.startswith("- https://github.com/")]
 
     def test_initial_refresh_and_resume_prompts_expose_bound_targets(self):
         self.assertEqual(
@@ -48,6 +44,4 @@ class TargetPromptTests(unittest.TestCase):
             values.utc_now(),
             {"summary": "retry"},
         )
-        self.assertEqual(
-            self.targets(Path(resumed["prompt_path"]).read_text()), expected
-        )
+        self.assertEqual(self.targets(Path(resumed["prompt_path"]).read_text()), expected)

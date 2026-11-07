@@ -105,11 +105,7 @@ def prepare_detected_local_tasks(
         from robert_agent.workflows.maintenance import repair as supervision_repair
 
         maintenance = supervision_store.repair_task(conn, task_id)
-        forced_route = (
-            supervision_repair.preparation_route(conn, task_id, config_result, repo)
-            if maintenance
-            else None
-        )
+        forced_route = supervision_repair.preparation_route(conn, task_id, config_result, repo) if maintenance else None
         normalized = {
             "origin_type": "web",
             "intent": "bug_fix"
@@ -120,9 +116,7 @@ def prepare_detected_local_tasks(
             "body": description,
         }
         route_result = (
-            workflow_routing.effective_route(
-                config_result, repo, normalized, route_id=forced_route
-            )
+            workflow_routing.effective_route(config_result, repo, normalized, route_id=forced_route)
             if not maintenance or forced_route
             else None
         )
@@ -132,9 +126,7 @@ def prepare_detected_local_tasks(
                 or route_result["expected_output"] != supervision_repair.OUTPUT_TYPE
                 or not route_result["needs_worktree"]
                 or route_result.get("workspace_mode", "new_branch") != "new_branch"
-                or not set(supervision_repair.ACTIONS).issubset(
-                    route_result["allowed_github_actions"]
-                )
+                or not set(supervision_repair.ACTIONS).issubset(route_result["allowed_github_actions"])
             ):
                 work_application_lifecycle.finalize_failed_task(
                     conn,
@@ -169,9 +161,7 @@ def prepare_detected_local_tasks(
             worktree_result = (
                 supervision_git.prepare(repo, task_id, data_dir, dry_run=dry_run)
                 if maintenance
-                else assigned_workspace.prepare_worktree(
-                    repo, worktree_event, route_result, dry_run
-                )
+                else assigned_workspace.prepare_worktree(repo, worktree_event, route_result, dry_run)
             )
         except ControlDeadlineExceeded:
             raise
@@ -199,12 +189,9 @@ def prepare_detected_local_tasks(
             )
             continue
         skill_status = route_result.get("skill_status") or {"runnable": True}
-        if not skill_status["runnable"] or (
-            worktree_result and not worktree_result.get("ok", True)
-        ):
+        if not skill_status["runnable"] or (worktree_result and not worktree_result.get("ok", True)):
             reason = (
-                "missing required route skills: "
-                + ", ".join(skill_status["missing_required"])
+                "missing required route skills: " + ", ".join(skill_status["missing_required"])
                 if not skill_status["runnable"]
                 else worktree_result["status"]
             )
@@ -213,9 +200,7 @@ def prepare_detected_local_tasks(
                 "UPDATE tasks SET route_id = ?, expected_output = ? WHERE task_id = ?",
                 (route_result["route_id"], route_result["expected_output"], task_id),
             )
-            work_application_lifecycle.finalize_failed_task(
-                conn, task_id, workstream_id, run_now, {"status": reason}
-            )
+            work_application_lifecycle.finalize_failed_task(conn, task_id, workstream_id, run_now, {"status": reason})
             work_items.record_system_event(
                 conn,
                 work_item_id,
@@ -244,9 +229,7 @@ def prepare_detected_local_tasks(
             encoding="utf-8",
         )
         prompt_path = prompt_dir / f"{attempt_id}.prompt.md"
-        runtime_context = attempt_context.runtime_context(
-            db_path, repo, worktree_result
-        )
+        runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
         runtime_context.update(
             {
                 "origin_type": "web",
@@ -260,16 +243,13 @@ def prepare_detected_local_tasks(
                     if event["event_type"] in {"operator_question", "agent_question"}
                 ],
                 "prior_result_summaries": [
-                    event["body"]
-                    for event in local_events
-                    if event["event_type"] in {"result_recorded", "completed"}
+                    event["body"] for event in local_events if event["event_type"] in {"result_recorded", "completed"}
                 ],
                 "operator_reply": next(
                     (
                         event["body"]
                         for event in reversed(local_events)
-                        if event["event_type"]
-                        in {"user_response", "approved", "changes_requested"}
+                        if event["event_type"] in {"user_response", "approved", "changes_requested"}
                     ),
                     "",
                 ),
@@ -281,9 +261,7 @@ def prepare_detected_local_tasks(
                     "task_id": task_id,
                     "attempt_id": attempt_id,
                     "workstream_id": workstream_id,
-                    "review_input_policy": route.review_input_policy(
-                        route_result["expected_output"], normalized
-                    ),
+                    "review_input_policy": route.review_input_policy(route_result["expected_output"], normalized),
                 },
                 route_result,
                 local_events,
@@ -294,9 +272,7 @@ def prepare_detected_local_tasks(
         preparation.upsert_route_decision(conn, task_id, route_result, run_now)
         task_metadata = values.json_object(task_metadata_json)
         task_metadata["local_source_reference"] = source_reference
-        task_metadata["review_input_policy"] = route.review_input_policy(
-            route_result["expected_output"], normalized
-        )
+        task_metadata["review_input_policy"] = route.review_input_policy(route_result["expected_output"], normalized)
         conn.execute(
             """
             UPDATE tasks
@@ -344,12 +320,8 @@ def prepare_detected_local_tasks(
                 ),
             ),
         )
-        preparation.insert_file_artifact(
-            conn, task_id, attempt_id, "task_context", context_path, run_now
-        )
-        preparation.insert_file_artifact(
-            conn, task_id, attempt_id, "prompt", prompt_path, run_now
-        )
+        preparation.insert_file_artifact(conn, task_id, attempt_id, "task_context", context_path, run_now)
+        preparation.insert_file_artifact(conn, task_id, attempt_id, "prompt", prompt_path, run_now)
         conn.execute(
             """
             UPDATE wakeups
@@ -424,12 +396,8 @@ def prepare_github_operator_tasks(
             seen = set()
             while context_task and context_task not in seen and not events:
                 seen.add(context_task)
-                events = work_queries.task_related_events(
-                    conn, context_task, include_consumed=True
-                )
-                parent = conn.execute(
-                    "SELECT parent_task_id FROM tasks WHERE task_id=?", (context_task,)
-                ).fetchone()
+                events = work_queries.task_related_events(conn, context_task, include_consumed=True)
+                parent = conn.execute("SELECT parent_task_id FROM tasks WHERE task_id=?", (context_task,)).fetchone()
                 context_task = parent[0] if parent else None
             # Notification trust is derived from the current configuration,
             # never from a persisted boolean set by an earlier scanner.
@@ -444,45 +412,30 @@ def prepare_github_operator_tasks(
                                 and event.get("assignment_actor_login") in trusted
                             )
                             or (
-                                event.get("requested_reviewer")
-                                == repo["github_account"]
+                                event.get("requested_reviewer") == repo["github_account"]
                                 and event.get("requester_login") in trusted
                             )
-                            or (
-                                event.get("mentions_dd")
-                                and event.get("actor_login") in trusted
-                            )
+                            or (event.get("mentions_dd") and event.get("actor_login") in trusted)
                         )
                     )
             authorized = [
                 event
                 for event in events
-                if authorize.authorize_event(event, repo, known_workstreams=set())[
-                    "authorization_status"
-                ]
+                if authorize.authorize_event(event, repo, known_workstreams=set())["authorization_status"]
                 in {"authorized_trigger", "accepted_context"}
             ]
             parent_row = conn.execute(
                 "SELECT task_kind,metadata_json FROM tasks WHERE task_id=?",
                 (current["parent_task_id"],),
             ).fetchone()
-            parent_episode = (
-                values.json_object(parent_row[1]).get("remediation_episode_id")
-                if parent_row
-                else None
-            )
-            episode = (
-                remediation.load_episode(conn, parent_episode)
-                if parent_episode
-                else None
-            )
+            parent_episode = values.json_object(parent_row[1]).get("remediation_episode_id") if parent_row else None
+            episode = remediation.load_episode(conn, parent_episode) if parent_episode else None
             operator_episode_reply = bool(
                 parent_row
                 and parent_row[0] in {"ci_remediation", "merge_conflict_remediation"}
                 and episode
                 and episode["status"] == "exhausted"
-                and episode.get("metadata", {}).get("last_transition_reason")
-                == "worker_waiting_for_user"
+                and episode.get("metadata", {}).get("last_transition_reason") == "worker_waiting_for_user"
             )
             if operator_episode_reply and not authorized:
                 # The local operator command is the fresh authority. Preserve the
@@ -504,9 +457,7 @@ def prepare_github_operator_tasks(
                         current["work_item_id"],
                         event_type="execution_failed",
                         idempotency_key="github-operator-failed:" + task_id,
-                        body="GitHub operator request stopped: "
-                        + reason
-                        + ". Inspect the source and retry execution.",
+                        body="GitHub operator request stopped: " + reason + ". Inspect the source and retry execution.",
                         metadata={"task_id": task_id, "reason_code": reason},
                         now=run_now,
                     )
@@ -541,10 +492,7 @@ def prepare_github_operator_tasks(
             trigger = authorized[0]
             for event in [trigger, *(item for item in events if item is not trigger)]:
                 updated = dict(event)
-                if (
-                    event["source_type"] == current["source_type"]
-                    and event["number"] == current["number"]
-                ):
+                if event["source_type"] == current["source_type"] and event["number"] == current["number"]:
                     updated.update(
                         title=source.get("title", event.get("title", "")),
                         source_updated_at=source.get("updated_at"),
@@ -559,18 +507,14 @@ def prepare_github_operator_tasks(
                 refreshed.append(updated)
             refreshed[0]["operator_responses"] = operator_responses
             if operator_episode_reply:
-                response = (
-                    operator_responses[-1] if operator_responses else {"body": ""}
-                )
+                response = operator_responses[-1] if operator_responses else {"body": ""}
                 refreshed[0] = {
                     **refreshed[0],
                     "task_kind": "human_request",
                     "actor_kind": "operator",
                     "event_type": "manual_operator_request",
                     "body": response["body"],
-                    "intent": discover.infer_intent(
-                        None, response["body"], "manual_operator_request"
-                    ),
+                    "intent": discover.infer_intent(None, response["body"], "manual_operator_request"),
                     "metadata": {},
                     "operator_responses": operator_responses,
                 }
@@ -584,14 +528,10 @@ def prepare_github_operator_tasks(
                 route_id = None
             elif route_id in {None, "waiting-for-user"}:
                 route_id = "classification-result"
-            route_result = workflow_routing.effective_route(
-                config_result, repo, event, route_id=route_id
-            )
+            route_result = workflow_routing.effective_route(config_result, repo, event, route_id=route_id)
             conn.commit()
             try:
-                worktree_result = assigned_workspace.prepare_worktree(
-                    repo, event, route_result, dry_run
-                )
+                worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
             except ControlDeadlineExceeded:
                 raise
             except (
@@ -646,18 +586,14 @@ def prepare_github_operator_tasks(
             prompt_paths.append(str(info["prompt_path"]))
 
 
-def _record_retrigger_preparation_failure(
-    conn, wakeup_id, task_id, workstream_id, exc, now
-):
+def _record_retrigger_preparation_failure(conn, wakeup_id, task_id, workstream_id, exc, now):
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     row = conn.execute(
         "SELECT metadata_json FROM wakeups WHERE wakeup_id=? AND status='pending'",
         (wakeup_id,),
     ).fetchone()
-    if not row or not execution_ownership.parent_allows_child(
-        conn, task_id, retrigger_wakeup_id=wakeup_id
-    ):
+    if not row or not execution_ownership.parent_allows_child(conn, task_id, retrigger_wakeup_id=wakeup_id):
         return
     metadata = values.json_object(row[0])
     failure = retry_policy.failure_state(
@@ -757,17 +693,13 @@ def prepare_github_retrigger_tasks(
         )
         saved_review = native_rounds.session(conn, task_id=parent_task_id)
         if saved_review:
-            if not workflow_routing.native_request_allowed(
-                saved_review, repo, config_result
-            ):
+            if not workflow_routing.native_request_allowed(saved_review, repo, config_result):
                 _record_retrigger_preparation_failure(
                     conn,
                     wakeup_id,
                     parent_task_id,
                     workstream_id,
-                    ValueError(
-                        "invalid configuration: current native request policy rejected"
-                    ),
+                    ValueError("invalid configuration: current native request policy rejected"),
                     run_now,
                 )
                 continue
@@ -779,15 +711,11 @@ def prepare_github_retrigger_tasks(
             )
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-            worktree_result = assigned_workspace.prepare_worktree(
-                repo, task_event, route_result, dry_run
-            )
+            worktree_result = assigned_workspace.prepare_worktree(repo, task_event, route_result, dry_run)
         except ControlDeadlineExceeded:
             raise
         except (OSError, subprocess.SubprocessError) as exc:
-            _record_retrigger_preparation_failure(
-                conn, wakeup_id, parent_task_id, workstream_id, exc, run_now
-            )
+            _record_retrigger_preparation_failure(conn, wakeup_id, parent_task_id, workstream_id, exc, run_now)
             continue
         stream = {
             "workstream_id": workstream_id,
@@ -874,9 +802,7 @@ def prepare_queued_reviews(
                 (values.github_event_id(entry["trigger_fingerprint"]),),
             ).fetchone()
         ):
-            round_store.update(
-                conn, round_id, status="canceled", error="trigger_already_processed"
-            )
+            round_store.update(conn, round_id, status="canceled", error="trigger_already_processed")
             continue
         if conn.execute(
             f"""SELECT 1 FROM {table} WHERE workstream_id=?

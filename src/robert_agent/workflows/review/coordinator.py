@@ -77,13 +77,8 @@ class Coordinator(StageCoordinator):
                 if pr.get("state") != "open":
                     raise StageSuperseded("PR is closed")
                 expected_author = self.request["event"].get("pr_author_login", "")
-                if (
-                    pr.get("user", {}).get("login", "").casefold()
-                    != expected_author.casefold()
-                ):
-                    raise ValueError(
-                        "PR author does not match the authorized review request"
-                    )
+                if pr.get("user", {}).get("login", "").casefold() != expected_author.casefold():
+                    raise ValueError("PR author does not match the authorized review request")
                 try:
                     self.manifest = review_workspace.prepare_snapshot(
                         repo["repo_root"],
@@ -112,9 +107,7 @@ class Coordinator(StageCoordinator):
             self.save_manifest()
         review_workspace.verify_snapshot(self.manifest)
         if not self.manifest.get("frozen"):
-            prompt = self.prompt(
-                "prepare-prompt.md", review_files.build_prepare_prompt(self.manifest)
-            )
+            prompt = self.prompt("prepare-prompt.md", review_files.build_prepare_prompt(self.manifest))
 
             def validate(output, model):
                 summary = review_files.safe_path(output / "context-summary.md", output)
@@ -147,21 +140,15 @@ class Coordinator(StageCoordinator):
                     "source_index_sha256": store.digest(index),
                 }
 
-            result = self.run_phase(
-                "prepare", self.request["workers"][0], prompt, validate
-            )
+            result = self.run_phase("prepare", self.request["workers"][0], prompt, validate)
             for kind, name in [
                 ("context_summary", "context-summary.md"),
                 ("source_index", "source-index.json"),
             ]:
-                shutil.copyfile(
-                    result[kind + "_path"], Path(self.manifest["context_dir"]) / name
-                )
+                shutil.copyfile(result[kind + "_path"], Path(self.manifest["context_dir"]) / name)
             self.manifest = review_workspace.freeze_context(self.manifest)
             self.save_manifest()
-        if not same_revision(
-            self.manifest, self.fetch_pr(repo["full_name"], self.session["pr_number"])
-        ):
+        if not same_revision(self.manifest, self.fetch_pr(repo["full_name"], self.session["pr_number"])):
             raise StageSuperseded("PR head/base changed after context preparation")
 
     def review(self):
@@ -173,10 +160,7 @@ class Coordinator(StageCoordinator):
                 result = review_files.read_result(result_path, self.manifest)
                 report_path = review_files.safe_path(output / "report.md", output)
                 report = review_files.render_individual(result, worker["name"], model)
-                if (
-                    report_path.exists()
-                    and report_path.read_text(encoding="utf-8") != report
-                ):
+                if report_path.exists() and report_path.read_text(encoding="utf-8") != report:
                     raise ValueError("derived review report changed")
                 report_path.write_text(report, encoding="utf-8")
                 return {
@@ -188,9 +172,7 @@ class Coordinator(StageCoordinator):
                 }
 
             try:
-                return self.run_phase(
-                    "review", worker, self.manifest["prompt_path"], validate
-                ), None
+                return self.run_phase("review", worker, self.manifest["prompt_path"], validate), None
             except StageStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
@@ -228,9 +210,7 @@ class Coordinator(StageCoordinator):
             validate,
             input_hash=inputs["sha256"],
         )
-        evaluation = review_files.read_evaluation(
-            result["evaluation_path"], self.manifest, records
-        )
+        evaluation = review_files.read_evaluation(result["evaluation_path"], self.manifest, records)
         body = review_files.render_merged(self.manifest, records, evaluation)
         body += f"\n<!-- robert-review round={self.round_id} -->\n"
         redacted = redaction.redact_text(body)
@@ -292,9 +272,7 @@ class Coordinator(StageCoordinator):
         if not recorded.get("ok"):
             if recorded.get("status") == "failed_validation":
                 raise ReviewSubmissionRejected(recorded)
-            raise RuntimeError(
-                "review result was rejected: " + recorded.get("status", "unknown")
-            )
+            raise RuntimeError("review result was rejected: " + recorded.get("status", "unknown"))
         with store.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.submission_validation') WHERE attempt_id=?",
@@ -316,11 +294,7 @@ class Coordinator(StageCoordinator):
                         (json.dumps(exc.diagnostic), self.attempt_id),
                     )
                 if isinstance(exc, StageStopped):
-                    status = (
-                        "canceled"
-                        if not attempt_is_active(conn, self.task_id, self.attempt_id)
-                        else "attention"
-                    )
+                    status = "canceled" if not attempt_is_active(conn, self.task_id, self.attempt_id) else "attention"
                 store.update(conn, self.round_id, status=status, error=str(exc))
             with store.connect(self.db_path) as conn:
                 terminate_children(conn, self.task_id, store=store)

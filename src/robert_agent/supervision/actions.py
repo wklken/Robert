@@ -74,10 +74,7 @@ def _action_payload_digest(metadata):
 def _authoritative_config(conn, config):
     config = config or {}
     config_path = config.get("config_path")
-    if (
-        not config_path
-        or (config.get("supervision") or {}).get("mode") != "recover_known"
-    ):
+    if not config_path or (config.get("supervision") or {}).get("mode") != "recover_known":
         # Explicit local observe/off gates also serve paused consumers.
         return config
     try:
@@ -85,18 +82,10 @@ def _authoritative_config(conn, config):
 
         current = validate_config(config_path, skip_external=True)
         main_path = next(
-            (
-                row[2]
-                for row in conn.execute("PRAGMA database_list")
-                if row[1] == "main"
-            ),
+            (row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"),
             "",
         )
-        if (
-            current["ok"]
-            and main_path
-            and Path(current["db_path"]).resolve() == Path(main_path).resolve()
-        ):
+        if current["ok"] and main_path and Path(current["db_path"]).resolve() == Path(main_path).resolve():
             return current
     except (OSError, RuntimeError, ValueError):
         pass
@@ -108,9 +97,7 @@ def _policy(config, repo, kind):
     recovery = settings.get("recovery") or {}
     allowed = recovery.get("allowed_actions", ())
     repositories = recovery.get("repositories", ())
-    configured = next(
-        (item for item in config.get("repos", ()) if item["full_name"] == repo), None
-    )
+    configured = next((item for item in config.get("repos", ()) if item["full_name"] == repo), None)
     if (
         settings.get("mode") != "recover_known"
         or not config.get("daemon", {}).get("enabled", True)
@@ -177,9 +164,7 @@ def _target(conn, task, kind, target_id, now, generation):
             or not _due(now, handoff.get("next_retry_at"))
         ):
             return None
-        if conn.execute(
-            "SELECT 1 FROM tasks WHERE parent_task_id=? LIMIT 1", (task_id,)
-        ).fetchone():
+        if conn.execute("SELECT 1 FROM tasks WHERE parent_task_id=? LIMIT 1", (task_id,)).fetchone():
             return None
         events = [
             row[0]
@@ -221,9 +206,7 @@ def _target(conn, task, kind, target_id, now, generation):
         ):
             return None
         return {"attempt_id": target_id, "spool_fingerprint": generation}
-    if attempt["status"] != "completed" or (
-        type(attempt["pid"]) is int and not attempt["stopped_at"]
-    ):
+    if attempt["status"] != "completed" or (type(attempt["pid"]) is int and not attempt["stopped_at"]):
         return None
     result = _one(
         conn,
@@ -258,9 +241,7 @@ def _target(conn, task, kind, target_id, now, generation):
           AND a.action_id=? AND a.task_id=? AND a.result_id=?""",
         (now, target_id, task_id, result["result_id"]),
     )
-    if not action or (kind == "publication_reconcile") != (
-        action["status"] == "executing"
-    ):
+    if not action or (kind == "publication_reconcile") != (action["status"] == "executing"):
         return None
     state = json.loads(action["metadata_json"]).get("publish") or {}
     return {
@@ -276,9 +257,7 @@ def _target(conn, task, kind, target_id, now, generation):
 
 
 def _generation(task, target):
-    return _digest(
-        [task["task_id"], task["lineage_key"], task["repo"], task["lifecycle"], target]
-    )
+    return _digest([task["task_id"], task["lineage_key"], task["repo"], task["lifecycle"], target])
 
 
 def _candidate(observation):
@@ -326,9 +305,7 @@ def _budget_block(conn, lineage, stage):
     return None
 
 
-def _reserve(
-    conn, task, kind, target_id, target, policy, now, *, expected=None, rule=None
-):
+def _reserve(conn, task, kind, target_id, target, policy, now, *, expected=None, rule=None):
     lineage, stage, task_id = task["lineage_key"], STAGES[kind], task["task_id"]
     blocked = _budget_block(conn, lineage, stage)
     if blocked:
@@ -403,9 +380,7 @@ def plan(conn, *, observations, now, config, limit=8):
         if not task or task["lineage_key"] != observation["lineage_key"]:
             continue
         policy = _policy(config, task["repo"], kind)
-        target = (
-            _target(conn, task, kind, target_id, now, generation) if policy else None
-        )
+        target = _target(conn, task, kind, target_id, now, generation) if policy else None
         if not target:
             continue
         action, reason = _reserve(
@@ -427,9 +402,7 @@ def plan(conn, *, observations, now, config, limit=8):
 
 
 def _budget_notice(conn, task, kind, now):
-    identifier = (
-        "supervision-budget-" + _digest([task["lineage_key"], STAGES[kind]])[:24]
-    )
+    identifier = "supervision-budget-" + _digest([task["lineage_key"], STAGES[kind]])[:24]
     _notice(conn, identifier, task["task_id"], "recovery_budget_exhausted", now)
 
 
@@ -492,9 +465,7 @@ def blocks_consumer(conn, *, task_id, kind, target_id, now, config, native_retry
     return False
 
 
-def begin(
-    conn, *, task_id, kind, target_id, now, config, generation=None, native_retry=False
-):
+def begin(conn, *, task_id, kind, target_id, now, config, generation=None, native_retry=False):
     """Claim after original gates and within the consumer's existing domain lock.
 
     The caller commits this claim before external I/O. The legacy verdict carries
@@ -592,11 +563,7 @@ def _fenced(conn, claim, config, now):
         return None, None
     task = _task(conn, row["scope_id"])
     config = _authoritative_config(conn, config)
-    if (
-        not task
-        or config is None
-        or _policy(config, task["repo"], row["action_kind"]) != row["policy_version"]
-    ):
+    if not task or config is None or _policy(config, task["repo"], row["action_kind"]) != row["policy_version"]:
         return None, None
     return row, task
 
@@ -646,18 +613,10 @@ def publication_current(conn, claim, *, config, now):
     return bool(
         actual
         and actual["submission_fingerprint"] == facts["submission_fingerprint"]
-        and _action_payload_digest(actual["metadata_json"])
-        == facts["action_payload_digest"]
-        and _digest(json.loads(actual["audited_scope"] or "null"))
-        == facts["audited_scope_digest"]
-        and (
-            not facts["publication_id"]
-            or actual["publication_id"] == facts["publication_id"]
-        )
-        and (
-            not facts["request_fingerprint"]
-            or actual["request_fingerprint"] == facts["request_fingerprint"]
-        )
+        and _action_payload_digest(actual["metadata_json"]) == facts["action_payload_digest"]
+        and _digest(json.loads(actual["audited_scope"] or "null")) == facts["audited_scope_digest"]
+        and (not facts["publication_id"] or actual["publication_id"] == facts["publication_id"])
+        and (not facts["request_fingerprint"] or actual["request_fingerprint"] == facts["request_fingerprint"])
     )
 
 
@@ -669,9 +628,7 @@ def _safe_receipt(receipt):
 
 def finish(conn, claim, *, outcome, receipt, now):
     """Persist the domain receipt under the same fence. Return False for stale writers."""
-    if outcome not in {"observing", "failed", "rejected", "unknown"} or not isinstance(
-        receipt, dict
-    ):
+    if outcome not in {"observing", "failed", "rejected", "unknown"} or not isinstance(receipt, dict):
         raise ValueError("invalid recovery outcome or receipt")
     row = _one(
         conn,
@@ -689,9 +646,7 @@ def finish(conn, claim, *, outcome, receipt, now):
             outcome,
             _safe_receipt(receipt),
             now,
-            _after(now, RECHECK_SECONDS)
-            if outcome in {"observing", "unknown"}
-            else None,
+            _after(now, RECHECK_SECONDS) if outcome in {"observing", "unknown"} else None,
             outcome,
             row["action_id"],
             row["status"],
@@ -763,15 +718,9 @@ def _verified(conn, action):
                 facts.get("submission_fingerprint"),
             ),
         ).fetchone()
-        return (
-            {"result_id": target_id, "audit_status": "accepted", "occurred_at": row[0]}
-            if row
-            else None
-        )
+        return {"result_id": target_id, "audit_status": "accepted", "occurred_at": row[0]} if row else None
     if kind == "handoff_resume":
-        child = (json.loads(task["metadata_json"]).get("pending_handoff") or {}).get(
-            "child_task_id"
-        )
+        child = (json.loads(task["metadata_json"]).get("pending_handoff") or {}).get("child_task_id")
         if not child:
             return None
         row = conn.execute(
@@ -806,14 +755,8 @@ def _verified_publication(conn, action, facts):
         not row
         or row["audit_status"] != "accepted"
         or row["submission_fingerprint"] != facts["submission_fingerprint"]
-        or (
-            facts.get("publication_id")
-            and facts["publication_id"] != row["publication_id"]
-        )
-        or (
-            facts.get("request_fingerprint")
-            and facts["request_fingerprint"] != row["request_fingerprint"]
-        )
+        or (facts.get("publication_id") and facts["publication_id"] != row["publication_id"])
+        or (facts.get("request_fingerprint") and facts["request_fingerprint"] != row["request_fingerprint"])
     ):
         return None
     evidence = json.loads(row["remote_evidence_json"])
@@ -828,11 +771,7 @@ def _verified_publication(conn, action, facts):
             "effect": "confirmed_absent",
         }
     receipt = (json.loads(row["metadata_json"]).get("publish") or {}).get("receipt")
-    if (
-        row["publish_status"] != "published"
-        or not isinstance(receipt, dict)
-        or not row["audited_scope"]
-    ):
+    if row["publish_status"] != "published" or not isinstance(receipt, dict) or not row["audited_scope"]:
         return None
     from robert_agent.supervision.receipts import matches
 
@@ -885,9 +824,7 @@ def _unapplied_audit(conn, action, now):
 
 def verify(conn, *, observations, now, limit=32):
     """Advance due action records from independently read domain evidence."""
-    del (
-        observations
-    )  # A sampled absence or a model conclusion never verifies a recovery.
+    del observations  # A sampled absence or a model conclusion never verifies a recovery.
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     due = _read(
@@ -930,9 +867,7 @@ def verify(conn, *, observations, now, limit=32):
         deadline = (
             action["claim_expires_at"]
             if state == "applying"
-            else _after(
-                action["finished_at"] or action["created_at"], ACTION_TIMEOUT_SECONDS
-            )
+            else _after(action["finished_at"] or action["created_at"], ACTION_TIMEOUT_SECONDS)
         )
         if state in {"requested", "applying", "observing"} and _due(now, deadline):
             if state == "requested":

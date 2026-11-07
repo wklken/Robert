@@ -83,9 +83,7 @@ def _controlled_checkout(workspace_dir):
     )
     commands.append(_run(["git", "clone", "--bare", str(source), str(bare)]))
     commands.append(_run(["git", "clone", str(bare), str(checkout)]))
-    commands.append(
-        _run(["git", "remote", "rename", "origin", "upstream"], cwd=checkout)
-    )
+    commands.append(_run(["git", "remote", "rename", "origin", "upstream"], cwd=checkout))
     worktree_root = checkout / ".worktrees"
     worktree_root.mkdir(parents=True, exist_ok=True)
     return {
@@ -111,9 +109,7 @@ time.sleep(30)
 
 
 def _config(source_config_path, workspace_dir, checkout, worker):
-    source_config = validate_config.validate_config(
-        source_config_path, skip_external=True
-    )
+    source_config = validate_config.validate_config(source_config_path, skip_external=True)
     if not source_config["ok"]:
         return source_config
     repo = source_config["repos"][0]
@@ -290,9 +286,7 @@ def _terminate_worker(dispatch_result):
     return {"status": "signalled", "pid": pid}
 
 
-def live_worktree_acceptance(
-    config_path, workspace_dir=None, workflow_path=DEFAULT_WORKFLOW
-):
+def live_worktree_acceptance(config_path, workspace_dir=None, workflow_path=DEFAULT_WORKFLOW):
     workspace = _workspace_dir(workspace_dir)
     checkout = _controlled_checkout(workspace)
     worker = _mock_worker(workspace)
@@ -326,9 +320,7 @@ def live_worktree_acceptance(
     worktree_path = Path(evidence.get("worktree_path") or "")
     branch_name = evidence.get("branch_name") or ""
     git_branch = _git_branch(worktree_path) if worktree_path.exists() else ""
-    in_worktree_list = _worktree_list_contains_branch(
-        checkout["repo_root"], branch_name
-    )
+    in_worktree_list = _worktree_list_contains_branch(checkout["repo_root"], branch_name)
     ok = (
         evidence.get("route_id") == "new-pr"
         and evidence.get("attempt_status") == "running"

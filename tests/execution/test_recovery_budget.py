@@ -47,8 +47,6 @@ class RecoveryBudgetTests(unittest.TestCase):
                 "attention",
             )
             self.assertEqual(
-                execution_store.get_binding(c, "task", "task:test")[
-                    "recovery_attempts"
-                ],
+                execution_store.get_binding(c, "task", "task:test")["recovery_attempts"],
                 0,
             )

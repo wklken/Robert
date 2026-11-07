@@ -71,9 +71,7 @@ def _observation(
         "evidence": evidence,
         "expected_progress": expected,
         "next_check_at": (next_at or now + timedelta(seconds=poll)).isoformat(),
-        "progress_token": _digest(progress if progress is not None else positive)
-        if progress or positive
-        else None,
+        "progress_token": _digest(progress if progress is not None else positive) if progress or positive else None,
         "eligible_since": eligible_since,
     }
     if progress_at:
@@ -108,20 +106,12 @@ def _eligible(
     checkpoint = facts.get("checkpoints", {}).get(rule, {})
     key = _digest(generation)
     start = timestamp(checkpoint.get("eligible_since"))
-    if (
-        start is None
-        or start > now
-        or checkpoint.get("evidence", {}).get("eligibility_key") != key
-    ):
+    if start is None or start > now or checkpoint.get("evidence", {}).get("eligibility_key") != key:
         start = now
     classification = "expected_wait"
     opportunity = timestamp(consumer)
     if _old_enough(now, start, stall):
-        classification = (
-            "confirmed"
-            if confirm and opportunity and start < opportunity <= now
-            else "suspect"
-        )
+        classification = "confirmed" if confirm and opportunity and start < opportunity <= now else "suspect"
     return emit(
         classification,
         reason,
@@ -133,10 +123,7 @@ def _eligible(
 
 
 def _stage_wait(facts, consumer):
-    if (
-        facts.get("lifecycle") == "waiting_for_user"
-        or facts.get("stream_lifecycle") == "waiting_for_user"
-    ):
+    if facts.get("lifecycle") == "waiting_for_user" or facts.get("stream_lifecycle") == "waiting_for_user":
         return "waiting_for_user"
     if facts.get("source_closed") or facts.get("canceled"):
         return "request_no_longer_active"
@@ -173,33 +160,21 @@ def _worker(facts, emit, now, grace):
         if lifecycle in TERMINAL_TASKS:
             if not _old_enough(now, facts.get("task_updated_at"), grace):
                 return emit("expected_wait", "worker_cleanup_grace", evidence, expect)
-            return emit(
-                "confirmed", "terminal_task_worker_still_alive", evidence, expect
-            )
+            return emit("confirmed", "terminal_task_worker_still_alive", evidence, expect)
         return emit("healthy", "worker_identity_verified", evidence, expect)
     if process == "group_alive":
         return emit("expected_wait", "worker_group_still_alive", evidence, expect)
     if process == "dead" and status in RUNNING_ATTEMPTS:
         if facts.get("result_id") or facts.get("spool_status") == "saved":
-            return emit(
-                "expected_wait", "worker_exit_with_durable_result", evidence, expect
-            )
+            return emit("expected_wait", "worker_exit_with_durable_result", evidence, expect)
         if facts.get("spool_status") != "missing":
-            return emit(
-                "unobservable", "worker_result_spool_unverified", evidence, expect
-            )
+            return emit("unobservable", "worker_result_spool_unverified", evidence, expect)
         # A worker can exit just before normal supervision classifies it.
         anchor = facts.get("heartbeat_at") or facts.get("started_at")
         if not _old_enough(now, anchor, grace):
-            return emit(
-                "suspect", "worker_exit_pending_reconciliation", evidence, expect
-            )
+            return emit("suspect", "worker_exit_pending_reconciliation", evidence, expect)
         return emit("confirmed", "worker_exited_without_result", evidence, expect)
-    if (
-        status in RUNNING_ATTEMPTS
-        or facts.get("process_recorded")
-        or lifecycle == "running"
-    ):
+    if status in RUNNING_ATTEMPTS or facts.get("process_recorded") or lifecycle == "running":
         return emit("unobservable", "worker_identity_unverified", evidence, expect)
     return None
 
@@ -222,17 +197,11 @@ def _result(facts, emit, now, stall):
         "result_id": result_id,
     }
     wait = _stage_wait(facts, "local")
-    if (
-        facts.get("canceled")
-        or facts.get("source_closed")
-        or facts["lifecycle"] in {"canceled", "ignored"}
-    ):
+    if facts.get("canceled") or facts.get("source_closed") or facts["lifecycle"] in {"canceled", "ignored"}:
         return emit("expected_wait", "request_no_longer_active", evidence, expect)
     if not result_id:
         if spool == "unverified":
-            return emit(
-                "unobservable", "worker_result_spool_unverified", evidence, expect
-            )
+            return emit("unobservable", "worker_result_spool_unverified", evidence, expect)
         if wait:
             return emit("expected_wait", wait, evidence, expect)
         return _eligible(
@@ -276,13 +245,9 @@ def _result(facts, emit, now, stall):
         return emit("unobservable", "result_audit_status_unverified", evidence, expect)
     retry = _future(now, facts.get("audit_retry_at"))
     if retry:
-        return emit(
-            "expected_wait", "result_audit_backoff", evidence, expect, next_at=retry
-        )
+        return emit("expected_wait", "result_audit_backoff", evidence, expect, next_at=retry)
     if wait or facts["lifecycle"] not in ACTIVE_TASKS:
-        return emit(
-            "expected_wait", wait or "request_no_longer_active", evidence, expect
-        )
+        return emit("expected_wait", wait or "request_no_longer_active", evidence, expect)
     return _eligible(
         facts,
         "result_not_consumed",
@@ -323,10 +288,7 @@ def _publication(facts, emit, now, stall):
             expect,
             positive={"result_id": result_id, **facts["publication_receipt"]},
         )
-    if (
-        facts.get("publication_terminal_failure")
-        or facts.get("intent_status") == "attention"
-    ):
+    if facts.get("publication_terminal_failure") or facts.get("intent_status") == "attention":
         return emit(
             "confirmed",
             "publication_requires_attention",
@@ -335,9 +297,7 @@ def _publication(facts, emit, now, stall):
         )
     retry = _future(now, facts.get("publication_retry_at"))
     if retry:
-        return emit(
-            "expected_wait", "publication_backoff", evidence, expect, next_at=retry
-        )
+        return emit("expected_wait", "publication_backoff", evidence, expect, next_at=retry)
     if facts.get("intent_status") == "executing":
         overdue = _old_enough(now, facts.get("intent_started_at"), stall)
         return emit(
@@ -347,14 +307,8 @@ def _publication(facts, emit, now, stall):
             expect,
         )
     wait = _stage_wait(facts, "publish")
-    if (
-        wait
-        or not facts.get("publication_eligible")
-        or facts["lifecycle"] not in ACTIVE_TASKS
-    ):
-        return emit(
-            "expected_wait", wait or "publication_not_eligible", evidence, expect
-        )
+    if wait or not facts.get("publication_eligible") or facts["lifecycle"] not in ACTIVE_TASKS:
+        return emit("expected_wait", wait or "publication_not_eligible", evidence, expect)
     return _eligible(
         facts,
         "publication_stalled",
@@ -377,11 +331,7 @@ def _handoff(facts, emit, now, stall):
     child = facts.get("successor_task_id")
     evidence = {"handoff_status": status, "successor_task_id": child}
     expect = {"kind": "handoff_successor"}
-    if (
-        facts.get("canceled")
-        or facts.get("source_closed")
-        or facts["lifecycle"] in {"canceled", "ignored"}
-    ):
+    if facts.get("canceled") or facts.get("source_closed") or facts["lifecycle"] in {"canceled", "ignored"}:
         return emit("expected_wait", "request_no_longer_active", evidence, expect)
     if status == "completed" and child:
         return emit(
@@ -440,10 +390,7 @@ def _ready(facts, emit, now, stall):
         )
     if facts["lifecycle"] not in ACTIVE_TASKS:
         return None
-    if (
-        facts.get("attempt_status") in RUNNING_ATTEMPTS
-        and facts.get("process_status") == "alive_same"
-    ):
+    if facts.get("attempt_status") in RUNNING_ATTEMPTS and facts.get("process_status") == "alive_same":
         started = facts.get("worker_started_at")
         return emit(
             "healthy",
@@ -460,9 +407,7 @@ def _ready(facts, emit, now, stall):
         return emit("expected_wait", wait, evidence, expect)
     retry = _future(now, facts.get("dispatch_not_before"))
     if retry:
-        return emit(
-            "expected_wait", "attempt_not_before", evidence, expect, next_at=retry
-        )
+        return emit("expected_wait", "attempt_not_before", evidence, expect, next_at=retry)
     if not facts.get("has_prompt") or not facts.get("has_worktree"):
         return emit("unobservable", "attempt_preparation_unverified", evidence, expect)
     return _eligible(
@@ -498,11 +443,7 @@ def _worker_progress(facts, emit, now, stall):
         "command_observation": facts.get("command_observation", "limited"),
     }
     expect = {"kind": "new_worker_milestone", "attempt_id": attempt}
-    if (
-        facts.get("canceled")
-        or facts.get("source_closed")
-        or facts["lifecycle"] in {"canceled", "ignored"}
-    ):
+    if facts.get("canceled") or facts.get("source_closed") or facts["lifecycle"] in {"canceled", "ignored"}:
         return None
     if facts.get("result_id"):
         return emit(
@@ -513,10 +454,7 @@ def _worker_progress(facts, emit, now, stall):
             positive={"result_id": facts["result_id"], "attempt_id": attempt},
             progress_at=facts.get("result_created_at"),
         )
-    if (
-        facts.get("attempt_status") not in RUNNING_ATTEMPTS
-        or facts.get("process_status") != "alive_same"
-    ):
+    if facts.get("attempt_status") not in RUNNING_ATTEMPTS or facts.get("process_status") != "alive_same":
         return None
     milestones = facts.get("milestones") or None
     progress_at = facts.get("milestone_observed_at") if milestones else None
@@ -573,11 +511,7 @@ def _delivery(facts, emit, _now, _stall):
 
 def _execution_failure(facts, emit, now, grace):
     recovery = facts.get("execution_recovery_evidence")
-    if (
-        recovery
-        and not facts.get("canceled")
-        and facts["lifecycle"] in {"completed", "failed"}
-    ):
+    if recovery and not facts.get("canceled") and facts["lifecycle"] in {"completed", "failed"}:
         evidence = {
             "previous_attempt_id": facts.get("attempt_id"),
             "successor_task_id": recovery["successor_task_id"],
@@ -609,16 +543,12 @@ def _execution_failure(facts, emit, now, grace):
         "kind": "execution_progress_after_failure",
         "attempt_id": facts.get("attempt_id"),
     }
-    if facts.get("attempt_failure") == "failed_timeout" and not _old_enough(
-        now, facts.get("finished_at"), grace
-    ):
+    if facts.get("attempt_failure") == "failed_timeout" and not _old_enough(now, facts.get("finished_at"), grace):
         return emit("expected_wait", "worker_recovery_grace", evidence, expect)
     return emit("confirmed", "execution_failed", evidence, expect)
 
 
-def evaluate_task(
-    facts, *, now, poll_seconds=60, stall_seconds=300, worker_grace_seconds=60
-):
+def evaluate_task(facts, *, now, poll_seconds=60, stall_seconds=300, worker_grace_seconds=60):
     now = timestamp(now)
     rules = (
         ("worker_state_mismatch", _worker, worker_grace_seconds),
@@ -725,9 +655,7 @@ def evaluate_admission(facts, *, now, poll_seconds=60, stall_seconds=300):
             },
             progress_at=facts.get("disposition_at"),
         )
-        operator = facts["scope_type"] == "work_item_event" and facts.get(
-            "operator_handoff"
-        )
+        operator = facts["scope_type"] == "work_item_event" and facts.get("operator_handoff")
         if disposition != "linked_pending" and not operator:
             return [owned]
         rule = "handoff_stalled"
@@ -751,9 +679,7 @@ def evaluate_admission(facts, *, now, poll_seconds=60, stall_seconds=300):
                 ),
             ]
         wait = facts.get("wait_reason")
-        if wait or not (
-            facts.get("pending_eligible") or facts.get("operator_handoff_eligible")
-        ):
+        if wait or not (facts.get("pending_eligible") or facts.get("operator_handoff_eligible")):
             return [
                 owned,
                 emit(
@@ -793,11 +719,7 @@ def evaluate_admission(facts, *, now, poll_seconds=60, stall_seconds=300):
             ]
         due = _future(now, facts["due_at"])
         if due:
-            return [
-                emit(
-                    "expected_wait", "admission_deferred", evidence, expect, next_at=due
-                )
-            ]
+            return [emit("expected_wait", "admission_deferred", evidence, expect, next_at=due)]
     elif disposition is not None:
         return [emit("unobservable", "admission_target_unverified", evidence, expect)]
     return [
@@ -807,9 +729,7 @@ def evaluate_admission(facts, *, now, poll_seconds=60, stall_seconds=300):
             emit,
             now,
             stall_seconds,
-            "admission_deferred_consumer_stalled"
-            if disposition
-            else "admission_disposition_missing",
+            "admission_deferred_consumer_stalled" if disposition else "admission_disposition_missing",
             evidence,
             expect,
             [expect, facts.get("consumer"), facts.get("due_at")],
@@ -837,21 +757,13 @@ def evaluate_controller(facts, *, now, poll_seconds=60):
         outcome = ("confirmed", "controller_run_failed")
     elif status == "expired":
         overdue = _old_enough(now, facts.get("lease_expires_at"), poll_seconds)
-        outcome = (
-            ("confirmed", "controller_progress_stalled")
-            if overdue
-            else ("suspect", "controller_lease_expired")
-        )
+        outcome = ("confirmed", "controller_progress_stalled") if overdue else ("suspect", "controller_lease_expired")
         evidence["lease_expires_at"] = facts.get("lease_expires_at")
     elif status in {"fresh", "completed"}:
         outcome = ("healthy", "controller_progress_observed")
     else:
         outcome = ("unobservable", "controller_progress_unverified")
-    positive = (
-        evidence
-        if status == "completed" or (status == "fresh" and facts.get("has_progress"))
-        else None
-    )
+    positive = evidence if status == "completed" or (status == "fresh" and facts.get("has_progress")) else None
     return _observation(
         "controller",
         scope_id,

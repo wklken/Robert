@@ -94,9 +94,7 @@ raise SystemExit(0 if record["ok"] else 1)
 
 
 def _config(source_config_path, workspace_dir, checkout, worker):
-    source_config = validate_config.validate_config(
-        source_config_path, skip_external=True
-    )
+    source_config = validate_config.validate_config(source_config_path, skip_external=True)
     if not source_config["ok"]:
         return source_config
     repo = source_config["repos"][0]
@@ -216,11 +214,7 @@ class _PublishRunner:
         if command[:3] == ["gh", "pr", "list"]:
             return Completed("[]")
         if command[:3] == ["gh", "pr", "create"]:
-            repo = (
-                command[command.index("--repo") + 1]
-                if "--repo" in command
-                else "example/repo"
-            )
+            repo = command[command.index("--repo") + 1] if "--repo" in command else "example/repo"
             return Completed(f"https://github.com/{repo}/pull/42\n")
         return Completed("[]")
 
@@ -315,18 +309,14 @@ def controlled_e2e_acceptance(
         return {
             "ok": False,
             "status": first_run.get("status", "failed_first_run"),
-            "safe_error": first_run.get(
-                "safe_error", "controlled e2e first run failed"
-            ),
+            "safe_error": first_run.get("safe_error", "controlled e2e first run failed"),
             "workspace_dir": str(workspace),
             "config_path": str(config["config_path"]),
             "fixture_path": str(fixture),
             "db_path": str(config["db_path"]),
             "first_run": first_run,
         }
-    worker_result = _wait_for_result(
-        config["db_path"], timeout_seconds, poll_interval_seconds
-    )
+    worker_result = _wait_for_result(config["db_path"], timeout_seconds, poll_interval_seconds)
     if not worker_result:
         return {
             "ok": False,
@@ -373,8 +363,7 @@ def controlled_e2e_acceptance(
             ("push_existing_pr", "accepted", "published"),
             ("open_pr", "accepted", "published"),
         ]
-        and evidence["published_pr_url"]
-        == f"https://github.com/{repo_full_name}/pull/42"
+        and evidence["published_pr_url"] == f"https://github.com/{repo_full_name}/pull/42"
     )
     return {
         "ok": bool(ok),

@@ -12,9 +12,7 @@ class SupervisionBoardTests(unittest.TestCase):
     def test_incident_is_visible_on_affected_item_only(self):
         first = self._create("supervised", start=True)
         second = self._create("unrelated", start=True)
-        task = board.get_work_item_detail(self.db_path, first["work_item_id"])["tasks"][
-            0
-        ]["task_id"]
+        task = board.get_work_item_detail(self.db_path, first["work_item_id"])["tasks"][0]["task_id"]
         with sqlite3.connect(self.db_path) as conn:
             supervision_store.apply_observations(
                 conn,
@@ -33,12 +31,8 @@ class SupervisionBoardTests(unittest.TestCase):
                 "2026-11-06T10:00:00+00:00",
             )
         detail = board.get_work_item_detail(self.db_path, first["work_item_id"])
+        self.assertEqual(detail["supervision_incidents"][0]["reason_code"], "no_progress")
         self.assertEqual(
-            detail["supervision_incidents"][0]["reason_code"], "no_progress"
-        )
-        self.assertEqual(
-            board.get_work_item_detail(self.db_path, second["work_item_id"])[
-                "supervision_incidents"
-            ],
+            board.get_work_item_detail(self.db_path, second["work_item_id"])["supervision_incidents"],
             [],
         )

@@ -48,8 +48,7 @@ def finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
     remediation.record_task_failure(
         conn,
         task_id=task_id,
-        reason=(audit.get("status") if isinstance(audit, dict) else "task_failed")
-        or "task_failed",
+        reason=(audit.get("status") if isinstance(audit, dict) else "task_failed") or "task_failed",
         now=run_now,
     )
     if not (isinstance(audit, dict) and audit.get("status") == "failed_timeout"):
@@ -92,23 +91,16 @@ def finalize_superseded_result(conn, result_id, now):
         "SELECT wr.task_id,t.workstream_id,t.task_kind FROM worker_results wr JOIN tasks t ON t.task_id=wr.task_id WHERE wr.result_id=?",
         (result_id,),
     ).fetchone()
-    if (
-        not row
-        or row[2] != "human_request"
-        or not execution_ownership.claim_task(conn, row[0], now)
-    ):
+    if not row or row[2] != "human_request" or not execution_ownership.claim_task(conn, row[0], now):
         return False
     actions = conn.execute(
         "SELECT publish_status,metadata_json FROM github_actions WHERE result_id=?",
         (result_id,),
     ).fetchall()
-    if not actions or any(
-        status not in {"published", "skipped"} for status, _ in actions
-    ):
+    if not actions or any(status not in {"published", "skipped"} for status, _ in actions):
         return False
     if not any(
-        status == "skipped"
-        and _json_object(encoded).get("publish", {}).get("reason_code") == "superseded"
+        status == "skipped" and _json_object(encoded).get("publish", {}).get("reason_code") == "superseded"
         for status, encoded in actions
     ):
         return False

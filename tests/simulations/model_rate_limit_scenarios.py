@@ -163,9 +163,7 @@ class WorkerRuntime:
                 }
             )
         )
-        planned = run_once.run_once(
-            config_path, fixture_path=discovery, dry_run=True, skip_external=True
-        )
+        planned = run_once.run_once(config_path, fixture_path=discovery, dry_run=True, skip_external=True)
         assert planned["ok"], planned
         with closing(sqlite3.connect(self.db)) as conn, conn:
             attempts = conn.execute("SELECT worktree_path FROM attempts").fetchall()
@@ -174,17 +172,13 @@ class WorkerRuntime:
                 Path(path).mkdir(parents=True)
             # The intake fixture builds ordinary GitHub attempts. Use a local
             # result contract to verify ingestion without external publication.
-            conn.execute(
-                "UPDATE tasks SET expected_output='local_result',route_id='local-result'"
-            )
+            conn.execute("UPDATE tasks SET expected_output='local_result',route_id='local-result'")
             conn.execute(
                 "UPDATE route_decisions SET expected_output='local_result',route_id='local-result',"
                 "allowed_github_actions_json='[]',required_skills_json='[]'"
             )
             now = _now().isoformat()
-            daemon_state.start_daemon_run(
-                conn, config_path=str(config_path), owner_id="model-fixture", now=now
-            )
+            daemon_state.start_daemon_run(conn, config_path=str(config_path), owner_id="model-fixture", now=now)
             lease = daemon_state.acquire_daemon_lease(
                 conn,
                 resource_key="database:" + str(self.db.resolve()),
@@ -226,9 +220,7 @@ class WorkerRuntime:
     def dispatch(self):
         with closing(sqlite3.connect(self.db)) as conn:
             queue = []
-            for (attempt_id,) in conn.execute(
-                "SELECT attempt_id FROM attempts WHERE status='prepared'"
-            ):
+            for (attempt_id,) in conn.execute("SELECT attempt_id FROM attempts WHERE status='prepared'"):
                 current = dispatch_queue.current_dispatch_target(conn, attempt_id)
                 if current:
                     task, tree = current
@@ -269,9 +261,7 @@ class WorkerRuntime:
             )
 
     def observe(self, now=None):
-        observed = supervision_checks.check(
-            self.config, record=True, now=(now or _now()).isoformat()
-        )
+        observed = supervision_checks.check(self.config, record=True, now=(now or _now()).isoformat())
         assert observed["ok"], observed
         return observed["observations"]
 
@@ -311,13 +301,8 @@ def worker_runtime(root, endpoint, *, tasks=1, tries=2):
 def _requests(endpoint, path, expected):
     requests = endpoint.requests(path)
     assert [request["status"] for request in requests] == expected, requests
-    intervals = [
-        later["at"] - earlier["at"] for earlier, later in zip(requests, requests[1:])
-    ]
-    assert all(
-        interval >= int(request["retry_after"])
-        for interval, request in zip(intervals, requests)
-    ), requests
+    intervals = [later["at"] - earlier["at"] for earlier, later in zip(requests, requests[1:])]
+    assert all(interval >= int(request["retry_after"]) for interval, request in zip(intervals, requests)), requests
     return {
         "statuses": expected,
         "retry_intervals_seconds": [round(value, 3) for value in intervals],
@@ -325,16 +310,11 @@ def _requests(endpoint, path, expected):
 
 
 def _progress(observations):
-    return next(
-        item for item in observations if item["rule_id"] == "worker_no_progress"
-    )
+    return next(item for item in observations if item["rule_id"] == "worker_no_progress")
 
 
 def _assert_delivery(runtime, count):
-    assert (
-        query(runtime.db, "SELECT lifecycle FROM tasks ORDER BY task_id")
-        == [("completed",)] * count
-    )
+    assert query(runtime.db, "SELECT lifecycle FROM tasks ORDER BY task_id") == [("completed",)] * count
     assert (
         query(
             runtime.db,
@@ -356,47 +336,31 @@ def _recovers(root, misses):
             first = _progress(runtime.observe(sampled))
             assert first["classification"] == "expected_wait", first
             if misses > 1:
-                initial_heartbeat = query(
-                    runtime.db, "SELECT heartbeat_at FROM attempts"
-                )
+                initial_heartbeat = query(runtime.db, "SELECT heartbeat_at FROM attempts")
                 wait_for(lambda: len(endpoint.requests(path)) == 2, "second HTTP 429")
                 wait_for(
-                    lambda: (
-                        query(runtime.db, "SELECT heartbeat_at FROM attempts")
-                        != initial_heartbeat
-                    ),
+                    lambda: query(runtime.db, "SELECT heartbeat_at FROM attempts") != initial_heartbeat,
                     "heartbeat during rate limit",
                 )
-                suspect = _progress(
-                    runtime.observe(max(_now(), sampled + timedelta(seconds=1)))
-                )
-                assert suspect["classification"] == "suspect" and not suspect.get(
-                    "progress_token"
-                ), suspect
+                suspect = _progress(runtime.observe(max(_now(), sampled + timedelta(seconds=1))))
+                assert suspect["classification"] == "suspect" and not suspect.get("progress_token"), suspect
                 assert suspect["eligible_since"] == first["eligible_since"], suspect
                 runtime.supervise()
-                assert runtime.attempts()[0][2:4] == ("running", PRIMARY), (
-                    runtime.attempts()
-                )
+                assert runtime.attempts()[0][2:4] == ("running", PRIMARY), runtime.attempts()
                 assert runtime.dispatch() == []
             runtime.finish()
             _assert_delivery(runtime, 1)
             complete = _progress(runtime.observe())
-            assert (
-                complete["classification"] == "healthy"
-                and complete["reason_code"] == "worker_result_received"
-            ), complete
-            assert (
-                complete["positive_evidence"]["attempt_id"] == launched["attempt_id"]
-            ), complete
+            assert complete["classification"] == "healthy" and complete["reason_code"] == "worker_result_received", (
+                complete
+            )
+            assert complete["positive_evidence"]["attempt_id"] == launched["attempt_id"], complete
             assert query(
                 runtime.db,
                 "SELECT COUNT(*) FROM supervision_incidents WHERE scope_type='task'",
             ) == [(0,)]
             return {
-                "scenario": "model_429_then_200"
-                if misses == 1
-                else "model_repeated_429_then_200",
+                "scenario": "model_429_then_200" if misses == 1 else "model_repeated_429_then_200",
                 "passed": True,
                 "attempts": 1,
                 "results": 1,
@@ -406,9 +370,7 @@ def _recovers(root, misses):
 
 def _exhausted(root):
     primary, fallback = worker_path(), worker_path(FALLBACK)
-    with model_http(
-        {primary: [(429, RETRY_AFTER)], fallback: [(429, RETRY_AFTER)]}
-    ) as endpoint:
+    with model_http({primary: [(429, RETRY_AFTER)], fallback: [(429, RETRY_AFTER)]}) as endpoint:
         with worker_runtime(root, endpoint) as runtime:
             runtime.dispatch()
             runtime.finish()
@@ -427,15 +389,9 @@ def _exhausted(root):
                 runtime.observe()
                 assert runtime.dispatch() == []
             status = supervision_checks.status(runtime.config)
-            failures = [
-                item
-                for item in status["incidents"]
-                if item["rule_id"] == "execution_failed"
-            ]
+            failures = [item for item in status["incidents"] if item["rule_id"] == "execution_failed"]
             assert len(failures) == 1, status
-            assert query(
-                runtime.db, "SELECT recovery_attempts FROM execution_subjects"
-            ) == [(1,)]
+            assert query(runtime.db, "SELECT recovery_attempts FROM execution_subjects") == [(1,)]
             assert query(runtime.db, "SELECT COUNT(*) FROM worker_results") == [(0,)]
             return {
                 "scenario": "model_429_primary_and_fallback_exhausted",
@@ -452,9 +408,7 @@ def _exhausted(root):
 
 def _concurrent(root):
     paths = [worker_path(number=number) for number in (123, 124)]
-    with model_http(
-        {path: [(429, RETRY_AFTER), (200, None)] for path in paths}
-    ) as endpoint:
+    with model_http({path: [(429, RETRY_AFTER), (200, None)] for path in paths}) as endpoint:
         with worker_runtime(root, endpoint, tasks=2) as runtime:
             assert len(runtime.dispatch()) == 2
             runtime.finish()
@@ -465,9 +419,7 @@ def _concurrent(root):
                 "passed": True,
                 "attempts": 2,
                 "results": 2,
-                "requests": {
-                    path: _requests(endpoint, path, [429, 200]) for path in paths
-                },
+                "requests": {path: _requests(endpoint, path, [429, 200]) for path in paths},
             }
 
 
@@ -476,9 +428,7 @@ def _canceled(root):
     with model_http({path: [(429, "10"), (200, None)]}) as endpoint:
         with worker_runtime(root, endpoint) as runtime:
             task_id, _, _, _, _ = runtime.attempts()[0]
-            [(work_item_id, version)] = query(
-                runtime.db, "SELECT work_item_id,version FROM work_items"
-            )
+            [(work_item_id, version)] = query(runtime.db, "SELECT work_item_id,version FROM work_items")
             (launched,) = runtime.dispatch()
             wait_for(
                 lambda: query(
@@ -488,9 +438,7 @@ def _canceled(root):
                 ),
                 "worker consuming HTTP 429 and starting backoff",
             )
-            context = work_items.CommandContext(
-                "operator", "operator", frozenset({REPO_ID}), frozenset()
-            )
+            context = work_items.CommandContext("operator", "operator", frozenset({REPO_ID}), frozenset())
             canceled = work_items.execute_command(
                 runtime.db,
                 work_item_id,
@@ -504,9 +452,7 @@ def _canceled(root):
             runtime.finish()
             runtime.observe()
             assert runtime.dispatch() == []
-            assert runtime.attempts() == [
-                (task_id, launched["attempt_id"], "canceled", PRIMARY, None)
-            ]
+            assert runtime.attempts() == [(task_id, launched["attempt_id"], "canceled", PRIMARY, None)]
             assert query(runtime.db, "SELECT COUNT(*) FROM worker_results") == [(0,)]
             assert len(runtime.processes) == 1 and runtime.processes[0].returncode < 0
             return {

@@ -83,14 +83,8 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
         end = time.monotonic() + 5
         while time.monotonic() < end:
             with vote_store.connect(self.fixture.db) as conn:
-                runs = [
-                    r
-                    for r in vote_store.runs(conn, self.driver.round_id)
-                    if r["stage"] == "vote"
-                ]
-            if len(runs) == 2 and all(
-                r["status"] == "running" and r["dispatch"].get("pid") for r in runs
-            ):
+                runs = [r for r in vote_store.runs(conn, self.driver.round_id) if r["stage"] == "vote"]
+            if len(runs) == 2 and all(r["status"] == "running" and r["dispatch"].get("pid") for r in runs):
                 return
             time.sleep(0.01)
         self.fail("both real voters were not registered")
@@ -104,9 +98,7 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
                 self.wait_started()
                 with vote_store.connect(self.fixture.db) as conn:
                     self.assertEqual(vote_store.process_pool_status(conn)["in_use"], 2)
-                self.assertEqual(
-                    len({(p / "started").read_text() for _, p in self.started}), 1
-                )
+                self.assertEqual(len({(p / "started").read_text() for _, p in self.started}), 1)
                 self.assertEqual(len({p for _, p in self.started}), 2)
             finally:
                 self.gate.touch()

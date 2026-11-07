@@ -27,9 +27,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -63,19 +61,13 @@ class CyclePublicationTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
+            action_status = conn.execute("SELECT audit_status, publish_status FROM github_actions").fetchone()
             wakeup_status = conn.execute(
                 "SELECT status FROM wakeups WHERE result_id = ?",
                 (record["result_id"],),
             ).fetchone()[0]
-            relationship = conn.execute(
-                "SELECT relationship FROM task_events"
-            ).fetchone()[0]
+            relationship = conn.execute("SELECT relationship FROM task_events").fetchone()[0]
         self.assertEqual(task_lifecycle, "running")
         self.assertEqual(workstream, ("active", task_id))
         self.assertEqual(action_status, ("accepted", "not_published"))
@@ -192,9 +184,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -262,9 +252,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             relationship = conn.execute(
                 "SELECT relationship FROM task_events WHERE task_id = ?",
                 (task_id,),
@@ -282,9 +270,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         from robert_agent.readmodels import board
 
         with closing(sqlite3.connect(db_path)) as conn:
-            item_id, completed_at = conn.execute(
-                "SELECT work_item_id, completed_at FROM work_items"
-            ).fetchone()
+            item_id, completed_at = conn.execute("SELECT work_item_id, completed_at FROM work_items").fetchone()
         self.assertIsNotNone(completed_at)
         self.assertEqual(board.get_work_item_detail(db_path, item_id)["column"], "done")
 
@@ -335,9 +321,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
                 "deduplicated_count": 0,
                 "skipped_count": 0,
                 "failed_count": 1,
-                "failures": [
-                    {"action_id": "action-old", "safe_error": "old PR already exists"}
-                ],
+                "failures": [{"action_id": "action-old", "safe_error": "old PR already exists"}],
             }
 
         try:
@@ -382,9 +366,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         record = result.record_result(
             db_path,
@@ -494,9 +476,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
                         task_id,
                         f"https://github.com/{full_name}/issues/1",
                         now,
-                        json.dumps(
-                            {"body": "[from-codex local repo] hi"}, sort_keys=True
-                        ),
+                        json.dumps({"body": "[from-codex local repo] hi"}, sort_keys=True),
                     ),
                 )
 

@@ -44,12 +44,8 @@ class ControlLaneRecoveryTests(unittest.TestCase):
         if context is not None:
             recorded = {**recorded, "execution_context": context}
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            daemon_state.start_daemon_run(
-                conn, config_path="/config", owner_id="old", now=when
-            )
-            daemon_state.acquire_daemon_lease(
-                conn, resource_key="scope", owner_id="old", ttl_seconds=60, now=when
-            )
+            daemon_state.start_daemon_run(conn, config_path="/config", owner_id="old", now=when)
+            daemon_state.acquire_daemon_lease(conn, resource_key="scope", owner_id="old", ttl_seconds=60, now=when)
             conn.execute(
                 "INSERT INTO github_control_children VALUES ('child','old','scan',?,'running')",
                 (json.dumps(recorded),),
@@ -57,9 +53,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
 
     def state(self):
         with closing(sqlite3.connect(self.db)) as conn:
-            return conn.execute(
-                "SELECT status FROM github_control_children WHERE child_id='child'"
-            ).fetchone()[0]
+            return conn.execute("SELECT status FROM github_control_children WHERE child_id='child'").fetchone()[0]
 
     def test_different_boot_retires_record_without_signaling_any_pid(self):
         self.child()
@@ -71,9 +65,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
                 side_effect=AssertionError("must not signal new boot PID"),
             ),
         ):
-            self.assertTrue(
-                control_lane.recover(self.db, scope_key="scope", current_owner="new")
-            )
+            self.assertTrue(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
         self.assertEqual(self.state(), "stopped")
         with closing(sqlite3.connect(self.db)) as conn:
             evidence = json.loads(
@@ -110,9 +102,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
                 side_effect=AssertionError("unrelated process must not be signaled"),
             ),
         ):
-            self.assertFalse(
-                control_lane.recover(self.db, scope_key="scope", current_owner="new")
-            )
+            self.assertFalse(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
         self.assertIsNone(process.poll())
         self.assertEqual(self.state(), "running")
 
@@ -123,9 +113,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
             "terminate_recorded_identity",
             return_value={"status": "attention"},
         ):
-            self.assertFalse(
-                control_lane.recover(self.db, scope_key="scope", current_owner="new")
-            )
+            self.assertFalse(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertEqual(control_lane.main(["--db", str(self.db), "--list"]), 0)
@@ -142,14 +130,10 @@ class ControlLaneRecoveryTests(unittest.TestCase):
             ),
         ):
             self.assertEqual(
-                control_lane.main(
-                    ["--db", str(self.db), "--acknowledge-stopped", "--id", "child"]
-                ),
+                control_lane.main(["--db", str(self.db), "--acknowledge-stopped", "--id", "child"]),
                 0,
             )
-            self.assertTrue(
-                control_lane.recover(self.db, scope_key="scope", current_owner="new")
-            )
+            self.assertTrue(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
         self.assertEqual(self.state(), "stopped")
         with closing(sqlite3.connect(self.db)) as conn:
             evidence = json.loads(
@@ -166,16 +150,12 @@ class ControlLaneRecoveryTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertNotEqual(
-                control_lane.main(
-                    ["--db", str(self.db), "--acknowledge-stopped", "--id", "child"]
-                ),
+                control_lane.main(["--db", str(self.db), "--acknowledge-stopped", "--id", "child"]),
                 0,
             )
         self.assertEqual(self.state(), "running")
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM daemon_events").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM daemon_events").fetchone()[0], 0)
 
     def test_boot_context_probe_is_bounded_and_unknown_probe_does_not_prove_reboot(
         self,
@@ -211,11 +191,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.db)) as conn:
-            recorded = json.loads(
-                conn.execute(
-                    "SELECT identity_json FROM github_control_children"
-                ).fetchone()[0]
-            )
+            recorded = json.loads(conn.execute("SELECT identity_json FROM github_control_children").fetchone()[0])
         if sys.platform.startswith("linux") or sys.platform == "darwin":
             self.assertIsNotNone(recorded.get("execution_context"))
         self.assertEqual(result["status"], "done")
@@ -225,16 +201,12 @@ class ControlLaneRecoveryTests(unittest.TestCase):
         response = subprocess.CompletedProcess([], 0, token.upper() + "\n", "")
         with (
             mock.patch.object(control_lane.sys, "platform", "darwin"),
-            mock.patch.object(
-                control_lane.subprocess, "run", return_value=response
-            ) as command,
+            mock.patch.object(control_lane.subprocess, "run", return_value=response) as command,
         ):
             context = control_lane._boot_context()
         self.assertEqual(context["boot_id"], token)
         self.assertEqual(context["boot_source"], "macos_boot_session_uuid")
-        self.assertEqual(
-            command.call_args.args[0], ["sysctl", "-n", "kern.bootsessionuuid"]
-        )
+        self.assertEqual(command.call_args.args[0], ["sysctl", "-n", "kern.bootsessionuuid"])
         self.assertFalse(
             control_lane._different_boot(
                 {"execution_context": OLD_BOOT},

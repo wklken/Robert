@@ -45,11 +45,7 @@ def publish_ready_actions(
         execution_store.require_migrated(conn)
         from robert_agent.execution.application import cutover as result_cutover
 
-        cutover = (
-            result_cutover.inspect(conn, db_path)
-            if dry_run
-            else result_cutover.prepare(db_path)
-        )
+        cutover = result_cutover.inspect(conn, db_path) if dry_run else result_cutover.prepare(db_path)
         if not cutover["ok"]:
             return {
                 **cutover,
@@ -118,9 +114,7 @@ def publish_ready_actions(
             # already have completed the action or changed its eligibility.
             with closing(sqlite3.connect(db_path)) as conn:
                 conn.row_factory = sqlite3.Row
-                ready = publication_queries.ready_actions(
-                    conn, 1, action_ids=[action["action_id"]]
-                )
+                ready = publication_queries.ready_actions(conn, 1, action_ids=[action["action_id"]])
             if not ready:
                 continue
             action = ready[0]
@@ -143,9 +137,7 @@ def publish_ready_actions(
                         result = {
                             "ok": False,
                             "status": "publish_failed",
-                            "safe_error": (
-                                "skipped because the preceding remediation push failed"
-                            ),
+                            "safe_error": ("skipped because the preceding remediation push failed"),
                         }
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
@@ -154,19 +146,11 @@ def publish_ready_actions(
                     continue
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
-                    prior = (
-                        publication_values.decode_json(action["metadata_json"]).get(
-                            "publish"
-                        )
-                        or {}
-                    )
-                    existing_intent = intent_facts.load_intent(
-                        conn, action["action_id"]
-                    )
+                    prior = publication_values.decode_json(action["metadata_json"]).get("publish") or {}
+                    existing_intent = intent_facts.load_intent(conn, action["action_id"])
                     # Unknown effects can still be reconciled after the write budget is exhausted.
                     if (
-                        not existing_intent
-                        or existing_intent["status"] not in {"executing", "published"}
+                        not existing_intent or existing_intent["status"] not in {"executing", "published"}
                     ) and publication_queries.retry_budget_exhausted(prior, now):
                         publication_outcomes.record_failure(
                             conn,
@@ -182,9 +166,7 @@ def publish_ready_actions(
                             failed_result_ids.add(result_id)
                         continue
                 try:
-                    supervision = supervision_publication.begin(
-                        db_path, action, config, now
-                    )
+                    supervision = supervision_publication.begin(db_path, action, config, now)
                 except sqlite3.Error:
                     # No remote effect or publication attempt has started. Leave
                     # this task's ordered actions pending and try other tasks.
@@ -204,9 +186,7 @@ def publish_ready_actions(
                             }
                         )
                     continue
-                current = publication_intents.prepare_publication_intent(
-                    db_path, action["action_id"], bounded_command
-                )
+                current = publication_intents.prepare_publication_intent(db_path, action["action_id"], bounded_command)
                 if current["state"] == "missing":
                     if supervision.get("claim"):
                         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -235,9 +215,7 @@ def publish_ready_actions(
                         }
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
-                            publication_receipts.mark_published(
-                                conn, action, result, now
-                            )
+                            publication_receipts.mark_published(conn, action, result, now)
                             supervision_publication.finish(
                                 conn,
                                 supervision,
@@ -342,12 +320,8 @@ def publish_ready_actions(
 
                 if current["state"] == "reconcile":
                     reconcile_scope = dict(scope or {})
-                    evidence = publication_values.decode_json(
-                        intent.get("remote_evidence_json")
-                    )
-                    if evidence.get("source_sha") and not reconcile_scope.get(
-                        "result_head_sha"
-                    ):
+                    evidence = publication_values.decode_json(intent.get("remote_evidence_json"))
+                    if evidence.get("source_sha") and not reconcile_scope.get("result_head_sha"):
                         reconcile_scope["result_head_sha"] = evidence["source_sha"]
                     if evidence.get("head_owner"):
                         reconcile_scope["head_owner"] = evidence["head_owner"]
@@ -361,23 +335,15 @@ def publish_ready_actions(
                             "ok": True,
                             "status": "published",
                             "deduplicated": True,
-                            "external_id": reconciliation["evidence"].get(
-                                "external_id", ""
-                            ),
-                            "target_url": reconciliation["evidence"].get(
-                                "target_url", ""
-                            ),
+                            "external_id": reconciliation["evidence"].get("external_id", ""),
+                            "target_url": reconciliation["evidence"].get("target_url", ""),
                             "response": {"reconciliation": reconciliation["evidence"]},
                         }
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
                             latest = intent_facts.load_intent(conn, action["action_id"])
-                            publication_receipts.mark_published(
-                                conn, action, result, now, intent=latest
-                            )
-                            publication_outcomes.record_remediation_publish_outcome(
-                                conn, action, result, now
-                            )
+                            publication_receipts.mark_published(conn, action, result, now, intent=latest)
+                            publication_outcomes.record_remediation_publish_outcome(conn, action, result, now)
                             supervision_publication.finish(
                                 conn,
                                 supervision,
@@ -390,10 +356,7 @@ def publish_ready_actions(
                         continue
                     if reconciliation["status"] == "unknown":
                         current = {**current, "state": "attention"}
-                    if (
-                        reconciliation["status"] == "confirmed_absent"
-                        and scope is not None
-                    ):
+                    if reconciliation["status"] == "confirmed_absent" and scope is not None:
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
                             terminal_task = conn.execute(
@@ -405,9 +368,7 @@ def publish_ready_actions(
                                 "failed",
                                 "ignored",
                             }:
-                                latest = intent_facts.load_intent(
-                                    conn, action["action_id"]
-                                )
+                                latest = intent_facts.load_intent(conn, action["action_id"])
                                 execution_store.transition_publication_intent(
                                     conn,
                                     latest["publication_id"],
@@ -446,18 +407,10 @@ def publish_ready_actions(
                                     "evidence": {},
                                 }
                             else:
-                                latest = intent_facts.load_intent(
-                                    conn, action["action_id"]
-                                )
-                                persisted = publication_values.decode_json(
-                                    latest.get("remote_evidence_json")
-                                )
-                                source_sha = persisted.get("source_sha") or current.get(
-                                    "source_sha"
-                                )
-                                head_owner = persisted.get("head_owner") or current.get(
-                                    "head_owner"
-                                )
+                                latest = intent_facts.load_intent(conn, action["action_id"])
+                                persisted = publication_values.decode_json(latest.get("remote_evidence_json"))
+                                source_sha = persisted.get("source_sha") or current.get("source_sha")
+                                head_owner = persisted.get("head_owner") or current.get("head_owner")
                                 absent_evidence = {
                                     **reconciliation.get("evidence", {}),
                                     "status": "confirmed_absent",
@@ -478,10 +431,7 @@ def publish_ready_actions(
                                 if supervision.get("reconcile_only"):
                                     claim = supervision.get("claim") or {}
                                     outcome = (
-                                        "failed"
-                                        if claim.get("action_kind")
-                                        == "publication_retry"
-                                        else "observing"
+                                        "failed" if claim.get("action_kind") == "publication_retry" else "observing"
                                     )
                                     supervision_publication.finish(
                                         conn,
@@ -516,9 +466,7 @@ def publish_ready_actions(
                         with closing(sqlite3.connect(db_path)) as conn, conn:
                             conn.row_factory = sqlite3.Row
                             latest = intent_facts.load_intent(conn, action["action_id"])
-                            publication_outcomes.mark_attention(
-                                conn, action, latest, scope, reconciliation, now
-                            )
+                            publication_outcomes.mark_attention(conn, action, latest, scope, reconciliation, now)
                             supervision_publication.finish(
                                 conn,
                                 supervision,
@@ -547,9 +495,7 @@ def publish_ready_actions(
                     with closing(sqlite3.connect(db_path)) as conn, conn:
                         conn.row_factory = sqlite3.Row
                         latest = intent_facts.load_intent(conn, action["action_id"])
-                        publication_outcomes.mark_attention(
-                            conn, action, latest, scope, reconciliation, now
-                        )
+                        publication_outcomes.mark_attention(conn, action, latest, scope, reconciliation, now)
                         supervision_publication.finish(
                             conn,
                             supervision,
@@ -625,17 +571,13 @@ def publish_ready_actions(
                     conn.row_factory = sqlite3.Row
                     remote_effect_started = True
                     guard_kwargs = {}
-                    if supervision.get("guard_required") or supervision.get(
-                        "reconcile_only"
-                    ):
-                        guard_kwargs["recovery_guard"] = lambda: (
-                            supervision_publication.guard(
-                                db_path,
-                                action,
-                                supervision,
-                                config,
-                                publication_values.now(),
-                            )
+                    if supervision.get("guard_required") or supervision.get("reconcile_only"):
+                        guard_kwargs["recovery_guard"] = lambda: supervision_publication.guard(
+                            db_path,
+                            action,
+                            supervision,
+                            config,
+                            publication_values.now(),
                         )
                     result = publication_effects.publish_action(
                         action,
@@ -654,9 +596,7 @@ def publish_ready_actions(
                         # the immutable intent and require a fresh typed claim for a retry.
                         if latest and latest["status"] == "executing":
                             evidence = {
-                                **publication_values.decode_json(
-                                    latest.get("remote_evidence_json")
-                                ),
+                                **publication_values.decode_json(latest.get("remote_evidence_json")),
                                 "status": "confirmed_absent",
                                 "reason_code": "supervision_fence_rejected",
                             }
@@ -688,12 +628,8 @@ def publish_ready_actions(
                     with closing(sqlite3.connect(db_path)) as conn, conn:
                         conn.row_factory = sqlite3.Row
                         latest = intent_facts.load_intent(conn, action["action_id"])
-                        publication_receipts.mark_published(
-                            conn, action, result, now, intent=latest
-                        )
-                        publication_outcomes.record_remediation_publish_outcome(
-                            conn, action, result, now
-                        )
+                        publication_receipts.mark_published(conn, action, result, now, intent=latest)
+                        publication_outcomes.record_remediation_publish_outcome(conn, action, result, now)
                         supervision_publication.finish(
                             conn,
                             supervision,
@@ -708,9 +644,7 @@ def publish_ready_actions(
                 if result["status"] in {"unsupported_action", "superseded"}:
                     with closing(sqlite3.connect(db_path)) as conn, conn:
                         conn.row_factory = sqlite3.Row
-                        publication_outcomes.record_remediation_publish_outcome(
-                            conn, action, result, now
-                        )
+                        publication_outcomes.record_remediation_publish_outcome(conn, action, result, now)
                         publication_outcomes.mark_skipped(conn, action, result, now)
                         supervision_publication.finish(
                             conn,
@@ -729,38 +663,29 @@ def publish_ready_actions(
                                 result={
                                     "ok": True,
                                     "status": "superseded",
-                                    "safe_error": (
-                                        "skipped because the preceding push was superseded"
-                                    ),
+                                    "safe_error": ("skipped because the preceding push was superseded"),
                                 },
                                 now=now,
                             )
-                        scope = (
-                            publication_scope.trusted_action_scope(conn, action) or {}
-                        )
+                        scope = publication_scope.trusted_action_scope(conn, action) or {}
                         if (
                             result["status"] == "superseded"
                             and result_id
                             and not scope.get("review_round_id")
                             and not scope.get("vote_round_id")
-                            and scope.get("task_kind")
-                            not in {"ci_remediation", "merge_conflict_remediation"}
+                            and scope.get("task_kind") not in {"ci_remediation", "merge_conflict_remediation"}
                         ):
                             from robert_agent.work.application import (
                                 lifecycle as work_application_lifecycle,
                             )
 
-                            work_application_lifecycle.finalize_superseded_result(
-                                conn, result_id, now
-                            )
+                            work_application_lifecycle.finalize_superseded_result(conn, result_id, now)
                     continue
                 # A non-zero/raised remote command is ambiguous.  Keep the intent in
                 # executing and let the next pass reconcile before any retry.
                 with closing(sqlite3.connect(db_path)) as conn, conn:
                     conn.row_factory = sqlite3.Row
-                    publication_outcomes.record_remediation_publish_outcome(
-                        conn, action, result, now
-                    )
+                    publication_outcomes.record_remediation_publish_outcome(conn, action, result, now)
                     publication_outcomes.record_failure(
                         conn,
                         action,
@@ -781,8 +706,7 @@ def publish_ready_actions(
                     if (
                         action["action_type"] == "push_existing_pr"
                         and isinstance(action_scope, dict)
-                        and action_scope.get("task_kind")
-                        in {"ci_remediation", "merge_conflict_remediation"}
+                        and action_scope.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
                     ):
                         failed_remediation_result_ids.add(result_id)
                 failed_count += 1
@@ -812,9 +736,7 @@ def publish_ready_actions(
                     supervision_publication.finish(
                         conn,
                         supervision,
-                        outcome="unknown"
-                        if remote_effect_started or supervision.get("reconcile_only")
-                        else "rejected",
+                        outcome="unknown" if remote_effect_started or supervision.get("reconcile_only") else "rejected",
                         action_id=action["action_id"],
                         now=now,
                     )
@@ -847,9 +769,7 @@ def publish_ready_actions(
                     supervision_publication.finish(
                         conn,
                         supervision,
-                        outcome="unknown"
-                        if remote_effect_started or supervision.get("reconcile_only")
-                        else "rejected",
+                        outcome="unknown" if remote_effect_started or supervision.get("reconcile_only") else "rejected",
                         action_id=action["action_id"],
                         now=now,
                     )
@@ -886,11 +806,7 @@ def main(argv=None):
         help="Current Robert configuration for supervised or maintenance publication.",
     )
     args = parser.parse_args(argv)
-    config = (
-        supervision_publication.fresh_config({"config_path": args.config}, args.db)
-        if args.config
-        else None
-    )
+    config = supervision_publication.fresh_config({"config_path": args.config}, args.db) if args.config else None
     if args.config and not config:
         return emit(
             {
@@ -900,9 +816,7 @@ def main(argv=None):
             },
             3,
         )
-    result = publish_ready_actions(
-        args.db, dry_run=args.dry_run, limit=args.limit, config=config
-    )
+    result = publish_ready_actions(args.db, dry_run=args.dry_run, limit=args.limit, config=config)
     return emit(result, 0 if result.get("ok") else 3)
 
 

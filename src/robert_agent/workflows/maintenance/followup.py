@@ -70,9 +70,7 @@ def _claim(config, repo, policy, now):
         conn.execute("BEGIN IMMEDIATE")
         if not supervision_store.has_schema(conn):
             return None
-        candidate = _candidate(
-            conn, repository=policy["repository"], policy_digest=policy_digest, now=now
-        )
+        candidate = _candidate(conn, repository=policy["repository"], policy_digest=policy_digest, now=now)
         if not candidate:
             return None
         incident_id = candidate["incident_id"]
@@ -119,20 +117,12 @@ def poll(config, *, now=None, runtime=None):
     policy = repair._policy(config)
     repo = repair._repo(config, policy) if policy else None
     if not repo:
-        return repair._proposal_status(
-            "disabled" if not policy else "maintenance_repository_unavailable"
-        )
-    current = (
-        supervision_rules.timestamp(now)
-        if now is not None
-        else datetime.now(timezone.utc)
-    )
+        return repair._proposal_status("disabled" if not policy else "maintenance_repository_unavailable")
+    current = supervision_rules.timestamp(now) if now is not None else datetime.now(timezone.utc)
     if current is None:
         return repair._proposal_status("unavailable")
     try:
-        with task_publication_lock(
-            repair._path(config), "supervision-repair-followup"
-        ) as acquired:
+        with task_publication_lock(repair._path(config), "supervision-repair-followup") as acquired:
             if not acquired:
                 return repair._proposal_status("busy")
             claim = _claim(config, repo, policy, current)
@@ -142,14 +132,8 @@ def poll(config, *, now=None, runtime=None):
             raw = Path(path)
             checkout = raw.resolve()
             root = Path(repo["worktree_root"]).resolve()
-            if (
-                not raw.is_absolute()
-                or checkout == root
-                or not checkout.is_relative_to(root)
-            ):
-                outcome = repair._proposal_status(
-                    "verification_pending", reason_code="delivery_worktree_out_of_scope"
-                )
+            if not raw.is_absolute() or checkout == root or not checkout.is_relative_to(root):
+                outcome = repair._proposal_status("verification_pending", reason_code="delivery_worktree_out_of_scope")
             else:
                 outcome = repair.verify(
                     config,
@@ -161,9 +145,7 @@ def poll(config, *, now=None, runtime=None):
                 )
             finished = datetime.now(timezone.utc) if now is None else current
             if not _finish(config, key, state, outcome["status"], finished):
-                return repair._proposal_status(
-                    "repair_evidence_changed", incident_id=key[1]
-                )
+                return repair._proposal_status("repair_evidence_changed", incident_id=key[1])
             return {**outcome, "incident_id": key[1]}
     except (OSError, ValueError, sqlite3.Error):
         return repair._proposal_status("unavailable")

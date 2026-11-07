@@ -43,19 +43,11 @@ class TaskPreparationTests(RepositoryCycleFixture):
                     "agent_runs",
                 ]
             }
-            route = conn.execute(
-                "SELECT expected_output, recommended_skills_json FROM route_decisions"
-            ).fetchone()
+            route = conn.execute("SELECT expected_output, recommended_skills_json FROM route_decisions").fetchone()
 
-            source = conn.execute(
-                "SELECT html_url, state, source_updated_at FROM github_sources"
-            ).fetchone()
-            attempt = conn.execute(
-                "SELECT status, metadata_json, worktree_path, branch_name FROM attempts"
-            ).fetchone()
-            artifacts = dict(
-                conn.execute("SELECT artifact_type, path FROM artifacts").fetchall()
-            )
+            source = conn.execute("SELECT html_url, state, source_updated_at FROM github_sources").fetchone()
+            attempt = conn.execute("SELECT status, metadata_json, worktree_path, branch_name FROM attempts").fetchone()
+            artifacts = dict(conn.execute("SELECT artifact_type, path FROM artifacts").fetchall())
         self.assertEqual(counts["repos"], 1)
         self.assertEqual(counts["github_sources"], 1)
         self.assertEqual(counts["github_events"], 1)
@@ -191,13 +183,9 @@ class TaskPreparationTests(RepositoryCycleFixture):
                     "worker_results",
                 )
             }
-            task = conn.execute(
-                "SELECT task_id, route_id, expected_output, lifecycle FROM tasks"
-            ).fetchone()
+            task = conn.execute("SELECT task_id, route_id, expected_output, lifecycle FROM tasks").fetchone()
             attempt = conn.execute("SELECT attempt_id, status FROM attempts").fetchone()
-            prompt_path = conn.execute(
-                "SELECT path FROM artifacts WHERE artifact_type = 'prompt'"
-            ).fetchone()[0]
+            prompt_path = conn.execute("SELECT path FROM artifacts WHERE artifact_type = 'prompt'").fetchone()[0]
             wakeup_status = conn.execute(
                 "SELECT status FROM wakeups WHERE work_item_id = ?",
                 (created["item"]["work_item_id"],),

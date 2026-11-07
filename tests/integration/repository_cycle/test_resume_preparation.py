@@ -30,8 +30,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
         stdout_path = self.data_dir / "artifacts" / "attempt.stdout.log"
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stdout_path.write_text(
-            "I'm waiting on the background test run before I record the PR result.\n"
-            "Command exited 0\n",
+            "I'm waiting on the background test run before I record the PR result.\nCommand exited 0\n",
             encoding="utf-8",
         )
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -141,9 +140,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             artifacts = conn.execute(
                 """
                 SELECT artifact_type, path
@@ -217,9 +214,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
                 "previous_attempt_id": attempt_id,
                 "progress_signals": ["dirty_worktree"],
             }
-            preparation.create_resume_attempt_and_prompt = lambda *_args, **_kwargs: (
-                None
-            )
+            preparation.create_resume_attempt_and_prompt = lambda *_args, **_kwargs: None
             try:
                 supervised = monitor.supervise_running_attempts(
                     conn,
@@ -247,9 +242,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
                     (attempt_id,),
                 ).fetchone()[0]
             )
-            notification = conn.execute(
-                "SELECT notification_type, status FROM notifications"
-            ).fetchone()
+            notification = conn.execute("SELECT notification_type, status FROM notifications").fetchone()
 
         self.assertEqual(supervised, 1)
         self.assertEqual(binding["binding_status"], "attention")
@@ -300,9 +293,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
                 "previous_attempt_id": attempt_id,
                 "progress_signals": ["dirty_worktree"],
             }
-            preparation.create_resume_attempt_and_prompt = lambda *_args, **_kwargs: (
-                None
-            )
+            preparation.create_resume_attempt_and_prompt = lambda *_args, **_kwargs: None
             try:
                 recovered = monitor.recover_failed_timeout_attempts(
                     conn,
@@ -351,8 +342,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
         stdout_path = self.data_dir / "artifacts" / "attempt-timeout.stdout.log"
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stdout_path.write_text(
-            "I have local changes and the verification command finished.\n"
-            "Command exited 0\n",
+            "I have local changes and the verification command finished.\nCommand exited 0\n",
             encoding="utf-8",
         )
         missing_pid = 987654
@@ -429,9 +419,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             notification = conn.execute(
                 """
                 SELECT notification_type, status
@@ -571,9 +559,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             notification = conn.execute(
                 """
                 SELECT notification_type, status

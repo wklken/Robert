@@ -52,9 +52,7 @@ class AttemptContextTests(AttemptContextFixture):
                 (resumed["attempt_id"],),
             )
         )
-        self.assertIn(
-            resumed["attempt_id"] + ".github-context.md", paths["github_context_md"]
-        )
+        self.assertIn(resumed["attempt_id"] + ".github-context.md", paths["github_context_md"])
         self.assertNotIn(paths["github_context_md"], before)
         self.assertEqual(before, {path: Path(path).read_bytes() for path in before})
 
@@ -104,9 +102,7 @@ class AttemptContextTests(AttemptContextFixture):
         def prepare(*args, **kwargs):
             queue = [{"task_info": {"task_id": self.task_id}}]
             with patch.object(dispatch_queue, "dispatch_queued_locked") as dispatch:
-                self.assertEqual(
-                    dispatch_queue.dispatch_queued(self.db, [], queue, True, 1), []
-                )
+                self.assertEqual(dispatch_queue.dispatch_queued(self.db, [], queue, True, 1), [])
                 dispatch.assert_not_called()
             # The task lock must not be confused with a SQLite writer lock.
             with sqlite3.connect(self.db) as observer:
@@ -235,13 +231,8 @@ class InlineContextTests(unittest.TestCase):
     def test_current_request_precedes_large_history_and_consumption_stays_input_set(
         self,
     ):
-        events = [
-            {"event_fingerprint": f"old:{i}", "body": "history " * 200}
-            for i in range(10)
-        ]
-        events.append(
-            {"event_fingerprint": "current:1", "body": "Keep public API unchanged."}
-        )
+        events = [{"event_fingerprint": f"old:{i}", "body": "history " * 200} for i in range(10)]
+        events.append({"event_fingerprint": "current:1", "body": "Keep public API unchanged."})
         prompt = self.render(
             events,
             github_context={
@@ -250,9 +241,7 @@ class InlineContextTests(unittest.TestCase):
                 "current_event_fingerprint": "current:1",
             },
         )
-        self.assertLess(
-            prompt.index("Keep public API unchanged."), prompt.index("history history")
-        )
+        self.assertLess(prompt.index("Keep public API unchanged."), prompt.index("history history"))
         payload = json.loads(prompt.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0])
         self.assertEqual(
             payload["consumed_event_fingerprints"],
@@ -270,11 +259,7 @@ class InlineContextTests(unittest.TestCase):
         self.assertNotIn("For open_pr supply", prompt)
 
     def test_update_template_does_not_require_push(self):
-        prompt = self.render(
-            [{"event_fingerprint": "comment:2", "body": "Explain current behavior."}]
-        )
+        prompt = self.render([{"event_fingerprint": "comment:2", "body": "Explain current behavior."}])
         payload = json.loads(prompt.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0])
-        self.assertEqual(
-            [a["type"] for a in payload["planned_github_actions"]], ["comment"]
-        )
+        self.assertEqual([a["type"] for a in payload["planned_github_actions"]], ["comment"])
         self.assertIn("Only plan push_existing_pr when actual code changes", prompt)

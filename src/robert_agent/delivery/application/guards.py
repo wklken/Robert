@@ -43,9 +43,7 @@ def publication_scope_guard(conn, action, recovery_guard=None):
                 "status": "publish_failed",
                 "safe_error": "Maintenance Git binding unavailable",
             }
-    if scope is None or execution_operations.publication_scope_is_current(
-        conn, action.get("task_id"), scope
-    ):
+    if scope is None or execution_operations.publication_scope_is_current(conn, action.get("task_id"), scope):
         return None
     now = publication_values.now()
     intent = intent_facts.load_intent(conn, action["action_id"])
@@ -54,9 +52,7 @@ def publication_scope_guard(conn, action, recovery_guard=None):
         "reason_code": "publication_scope_stale",
         "evidence": {},
     }
-    publication_outcomes.mark_attention(
-        conn, action, intent, scope, reconciliation, now
-    )
+    publication_outcomes.mark_attention(conn, action, intent, scope, reconciliation, now)
     conn.commit()
     return {
         "ok": False,

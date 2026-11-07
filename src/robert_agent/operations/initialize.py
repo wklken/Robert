@@ -37,10 +37,7 @@ def init_config(
             "ok": False,
             "status": "failed_input",
             "safe_error": (
-                "missing "
-                + ("non-interactive " if non_interactive else "")
-                + "values: "
-                + ", ".join(missing)
+                "missing " + ("non-interactive " if non_interactive else "") + "values: " + ", ".join(missing)
             ),
         }
 

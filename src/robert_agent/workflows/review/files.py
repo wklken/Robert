@@ -51,9 +51,7 @@ def atomic_json(path, payload):
     if path.is_symlink():
         raise ValueError("cannot replace a symlink artifact")
     # A unique temporary name also makes controller writes safe across retries.
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=path.parent
-    )
+    descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
@@ -91,10 +89,7 @@ def _source_path(value):
 
 
 def _identity(document, manifest):
-    if (
-        type(document.get("schema_version")) is not int
-        or document["schema_version"] != SCHEMA_VERSION
-    ):
+    if type(document.get("schema_version")) is not int or document["schema_version"] != SCHEMA_VERSION:
         raise ValueError("unsupported review schema_version")
     for key in ("round_id", "snapshot_id", "head_sha"):
         if document.get(key) != manifest.get(key) or not manifest.get(key):
@@ -115,9 +110,7 @@ def _finding(finding, dismissed=False):
     line = location.get("line")
     if type(line) is not int or line < 1:
         raise ValueError("source line must be a positive integer")
-    if "end_line" in location and (
-        type(location["end_line"]) is not int or location["end_line"] < line
-    ):
+    if "end_line" in location and (type(location["end_line"]) is not int or location["end_line"] < line):
         raise ValueError("source end_line must not precede line")
     if dismissed:
         _text(finding.get("reason"), "dismissed finding reason")
@@ -213,12 +206,8 @@ def _validated_records(manifest, records):
         for key in ("model", "run_id"):
             _text(record.get(key), key)
         for kind in ("result", "report"):
-            path = safe_path(
-                record.get(f"{kind}_path", ""), Path(manifest["artifact_root"]) / "runs"
-            )
-            if path.name != f"{kind}.json" and not (
-                kind == "report" and path.name == "report.md"
-            ):
+            path = safe_path(record.get(f"{kind}_path", ""), Path(manifest["artifact_root"]) / "runs")
+            if path.name != f"{kind}.json" and not (kind == "report" and path.name == "report.md"):
                 raise ValueError("unexpected selected artifact filename")
             try:
                 digest = sha256_file(path)
@@ -240,9 +229,7 @@ def write_synthesis_inputs(manifest, records):
     if path.exists() and _read_json(path) != document:
         # A repaired reviewer has a new attempt/hash. Retain the old synthesis
         # input set for audit and seal a distinct set for the next synthesis.
-        revision = hashlib.sha256(
-            json.dumps(document, sort_keys=True).encode("utf-8")
-        ).hexdigest()
+        revision = hashlib.sha256(json.dumps(document, sort_keys=True).encode("utf-8")).hexdigest()
         path = path.with_name(f"inputs-{revision}.json")
         safe_path(path, manifest["artifact_root"])
     if path.exists():
@@ -283,9 +270,7 @@ def read_evaluation(path, manifest, records):
                 raise ValueError("finding source must be an object")
             pair = (source.get("worker_id"), source.get("finding_id"))
             if pair not in expected or pair in covered:
-                raise ValueError(
-                    "evaluation contains unknown or duplicated finding source"
-                )
+                raise ValueError("evaluation contains unknown or duplicated finding source")
             covered.add(pair)
     if covered != expected:
         raise ValueError("evaluation must handle every reviewer finding exactly once")
@@ -304,11 +289,7 @@ def render_merged(manifest, records, evaluation):
     labels = [f"{record['worker_id']} ({record['model']})" for record in records]
     models = " + ".join(labels)
     distinct = len({record["model"] for record in records}) == len(records)
-    mode = (
-        "多模型"
-        if distinct and all(record["model"] != "default" for record in records)
-        else "多 reviewer"
-    )
+    mode = "多模型" if distinct and all(record["model"] != "default" for record in records) else "多 reviewer"
     lines = [
         f"# PR #{manifest['pr_number']} Code Review 汇总报告",
         "",
@@ -323,9 +304,7 @@ def render_merged(manifest, records, evaluation):
     for severity in SEVERITIES:
         lines.extend([f"### {severity.title()} Issues", ""])
         findings = [
-            item
-            for item in evaluation["items"]
-            if item["disposition"] == "confirmed" and item["severity"] == severity
+            item for item in evaluation["items"] if item["disposition"] == "confirmed" and item["severity"] == severity
         ]
         for finding in findings:
             lines.extend(_finding_lines(finding))
@@ -334,14 +313,10 @@ def render_merged(manifest, records, evaluation):
             lines.append("无")
         lines.append("")
     lines.extend(["### Dismissed Findings", ""])
-    dismissed = [
-        item for item in evaluation["items"] if item["disposition"] != "confirmed"
-    ]
+    dismissed = [item for item in evaluation["items"] if item["disposition"] != "confirmed"]
     for finding in dismissed:
         label = "误报" if finding["disposition"] == "dismissed" else "需人工确认"
-        lines.append(
-            f"- **{label}：{finding['title']}** — `{_location(finding)}`：{finding['reason']}"
-        )
+        lines.append(f"- **{label}：{finding['title']}** — `{_location(finding)}`：{finding['reason']}")
     if not dismissed:
         lines.append("无")
     lines.extend(
@@ -355,13 +330,8 @@ def render_merged(manifest, records, evaluation):
     )
     for record in records:
         coverage = result_lookup[record["worker_id"]]["coverage"]
-        reviewed = (
-            ", ".join(f"`{path}`" for path in coverage["reviewed_paths"]) or "未列出"
-        )
-        unreviewed = (
-            ", ".join(f"`{path}`" for path in coverage["unreviewed_paths"])
-            or "未列出（不表示完整覆盖）"
-        )
+        reviewed = ", ".join(f"`{path}`" for path in coverage["reviewed_paths"]) or "未列出"
+        unreviewed = ", ".join(f"`{path}`" for path in coverage["unreviewed_paths"]) or "未列出（不表示完整覆盖）"
         lines.extend(
             [
                 f"#### {record['worker_id']} ({record['model']})",
@@ -376,9 +346,7 @@ def render_merged(manifest, records, evaluation):
         [
             "### Agent Agreement Summary",
             "",
-            "| Issue | "
-            + " | ".join(_table(label) for label in labels)
-            + " | Verdict |",
+            "| Issue | " + " | ".join(_table(label) for label in labels) + " | Verdict |",
             "|-------|" + "|".join("----------" for _ in records) + "|---------|",
         ]
     )
@@ -387,9 +355,7 @@ def render_merged(manifest, records, evaluation):
         states = []
         for record in records:
             referenced = {
-                source["finding_id"]
-                for source in item["sources"]
-                if source["worker_id"] == record["worker_id"]
+                source["finding_id"] for source in item["sources"] if source["worker_id"] == record["worker_id"]
             }
             result = result_lookup[record["worker_id"]]
             states.append(
@@ -404,9 +370,7 @@ def render_merged(manifest, records, evaluation):
             if item["disposition"] == "confirmed"
             else ("误报" if item["disposition"] == "dismissed" else "需人工确认")
         )
-        lines.append(
-            "| " + " | ".join([_table(item["title"]), *states, verdict]) + " |"
-        )
+        lines.append("| " + " | ".join([_table(item["title"]), *states, verdict]) + " |")
     lines.extend(
         [
             "",

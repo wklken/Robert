@@ -54,13 +54,9 @@ def mark_attention(conn, action, intent, scope, reconciliation, now):
     )
     if intent and intent["status"] in {"prepared", "executing", "failed"}:
         if intent["status"] == "prepared":
-            execution_store.transition_publication_intent(
-                conn, intent["publication_id"], "executing", now
-            )
+            execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
         elif intent["status"] == "failed":
-            execution_store.transition_publication_intent(
-                conn, intent["publication_id"], "executing", now
-            )
+            execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
         execution_store.transition_publication_intent(
             conn,
             intent["publication_id"],
@@ -69,9 +65,7 @@ def mark_attention(conn, action, intent, scope, reconciliation, now):
             remote_evidence=reconciliation.get("evidence", {}),
             error={"reason_code": reason_code},
         )
-    execution_operations.mark_publication_attention(
-        conn, action.get("task_id"), scope, reason_code, now=now
-    )
+    execution_operations.mark_publication_attention(conn, action.get("task_id"), scope, reason_code, now=now)
     insert_workflow_attention_notification(conn, action, reason_code, now)
 
 
@@ -107,9 +101,7 @@ def mark_skipped(conn, action, result, now):
         """,
         (publication_values.encode_json(metadata), action["action_id"]),
     )
-    publication_notifications.insert_notification(
-        conn, action, "github_publish_skipped", result, now
-    )
+    publication_notifications.insert_notification(conn, action, "github_publish_skipped", result, now)
 
 
 def skip_pending_result_actions(
@@ -157,9 +149,7 @@ def retire_unstarted_actions(conn, task_id, now):
             }:
                 continue
             if intent and intent["status"] != "confirmed_absent":
-                execution_store.transition_publication_intent(
-                    conn, intent["publication_id"], "executing", now
-                )
+                execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
                 execution_store.transition_publication_intent(
                     conn,
                     intent["publication_id"],
@@ -185,28 +175,20 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
         "SELECT metadata_json FROM github_actions WHERE action_id=?",
         (action["action_id"],),
     ).fetchone()
-    metadata = publication_values.decode_json(
-        fresh[0] if fresh else action["metadata_json"]
-    )
+    metadata = publication_values.decode_json(fresh[0] if fresh else action["metadata_json"])
     prior = dict(metadata.get("publish") or {})
     if prior.get("attempt_charged"):
         prior["attempt_count"] = max(0, int(prior.get("attempt_count", 0)) - 1)
-    state = retry_policy.failure_state(
-        prior, result.get("safe_error"), now, retryable=result.get("retryable", True)
-    )
+    state = retry_policy.failure_state(prior, result.get("safe_error"), now, retryable=result.get("retryable", True))
     # Authentication, permission, and branch rejections establish failure.
     # Only an ambiguous transport outcome needs a final reconciliation pass.
-    reconcile_required = (
-        reconcile_required and state["error_class"] == "transient_failure"
-    )
+    reconcile_required = reconcile_required and state["error_class"] == "transient_failure"
     from robert_agent.security import redaction
 
     safe = redaction.redact_and_truncate(str(result.get("safe_error", "")), 2000)
     result = {
         **result,
-        "safe_error": safe.get(
-            "text", "Sensitive diagnostic omitted; inspect the local log."
-        ),
+        "safe_error": safe.get("text", "Sensitive diagnostic omitted; inspect the local log."),
         "command": [],
     }
     metadata["publish"] = {
@@ -225,9 +207,7 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
         """,
         (publication_values.encode_json(metadata), action["action_id"]),
     )
-    publication_notifications.insert_notification(
-        conn, action, "github_publish_failed", {**result, **state}, now
-    )
+    publication_notifications.insert_notification(conn, action, "github_publish_failed", {**result, **state}, now)
     if not state["retryable"] and not reconcile_required:
         intent = intent_facts.load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
@@ -254,11 +234,7 @@ def record_remediation_publish_outcome(conn, action, result, now):
     if not isinstance(action_scope, dict):
         return
     episode_id = action_scope.get("episode_id")
-    if (
-        action_scope.get("task_kind")
-        not in {"ci_remediation", "merge_conflict_remediation"}
-        or not episode_id
-    ):
+    if action_scope.get("task_kind") not in {"ci_remediation", "merge_conflict_remediation"} or not episode_id:
         return
     remediation.record_publish_result(
         conn,

@@ -22,9 +22,7 @@ class ReplayBudgetTests(DurableResultFixture):
         for number in range(2):
             envelope = {**self.payload, "attempt_id": f"pending-{number}"}
             digest = result_contract.semantic_fingerprint(envelope)
-            payload = {
-                key: value for key, value in envelope.items() if key != "submission"
-            } | envelope["submission"]
+            payload = {key: value for key, value in envelope.items() if key != "submission"} | envelope["submission"]
             payload.update(
                 _result_contract=result_contract.CONTRACT_ID,
                 _normalizer_version=1,

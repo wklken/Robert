@@ -112,9 +112,7 @@ class WebSecurityTests(unittest.TestCase):
 
     def test_readme_logo_remains_available(self):
         logo = (REPO_ROOT / "docs/imgs/robert-logo.svg").read_bytes()
-        status, headers, body = build_http_response(
-            "/assets/robert-logo.svg", "unused.sqlite3"
-        )
+        status, headers, body = build_http_response("/assets/robert-logo.svg", "unused.sqlite3")
         self.assertEqual(status, 200)
         self.assertEqual(headers["content-type"], "image/svg+xml")
         self.assertEqual(body, logo)
@@ -132,10 +130,7 @@ class WebSecurityTests(unittest.TestCase):
             self.assertEqual(len(groups), 1)
             self.assertEqual(
                 [ET.tostring(shape) for shape in groups[0]],
-                [
-                    ET.tostring(shape)
-                    for shape in logo.find("{http://www.w3.org/2000/svg}g")
-                ],
+                [ET.tostring(shape) for shape in logo.find("{http://www.w3.org/2000/svg}g")],
             )
 
     def test_pages_use_robot_avatar_favicon(self):
@@ -172,12 +167,8 @@ class WebSecurityTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn(b"output from attempt 1", body)
             self.assertNotIn(b"output from attempt 2", body)
-            self.assertEqual(
-                build_http_response(url.replace("task-1", "unrelated-task"), db)[0], 404
-            )
-            self.assertEqual(
-                build_http_response(url.replace("log-1", "unknown"), db)[0], 404
-            )
+            self.assertEqual(build_http_response(url.replace("task-1", "unrelated-task"), db)[0], 404)
+            self.assertEqual(build_http_response(url.replace("log-1", "unknown"), db)[0], 404)
 
     def test_artifact_preview_rejects_paths_outside_database_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

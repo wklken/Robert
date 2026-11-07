@@ -111,12 +111,8 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
             self.assertEqual(first, same)
 
-            execution_store.ensure_subject(
-                conn, "remediation_episode", "episode-1", "pr_remediation", NOW
-            )
-            execution_store.mark_binding_attention(
-                conn, "remediation_episode", "episode-1", NOW
-            )
+            execution_store.ensure_subject(conn, "remediation_episode", "episode-1", "pr_remediation", NOW)
+            execution_store.mark_binding_attention(conn, "remediation_episode", "episode-1", NOW)
             self.assertIsNone(
                 execution_operations.claim_subject(
                     conn,
@@ -126,9 +122,7 @@ class WorkflowOperationsTests(unittest.TestCase):
                 )
             )
 
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = 'task-1'"
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = 'task-1'")
             self.assertEqual(
                 execution_operations.claim_subject(
                     conn,
@@ -171,15 +165,11 @@ class WorkflowOperationsTests(unittest.TestCase):
                 )
             execution_store.ensure_subject(conn, "task", "task-1", "human_request", NOW)
             self.assertEqual(
-                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)[
-                    "binding_status"
-                ],
+                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)["binding_status"],
                 "active",
             )
             execution_store.mark_binding_attention(conn, "task", "task-1", NOW)
-            self.assertIsNone(
-                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)
-            )
+            self.assertIsNone(execution_operations.claim_subject(conn, "task", "task-1", now=NOW))
 
 
 class MigratedSubjectClaimTests(unittest.TestCase):
@@ -230,28 +220,20 @@ class MigratedSubjectClaimTests(unittest.TestCase):
                         "INSERT INTO tasks(task_id, workstream_id, lifecycle, created_at, updated_at) VALUES ('task', 'ws', ?, ?, ?)",
                         (lifecycle, NOW, NOW),
                     )
-                    binding = execution_operations.claim_subject(
-                        self.conn, "task", "task", now=NOW
-                    )
+                    binding = execution_operations.claim_subject(self.conn, "task", "task", now=NOW)
                     if lifecycle in {"queued", "running"}:
                         self.assertEqual(binding["binding_status"], "active")
                     else:
                         self.assertIsNone(binding)
-                        self.assertIsNone(
-                            execution_store.get_binding(self.conn, "task", "task")
-                        )
+                        self.assertIsNone(execution_store.get_binding(self.conn, "task", "task"))
             for task_kind in ("ci_remediation", "merge_conflict_remediation"):
                 with self.subTest(row_factory=row_factory, task_kind=task_kind):
                     self.conn.execute(
                         "UPDATE tasks SET task_kind = ?, lifecycle = 'queued'",
                         (task_kind,),
                     )
-                    with self.assertRaisesRegex(
-                        ValueError, "not an eligible human task"
-                    ):
-                        execution_operations.claim_subject(
-                            self.conn, "task", "task", now=NOW
-                        )
+                    with self.assertRaisesRegex(ValueError, "not an eligible human task"):
+                        execution_operations.claim_subject(self.conn, "task", "task", now=NOW)
 
     def test_claim_migrated_episode_does_not_reopen_terminal_status(self):
         from robert_agent.execution import operations as execution_operations
@@ -272,18 +254,12 @@ class MigratedSubjectClaimTests(unittest.TestCase):
                         """,
                         (status, NOW, NOW),
                     )
-                    binding = execution_operations.claim_subject(
-                        self.conn, "remediation_episode", "episode", now=NOW
-                    )
+                    binding = execution_operations.claim_subject(self.conn, "remediation_episode", "episode", now=NOW)
                     if status == "queued":
                         self.assertEqual(binding["binding_status"], "active")
                     else:
                         self.assertIsNone(binding)
-                        self.assertIsNone(
-                            execution_store.get_binding(
-                                self.conn, "remediation_episode", "episode"
-                            )
-                        )
+                        self.assertIsNone(execution_store.get_binding(self.conn, "remediation_episode", "episode"))
 
 
 if __name__ == "__main__":

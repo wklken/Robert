@@ -25,9 +25,7 @@ class SubmissionHeadTests(unittest.TestCase):
     prepare = integration.ReviewInputIntegrationFixture.prepare
 
     def git(self, *args):
-        return subprocess.run(
-            ["git", *args], cwd=self.tree, check=True, capture_output=True, text=True
-        ).stdout.strip()
+        return subprocess.run(["git", *args], cwd=self.tree, check=True, capture_output=True, text=True).stdout.strip()
 
     def fixture(self):
         db, task, attempt, _, _ = self.prepare("comment")
@@ -68,9 +66,7 @@ class SubmissionHeadTests(unittest.TestCase):
 
     def metadata(self, db):
         with closing(sqlite3.connect(db)) as conn:
-            return json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )
+            return json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
 
     def test_acknowledged_head_change_is_rejected_by_final_audit(self):
         db, _, _, envelope = self.fixture()
@@ -79,9 +75,7 @@ class SubmissionHeadTests(unittest.TestCase):
         self.assertEqual(self.metadata(db)["submission_head_sha"], head)
         self.git("commit", "--allow-empty", "-m", "after acknowledgement")
         run_once.run_once(self.config_path, dry_run=True, skip_external=True)
-        self.assertEqual(
-            self.metadata(db)["audit"]["violations"], ["submission_head_changed"]
-        )
+        self.assertEqual(self.metadata(db)["audit"]["violations"], ["submission_head_changed"])
 
     def test_stopped_process_with_same_head_passes_and_live_process_waits(self):
         db, _, attempt, envelope = self.fixture()
@@ -92,9 +86,7 @@ class SubmissionHeadTests(unittest.TestCase):
             )
         self.assertTrue(result.record_result(db, envelope)["ok"])
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE attempts SET status='completed' WHERE attempt_id=?", (attempt,)
-            )
+            conn.execute("UPDATE attempts SET status='completed' WHERE attempt_id=?", (attempt,))
         with patch.object(monitor, "supervise_running_attempts", return_value=0):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertNotIn("audit", self.metadata(db))
@@ -125,9 +117,7 @@ class SubmissionHeadTests(unittest.TestCase):
             self.assertTrue(result.record_result(db, envelope)["deduplicated"])
         self.assertEqual(self.metadata(db)["submission_head_sha"], head)
         run_once.run_once(self.config_path, dry_run=True, skip_external=True)
-        self.assertEqual(
-            self.metadata(db)["audit"]["violations"], ["submission_head_changed"]
-        )
+        self.assertEqual(self.metadata(db)["audit"]["violations"], ["submission_head_changed"])
 
     def test_git_read_failure_is_validation_unavailable(self):
         db, _, _, envelope = self.fixture()
@@ -157,24 +147,18 @@ class SubmissionHeadTests(unittest.TestCase):
         self.assertIn("commit", rejected["required_action"].lower())
         with closing(sqlite3.connect(db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM worker_results WHERE task_id=?", (task,)
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM worker_results WHERE task_id=?", (task,)).fetchone()[0],
                 0,
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM github_actions WHERE task_id=?", (task,)
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM github_actions WHERE task_id=?", (task,)).fetchone()[0],
                 0,
             )
         self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
         self.git("add", "document.md" if state != "untracked" else "new.md")
         self.git("commit", "-m", "requested change")
         self.assertTrue(result.record_result(db, envelope)["ok"])
-        self.assertEqual(
-            self.metadata(db)["submission_head_sha"], self.git("rev-parse", "HEAD")
-        )
+        self.assertEqual(self.metadata(db)["submission_head_sha"], self.git("rev-parse", "HEAD"))
         run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertEqual(self.metadata(db)["audit"]["status"], "accepted")
 
@@ -192,23 +176,17 @@ class SubmissionHeadTests(unittest.TestCase):
         self.assertTrue(result.record_result(db, envelope)["ok"])
         (self.tree / "forgotten.md").write_text("uncommitted change\n")
         run_once.run_once(self.config_path, dry_run=True, skip_external=True)
-        self.assertEqual(
-            self.metadata(db)["audit"]["violations"], ["uncommitted_worktree"]
-        )
+        self.assertEqual(self.metadata(db)["audit"]["violations"], ["uncommitted_worktree"])
         with closing(sqlite3.connect(db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM github_actions WHERE audit_status='accepted'"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM github_actions WHERE audit_status='accepted'").fetchone()[0],
                 0,
             )
 
     def test_comment_only_result_does_not_require_a_clean_worktree(self):
         db, _, _, envelope = self.fixture()
         (self.tree / "unrelated.md").write_text("unrelated work\n")
-        envelope["submission"]["planned_github_actions"] = [
-            {"type": "comment", "body": "No update required."}
-        ]
+        envelope["submission"]["planned_github_actions"] = [{"type": "comment", "body": "No update required."}]
         self.assertTrue(result.record_result(db, envelope)["ok"])
         run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertEqual(self.metadata(db)["audit"]["status"], "accepted")
@@ -248,9 +226,7 @@ class SubmissionHeadTests(unittest.TestCase):
 
         with patch.object(control_commands, "run_command", side_effect=fail_status):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
-        self.assertEqual(
-            self.metadata(db)["audit"]["violations"], ["worktree_status_unavailable"]
-        )
+        self.assertEqual(self.metadata(db)["audit"]["violations"], ["worktree_status_unavailable"])
 
     def test_status_timeout_is_validation_unavailable(self):
         db, _, _, envelope = self.fixture()
@@ -325,9 +301,7 @@ class CompactShapeTests(unittest.TestCase):
                 self.subTest(change=change),
                 self.assertRaises(result_contract.InvalidSubmission) as raised,
             ):
-                result_contract.validate_submission(
-                    self.submission() | change, "local_result", "github"
-                )
+                result_contract.validate_submission(self.submission() | change, "local_result", "github")
             self.assertEqual(raised.exception.field, expected)
 
     def test_schema_semantic_shapes_are_enforced(self):
@@ -366,6 +340,4 @@ class CompactShapeTests(unittest.TestCase):
                 self.subTest(change=change),
                 self.assertRaises(result_contract.InvalidSubmission),
             ):
-                result_contract.validate_submission(
-                    self.submission() | change, "local_result", "github"
-                )
+                result_contract.validate_submission(self.submission() | change, "local_result", "github")

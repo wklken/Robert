@@ -42,9 +42,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(
-            decisions[0]["authorization_status"], "ignored_untrusted_trigger"
-        )
+        self.assertEqual(decisions[0]["authorization_status"], "ignored_untrusted_trigger")
 
     def test_notification_with_missing_timeline_stays_pending(self):
         decisions = self.normalize_and_authorize(
@@ -115,9 +113,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
                 )
             raise AssertionError(args)
 
-        buckets = discover.collect_account_notifications(
-            [repo_a, repo_b], runner=fake_runner
-        )
+        buckets = discover.collect_account_notifications([repo_a, repo_b], runner=fake_runner)
 
         self.assertEqual(sorted(buckets), ["Org/repo-a", "Org/repo-b"])
         self.assertEqual(buckets["Org/repo-a"][0]["repo_full_name"], "Org/repo-a")
@@ -244,9 +240,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
         )
 
         self.assertEqual(raw_events, [])
-        self.assertFalse(
-            any("repos/Org/repo-a/issues/10" in " ".join(args) for args in calls)
-        )
+        self.assertFalse(any("repos/Org/repo-a/issues/10" in " ".join(args) for args in calls))
 
     def test_closed_issue_notification_hint_is_ignored(self):
         from robert_agent.adapters.github import discovery as discover
@@ -381,9 +375,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
             [event["event_fingerprint"] for event in events],
             ["assigned:assign-event-2901", "assigned:assign-event-2901"],
         )
-        self.assertEqual(
-            {event["event_type"] for event in events}, {"assigned", "notification"}
-        )
+        self.assertEqual({event["event_type"] for event in events}, {"assigned", "notification"})
 
     def test_notification_for_known_pr_workstream_uses_latest_non_bot_comment(self):
         from robert_agent.adapters.github import discovery as discover
@@ -519,9 +511,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
 
         raw_events = discover.collect_live_events(REPO_CONFIG, runner=fake_runner)
         events = discover.normalize_events(raw_events, REPO_CONFIG)
-        decisions = authorize.authorize_events(
-            events, REPO_CONFIG, existing_workstreams=set()
-        )
+        decisions = authorize.authorize_events(events, REPO_CONFIG, existing_workstreams=set())
 
         self.assertEqual(events[0]["authorization_lookup_complete"], False)
         self.assertEqual(decisions[0]["authorization_status"], "pending_authorization")

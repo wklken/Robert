@@ -8,12 +8,8 @@ class DaemonChildRunnerTests(unittest.TestCase):
         from robert_agent.runtime import daemon
 
         db_path = Path("/tmp/robert-state/../robert-state/robert.sqlite3")
-        first = daemon._daemon_resource_key(
-            {"db_path": str(db_path), "repos": [{"full_name": "example/one"}]}
-        )
-        second = daemon._daemon_resource_key(
-            {"db_path": str(db_path), "repos": [{"full_name": "example/two"}]}
-        )
+        first = daemon._daemon_resource_key({"db_path": str(db_path), "repos": [{"full_name": "example/one"}]})
+        second = daemon._daemon_resource_key({"db_path": str(db_path), "repos": [{"full_name": "example/two"}]})
 
         self.assertEqual(first, f"database:{db_path.resolve()}")
         self.assertEqual(second, first)

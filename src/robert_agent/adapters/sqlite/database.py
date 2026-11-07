@@ -12,37 +12,25 @@ from robert_agent.resource_files import resource
 SCHEMA_RESOURCE = resource("db", "schema.sql")
 WORK_ITEM_MIGRATION_VERSION = 2
 WORK_ITEM_MIGRATION_NAME = "robert-work-item-control-v1"
-WORK_ITEM_MIGRATION_CHECKSUM = hashlib.sha256(
-    WORK_ITEM_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+WORK_ITEM_MIGRATION_CHECKSUM = hashlib.sha256(WORK_ITEM_MIGRATION_NAME.encode("utf-8")).hexdigest()
 WORKFLOW_MIGRATION_VERSION = 3
 WORKFLOW_MIGRATION_NAME = "robert-dbos-workflow-v1"
-WORKFLOW_MIGRATION_CHECKSUM = hashlib.sha256(
-    WORKFLOW_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+WORKFLOW_MIGRATION_CHECKSUM = hashlib.sha256(WORKFLOW_MIGRATION_NAME.encode("utf-8")).hexdigest()
 
 
 PR_MAINLINE_MIGRATION_VERSION = 4
 PR_MAINLINE_MIGRATION_NAME = "robert-pr-mainline-workstreams-v1"
-PR_MAINLINE_MIGRATION_CHECKSUM = hashlib.sha256(
-    PR_MAINLINE_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+PR_MAINLINE_MIGRATION_CHECKSUM = hashlib.sha256(PR_MAINLINE_MIGRATION_NAME.encode("utf-8")).hexdigest()
 RECOMMENDED_SKILLS_MIGRATION_VERSION = 5
 RECOMMENDED_SKILLS_MIGRATION_NAME = "robert-route-recommended-skills-v1"
-RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(
-    RECOMMENDED_SKILLS_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(RECOMMENDED_SKILLS_MIGRATION_NAME.encode("utf-8")).hexdigest()
 SUPERVISION_MIGRATION_VERSION = 6
 SUPERVISION_MIGRATION_NAME = "robert-supervision-v1"
-SUPERVISION_MIGRATION_CHECKSUM = hashlib.sha256(
-    SUPERVISION_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+SUPERVISION_MIGRATION_CHECKSUM = hashlib.sha256(SUPERVISION_MIGRATION_NAME.encode("utf-8")).hexdigest()
 
 
 def _data_migration_pending(conn, name, checksum):
-    marker = conn.execute(
-        "SELECT checksum FROM schema_migrations WHERE name=?", (name,)
-    ).fetchone()
+    marker = conn.execute("SELECT checksum FROM schema_migrations WHERE name=?", (name,)).fetchone()
     if marker and marker[0] != checksum:
         raise RuntimeError(f"{name} migration checksum mismatch")
     return marker is None
@@ -51,9 +39,7 @@ def _data_migration_pending(conn, name, checksum):
 def _migration_version(conn, preferred):
     # Legacy DD installations may already use this ordinal for another name.
     # Names and checksums identify migrations; retain their historical ordinals.
-    latest = conn.execute(
-        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-    ).fetchone()[0]
+    latest = conn.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0]
     return max(preferred, latest + 1)
 
 
@@ -94,9 +80,7 @@ def _repair_origin_workstream_after_task_move(conn, origin_workstream_id, task_i
     ).fetchone()
     if not row or row[0] != task_id:
         return
-    lifecycle = (
-        "active" if _has_active_task(conn, origin_workstream_id) else "completed"
-    )
+    lifecycle = "active" if _has_active_task(conn, origin_workstream_id) else "completed"
     conn.execute(
         """
         UPDATE workstreams
@@ -182,9 +166,7 @@ def _migrate_pr_mainline_workstreams(conn):
             """,
             (source_key, source_id),
         )
-        _repair_origin_workstream_after_task_move(
-            conn, origin_workstream_id, task_id, now
-        )
+        _repair_origin_workstream_after_task_move(conn, origin_workstream_id, task_id, now)
 
 
 def _migrate_github_action_publish_status(conn):
@@ -204,11 +186,7 @@ def _migrate_route_recommended_skills(conn):
         "recommended_skills_json",
         "recommended_skills_json TEXT NOT NULL DEFAULT '[]'",
     )
-    source_column = (
-        "allowed_skills_json"
-        if "allowed_skills_json" in columns
-        else "required_skills_json"
-    )
+    source_column = "allowed_skills_json" if "allowed_skills_json" in columns else "required_skills_json"
     conn.execute(
         f"""
         UPDATE route_decisions
@@ -314,9 +292,7 @@ def _backfill_work_item_id(workstream_id):
 
 
 def _backfill_event_id(workstream_id):
-    digest = hashlib.sha256(f"backfill:{workstream_id}".encode("utf-8")).hexdigest()[
-        :20
-    ]
+    digest = hashlib.sha256(f"backfill:{workstream_id}".encode("utf-8")).hexdigest()[:20]
     return f"wie-{digest}"
 
 
@@ -592,13 +568,9 @@ def init_database(db_path, schema_path=None):
             "retry_count",
             "retry_count INTEGER NOT NULL DEFAULT 0",
         )
-        _ensure_column(
-            conn, "github_scan_batches", "attention_reason", "attention_reason TEXT"
-        )
+        _ensure_column(conn, "github_scan_batches", "attention_reason", "attention_reason TEXT")
         pending = []
-        pr_pending = _data_migration_pending(
-            conn, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM
-        )
+        pr_pending = _data_migration_pending(conn, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM)
         skills_pending = _data_migration_pending(
             conn,
             RECOMMENDED_SKILLS_MIGRATION_NAME,
@@ -656,10 +628,7 @@ def init_database(db_path, schema_path=None):
                     (_migration_version(conn, preferred), name, checksum),
                 )
         tables = sorted(
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
-            )
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         )
 
     return {

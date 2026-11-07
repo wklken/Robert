@@ -54,10 +54,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             relationships = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT relationship FROM task_events ORDER BY relationship"
-                )
+                row[0] for row in conn.execute("SELECT relationship FROM task_events ORDER BY relationship")
             }
         self.assertEqual(task_count, 1)
         self.assertEqual(relationships, {"context", "trigger"})
@@ -110,10 +107,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             relationships = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT relationship FROM task_events ORDER BY relationship"
-                )
+                row[0] for row in conn.execute("SELECT relationship FROM task_events ORDER BY relationship")
             }
             event_status = conn.execute(
                 """
@@ -195,12 +189,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            workstream_ids = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT workstream_id FROM tasks ORDER BY created_at"
-                )
-            ]
+            workstream_ids = [row[0] for row in conn.execute("SELECT workstream_id FROM tasks ORDER BY created_at")]
         self.assertEqual(
             workstream_ids,
             [
@@ -300,9 +289,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
                 """
             ).fetchone()
         self.assertEqual(pr_task_count, 0)
-        self.assertEqual(
-            event_row, ("context_only", "reviewer", "comment:pr-member-followup")
-        )
+        self.assertEqual(event_row, ("context_only", "reviewer", "comment:pr-member-followup"))
 
     def test_trusted_context_on_known_inactive_pr_workstream_creates_new_task(self):
         from robert_agent.runtime import cycle as run_once
@@ -456,9 +443,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         self.assertTrue(issue_run["ok"], issue_run)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            issue_task_id, issue_attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            issue_task_id, issue_attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         record = result.record_result(
             db_path,

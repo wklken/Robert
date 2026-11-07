@@ -99,24 +99,15 @@ def _task_operator_state(task):
         return "needs_attention", "inspect_failure_notification"
     if task.get("pending_publish_actions", 0):
         return "waiting_publish", "publish_accepted_github_actions"
-    if (
-        task["lifecycle"] == "waiting_for_user"
-        or task.get("workstream_lifecycle") == "waiting_for_user"
-    ):
+    if task["lifecycle"] == "waiting_for_user" or task.get("workstream_lifecycle") == "waiting_for_user":
         return "waiting_user", "wait_for_trusted_user_reply"
     if task.get("latest_attempt_status") == "stale":
         return "worker_stale", "inspect_worker_heartbeat"
-    if (
-        task["lifecycle"] in {"queued", "running"}
-        and task.get("worker_resume_count", 0) >= 2
-    ):
+    if task["lifecycle"] in {"queued", "running"} and task.get("worker_resume_count", 0) >= 2:
         return "worker_retrying", "inspect_worker_resume"
     if task["lifecycle"] in {"queued", "running"} and task.get("result_pending_audit"):
         return "result_pending_audit", "wait_next_cycle_or_run_once"
-    if (
-        task["lifecycle"] in {"queued", "running"}
-        and task.get("latest_attempt_status") == "running"
-    ):
+    if task["lifecycle"] in {"queued", "running"} and task.get("latest_attempt_status") == "running":
         return "worker_running", "wait_for_worker_completion"
     if task["lifecycle"] in {
         "detected",
@@ -162,10 +153,7 @@ def _attach_task_operator_state(conn, recent_tasks):
         task_ids,
     ):
         action_state = actions_by_task[row["task_id"]]
-        if (
-            row["audit_status"] == "accepted"
-            and row["publish_status"] == "not_published"
-        ):
+        if row["audit_status"] == "accepted" and row["publish_status"] == "not_published":
             action_state["pending_publish_actions"] += 1
             if not action_state["latest_pending_publish"]:
                 action_state["latest_pending_publish"] = {
@@ -184,12 +172,8 @@ def _attach_task_operator_state(conn, recent_tasks):
                     "action_id": row["action_id"],
                     "action_type": row["action_type"],
                     "target_url": row["target_url"],
-                    "safe_error": publish.get("safe_error")
-                    if isinstance(publish, dict)
-                    else None,
-                    "command": publish.get("command")
-                    if isinstance(publish, dict)
-                    else None,
+                    "safe_error": publish.get("safe_error") if isinstance(publish, dict) else None,
+                    "command": publish.get("command") if isinstance(publish, dict) else None,
                 }
         if isinstance(publish, dict) and publish.get("status") == "publish_failed":
             action_state["failed_publish_actions"] += 1
@@ -309,9 +293,7 @@ def _attach_task_operator_state(conn, recent_tasks):
         )
 
     attention_by_task = {
-        row["task_id"]: (_decode_json(row["metadata_json"]) or {}).get(
-            "execution_attention"
-        )
+        row["task_id"]: (_decode_json(row["metadata_json"]) or {}).get("execution_attention")
         for row in conn.execute(
             f"SELECT task_id,metadata_json FROM tasks WHERE task_id IN ({placeholders})",
             task_ids,
@@ -327,12 +309,8 @@ def _attach_task_operator_state(conn, recent_tasks):
         task["latest_attempt_started_at"] = latest_attempt.get("started_at")
         task["latest_attempt_finished_at"] = latest_attempt.get("finished_at")
         task["latest_notification"] = notifications_by_task.get(task["task_id"])
-        task["worker_resume_count"] = worker_resume_counts_by_task.get(
-            task["task_id"], 0
-        )
-        task["result_pending_audit"] = result_pending_audit_by_task.get(
-            task["task_id"], False
-        )
+        task["worker_resume_count"] = worker_resume_counts_by_task.get(task["task_id"], 0)
+        task["result_pending_audit"] = result_pending_audit_by_task.get(task["task_id"], False)
         source = sources_by_task.get(task["task_id"]) or {}
         task["source_key"] = source.get("source_key")
         task["source_title"] = source.get("source_title")
@@ -340,9 +318,7 @@ def _attach_task_operator_state(conn, recent_tasks):
         task["source_type"] = source.get("source_type")
         task["source_number"] = source.get("number")
         task["trigger_event_fingerprint"] = source.get("event_fingerprint")
-        task["artifacts"] = dict(
-            sorted(artifacts_by_task.get(task["task_id"], {}).items())
-        )
+        task["artifacts"] = dict(sorted(artifacts_by_task.get(task["task_id"], {}).items()))
         operator_state, next_action = _task_operator_state(task)
         task["operator_state"] = operator_state
         task["next_action"] = next_action
@@ -396,9 +372,7 @@ def _build_operator_alerts(operator_state_counts, event_flow_counts, summary_cou
         "pending_actor_permission_events",
         summary_counts.get(
             "pending_actor_permission_events",
-            event_flow_counts.get("authorization_status", {}).get(
-                "pending_actor_permission", 0
-            ),
+            event_flow_counts.get("authorization_status", {}).get("pending_actor_permission", 0),
         ),
         "warning",
         "resolve_actor_permission",
@@ -407,9 +381,7 @@ def _build_operator_alerts(operator_state_counts, event_flow_counts, summary_cou
         "pending_authorization_events",
         summary_counts.get(
             "pending_authorization_events",
-            event_flow_counts.get("authorization_status", {}).get(
-                "pending_authorization", 0
-            ),
+            event_flow_counts.get("authorization_status", {}).get("pending_authorization", 0),
         ),
         "warning",
         "resolve_authorization_lookup",
@@ -511,9 +483,7 @@ def _build_operator_next_steps(recent_tasks, recent_events, priority_events=None
             metadata = notification.get("metadata") or {}
             audit = metadata.get("audit") if isinstance(metadata, dict) else {}
             step["notification_type"] = notification.get("notification_type")
-            step["result_id"] = (
-                metadata.get("result_id") if isinstance(metadata, dict) else None
-            )
+            step["result_id"] = metadata.get("result_id") if isinstance(metadata, dict) else None
             step["safe_error"] = (
                 audit.get("safe_error")
                 if isinstance(audit, dict)
@@ -535,18 +505,10 @@ def _build_operator_next_steps(recent_tasks, recent_events, priority_events=None
             notification = task.get("latest_notification") or {}
             metadata = notification.get("metadata") or {}
             step["notification_type"] = notification.get("notification_type")
-            step["attempt_id"] = (
-                metadata.get("attempt_id") if isinstance(metadata, dict) else None
-            )
-            step["resume_attempt_id"] = (
-                metadata.get("resume_attempt_id")
-                if isinstance(metadata, dict)
-                else None
-            )
+            step["attempt_id"] = metadata.get("attempt_id") if isinstance(metadata, dict) else None
+            step["resume_attempt_id"] = metadata.get("resume_attempt_id") if isinstance(metadata, dict) else None
             step["recovery_artifact_path"] = (
-                metadata.get("recovery_artifact_path")
-                if isinstance(metadata, dict)
-                else None
+                metadata.get("recovery_artifact_path") if isinstance(metadata, dict) else None
             )
             step["worker_resume_count"] = task.get("worker_resume_count")
         elif task["next_action"] == "wait_next_cycle_or_run_once":
@@ -593,18 +555,11 @@ def _notification_task_id(notification):
 
 def _status_severity(*values):
     text = " ".join(str(value or "").lower() for value in values)
-    if any(
-        token in text for token in ("failed", "failure", "rejected", "timeout", "error")
-    ):
+    if any(token in text for token in ("failed", "failure", "rejected", "timeout", "error")):
         return "critical"
-    if any(
-        token in text
-        for token in ("stale", "retry", "skipped", "pending", "permission")
-    ):
+    if any(token in text for token in ("stale", "retry", "skipped", "pending", "permission")):
         return "warning"
-    if any(
-        token in text for token in ("completed", "succeeded", "healthy", "resolved")
-    ):
+    if any(token in text for token in ("completed", "succeeded", "healthy", "resolved")):
         return "ok"
     return "info"
 
@@ -721,9 +676,7 @@ def _build_notification_center(
                 kind="daemon_event",
                 severity=_status_severity(event.get("status"), event.get("event_type")),
                 title=event.get("event_type") or "daemon_event",
-                summary=metadata.get("reason")
-                if isinstance(metadata, dict)
-                else event.get("status"),
+                summary=metadata.get("reason") if isinstance(metadata, dict) else event.get("status"),
                 created_at=event.get("created_at"),
                 metadata=event,
             )
@@ -734,14 +687,8 @@ def _build_notification_center(
         publish_status = action.get("publish_status")
         metadata = action.get("metadata") or {}
         publish = metadata.get("publish") if isinstance(metadata, dict) else {}
-        failed_publish = (
-            isinstance(publish, dict) and publish.get("status") == "publish_failed"
-        )
-        if (
-            audit_status not in {"failed", "policy_violation"}
-            and publish_status != "skipped"
-            and not failed_publish
-        ):
+        failed_publish = isinstance(publish, dict) and publish.get("status") == "publish_failed"
+        if audit_status not in {"failed", "policy_violation"} and publish_status != "skipped" and not failed_publish:
             continue
         task = tasks_by_id.get(action.get("task_id"), {})
         items.append(
@@ -754,9 +701,7 @@ def _build_notification_center(
                     publish.get("status") if isinstance(publish, dict) else None,
                 ),
                 title=action.get("action_type") or "github_action",
-                summary=publish.get("safe_error")
-                if isinstance(publish, dict)
-                else publish_status or audit_status,
+                summary=publish.get("safe_error") if isinstance(publish, dict) else publish_status or audit_status,
                 created_at=action.get("created_at"),
                 task_id=action.get("task_id"),
                 source_key=task.get("source_key"),
@@ -796,9 +741,7 @@ def _build_notification_center(
 def _build_work_items(recent_tasks):
     groups = {}
     for task in recent_tasks:
-        item_id = (
-            task.get("source_key") or task.get("workstream_id") or task.get("task_id")
-        )
+        item_id = task.get("source_key") or task.get("workstream_id") or task.get("task_id")
         if not item_id:
             continue
         group = groups.setdefault(
@@ -834,15 +777,12 @@ def _build_work_items(recent_tasks):
         if not group.get("github_url") and task.get("github_url"):
             group["github_url"] = task.get("github_url")
         if task.get("updated_at") and (
-            not group.get("latest_task_updated_at")
-            or task["updated_at"] > group["latest_task_updated_at"]
+            not group.get("latest_task_updated_at") or task["updated_at"] > group["latest_task_updated_at"]
         ):
             group["latest_task_updated_at"] = task["updated_at"]
         group["task_count"] += 1
         state = task.get("operator_state") or "unknown"
-        group["operator_state_counts"][state] = (
-            group["operator_state_counts"].get(state, 0) + 1
-        )
+        group["operator_state_counts"][state] = group["operator_state_counts"].get(state, 0) + 1
         group["tasks"].append(task)
 
     state_priority = {
@@ -973,16 +913,10 @@ def build_dashboard_data(db_path, history_limit=20):
             )
         ]
         for task in recent_tasks:
-            task["allowed_github_actions"] = (
-                _decode_json(task.pop("allowed_github_actions_json")) or []
-            )
-            task["recommended_skills"] = (
-                _decode_json(task.pop("recommended_skills_json")) or []
-            )
+            task["allowed_github_actions"] = _decode_json(task.pop("allowed_github_actions_json")) or []
+            task["recommended_skills"] = _decode_json(task.pop("recommended_skills_json")) or []
         _attach_task_operator_state(conn, recent_tasks)
-        operator_state_counts = dict(
-            sorted(Counter(task["operator_state"] for task in recent_tasks).items())
-        )
+        operator_state_counts = dict(sorted(Counter(task["operator_state"] for task in recent_tasks).items()))
         recent_actions = [
             dict(row)
             for row in conn.execute(
@@ -1029,9 +963,7 @@ def build_dashboard_data(db_path, history_limit=20):
         ]
         used_skill_counts = Counter()
         for result in recent_worker_results:
-            result["consumed_event_fingerprints"] = (
-                _decode_json(result.pop("consumed_event_fingerprints_json")) or []
-            )
+            result["consumed_event_fingerprints"] = _decode_json(result.pop("consumed_event_fingerprints_json")) or []
             result["verification"] = _decode_json(result.pop("verification_json")) or []
             result["metadata"] = _decode_json(result.pop("metadata_json")) or {}
             used_skill_counts.update(result["metadata"].get("used_skills") or [])
@@ -1075,27 +1007,14 @@ def build_dashboard_data(db_path, history_limit=20):
         )
         event_flow_counts = {
             "authorization_status": dict(
-                sorted(
-                    Counter(
-                        event["authorization_status"] for event in recent_events
-                    ).items()
-                )
+                sorted(Counter(event["authorization_status"] for event in recent_events).items())
             ),
             "task_relationship": dict(
-                sorted(
-                    Counter(
-                        event["task_relationship"] or "unattached"
-                        for event in recent_events
-                    ).items()
-                )
+                sorted(Counter(event["task_relationship"] or "unattached" for event in recent_events).items())
             ),
-            "authorized_unattached": sum(
-                1 for event in recent_events if _is_authorized_unattached_event(event)
-            ),
+            "authorized_unattached": sum(1 for event in recent_events if _is_authorized_unattached_event(event)),
             "ignored_events": sum(
-                1
-                for event in recent_events
-                if (event["authorization_status"] or "").startswith("ignored_")
+                1 for event in recent_events if (event["authorization_status"] or "").startswith("ignored_")
             ),
         }
         summary_counts = summarize.summarize_database(db_path)
@@ -1224,9 +1143,7 @@ def build_dashboard_data(db_path, history_limit=20):
 
 def _build_knowledge_review_data(conn, history_limit=20):
     proposal_repos = _knowledge_proposal_repos(conn)
-    if not _table_exists(conn, "knowledge_candidates") or not _table_exists(
-        conn, "runtime_knowledge"
-    ):
+    if not _table_exists(conn, "knowledge_candidates") or not _table_exists(conn, "runtime_knowledge"):
         return {
             "available": False,
             "submission_boundary": "local_runtime_knowledge_only",
@@ -1246,9 +1163,7 @@ def _build_knowledge_review_data(conn, history_limit=20):
             """
         )
     }
-    active_count = conn.execute(
-        "SELECT COUNT(*) FROM runtime_knowledge WHERE active = 1"
-    ).fetchone()[0]
+    active_count = conn.execute("SELECT COUNT(*) FROM runtime_knowledge WHERE active = 1").fetchone()[0]
     pending_candidates = [
         runtime_knowledge.show_candidate(conn, row["candidate_id"])
         for row in conn.execute(
@@ -1345,9 +1260,7 @@ def _knowledge_tables_available(conn):
     )
 
 
-def load_artifact_preview(
-    db_path, task_id, artifact_type, max_bytes=65536, *, artifact_id=None
-):
+def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, artifact_id=None):
     if not task_id or not artifact_type:
         return None
     with closing(sqlite3.connect(db_path)) as conn, conn:

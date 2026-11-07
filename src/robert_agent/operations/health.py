@@ -40,10 +40,7 @@ def _control_failure_snapshot(conn, limit):
         (limit,),
     ).fetchall()
     for identifier, status, encoded in runs:
-        if (
-            status != "failed"
-            or json.loads(encoded or "{}").get("status") != "executor_interrupted"
-        ):
+        if status != "failed" or json.loads(encoded or "{}").get("status") != "executor_interrupted":
             if not streaks.get("executor"):
                 recovered.add("executor")
             break
@@ -51,9 +48,7 @@ def _control_failure_snapshot(conn, limit):
     return streaks, recovered
 
 
-def _persist_control_failure_alerts(
-    conn, now, streaks, recovered, *, supervision_owns_alerts=False
-):
+def _persist_control_failure_alerts(conn, now, streaks, recovered, *, supervision_owns_alerts=False):
     for lane in {"scan", "local", "publish", "context_refresh", "executor"}:
         failures = streaks.get(lane, [])
         existing = conn.execute(
@@ -98,9 +93,7 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
     placeholders = ",".join("?" for _ in repo_ids)
     with closing(sqlite3.connect(db_path, timeout=0.1)) as conn:
         streaks, recovered = _control_failure_snapshot(conn, limit)
-        control_failure_streak = max(
-            (len(failures) for failures in streaks.values()), default=0
-        )
+        control_failure_streak = max((len(failures) for failures in streaks.values()), default=0)
         pages = conn.execute("PRAGMA page_count").fetchone()[0]
         free = conn.execute("PRAGMA freelist_count").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
@@ -136,9 +129,7 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
             "SELECT count(*), MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM workflow_outbox WHERE status='pending'",
             (now,),
         ).fetchone()
-        outbox_attention = conn.execute(
-            "SELECT count(*) FROM workflow_outbox WHERE status='attention'"
-        ).fetchone()[0]
+        outbox_attention = conn.execute("SELECT count(*) FROM workflow_outbox WHERE status='attention'").fetchone()[0]
     alerts_persisted = True
     try:
         with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
@@ -190,7 +181,5 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
         "pending_outbox": outbox[0],
         "oldest_outbox_seconds": outbox[1],
         "attention_outbox": outbox_attention,
-        "notification_delivery_configured": bool(
-            os.environ.get("ROBERT_NOTIFICATION_COMMAND")
-        ),
+        "notification_delivery_configured": bool(os.environ.get("ROBERT_NOTIFICATION_COMMAND")),
     }

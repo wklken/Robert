@@ -17,9 +17,7 @@ from robert_agent.delivery import contract as result_contract
 
 class CompactCallerTests(unittest.TestCase):
     def test_all_prompt_examples_are_compact_submissions(self):
-        samples = json.loads(
-            (TEST_ROOT / "fixtures" / "worker_prompt_inputs.json").read_text()
-        )
+        samples = json.loads((TEST_ROOT / "fixtures" / "worker_prompt_inputs.json").read_text())
         for sample in samples:
             with self.subTest(route=sample["name"]):
                 prompt = render_prompt.render_prompt(
@@ -30,9 +28,7 @@ class CompactCallerTests(unittest.TestCase):
                     sample.get("project_memories"),
                     sample.get("runtime_knowledge"),
                 )
-                submission = json.loads(
-                    re.search(r"<<'JSON'\n(.*?)\nJSON", prompt, re.S)[1]
-                )
+                submission = json.loads(re.search(r"<<'JSON'\n(.*?)\nJSON", prompt, re.S)[1])
                 if submission.get("review_input_kind", "").startswith("<"):
                     submission["review_input_kind"] = "request"
                 result_contract.validate_submission(
@@ -55,9 +51,7 @@ class CompactCallerTests(unittest.TestCase):
             ],
         }
         self.assertEqual(
-            audit_result._audit_review_point_evaluation(
-                result, ["comment"], "classify"
-            ),
+            audit_result._audit_review_point_evaluation(result, ["comment"], "classify"),
             ["invalid_review_input_kind"],
         )
 
@@ -123,15 +117,9 @@ class CutoverTests(unittest.TestCase):
         db.execute("UPDATE tasks SET lifecycle='completed'")
         db.execute("UPDATE attempts SET status='completed'")
         db.execute("INSERT INTO worker_results VALUES('r','t','{}')")
-        self.assertTrue(
-            result_cutover.inspect(db, "/tmp/nonexistent-cutover-test-db")["ok"]
-        )
-        db.execute(
-            "INSERT INTO github_actions VALUES('action','r','not_published','accepted')"
-        )
-        self.assertFalse(
-            result_cutover.inspect(db, "/tmp/nonexistent-cutover-test-db")["ok"]
-        )
+        self.assertTrue(result_cutover.inspect(db, "/tmp/nonexistent-cutover-test-db")["ok"])
+        db.execute("INSERT INTO github_actions VALUES('action','r','not_published','accepted')")
+        self.assertFalse(result_cutover.inspect(db, "/tmp/nonexistent-cutover-test-db")["ok"])
         db.close()
 
     def test_direct_publisher_isolates_legacy_push_before_external_effects(self):
@@ -144,12 +132,8 @@ class CutoverTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            conn.execute(
-                "UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.result_contract')"
-            )
-        commands = Mock(
-            side_effect=AssertionError("old protocol must not reach external effects")
-        )
+            conn.execute("UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.result_contract')")
+        commands = Mock(side_effect=AssertionError("old protocol must not reach external effects"))
         response = publish.publish_ready_actions(fixture.db, run_command=commands)
         self.assertTrue(response["ok"], response)
         self.assertEqual(response["pending_count"], 0)
@@ -174,9 +158,7 @@ class CutoverTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            conn.execute(
-                "UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.result_contract')"
-            )
+            conn.execute("UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.result_contract')")
         config = {
             "ok": True,
             "db_path": fixture.db,
@@ -184,13 +166,9 @@ class CutoverTests(unittest.TestCase):
         }
         with (
             patch.object(validate_config, "validate_config", return_value=config),
-            patch(
-                "robert_agent.delivery.application.notifications.deliver_pending"
-            ) as notify,
+            patch("robert_agent.delivery.application.notifications.deliver_pending") as notify,
             patch.object(github_budget, "budget", return_value=True),
-            patch(
-                "robert_agent.delivery.application.publish.publish_ready_actions"
-            ) as publish,
+            patch("robert_agent.delivery.application.publish.publish_ready_actions") as publish,
         ):
             publish.return_value = {"ok": True}
             response = delivery_lane.publish("unused")
@@ -217,9 +195,7 @@ class CutoverTests(unittest.TestCase):
             )
         self.assertFalse(result_cutover.check(fixture.db)["ok"])
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            conn.execute(
-                "UPDATE workstreams SET lifecycle='completed', active_task_id=NULL"
-            )
+            conn.execute("UPDATE workstreams SET lifecycle='completed', active_task_id=NULL")
         self.assertTrue(result_cutover.check(fixture.db)["ok"])
 
     def test_pending_legacy_spool_is_preserved(self):
@@ -263,23 +239,17 @@ class CutoverControlPathTests(unittest.TestCase):
 
         db, task, attempt, _, _ = self.prepare("comment")
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE attempts SET metadata_json='{}' WHERE attempt_id=?", (attempt,)
-            )
+            conn.execute("UPDATE attempts SET metadata_json='{}' WHERE attempt_id=?", (attempt,))
             item_id, version, repo_id = conn.execute(
                 """SELECT wi.work_item_id,wi.version,wi.repo_id
                 FROM work_items wi JOIN tasks t ON wi.workstream_id=t.workstream_id WHERE t.task_id=?""",
                 (task,),
             ).fetchone()
         self.assertEqual(
-            run_once.run_once(self.config_path, dry_run=True, skip_external=True)[
-                "status"
-            ],
+            run_once.run_once(self.config_path, dry_run=True, skip_external=True)["status"],
             "blocked_result_contract_cutover",
         )
-        context = work_items.CommandContext(
-            "operator", "owner", frozenset({repo_id}), frozenset({"default"})
-        )
+        context = work_items.CommandContext("operator", "owner", frozenset({repo_id}), frozenset({"default"}))
         work_items.execute_command(
             db,
             item_id,
@@ -302,9 +272,7 @@ class CutoverControlPathTests(unittest.TestCase):
             idempotency_key="cutover-replacement",
         )
         self.assertNotEqual(created["item"]["work_item_id"], item_id)
-        self.assertTrue(
-            run_once.run_once(self.config_path, dry_run=True, skip_external=True)["ok"]
-        )
+        self.assertTrue(run_once.run_once(self.config_path, dry_run=True, skip_external=True)["ok"])
         with closing(sqlite3.connect(db)) as conn:
             self.assertEqual(
                 conn.execute(
@@ -315,11 +283,7 @@ class CutoverControlPathTests(unittest.TestCase):
             )
             contracts = [
                 json.loads(row[0]).get("result_contract")
-                for row in conn.execute(
-                    "SELECT metadata_json FROM attempts WHERE attempt_id!=?", (attempt,)
-                )
+                for row in conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id!=?", (attempt,))
             ]
         self.assertTrue(contracts)
-        self.assertTrue(
-            all(contract == result_contract.CONTRACT_ID for contract in contracts)
-        )
+        self.assertTrue(all(contract == result_contract.CONTRACT_ID for contract in contracts))

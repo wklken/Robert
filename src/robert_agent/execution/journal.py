@@ -43,16 +43,8 @@ def mark_run_step(conn, run_id, key, status, run_now=None, output=None, error=No
     output = _step_duration((run_id, None, key), status, output)
     if key == "summarize" and status == "succeeded" and isinstance(output, dict):
         output = SUMMARY_REFERENCE
-    output_json = (
-        json.dumps(output, ensure_ascii=False, sort_keys=True)
-        if output is not None
-        else None
-    )
-    error_json = (
-        json.dumps(error, ensure_ascii=False, sort_keys=True)
-        if error is not None
-        else None
-    )
+    output_json = json.dumps(output, ensure_ascii=False, sort_keys=True) if output is not None else None
+    error_json = json.dumps(error, ensure_ascii=False, sort_keys=True) if error is not None else None
     finished_at = run_now if status in {"succeeded", "failed", "skipped"} else None
     conn.execute(
         """
@@ -79,22 +71,12 @@ def _insert_repo_run_step(conn, run_id, repo_id, key, status="pending"):
     )
 
 
-def mark_repo_run_step(
-    conn, run_id, repo_id, key, status, run_now=None, output=None, error=None
-):
+def mark_repo_run_step(conn, run_id, repo_id, key, status, run_now=None, output=None, error=None):
     run_now = values.utc_now()
     output = _step_duration((run_id, repo_id, key), status, output)
     finished_at = run_now if status in {"succeeded", "failed", "skipped"} else None
-    output_json = (
-        json.dumps(output, ensure_ascii=False, sort_keys=True)
-        if output is not None
-        else None
-    )
-    error_json = (
-        json.dumps(error, ensure_ascii=False, sort_keys=True)
-        if error is not None
-        else None
-    )
+    output_json = json.dumps(output, ensure_ascii=False, sort_keys=True) if output is not None else None
+    error_json = json.dumps(error, ensure_ascii=False, sort_keys=True) if error is not None else None
     conn.execute(
         """
         UPDATE run_repo_steps
@@ -187,9 +169,7 @@ def start_run(conn, run_id, started_at, config_path, summary_json, *, dry_run=Fa
     )
 
 
-def finish_run(
-    conn, run_id, status, finished_at, summary, *, error=None, sort_keys=True
-):
+def finish_run(conn, run_id, status, finished_at, summary, *, error=None, sort_keys=True):
     summary_json = json.dumps(summary, sort_keys=sort_keys)
     if error is None:
         conn.execute(
@@ -248,33 +228,17 @@ def summarize_repositories(
 ):
     aggregate_counts = {
         "supervised_count": sum(item["supervised_count"] for item in repo_summaries),
-        "failed_timeout_recovered_count": sum(
-            item["failed_timeout_recovered_count"] for item in repo_summaries
-        ),
-        "audited_result_count": sum(
-            item["audited_result_count"] for item in repo_summaries
-        ),
-        "reconciled_source_count": sum(
-            item["reconciled_source_count"] for item in repo_summaries
-        ),
+        "failed_timeout_recovered_count": sum(item["failed_timeout_recovered_count"] for item in repo_summaries),
+        "audited_result_count": sum(item["audited_result_count"] for item in repo_summaries),
+        "reconciled_source_count": sum(item["reconciled_source_count"] for item in repo_summaries),
         "raw_event_count": sum(item["raw_event_count"] for item in repo_summaries),
         "decision_count": sum(item["decision_count"] for item in repo_summaries),
-        "current_state_closed_skip_count": sum(
-            item["current_state_closed_skip_count"] for item in repo_summaries
-        ),
-        "publish_pending_count": sum(
-            item["publish_pending_count"] for item in repo_summaries
-        ),
+        "current_state_closed_skip_count": sum(item["current_state_closed_skip_count"] for item in repo_summaries),
+        "publish_pending_count": sum(item["publish_pending_count"] for item in repo_summaries),
         "published_count": sum(item["published_count"] for item in repo_summaries),
-        "publish_skipped_count": sum(
-            item["publish_skipped_count"] for item in repo_summaries
-        ),
-        "publish_failed_count": sum(
-            item["publish_failed_count"] for item in repo_summaries
-        ),
-        "finalized_task_count": sum(
-            item["finalized_task_count"] for item in repo_summaries
-        ),
+        "publish_skipped_count": sum(item["publish_skipped_count"] for item in repo_summaries),
+        "publish_failed_count": sum(item["publish_failed_count"] for item in repo_summaries),
+        "finalized_task_count": sum(item["finalized_task_count"] for item in repo_summaries),
     }
     publish_result = {
         "ok": aggregate_counts["publish_failed_count"] == 0,
@@ -282,11 +246,7 @@ def summarize_repositories(
             "skipped"
             if skip_publish
             else (
-                "publish_failed"
-                if aggregate_counts["publish_failed_count"]
-                else "dry_run"
-                if dry_run
-                else "published"
+                "publish_failed" if aggregate_counts["publish_failed_count"] else "dry_run" if dry_run else "published"
             )
         ),
         "pending_count": aggregate_counts["publish_pending_count"],
@@ -301,19 +261,13 @@ def summarize_repositories(
     step_outputs = {
         "acquire_lease": {
             "repo_count": len(repo_summaries),
-            "acquired_count": sum(
-                1 for item in repo_summaries if item["lease_status"] == "acquired"
-            ),
+            "acquired_count": sum(1 for item in repo_summaries if item["lease_status"] == "acquired"),
             "skipped_active_lease_count": sum(
-                1
-                for item in repo_summaries
-                if item["lease_status"] == "skipped_active_lease"
+                1 for item in repo_summaries if item["lease_status"] == "skipped_active_lease"
             ),
         },
         "supervise": {
-            "failed_timeout_recovered_count": aggregate_counts[
-                "failed_timeout_recovered_count"
-            ],
+            "failed_timeout_recovered_count": aggregate_counts["failed_timeout_recovered_count"],
             "supervised_count": aggregate_counts["supervised_count"],
         },
         "audit_results": {
@@ -333,26 +287,17 @@ def summarize_repositories(
             "prompt_count": prompt_count,
             "dispatch_queue_count": queued_count,
             "reconciled_source_count": aggregate_counts["reconciled_source_count"],
-            "current_state_closed_skip_count": aggregate_counts[
-                "current_state_closed_skip_count"
-            ],
+            "current_state_closed_skip_count": aggregate_counts["current_state_closed_skip_count"],
         },
     }
 
     for step in REPO_STEP_ORDER:
         failed_summary = next(
-            (
-                item
-                for item in repo_summaries
-                if item["status"] == "failed" and item.get("safe_error")
-            ),
+            (item for item in repo_summaries if item["status"] == "failed" and item.get("safe_error")),
             None,
         )
         error = None
-        if (
-            aggregate_repo_step_status(conn, run_id, step) == "failed"
-            and failed_summary
-        ):
+        if aggregate_repo_step_status(conn, run_id, step) == "failed" and failed_summary:
             error = {
                 "status": failed_summary.get("failure_status", "failed"),
                 "safe_error": failed_summary["safe_error"],
@@ -370,14 +315,8 @@ def summarize_repositories(
         )
 
     failed_repos = [item for item in repo_summaries if item["status"] == "failed"]
-    succeeded_repos = [
-        item
-        for item in repo_summaries
-        if item["status"] in {"completed", "skipped_active_lease"}
-    ]
-    if repo_summaries and all(
-        item["status"] == "skipped_active_lease" for item in repo_summaries
-    ):
+    succeeded_repos = [item for item in repo_summaries if item["status"] in {"completed", "skipped_active_lease"}]
+    if repo_summaries and all(item["status"] == "skipped_active_lease" for item in repo_summaries):
         overall_status = "skipped_active_lease"
     elif failed_repos and succeeded_repos:
         overall_status = "partial_failure"
@@ -387,9 +326,7 @@ def summarize_repositories(
         overall_status = "completed"
 
     repo_pipeline_status = (
-        "skipped"
-        if overall_status == "skipped_active_lease"
-        else ("failed" if failed_repos else "succeeded")
+        "skipped" if overall_status == "skipped_active_lease" else ("failed" if failed_repos else "succeeded")
     )
     mark_run_step(
         conn,
@@ -404,11 +341,7 @@ def summarize_repositories(
 
 def dispatch_failure_for(dispatch_results, dispatch_error):
     return dispatch_error or next(
-        (
-            result
-            for result in dispatch_results
-            if not result.get("ok", True) or result.get("status") == "failed"
-        ),
+        (result for result in dispatch_results if not result.get("ok", True) or result.get("status") == "failed"),
         None,
     )
 
@@ -435,9 +368,7 @@ def finish_dispatch(
         "audited_result_count": aggregate_counts["audited_result_count"],
         "publish_result": publish_result,
         "reconciled_source_count": aggregate_counts["reconciled_source_count"],
-        "current_state_closed_skip_count": aggregate_counts[
-            "current_state_closed_skip_count"
-        ],
+        "current_state_closed_skip_count": aggregate_counts["current_state_closed_skip_count"],
         "supervised_count": aggregate_counts["supervised_count"],
     }
     if failure:

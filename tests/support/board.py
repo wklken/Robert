@@ -126,7 +126,4 @@ class BoardReadModelFixture(unittest.TestCase):
                 "UPDATE work_items SET completed_at = ?, updated_at = ?, version = version + 1 WHERE work_item_id = ?",
                 (now, now, done["work_item_id"]),
             )
-        return {
-            item["title"].split()[0].lower(): item
-            for item in (backlog, todo, doing, waiting, review, done)
-        }
+        return {item["title"].split()[0].lower(): item for item in (backlog, todo, doing, waiting, review, done)}

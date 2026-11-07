@@ -118,10 +118,7 @@ def result_actions_all_published(conn, result_id):
     ).fetchall()
     if not rows:
         return True
-    if all(
-        audit_status == "accepted" and publish_status == "published"
-        for audit_status, publish_status in rows
-    ):
+    if all(audit_status == "accepted" and publish_status == "published" for audit_status, publish_status in rows):
         return True
     if not all(
         audit_status == "accepted" and publish_status in {"published", "skipped"}

@@ -27,9 +27,7 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
         context.startup_live_poll_pending = False
         context.next_live_poll_at = "2099-01-01T00:00:00+00:00"
         context.background_lanes = {
-            name: SimpleNamespace(
-                process=None, start=mock.Mock(), poll=mock.Mock(return_value=None)
-            )
+            name: SimpleNamespace(process=None, start=mock.Mock(), poll=mock.Mock(return_value=None))
             for name in ("scan", "publish")
         }
         return fixture, context, context.background_lanes["scan"]
@@ -38,9 +36,7 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
         with (
             mock.patch.object(daemon, "_maybe_prune"),
             mock.patch.object(daemon.time, "monotonic", return_value=monotonic),
-            mock.patch.object(
-                daemon.loop_engine, "has_runnable_local_work", return_value=False
-            ),
+            mock.patch.object(daemon.loop_engine, "has_runnable_local_work", return_value=False),
         ):
             return daemon.run_once_decision(context, now=retention_fixtures.NOW)
 
@@ -86,9 +82,7 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
                 if state == "backoff":
                     context.control_retry_at["scan"] = 200
                 elif state == "attention":
-                    context.control_attention["scan"] = {
-                        "reason_code": "control_plane_failed"
-                    }
+                    context.control_attention["scan"] = {"reason_code": "control_plane_failed"}
                 else:
                     scan.process = object()
                 self.decide(context)
@@ -117,9 +111,7 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
         fixture = run_fixtures.RepositoryCycleFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        config = validate_config.validate_config(
-            fixture.config_path, skip_external=True
-        )
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
         storage.init_database(config["db_path"])
         with closing(sqlite3.connect(config["db_path"])) as conn, conn:
             repo_id = work_repositories.upsert_repo(conn, config["repos"][0])
@@ -151,26 +143,20 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
             mock.patch.object(time, "time", return_value=1000),
             mock.patch.object(synchronization, "scan_repo") as scan,
         ):
-            result = synchronization.scan(
-                fixture.config_path, runner=runner, refresh_context=True
-            )
+            result = synchronization.scan(fixture.config_path, runner=runner, refresh_context=True)
         self.assertFalse(result["ok"])
         self.assertEqual(result["retry_after_seconds"], 600)
         self.assertEqual(result["failures"][0]["reason"], "core_rate_limit_floor")
         scan.assert_not_called()
         with closing(sqlite3.connect(config["db_path"])) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM wakeups").fetchone()[0], "pending"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM wakeups").fetchone()[0], "pending")
 
     def test_refresh_without_due_repos_makes_no_github_reads(self):
         fixture = run_fixtures.RepositoryCycleFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         runner = mock.Mock(side_effect=AssertionError("unexpected remote read"))
-        result = synchronization.scan(
-            fixture.config_path, runner=runner, refresh_context=True
-        )
+        result = synchronization.scan(fixture.config_path, runner=runner, refresh_context=True)
         self.assertTrue(result["ok"])
         self.assertEqual(result["batch_count"], 0)
         self.assertEqual(result["github_reads"], {})

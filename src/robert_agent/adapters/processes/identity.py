@@ -200,11 +200,7 @@ def read_ps_identity(pid, *, ps_runner=None):
         if getattr(completed, "stderr", ""):
             raise IdentityReadError("portable process identity is not visible")
         raise ProcessIdentityMissing("portable process is not present")
-    lines = [
-        line
-        for line in (getattr(completed, "stdout", "") or "").splitlines()
-        if line.strip()
-    ]
+    lines = [line for line in (getattr(completed, "stdout", "") or "").splitlines() if line.strip()]
     if not lines:
         raise ProcessIdentityMissing("portable process is not present")
     return _parse_ps_line(lines[0], pid)
@@ -252,9 +248,7 @@ def _valid_identity(identity):
     }:
         return False
     fingerprint = str(identity.get("command_fingerprint"))
-    return len(fingerprint) == 64 and all(
-        char in "0123456789abcdef" for char in fingerprint
-    )
+    return len(fingerprint) == 64 and all(char in "0123456789abcdef" for char in fingerprint)
 
 
 def compare_recorded_identity(recorded, observed):
@@ -321,9 +315,7 @@ def _observe_recorded_identity(recorded, *, proc_root="/proc", ps_runner=None):
 def inspect_recorded_identity(recorded, *, proc_root="/proc", ps_runner=None):
     """Return ``alive_same``, ``dead``, or ``unknown`` for recorded metadata."""
 
-    return _observe_recorded_identity(
-        recorded, proc_root=proc_root, ps_runner=ps_runner
-    )
+    return _observe_recorded_identity(recorded, proc_root=proc_root, ps_runner=ps_runner)
 
 
 def _default_clock():
@@ -351,11 +343,7 @@ def terminate_recorded_identity(
 
     inspect = inspect or inspect_recorded_identity
     signal_group = signal_group or os.killpg
-    supervisor_process_group_id = (
-        os.getpgrp()
-        if supervisor_process_group_id is None
-        else supervisor_process_group_id
-    )
+    supervisor_process_group_id = os.getpgrp() if supervisor_process_group_id is None else supervisor_process_group_id
     clock = clock or _default_clock
     sleep = sleep or time.sleep
     if not _valid_identity(recorded):

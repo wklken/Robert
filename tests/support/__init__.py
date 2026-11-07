@@ -12,9 +12,7 @@ if PACKAGE_PARENT not in sys.path:
 
 existing_pythonpath = os.environ.get("PYTHONPATH")
 os.environ["PYTHONPATH"] = (
-    PACKAGE_PARENT
-    if not existing_pythonpath
-    else os.pathsep.join([PACKAGE_PARENT, existing_pythonpath])
+    PACKAGE_PARENT if not existing_pythonpath else os.pathsep.join([PACKAGE_PARENT, existing_pythonpath])
 )
 
 

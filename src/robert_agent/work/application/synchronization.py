@@ -26,9 +26,9 @@ def review_allowlist(config, repo):
 
     if config is None:
         return []
-    settings = route_config.resolve_route_config(
-        config, repo, route_config.ROUTE_POLICIES["review-pr"]
-    ).get("multi_agent_review", {})
+    settings = route_config.resolve_route_config(config, repo, route_config.ROUTE_POLICIES["review-pr"]).get(
+        "multi_agent_review", {}
+    )
     return (
         sorted(settings.get("author_allowlist") or [])
         if settings.get("enabled") and len(settings.get("workers", [])) > 1
@@ -106,9 +106,7 @@ def scan_repo(config, repo, session, hints):
         if not any((kind, number) == source for kind, number, _ in sources):
             sources.append((*source, False))
         if not any(
-            h.get("number") == raw["number"]
-            and h.get("source_type") == raw.get("source_type", "issue")
-            for h in hints
+            h.get("number") == raw["number"] and h.get("source_type") == raw.get("source_type", "issue") for h in hints
         ):
             hints.append(
                 {
@@ -128,17 +126,12 @@ def scan_repo(config, repo, session, hints):
                 repo["full_name"], source_type, number, recorded
             )
             automation = repo.get("pr_automation") or {}
-            if health_candidate and any(
-                (automation.get(k) or {}).get("enabled") for k in ("ci", "conflict")
-            ):
-                snapshot = pr_health.fetch_pr_snapshot(
-                    repo["full_name"], number, runner=recorded
-                )
+            if health_candidate and any((automation.get(k) or {}).get("enabled") for k in ("ci", "conflict")):
+                snapshot = pr_health.fetch_pr_snapshot(repo["full_name"], number, runner=recorded)
                 ci = automation.get("ci") or {}
                 if (
                     snapshot
-                    and snapshot.get("author_login", "").casefold()
-                    == repo["github_account"].casefold()
+                    and snapshot.get("author_login", "").casefold() == repo["github_account"].casefold()
                     and ci.get("enabled")
                     and snapshot.get("head_sha")
                 ):
@@ -160,9 +153,7 @@ def scan_repo(config, repo, session, hints):
         # assignment). Read the full discussion for each orphaned source so an
         # earlier unconsumed request cannot be hidden by a newer comment.
         for source_type, number in dict.fromkeys(
-            (raw.get("source_type", "issue"), raw["number"])
-            for raw in recovery_events
-            if raw.get("drives_execution")
+            (raw.get("source_type", "issue"), raw["number"]) for raw in recovery_events if raw.get("drives_execution")
         ):
             if remote_states.get((source_type, number)) is None:
                 continue
@@ -178,30 +169,18 @@ def scan_repo(config, repo, session, hints):
             discussion = session.source_events(
                 repo,
                 enriched,
-                lambda enriched=enriched: discover._enrich_known_workstream_contexts(
-                    enriched, repo, session
-                ),
+                lambda enriched=enriched: discover._enrich_known_workstream_contexts(enriched, repo, session),
                 known_workstreams=known,
-                notification_hints=[
-                    h
-                    for h in hints
-                    if h["number"] == number and h["source_type"] == source_type
-                ],
+                notification_hints=[h for h in hints if h["number"] == number and h["source_type"] == source_type],
             )
-            events.extend(
-                event
-                for event in discussion
-                if event.get("event_type") != "notification"
-            )
+            events.extend(event for event in discussion if event.get("event_type") != "notification")
         for raw in [
             *events,
             *(raw for (encoded,) in pending for raw in json.loads(encoded)),
         ]:
             source = (raw.get("source_type", "issue"), raw["number"])
             if source not in remote_states:
-                remote_states[source] = github_sources.read_source_state(
-                    repo["full_name"], *source, recorded
-                )
+                remote_states[source] = github_sources.read_source_state(repo["full_name"], *source, recorded)
         incomplete = {
             (raw.get("source_type", "issue"), raw["number"])
             for raw in events
@@ -212,23 +191,13 @@ def scan_repo(config, repo, session, hints):
             for source, state in remote_states.items()
             if state is not None
             and source not in incomplete
-            and discover.source_key(repo["full_name"], *source)
-            not in session.failed_sources
+            and discover.source_key(repo["full_name"], *source) not in session.failed_sources
         }
         with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
             for old_id, old_context, encoded, retry_at in pending_rows:
-                old_sources = {
-                    (raw.get("source_type", "issue"), raw["number"])
-                    for raw in json.loads(encoded)
-                }
-                if (
-                    old_context != context
-                    and retry_at <= time.time()
-                    and not old_sources <= covered
-                ):
-                    scan_batches.fail_batch(
-                        conn, old_id, "source_refresh_unavailable", time.time()
-                    )
+                old_sources = {(raw.get("source_type", "issue"), raw["number"]) for raw in json.loads(encoded)}
+                if old_context != context and retry_at <= time.time() and not old_sources <= covered:
+                    scan_batches.fail_batch(conn, old_id, "source_refresh_unavailable", time.time())
         events = source_policy.refresh_pending_events(
             events,
             [raw for (encoded,) in pending for raw in json.loads(encoded)],
@@ -250,9 +219,7 @@ def scan_repo(config, repo, session, hints):
             scan_batches.save_reads(conn, repo_id, recorded.responses, time.time())
             for old_id, old_context, _encoded, retry_at in pending_rows:
                 if old_context != context and retry_at <= time.time():
-                    scan_batches.fail_batch(
-                        conn, old_id, "discovery_refresh_failed", time.time()
-                    )
+                    scan_batches.fail_batch(conn, old_id, "discovery_refresh_failed", time.time())
         raise
     with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
         conn.execute(
@@ -297,9 +264,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             if not github_budget.budget(session, config):
                 failures.append({"account": account, "reason": "core_rate_limit_floor"})
                 continue
-            account_repos = [
-                item for item in repos if item["github_account"] == account
-            ]
+            account_repos = [item for item in repos if item["github_account"] == account]
             try:
                 buckets[account] = (
                     session.cached_notifications(account_repos)
@@ -311,9 +276,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             except (subprocess.SubprocessError, OSError, ValueError):
                 # Search remains a fallback when notification lookup fails.
                 buckets[account] = {}
-                failures.append(
-                    {"account": account, "reason": "notification_read_failed"}
-                )
+                failures.append({"account": account, "reason": "notification_read_failed"})
         except ControlDeadlineExceeded:
             raise
         except (subprocess.SubprocessError, OSError, ValueError):
@@ -334,11 +297,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             raise
         except (subprocess.SubprocessError, OSError, ValueError, sqlite3.Error):
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
-    intervals = [
-        session.poll_interval_seconds
-        for session in sessions.values()
-        if session.poll_interval_seconds
-    ]
+    intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {
         "ok": not failures,
         "status": "scanned",
@@ -350,7 +309,5 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
         if any(item["reason"] == "core_rate_limit_floor" for item in failures)
         else 0,
         "failure_scope": "repository" if failures else None,
-        "github_reads": {
-            account: session.metrics() for account, session in sessions.items()
-        },
+        "github_reads": {account: session.metrics() for account, session in sessions.items()},
     }

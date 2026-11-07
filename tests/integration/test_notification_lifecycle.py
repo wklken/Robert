@@ -51,9 +51,7 @@ class NotificationLifecycleTests(unittest.TestCase):
                 "UPDATE attempts SET status='completed',finished_at=?,metadata_json=?",
                 (values.utc_now(), '{"result_contract":"compact-v1"}'),
             )
-            conn.execute(
-                "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL"
-            )
+            conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
             execution_store.close_binding(conn, "task", task_id, values.utc_now())
             conn.execute("UPDATE work_items SET completed_at=?", (values.utc_now(),))
         return fixture
@@ -111,9 +109,7 @@ class NotificationLifecycleTests(unittest.TestCase):
         return runner
 
     def scan(self, fixture, runner, source_type="issue", reason="mention"):
-        config = validate_config.validate_config(
-            fixture.config_path, skip_external=True
-        )
+        config = validate_config.validate_config(fixture.config_path, skip_external=True)
         session = GitHubReadSession(fixture.db_path, account="robot", runner=runner)
         session.search_allowed = False
         hints = [
@@ -178,9 +174,7 @@ class NotificationLifecycleTests(unittest.TestCase):
                 expected = {"comment:22", "comment:23", "comment:24"}
                 if source_type == "pull_request":
                     expected |= {"review:32", "review_comment:33"}
-                self.assertEqual(
-                    {event["event_fingerprint"] for event in raw}, expected
-                )
+                self.assertEqual({event["event_fingerprint"] for event in raw}, expected)
                 self.assertIn("repos/example/repo/issues/1/comments", calls)
                 self.consume(fixture)
                 with closing(sqlite3.connect(fixture.db_path)) as conn:
@@ -194,15 +188,11 @@ class NotificationLifecycleTests(unittest.TestCase):
                     for fingerprint in expected - {"comment:24"}:
                         self.assertTrue(events[fingerprint]["drives_execution"])
                     self.assertFalse(events["comment:24"]["drives_execution"])
-                    self.assertEqual(
-                        conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2
-                    )
+                    self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
                 self.scan(fixture, runner, source_type)
                 self.consume(fixture)
                 with closing(sqlite3.connect(fixture.db_path)) as conn:
-                    self.assertEqual(
-                        conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2
-                    )
+                    self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
 
     def test_revoked_actor_cannot_drive_notification_after_historical_assignment(self):
         fixture = self.fixture()
@@ -220,9 +210,7 @@ class NotificationLifecycleTests(unittest.TestCase):
             ]
             self.assertEqual(len(events), 3)
             self.assertTrue(all(not event["drives_execution"] for event in events))
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
 
     def test_old_source_cache_cannot_hide_unobserved_comments(self):
         fixture = self.fixture()
@@ -240,9 +228,7 @@ class NotificationLifecycleTests(unittest.TestCase):
         runner = self.remote("issue", self.comments(), [])
         with patch.object(discover, "SOURCE_CONTEXT_VERSION", 2):
             # source_events keys are independent of the loader's implementation.
-            config = validate_config.validate_config(
-                fixture.config_path, skip_external=True
-            )
+            config = validate_config.validate_config(fixture.config_path, skip_external=True)
             hint = {
                 "repo_full_name": "example/repo",
                 "id": "thread",

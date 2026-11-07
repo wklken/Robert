@@ -14,9 +14,7 @@ class ScopeTests(SummaryFixture):
         tree.mkdir()
 
         def git(*args):
-            return subprocess.run(
-                ["git", *args], cwd=tree, check=True, capture_output=True, text=True
-            ).stdout.strip()
+            return subprocess.run(["git", *args], cwd=tree, check=True, capture_output=True, text=True).stdout.strip()
 
         git("init", "-b", "codex/fix")
         git("config", "user.email", "test@example.invalid")
@@ -29,9 +27,7 @@ class ScopeTests(SummaryFixture):
                 "UPDATE attempts SET worktree_path = ?, branch_name = 'codex/fix'",
                 (str(tree),),
             )
-            ws = conn.execute(
-                "SELECT workstream_id FROM tasks WHERE task_id='task-1'"
-            ).fetchone()[0]
+            ws = conn.execute("SELECT workstream_id FROM tasks WHERE task_id='task-1'").fetchone()[0]
             scope = cycle_scope.for_result(conn, "task-1", "attempt-1", ws)
         self.assertEqual(scope["result_head_sha"], expected_sha)
         self.assertEqual(scope["head_owner"], "expected-owner")

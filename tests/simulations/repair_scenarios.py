@@ -54,9 +54,7 @@ def _diagnose(fixture, scope_type, scope_id):
         )
         incident = changes[0]["incident"]
         target = supervision_diagnose._target(incident, "incident")
-        bundle = supervision_diagnose._bundle(
-            supervision_diagnose._snapshot(conn, target), target, "fixture-bundle"
-        )
+        bundle = supervision_diagnose._bundle(supervision_diagnose._snapshot(conn, target), target, "fixture-bundle")
         answer = {key: bundle[key] for key in ("bundle_id", "bundle_sha256")}
         answer.update(
             diagnosis_class="product_defect",
@@ -92,9 +90,7 @@ def _backlog_and_recursion(root):
     assert fixture.counts() == (0, 0)
     # An explicit human start in a fixture represents a failed maintenance task.
     # Its subsequent incident links back to the maintenance item and cannot recurse.
-    context = work_items.CommandContext(
-        "operator", "fixture-operator", frozenset({"repo"}), frozenset()
-    )
+    context = work_items.CommandContext("operator", "fixture-operator", frozenset({"repo"}), frozenset())
     active = work_items.execute_command(
         fixture.db,
         first["work_item_id"],
@@ -138,19 +134,14 @@ def _build_evidence(root, fixture):
     installed = root / "installed" / "robert_agent"
     installed.mkdir(parents=True)
     with ZipFile(wheel) as artifact:
-        (installed / "__init__.py").write_bytes(
-            artifact.read("robert_agent/__init__.py")
-        )
+        (installed / "__init__.py").write_bytes(artifact.read("robert_agent/__init__.py"))
     verified = runtime_identity.runtime_snapshot(
         run_id="fixture-runtime",
         started_at=fixture.now,
         manifest_path=sidecar,
         package_root=installed,
     )
-    assert (
-        verified["build_status"] == "verified"
-        and verified["build_id"] == manifest["build_id"]
-    ), verified
+    assert verified["build_status"] == "verified" and verified["build_id"] == manifest["build_id"], verified
     assert verified["process_identity"]["pid"] == os.getpid()
     (installed / "__init__.py").write_bytes(original.replace(b"True", b"False"))
     mismatched = runtime_identity.runtime_snapshot(
@@ -241,10 +232,7 @@ def _audit_and_push(fixture, escape_marker):
         assert Path(kwargs["cwd"]).parent == fixture.data
         assert kwargs["env"]["GIT_CONFIG_GLOBAL"] == os.devnull
         if fixed_remote in command:
-            command = [
-                destination.as_uri() if item == fixed_remote else item
-                for item in command
-            ]
+            command = [destination.as_uri() if item == fixed_remote else item for item in command]
             kwargs["env"] = {**kwargs["env"], "GIT_ALLOW_PROTOCOL": "file"}
             seen.append("ls-remote" if "ls-remote" in command else "push")
         else:
@@ -268,33 +256,21 @@ def _audit_and_push(fixture, escape_marker):
             )
             == 1
         )
-        metadata = json.loads(
-            conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-        )
+        metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
         audit = metadata["audit"]
         assert audit["status"] == "accepted", audit
         scope = audit["action_scope"]
         assert scope["repair_git"] == fixture.git_binding
         assert scope["worktree_status"] == "clean"
-        recovery = evidence.inspect_attempt_recovery(
-            conn, fixture.attempt, fixture.task, str(fixture.tree)
-        )
+        recovery = evidence.inspect_attempt_recovery(conn, fixture.attempt, fixture.task, str(fixture.tree))
         assert recovery["git"] == {}, recovery
-        action = dict(
-            conn.execute(
-                "SELECT * FROM github_actions WHERE action_type='push_existing_pr'"
-            ).fetchone()
-        )
-        before = publication_reconcile.classify_remote_state(
-            action, scope, run_git_locally
-        )
+        action = dict(conn.execute("SELECT * FROM github_actions WHERE action_type='push_existing_pr'").fetchone())
+        before = publication_reconcile.classify_remote_state(action, scope, run_git_locally)
         assert before["status"] == "confirmed_absent", before
 
         def authorized():
             return bool(
-                supervision_repair.authorized_repair(
-                    conn, fixture.task, fixture.config, "repo", "push_existing_pr"
-                )
+                supervision_repair.authorized_repair(conn, fixture.task, fixture.config, "repo", "push_existing_pr")
             )
 
         def revoke_after_fsck(command, **kwargs):
@@ -303,24 +279,14 @@ def _audit_and_push(fixture, escape_marker):
                 fixture.config["supervision"]["repair"]["mode"] = "backlog"
             return response
 
-        rejected = publication_effects.publish_action(
-            action, revoke_after_fsck, conn=conn, recovery_guard=authorized
-        )
-        assert rejected["status"] == "supervision_fence_rejected" and seen == [
-            "ls-remote"
-        ], rejected
+        rejected = publication_effects.publish_action(action, revoke_after_fsck, conn=conn, recovery_guard=authorized)
+        assert rejected["status"] == "supervision_fence_rejected" and seen == ["ls-remote"], rejected
         fixture.config["supervision"]["repair"]["mode"] = "auto"
-        result = publication_effects.publish_action(
-            action, run_git_locally, conn=conn, recovery_guard=authorized
-        )
+        result = publication_effects.publish_action(action, run_git_locally, conn=conn, recovery_guard=authorized)
         assert result["status"] == "published", result
-        after = publication_reconcile.classify_remote_state(
-            action, scope, run_git_locally
-        )
+        after = publication_reconcile.classify_remote_state(action, scope, run_git_locally)
         assert after["status"] == "confirmed_effect", after
-        actual = fixture.git(
-            "rev-parse", "refs/heads/" + fixture.git_binding["branch"], cwd=destination
-        )
+        actual = fixture.git("rev-parse", "refs/heads/" + fixture.git_binding["branch"], cwd=destination)
         assert actual == result["result_head_sha"] == scope["result_head_sha"]
         assert seen == ["ls-remote", "push", "ls-remote"], seen
         assert not escape_marker.exists()
@@ -356,9 +322,7 @@ def _sandbox(root):
     for path in credentials:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture canary")
-    credential_denials = list(
-        map(str, (gh_config, credentials[1], credentials[2].parent))
-    )
+    credential_denials = list(map(str, (gh_config, credentials[1], credentials[2].parent)))
     launcher = [
         sys.executable,
         str(launcher_path),
@@ -412,9 +376,7 @@ marker.unlink()
             "launcher_returncode": capability.returncode,
         }
     incident = _diagnose(fixture, "controller", "isolated-local")
-    policy = supervision_repair.normalize_repair(
-        fixture.config["supervision"]["repair"]
-    )
+    policy = supervision_repair.normalize_repair(fixture.config["supervision"]["repair"])
     weak_policy = {**policy, "launcher": [*launcher[:-1], "[]"]}
     with patch.dict(os.environ, controller_env):
         weak = supervision_repair.probe_restricted_launcher(
@@ -428,9 +390,7 @@ marker.unlink()
         )
         assert weak == {"ok": False, "status": "restricted_launcher_unverified"}, weak
         proposal = supervision_repair.propose(fixture.config, incident)
-        assert (
-            proposal["status"] == "activated" and proposal["auto_status"] == "verified"
-        ), proposal
+        assert proposal["status"] == "activated" and proposal["auto_status"] == "verified", proposal
         fixture.bind(task_id=proposal["task_id"])
         process = fixture.launch(real_probe=True)
     try:

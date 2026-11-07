@@ -74,17 +74,11 @@ class AnalysisCompletionTests(unittest.TestCase):
         self.assertEqual(replay["version"], item["version"])
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM work_item_events WHERE event_type='completed'"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM work_item_events WHERE event_type='completed'").fetchone()[0],
                 1,
             )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM github_actions").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT count(*) FROM github_actions").fetchone()[0], 1)
 
     def test_pending_failed_skipped_or_unaudited_publication_stays_unfinished(self):
         for audit, publication in [
@@ -98,9 +92,7 @@ class AnalysisCompletionTests(unittest.TestCase):
                     (audit, publication),
                 )
                 self.assertIsNone(self.reconcile()["completed_at"])
-        self.change(
-            "UPDATE github_actions SET audit_status='accepted',publish_status='published'"
-        )
+        self.change("UPDATE github_actions SET audit_status='accepted',publish_status='published'")
         self.change("UPDATE worker_results SET metadata_json='{}'")
         self.assertIsNone(self.reconcile()["completed_at"])
 

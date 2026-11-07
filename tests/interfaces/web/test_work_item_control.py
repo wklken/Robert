@@ -12,9 +12,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = 'task-2'"
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = 'task-2'")
             conn.execute(
                 "UPDATE workstreams SET lifecycle = 'failed', active_task_id = NULL WHERE workstream_id = 'ws-1'"
             )
@@ -136,9 +134,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         missing_csrf.pop("x-robert-csrf-token")
         denied_status, _headers, _body = web.handle_dashboard_post(
             f"/api/work-items/{work_item_id}/commands",
-            json.dumps(
-                {"command": "start", "expected_version": detail["version"]}
-            ).encode(),
+            json.dumps({"command": "start", "expected_version": detail["version"]}).encode(),
             db_path,
             control_context=context,
             request_headers=missing_csrf,
@@ -148,9 +144,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         command_headers = {**request_headers, "x-idempotency-key": "start-api-1"}
         start_status, _headers, start_body = web.handle_dashboard_post(
             f"/api/work-items/{work_item_id}/commands",
-            json.dumps(
-                {"command": "start", "expected_version": detail["version"]}
-            ).encode(),
+            json.dumps({"command": "start", "expected_version": detail["version"]}).encode(),
             db_path,
             control_context=context,
             request_headers=command_headers,
@@ -171,9 +165,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
             request_headers=stale_headers,
         )
         self.assertEqual(stale_status, 409)
-        self.assertEqual(
-            json.loads(stale_body)["current"]["work_item_id"], work_item_id
-        )
+        self.assertEqual(json.loads(stale_body)["current"]["work_item_id"], work_item_id)
 
     def test_board_api_rejects_bad_filters_and_read_only_writes(self):
         from robert_agent.interfaces.web import server as web
@@ -191,9 +183,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
             writes_enabled=False,
             write_error="Start with --config to enable writes.",
         )
-        status, _headers, _body = web.build_http_response(
-            "/api/board?column=unknown", db_path, control_context=context
-        )
+        status, _headers, _body = web.build_http_response("/api/board?column=unknown", db_path, control_context=context)
         self.assertEqual(status, 422)
         write_status, _headers, _body = web.handle_dashboard_post(
             "/api/work-items",
@@ -243,13 +233,9 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         thread.start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", server.server_port, timeout=3
-        )
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
         self.addCleanup(connection.close)
-        connection.request(
-            "GET", "/api/session", headers={"Host": "robert.example.com"}
-        )
+        connection.request("GET", "/api/session", headers={"Host": "robert.example.com"})
         response = connection.getresponse()
         session = json.loads(response.read())
         self.assertEqual(response.status, 200)
@@ -312,9 +298,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         self.assertEqual(context.allowed_workers, frozenset({"default"}))
         self.assertEqual(context.allowed_origins, frozenset({"http://127.0.0.1:9876"}))
         with closing(sqlite3.connect(context.db_path)) as conn:
-            repo = conn.execute(
-                "SELECT repo_id, full_name FROM repos WHERE repo_id = 'repo:x/y'"
-            ).fetchone()
+            repo = conn.execute("SELECT repo_id, full_name FROM repos WHERE repo_id = 'repo:x/y'").fetchone()
         self.assertEqual(repo, ("repo:x/y", "x/y"))
 
     def test_web_http_handler_passes_control_context_and_limits_body(self):

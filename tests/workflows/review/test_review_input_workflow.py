@@ -39,9 +39,7 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         return payload
 
     def audit(self, payload, **kwargs):
-        return audit_result.audit_result(
-            payload, ["push_existing_pr", "comment"], **kwargs
-        )
+        return audit_result.audit_result(payload, ["push_existing_pr", "comment"], **kwargs)
 
     def test_trigger_type_selects_policy_without_reading_body_keywords(self):
         for event_type, policy in (
@@ -53,26 +51,18 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         ):
             with self.subTest(event_type=event_type):
                 self.assertEqual(
-                    route.review_input_policy(
-                        "update_existing_pr", {"event_type": event_type}
-                    ),
+                    route.review_input_policy("update_existing_pr", {"event_type": event_type}),
                     policy,
                 )
+        self.assertEqual(route.review_input_policy("new_pr", {"event_type": "review"}), "none")
         self.assertEqual(
-            route.review_input_policy("new_pr", {"event_type": "review"}), "none"
-        )
-        self.assertEqual(
-            route.review_input_policy(
-                "update_existing_pr", {"task_kind": "ci_remediation"}
-            ),
+            route.review_input_policy("update_existing_pr", {"task_kind": "ci_remediation"}),
             "none",
         )
 
     def test_ordinary_request_can_push_without_inventing_review_points(self):
         self.assertEqual(
-            self.audit(self.payload("request"), review_input_policy="classify")[
-                "status"
-            ],
+            self.audit(self.payload("request"), review_input_policy="classify")["status"],
             "accepted",
         )
 
@@ -85,18 +75,14 @@ class ReviewInputWorkflowTests(unittest.TestCase):
                 self.assertIn("missing_review_point_evaluation", audit["violations"])
 
     def test_report_in_ordinary_comment_requires_review_evidence(self):
-        audit = self.audit(
-            self.payload("review_feedback"), review_input_policy="classify"
-        )
+        audit = self.audit(self.payload("review_feedback"), review_input_policy="classify")
         self.assertIn("missing_review_point_evaluation", audit["violations"])
 
     def test_missing_classification_and_invalid_values_do_not_bypass(self):
         for kind in (None, "", "direct", False):
             with self.subTest(kind=kind):
                 self.assertEqual(
-                    self.audit(self.payload(kind), review_input_policy="classify")[
-                        "status"
-                    ],
+                    self.audit(self.payload(kind), review_input_policy="classify")["status"],
                     "policy_violation",
                 )
 
@@ -129,9 +115,7 @@ class ReviewInputWorkflowTests(unittest.TestCase):
                 "action": "skip",
             }
         ]
-        self.assertEqual(
-            self.audit(payload, review_input_policy="classify")["status"], "accepted"
-        )
+        self.assertEqual(self.audit(payload, review_input_policy="classify")["status"], "accepted")
         self.assertIn(
             "no_implemented_review_points",
             self.audit(payload, review_input_policy="required")["violations"],
@@ -153,9 +137,7 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         self.assertIn("review_feedback", prompt)
         self.assertIn("Do not invent review points", prompt)
         self.assertIn("If the request includes both", prompt)
-        self.assertIn(
-            "The policy below applies only when evaluating review feedback", prompt
-        )
+        self.assertIn("The policy below applies only when evaluating review feedback", prompt)
 
     def test_write_routes_require_local_commits_before_result_submission(self):
         for route_id in ("new-pr", "update-existing-pr"):
@@ -169,9 +151,7 @@ class ReviewInputWorkflowTests(unittest.TestCase):
                     route.ROUTES[route_id],
                     [{"event_type": "comment", "body": "Update documentation"}],
                 )
-                self.assertIn(
-                    "Commit all task-owned changes locally before submitting", prompt
-                )
+                self.assertIn("Commit all task-owned changes locally before submitting", prompt)
                 self.assertIn(
                     "Robert publishes commits; it does not stage or commit working-tree changes",
                     prompt,

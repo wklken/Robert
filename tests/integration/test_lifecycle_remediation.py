@@ -63,9 +63,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
         )
         db = fixture.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db)) as conn:
-            task, attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            task, attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         payload = {
             "task_id": task,
             "attempt_id": attempt,
@@ -85,23 +83,17 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             with mock.patch.object(
                 assigned_workspace,
                 "prepare_worktree",
-                side_effect=subprocess.CalledProcessError(
-                    1, ["git", "fetch"], stderr="connection reset by peer"
-                ),
+                side_effect=subprocess.CalledProcessError(1, ["git", "fetch"], stderr="connection reset by peer"),
             ):
                 run_once.run_once(fixture.config_path, dry_run=True, skip_external=True)
             with closing(sqlite3.connect(db)) as conn:
                 metadata = json.loads(
-                    conn.execute(
-                        "SELECT metadata_json FROM tasks WHERE task_id=?", (task,)
-                    ).fetchone()[0]
+                    conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task,)).fetchone()[0]
                 )
                 handoff = metadata.get("classification_handoff", {})
                 self.assertEqual(handoff.get("attempt_count"), failure)
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT count(*) FROM tasks WHERE parent_task_id=?", (task,)
-                    ).fetchone()[0],
+                    conn.execute("SELECT count(*) FROM tasks WHERE parent_task_id=?", (task,)).fetchone()[0],
                     0,
                 )
                 if failure < 3:
@@ -111,11 +103,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                             conn, ["repo:example/backend"], handoff["failed_at"]
                         )
                     )
-                    self.assertTrue(
-                        completion.has_orphaned_classification_result(
-                            conn, ["repo:example/backend"], due
-                        )
-                    )
+                    self.assertTrue(completion.has_orphaned_classification_result(conn, ["repo:example/backend"], due))
                 else:
                     self.assertFalse(handoff["retryable"])
                     self.assertFalse(
@@ -140,9 +128,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                 resume_attempt=preparation.create_resume_attempt_and_prompt,
             )
             self.assertIsNone(process.poll())
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "stale"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "stale")
             self.assertEqual(capacity.running_attempt_count(conn, repo), 1)
             self.assertEqual(capacity.running_attempt_count_for_repos(conn, [repo]), 1)
 
@@ -151,9 +137,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
         self.assertTrue(result.record_result(fixture.db, fixture.payload)["ok"])
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             self.assertEqual(capacity.running_attempt_count(conn, repo), 1)
-            self.assertNotEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
+            self.assertNotEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
         self.stop_process(process)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             monitor.supervise_running_attempts(
@@ -163,9 +147,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                 now,
                 resume_attempt=preparation.create_resume_attempt_and_prompt,
             )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
             self.assertEqual(capacity.running_attempt_count(conn, repo), 0)
 
     def test_result_arriving_during_recovery_observation_is_not_failed(self):
@@ -178,9 +160,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             return {"status": "no_progress", "commands": [], "progress_signals": []}
 
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            with mock.patch.object(
-                evidence, "inspect_attempt_recovery_with_metadata", side_effect=inspect
-            ):
+            with mock.patch.object(evidence, "inspect_attempt_recovery_with_metadata", side_effect=inspect):
                 monitor.supervise_running_attempts(
                     conn,
                     repo,
@@ -190,9 +170,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                 )
             self.assertTrue(receipts[0]["ok"])
             self.assertEqual(receipts[0]["status"], "recorded")
-            self.assertNotEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "failed"
-            )
+            self.assertNotEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "failed")
             monitor.supervise_running_attempts(
                 conn,
                 repo,
@@ -200,12 +178,8 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                 now,
                 resume_attempt=preparation.create_resume_attempt_and_prompt,
             )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
 
     def test_result_arriving_during_timeout_cleanup_is_not_failed(self):
         fixture, process, repo, now = self.running_fixture(age_minutes=50)
@@ -221,9 +195,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             payload, rejection = result._prepare(fixture.db, fixture.payload)
             self.assertIsNone(rejection)
             payload.update(
-                _submission_fingerprint=result_contract.semantic_fingerprint(
-                    fixture.payload
-                ),
+                _submission_fingerprint=result_contract.semantic_fingerprint(fixture.payload),
                 _result_contract=result_contract.CONTRACT_ID,
                 _normalizer_version=result_contract.NORMALIZER_VERSION,
             )
@@ -231,9 +203,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             return {"status": "already_dead"}
 
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            with mock.patch.object(
-                monitor, "terminate_owned_attempt", side_effect=terminate
-            ):
+            with mock.patch.object(monitor, "terminate_owned_attempt", side_effect=terminate):
                 monitor.supervise_running_attempts(
                     conn,
                     repo,
@@ -243,9 +213,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                 )
             self.assertTrue(receipts[0]["ok"])
             self.assertEqual(receipts[0]["status"], "recorded")
-            self.assertNotEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "failed"
-            )
+            self.assertNotEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "failed")
             monitor.supervise_running_attempts(
                 conn,
                 repo,
@@ -253,12 +221,8 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                 now,
                 resume_attempt=preparation.create_resume_attempt_and_prompt,
             )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
 
     def test_recovery_backfill_does_not_hold_writer_during_git_inspection(self):
         from pathlib import Path
@@ -290,17 +254,11 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             return {}
 
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            with mock.patch.object(
-                evidence, "git_recovery_summary", side_effect=inspect_git
-            ):
-                recovery = evidence.inspect_attempt_recovery_with_metadata(
-                    conn, "attempt-1", "task-1", {}, directory
-                )
+            with mock.patch.object(evidence, "git_recovery_summary", side_effect=inspect_git):
+                recovery = evidence.inspect_attempt_recovery_with_metadata(conn, "attempt-1", "task-1", {}, directory)
             self.assertEqual(recovery["status"], "recoverable_progress")
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM worker_phases WHERE summary='Command exited 0'"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM worker_phases WHERE summary='Command exited 0'").fetchone()[0],
                 1,
             )
         self.assertEqual(observed, [True])
@@ -318,9 +276,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             return [{"status": "running"}]
 
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            with mock.patch.object(
-                evidence, "attempt_command_records", side_effect=inspect_commands
-            ):
+            with mock.patch.object(evidence, "attempt_command_records", side_effect=inspect_commands):
                 monitor.supervise_running_attempts(
                     conn,
                     repo,
@@ -328,9 +284,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                     now,
                     resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
         self.assertEqual(observed, [True])
 
     def test_control_deadline_does_not_fail_recoverable_worker(self):
@@ -340,9 +294,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
         self.stop_process(process)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.execute("DELETE FROM worker_phases")
-            conn.execute(
-                "UPDATE attempts SET worktree_path=?", (str(Path(fixture.db).parent),)
-            )
+            conn.execute("UPDATE attempts SET worktree_path=?", (str(Path(fixture.db).parent),))
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             with mock.patch.dict(os.environ, {"_ROBERT_CONTROL_DEADLINE": "0"}):
                 with self.assertRaises(subprocess.TimeoutExpired):
@@ -353,21 +305,13 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                         now,
                         resume_attempt=preparation.create_resume_attempt_and_prompt,
                     )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running")
             self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running"
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT binding_status FROM execution_subjects"
-                ).fetchone()[0],
+                conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
                 "active",
             )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
 
     def test_fast_receipt_before_pid_registration_is_still_supervised(self):
         from robert_agent.runtime import loop as loop_engine
@@ -391,9 +335,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
         self.assertTrue(result.record_result(fixture.db, fixture.payload)["ok"])
         process, identity = self.process()
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
-            dispatch_queue._record_dispatch_result(
-                conn, "attempt-1", {**identity, "ok": True, "status": "running"}
-            )
+            dispatch_queue._record_dispatch_result(conn, "attempt-1", {**identity, "ok": True, "status": "running"})
             self.assertEqual(capacity.running_attempt_count(conn, repo), 1)
         self.stop_process(process)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
@@ -420,9 +362,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             with closing(sqlite3.connect(fixture.db_path, timeout=0)) as other, other:
                 other.execute("BEGIN IMMEDIATE")
             observed.append(args[-1])
-            return delegate(
-                [arg.replace("/pulls/14", "/pulls/13") for arg in args], **kwargs
-            )
+            return delegate([arg.replace("/pulls/14", "/pulls/13") for arg in args], **kwargs)
 
         with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
             decisions = remediation_requests.collect_pr_remediation_decisions(
@@ -527,9 +467,7 @@ driver.run()
                 now,
             )
         self.assertTrue(closed)
-        self.assertIsNotNone(
-            model.poll(), "remote close must stop the independent model group"
-        )
+        self.assertIsNotNone(model.poll(), "remote close must stop the independent model group")
         with review_store.connect(fixture.db) as conn:
             self.assertEqual(review_store.process_pool_status(conn)["in_use"], 0)
 

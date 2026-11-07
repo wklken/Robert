@@ -173,12 +173,8 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
 
     def test_prepared_pr_reroute_preserves_required_skill_gate(self):
         with self.config_path.open("a") as config:
-            config.write(
-                "\nroutes:\n  update-existing-pr:\n    required_skills: [missing-reroute-skill]\n"
-            )
-        self.test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(
-            blocked=True
-        )
+            config.write("\nroutes:\n  update-existing-pr:\n    required_skills: [missing-reroute-skill]\n")
+        self.test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(blocked=True)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
             row = conn.execute(
                 "SELECT t.lifecycle, a.status, rd.required_skills_json "
@@ -194,9 +190,7 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
 
             self.assertIsNone(current_dispatch_target(conn, "attempt-pr-2886"))
 
-    def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(
-        self, blocked=False
-    ):
+    def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(self, blocked=False):
         from robert_agent.runtime import cycle as run_once
         from robert_agent.adapters.sqlite import database as storage
 
@@ -518,6 +512,4 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
                 """,
                 (attempt_id,),
             ).fetchone()
-        self.assertEqual(
-            attempt, (str(new_worktree_path), "codex/issue-2884-fix-operator")
-        )
+        self.assertEqual(attempt, (str(new_worktree_path), "codex/issue-2884-fix-operator"))

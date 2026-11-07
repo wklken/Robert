@@ -98,9 +98,7 @@ def publish_comment(action, run_command, conn=None, recovery_guard=None):
             "status": "publish_failed",
             "safe_error": "comment action requires robert-comment idempotency marker",
         }
-    endpoint = issue_comment_endpoint(
-        action["target_url"] or metadata.get("target_url") or metadata.get("url")
-    )
+    endpoint = issue_comment_endpoint(action["target_url"] or metadata.get("target_url") or metadata.get("url"))
     if not endpoint:
         return {
             "ok": False,
@@ -110,9 +108,7 @@ def publish_comment(action, run_command, conn=None, recovery_guard=None):
     existing = find_existing_comment(endpoint, marker, run_command)
     if not existing["ok"] or existing["status"] == "published":
         return existing
-    scope_guard = publication_guards.publication_scope_guard(
-        conn, action, recovery_guard
-    )
+    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     command = ["gh", "api", endpoint, "-f", f"body={body}"]
@@ -132,9 +128,7 @@ def publish_comment(action, run_command, conn=None, recovery_guard=None):
         "ok": True,
         "status": "published",
         "external_id": str(response.get("id") or ""),
-        "target_url": response.get("html_url")
-        or response.get("url")
-        or action["target_url"],
+        "target_url": response.get("html_url") or response.get("url") or action["target_url"],
         "response": response,
         "command": command,
     }
@@ -178,9 +172,7 @@ def owners_match(expected, actual):
 
 
 def pr_head_owner(pr):
-    return owner_login(pr.get("headRepositoryOwner")) or owner_login(
-        pr.get("headRepository")
-    )
+    return owner_login(pr.get("headRepositoryOwner")) or owner_login(pr.get("headRepository"))
 
 
 def find_existing_open_pr(repo, head, marker, run_command, base="", head_owner=""):
@@ -320,25 +312,17 @@ def head_owner_for_action(metadata, head, action, conn, run_command):
         return scope["head_owner"]
     if ":" in head:
         return head.split(":", 1)[0]
-    owner = metadata_value(
-        metadata, "head_owner", "fork_owner", "remote_owner", "head_repo_owner"
-    )
+    owner = metadata_value(metadata, "head_owner", "fork_owner", "remote_owner", "head_repo_owner")
     if not owner:
         push_metadata = sibling_push_metadata(conn, action, head)
-        owner = (
-            head_owner_from_push_metadata(push_metadata, head, run_command)
-            if push_metadata
-            else ""
-        )
+        owner = head_owner_from_push_metadata(push_metadata, head, run_command) if push_metadata else ""
     return owner
 
 
 def trusted_head_owner_for_intent(conn, action, action_scope, run_command):
     """Resolve the immutable PR head owner without trusting Worker metadata."""
 
-    scoped_owner = (
-        action_scope.get("head_owner") if isinstance(action_scope, dict) else ""
-    )
+    scoped_owner = action_scope.get("head_owner") if isinstance(action_scope, dict) else ""
     if isinstance(scoped_owner, str) and scoped_owner:
         return scoped_owner
     if isinstance(action_scope, dict) and action_scope.get("supervision_repair"):
@@ -366,9 +350,7 @@ def head_for_pr_create(repo, head, owner):
     return f"{owner}:{head}" if owner else head
 
 
-def publish_open_pr(
-    action, run_command, conn=None, trusted_head_owner=None, recovery_guard=None
-):
+def publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, recovery_guard=None):
     metadata = publication_values.decode_json(action["metadata_json"])
     repo = metadata_value(metadata, "repo", "repository")
     head = metadata_value(metadata, "head", "head_branch", "branch")
@@ -404,14 +386,10 @@ def publish_open_pr(
         if trusted_head_owner is not None
         else head_owner_for_action(metadata, head, action, conn, run_command)
     )
-    existing = find_existing_open_pr(
-        repo, head, marker, run_command, base=base, head_owner=head_owner
-    )
+    existing = find_existing_open_pr(repo, head, marker, run_command, base=base, head_owner=head_owner)
     if not existing["ok"] or existing["status"] == "published":
         return existing
-    scope_guard = publication_guards.publication_scope_guard(
-        conn, action, recovery_guard
-    )
+    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     create_head = head_for_pr_create(repo, head, head_owner)
@@ -464,9 +442,7 @@ def publish_open_pr(
     }
 
 
-def publish_push_existing_pr(
-    action, run_command, conn=None, source_ref="HEAD", recovery_guard=None
-):
+def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", recovery_guard=None):
     metadata = publication_values.decode_json(action["metadata_json"])
     worktree_path = metadata_value(metadata, "worktree_path")
     remote = metadata_value(metadata, "remote") or "origin"
@@ -487,9 +463,7 @@ def publish_push_existing_pr(
         }
     action_scope = publication_scope.trusted_action_scope(conn, action) or {}
     expected_remote_sha = action_scope.get("existing_pr_head_sha", "")
-    result_head_sha = action_scope.get("result_head_sha") or (
-        source_ref if source_ref != "HEAD" else None
-    )
+    result_head_sha = action_scope.get("result_head_sha") or (source_ref if source_ref != "HEAD" else None)
     source_ref = result_head_sha or source_ref
     destination_ref = f"refs/heads/{branch}"
     if action_scope and not result_head_sha:
@@ -503,9 +477,7 @@ def publish_push_existing_pr(
 
         def before_push():
             nonlocal blocked
-            blocked = publication_guards.publication_scope_guard(
-                conn, action, recovery_guard
-            )
+            blocked = publication_guards.publication_scope_guard(conn, action, recovery_guard)
             return blocked is None
 
         try:
@@ -536,9 +508,7 @@ def publish_push_existing_pr(
         }
     if expected_remote_sha:
         lookup_command = ["git", "ls-remote", "--heads", remote, branch]
-        lookup = run_command(
-            lookup_command, cwd=worktree_path, capture_output=True, text=True
-        )
+        lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
         lookup_error = command_failure(lookup, "git ls-remote failed")
         if lookup_error:
             return {
@@ -625,9 +595,7 @@ def publish_push_existing_pr(
         ]
     else:
         command = ["git", "push", remote, f"{source_ref}:{destination_ref}"]
-    scope_guard = publication_guards.publication_scope_guard(
-        conn, action, recovery_guard
-    )
+    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
@@ -643,30 +611,20 @@ def publish_push_existing_pr(
         "ok": True,
         "status": "published",
         "external_id": branch,
-        "target_url": action["target_url"]
-        or metadata.get("target_url")
-        or metadata.get("url"),
+        "target_url": action["target_url"] or metadata.get("target_url") or metadata.get("url"),
         "result_head_sha": result_head_sha,
         "response": {"stdout": getattr(completed, "stdout", "")},
         "command": command,
     }
 
 
-def publish_remediation_push(
-    action, run_command, action_scope, conn=None, recovery_guard=None
-):
+def publish_remediation_push(action, run_command, action_scope, conn=None, recovery_guard=None):
     repo = action_scope.get("repo")
     pr_number = action_scope.get("pr_number")
     observed_head_sha = action_scope.get("observed_head_sha")
     observed_base_sha = action_scope.get("observed_base_sha")
     audited_result_head_sha = action_scope.get("result_head_sha")
-    if (
-        not repo
-        or not pr_number
-        or not observed_head_sha
-        or not observed_base_sha
-        or not audited_result_head_sha
-    ):
+    if not repo or not pr_number or not observed_head_sha or not observed_base_sha or not audited_result_head_sha:
         return {
             "ok": False,
             "status": "publish_failed",
@@ -763,9 +721,7 @@ def publish_action(
             "safe_error": f"action scope validation failed: {scope_violation}",
             "retryable": False,
         }
-    scope_guard = publication_guards.publication_scope_guard(
-        conn, action, recovery_guard
-    )
+    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
     if scope_guard:
         return scope_guard
     if action["action_type"] == "submit_pr_review":
@@ -773,23 +729,17 @@ def publish_action(
             action,
             publication_scope.trusted_action_scope(conn, action),
             run_command,
-            scope_guard=lambda: publication_guards.publication_scope_guard(
-                conn, action, recovery_guard
-            ),
+            scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
         )
     if action["action_type"] == "comment" and vote_publish.is_vote(action):
         return vote_publish.publish(
             action,
             publication_scope.trusted_action_scope(conn, action),
             run_command,
-            scope_guard=lambda: publication_guards.publication_scope_guard(
-                conn, action, recovery_guard
-            ),
+            scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
         )
     if action["action_type"] == "comment":
-        return publish_comment(
-            action, run_command, conn=conn, recovery_guard=recovery_guard
-        )
+        return publish_comment(action, run_command, conn=conn, recovery_guard=recovery_guard)
     if action["action_type"] == "open_pr":
         return publish_open_pr(
             action,

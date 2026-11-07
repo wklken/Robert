@@ -17,9 +17,7 @@ class ModelRateLimitScenarios(unittest.TestCase):
     def test_intermittent_worker_rate_limits(self):
         for count in (1, 2):
             with self.subTest(count=count):
-                self.assertTrue(
-                    workers._recovers(self.root / str(count), count)["passed"]
-                )
+                self.assertTrue(workers._recovers(self.root / str(count), count)["passed"])
 
     def test_persistent_worker_rate_limits_are_bounded(self):
         self.assertTrue(workers._exhausted(self.root / "worker")["passed"])
@@ -38,9 +36,7 @@ class ModelRateLimitScenarios(unittest.TestCase):
             (None, "missing_header"),
         ]:
             with self.subTest(kind=kind):
-                self.assertTrue(
-                    diagnosis.recovered(self.root / kind, header, kind=kind)["passed"]
-                )
+                self.assertTrue(diagnosis.recovered(self.root / kind, header, kind=kind)["passed"])
 
     def test_persistent_diagnosis_rate_limits_survive_restart(self):
         self.assertTrue(diagnosis.exhausted(self.root / "diagnosis")["passed"])

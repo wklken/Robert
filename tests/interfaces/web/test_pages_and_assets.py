@@ -9,9 +9,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        status, _headers, body = web.build_http_response(
-            "/assets/workbench.js", db_path
-        )
+        status, _headers, body = web.build_http_response("/assets/workbench.js", db_path)
 
         self.assertEqual(status, 200)
         self.assertIn(b"retriggerTask", body)
@@ -35,17 +33,13 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn('data-view="timeline"', html)
         self.assertIn('id="view-knowledge"', html)
         self.assertIn('data-view="notifications"', html)
-        self.assertLess(
-            html.index('data-view="notifications"'), html.index('data-view="daemon"')
-        )
+        self.assertLess(html.index('data-view="notifications"'), html.index('data-view="daemon"'))
         self.assertIn("theme-select", html)
         self.assertIn("language-select", html)
         self.assertIn("notification-center", html)
         self.assertIn("detail-drawer", html)
         self.assertIn("work-task-list", html)
-        self.assertLess(
-            html.index('id="work-task-list"'), html.index('id="detail-drawer"')
-        )
+        self.assertLess(html.index('id="work-task-list"'), html.index('id="detail-drawer"'))
         self.assertNotIn('id="command-search"', html)
         self.assertNotIn("searchPlaceholder", html)
         self.assertIn('id="work-search"', html)
@@ -74,9 +68,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn("setLanguage(", html)
         self.assertIn("localStorage.getItem('robertWorkbenchTheme')", html)
         self.assertIn("localStorage.getItem('robertLanguage')", html)
-        self.assertIn(
-            "function repoContext(data) { const repos = data.repos || []", html
-        )
+        self.assertIn("function repoContext(data) { const repos = data.repos || []", html)
         self.assertNotIn("value.match(/github:", html)
         self.assertIn("operator-next-steps", html)
         self.assertIn("daemon-health", html)
@@ -129,12 +121,8 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn('data-i18n="navKnowledge"', operations_html)
         self.assertIn("navBoard: 'Board'", operations_html)
         self.assertIn("navBoard: '任务看板'", operations_html)
-        self.assertNotIn(
-            'class="nav-button" type="button" data-view="work"', operations_html
-        )
-        self.assertNotIn(
-            'class="nav-button" type="button" data-view="knowledge"', operations_html
-        )
+        self.assertNotIn('class="nav-button" type="button" data-view="work"', operations_html)
+        self.assertNotIn('class="nav-button" type="button" data-view="knowledge"', operations_html)
         self.assertIn('id="nav-count-command">0</span>', operations_html)
         self.assertIn('id="nav-count-timeline">0</span>', operations_html)
         self.assertIn('id="nav-count-notifications">0</span>', operations_html)
@@ -167,14 +155,10 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn(b'data-i18n-placeholder="workSearchPlaceholder"', workbench_html)
         self.assertNotIn(b'id="global-search"', workbench_html)
 
-        _status, _headers, board_css = web.build_http_response(
-            "/assets/board.css", db_path
-        )
+        _status, _headers, board_css = web.build_http_response("/assets/board.css", db_path)
         self.assertNotIn(b"Avenir Next Condensed", board_css)
 
-        shell_status, shell_headers, shell_css = web.build_http_response(
-            "/assets/github-shell.css", db_path
-        )
+        shell_status, shell_headers, shell_css = web.build_http_response("/assets/github-shell.css", db_path)
         self.assertEqual(shell_status, 200)
         self.assertEqual(shell_headers["content-type"], "text/css; charset=utf-8")
         self.assertIn(b"--bgColor-default", shell_css)
@@ -190,18 +174,14 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn(b".mission-shell > .global-bar", operations_css)
         self.assertIn(b"var(--bgColor-default)", operations_css)
 
-        _status, _headers, board_js = web.build_http_response(
-            "/assets/board.js", db_path
-        )
+        _status, _headers, board_js = web.build_http_response("/assets/board.js", db_path)
         self.assertIn(b'localStorage.getItem("robertLanguage")', board_js)
         self.assertIn(b'localStorage.setItem("robertLanguage"', board_js)
         self.assertIn(b'localStorage.getItem("robertWorkbenchTheme")', board_js)
         self.assertIn(b'localStorage.setItem("robertWorkbenchTheme"', board_js)
         self.assertIn(b"function applyTranslations()", board_js)
 
-        _status, _headers, workbench_js = web.build_http_response(
-            "/assets/workbench.js", db_path
-        )
+        _status, _headers, workbench_js = web.build_http_response("/assets/workbench.js", db_path)
         self.assertIn(b'localStorage.getItem("robertLanguage")', workbench_js)
         self.assertIn(b'localStorage.setItem("robertLanguage"', workbench_js)
         self.assertIn(b'localStorage.getItem("robertWorkbenchTheme")', workbench_js)
@@ -261,32 +241,22 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn(b'id="work-item-drawer"', body)
         self.assertIn(b'aria-live="polite"', body)
 
-        css_status, css_headers, css_body = web.build_http_response(
-            "/assets/board.css", db_path
-        )
-        js_status, js_headers, js_body = web.build_http_response(
-            "/assets/board.js", db_path
-        )
+        css_status, css_headers, css_body = web.build_http_response("/assets/board.css", db_path)
+        js_status, js_headers, js_body = web.build_http_response("/assets/board.js", db_path)
         self.assertEqual(css_status, 200)
         self.assertEqual(css_headers["content-type"], "text/css; charset=utf-8")
         self.assertIn(b"@media", css_body)
         self.assertIn(b"[hidden]", css_body)
         body_rules = css_body.decode("utf-8").split("body {", 1)[1].split("}", 1)[0]
-        self.assertIn(
-            "height: 100dvh;", {line.strip() for line in body_rules.splitlines()}
-        )
+        self.assertIn("height: 100dvh;", {line.strip() for line in body_rules.splitlines()})
         self.assertEqual(js_status, 200)
         self.assertEqual(js_headers["content-type"], "text/javascript; charset=utf-8")
         self.assertIn(b"/api/board", js_body)
-        favicon_status, _headers, favicon_body = web.build_http_response(
-            "/favicon.ico", db_path
-        )
+        favicon_status, _headers, favicon_body = web.build_http_response("/favicon.ico", db_path)
         self.assertEqual(favicon_status, 200)
         self.assertIn(b"<svg", favicon_body)
 
-        traversal_status, _headers, _body = web.build_http_response(
-            "/assets/../web.py", db_path
-        )
+        traversal_status, _headers, _body = web.build_http_response("/assets/../web.py", db_path)
         self.assertEqual(traversal_status, 404)
 
     def test_web_serves_github_native_workbench_assets(self):
@@ -310,25 +280,19 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertNotIn('id="global-search"', html)
         self.assertNotIn("bootstrap", html.lower())
 
-        status, headers, body = web.build_http_response(
-            "/assets/workbench.css", db_path
-        )
+        status, headers, body = web.build_http_response("/assets/workbench.css", db_path)
         self.assertEqual(status, 200)
         self.assertEqual(headers["content-type"], "text/css; charset=utf-8")
         self.assertIn(b".workbench-shell", body)
 
-        status, headers, body = web.build_http_response(
-            "/assets/github-shell.css", db_path
-        )
+        status, headers, body = web.build_http_response("/assets/github-shell.css", db_path)
         self.assertEqual(status, 200)
         self.assertEqual(headers["content-type"], "text/css; charset=utf-8")
         self.assertIn(b"--bgColor-default", body)
 
         status, headers, body = web.build_http_response("/assets/workbench.js", db_path)
         self.assertEqual(status, 200)
-        self.assertEqual(
-            headers["content-type"], "application/javascript; charset=utf-8"
-        )
+        self.assertEqual(headers["content-type"], "application/javascript; charset=utf-8")
         self.assertIn(b"function loadWorkItems", body)
         self.assertIn(b"const translations", body)
         self.assertIn(b"function setLanguage", body)

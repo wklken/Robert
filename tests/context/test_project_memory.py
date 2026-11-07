@@ -37,14 +37,10 @@ class ProjectMemoryTests(unittest.TestCase):
                 FROM project_memory_entries
                 """
             ).fetchone()
-            revision_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_revisions"
-            ).fetchone()[0]
+            revision_count = conn.execute("SELECT COUNT(*) FROM project_memory_revisions").fetchone()[0]
             terms = {
                 row[0]
-                for row in conn.execute(
-                    "SELECT term_value FROM project_memory_terms WHERE term_type = 'keyword'"
-                )
+                for row in conn.execute("SELECT term_value FROM project_memory_terms WHERE term_type = 'keyword'")
             }
 
         self.assertEqual(status["status"], "recorded")
@@ -90,15 +86,9 @@ class ProjectMemoryTests(unittest.TestCase):
                 repo_id=self.repo_id,
                 run_now=self.now,
             )
-            entry_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_entries"
-            ).fetchone()[0]
-            entry = conn.execute(
-                "SELECT short_summary, revision_count FROM project_memory_entries"
-            ).fetchone()
-            revision_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_revisions"
-            ).fetchone()[0]
+            entry_count = conn.execute("SELECT COUNT(*) FROM project_memory_entries").fetchone()[0]
+            entry = conn.execute("SELECT short_summary, revision_count FROM project_memory_entries").fetchone()
+            revision_count = conn.execute("SELECT COUNT(*) FROM project_memory_revisions").fetchone()[0]
 
         self.assertEqual(entry_count, 1)
         self.assertEqual(entry, ("Updated summary after review.", 2))
@@ -121,9 +111,7 @@ class ProjectMemoryTests(unittest.TestCase):
                 repo_id=self.repo_id,
                 run_now=self.now,
             )
-            entry_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_entries"
-            ).fetchone()[0]
+            entry_count = conn.execute("SELECT COUNT(*) FROM project_memory_entries").fetchone()[0]
 
         self.assertEqual(status["status"], "skipped")
         self.assertIn("entries", status["safe_error"])
@@ -174,13 +162,9 @@ class ProjectMemoryTests(unittest.TestCase):
             )
 
         self.assertGreaterEqual(len(memories), 1)
-        self.assertEqual(
-            memories[0]["title"], "PR review comments update the PR workstream"
-        )
+        self.assertEqual(memories[0]["title"], "PR review comments update the PR workstream")
         self.assertIn("memory_id", memories[0])
-        self.assertEqual(
-            memories[0]["short_summary"], "DD PR follow-up runs on update-existing-pr."
-        )
+        self.assertEqual(memories[0]["short_summary"], "DD PR follow-up runs on update-existing-pr.")
 
     def test_retrieve_memories_applies_runtime_knowledge_boost_terms(self):
         from robert_agent.context import project as project_memory
@@ -224,19 +208,11 @@ class ProjectMemoryTests(unittest.TestCase):
                         "intent": "analysis",
                     }
                 ],
-                runtime_knowledge=[
-                    {
-                        "retrieval_boost": {
-                            "keywords": ["dd-pr-followup", "update-existing-pr"]
-                        }
-                    }
-                ],
+                runtime_knowledge=[{"retrieval_boost": {"keywords": ["dd-pr-followup", "update-existing-pr"]}}],
             )
 
         self.assertGreaterEqual(len(memories), 1)
-        self.assertEqual(
-            memories[0]["title"], "Use update-existing-pr for DD PR review loops"
-        )
+        self.assertEqual(memories[0]["title"], "Use update-existing-pr for DD PR review loops")
 
     def _init_db(self):
         from robert_agent.adapters.sqlite import database as storage
@@ -276,9 +252,7 @@ class ProjectMemoryTests(unittest.TestCase):
                         "symbols": ["_create_task_attempt_and_prompt"],
                         "keywords": list(keywords or ["dd-pr-followup", "workstream"]),
                         "confidence": "medium",
-                        "evidence": [
-                            {"type": "test", "value": "python -B -m unittest"}
-                        ],
+                        "evidence": [{"type": "test", "value": "python -B -m unittest"}],
                     }
                 ],
             },

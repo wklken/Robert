@@ -25,25 +25,11 @@ class RuntimeTickTests(unittest.TestCase):
                 "checked_at": "2026-11-06T10:00:00+00:00",
                 "last_complete_check_at": "2026-11-06T10:00:00+00:00",
             }
-            supervision_health.atomic_json(
-                supervision_health.health_path(config), health
-            )
-            self.assertTrue(
-                supervision_health.owns_health_alerts(
-                    config, "2026-11-06T10:00:01+00:00"
-                )
-            )
-            self.assertFalse(
-                supervision_health.owns_health_alerts(
-                    config, "2026-11-06T11:00:00+00:00"
-                )
-            )
+            supervision_health.atomic_json(supervision_health.health_path(config), health)
+            self.assertTrue(supervision_health.owns_health_alerts(config, "2026-11-06T10:00:01+00:00"))
+            self.assertFalse(supervision_health.owns_health_alerts(config, "2026-11-06T11:00:00+00:00"))
             config["supervision"]["mode"] = "off"
-            self.assertFalse(
-                supervision_health.owns_health_alerts(
-                    config, "2026-11-06T10:00:01+00:00"
-                )
-            )
+            self.assertFalse(supervision_health.owns_health_alerts(config, "2026-11-06T10:00:01+00:00"))
 
     def test_daemon_tick_survives_outside_database_and_preserves_start_identity(self):
         with tempfile.TemporaryDirectory() as directory:

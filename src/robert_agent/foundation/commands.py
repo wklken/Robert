@@ -24,12 +24,8 @@ def run_command(command, *, runner=None, **kwargs):
     try:
         return (runner or subprocess.run)(command, timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired as exc:
-        if deadline_limits_call or (
-            deadline is not None and time.monotonic() >= deadline
-        ):
-            raise ControlDeadlineExceeded(
-                exc.cmd, timeout, output=exc.output, stderr=exc.stderr
-            ) from exc
+        if deadline_limits_call or (deadline is not None and time.monotonic() >= deadline):
+            raise ControlDeadlineExceeded(exc.cmd, timeout, output=exc.output, stderr=exc.stderr) from exc
         raise
 
 

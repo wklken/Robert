@@ -35,11 +35,7 @@ class ExecutionReplayTests(unittest.TestCase):
             self.task, self.attempt, self.attempt_metadata = conn.execute(
                 "SELECT task_id,attempt_id,metadata_json FROM attempts"
             ).fetchone()
-            self.event = json.loads(
-                conn.execute(
-                    "SELECT payload_json FROM github_events LIMIT 1"
-                ).fetchone()[0]
-            )
+            self.event = json.loads(conn.execute("SELECT payload_json FROM github_events LIMIT 1").fetchone()[0])
             conn.execute("UPDATE tasks SET lifecycle='waiting_for_user'")
             conn.execute("UPDATE workstreams SET lifecycle='waiting_for_user'")
             conn.execute("UPDATE attempts SET status='completed',metadata_json='{}'")
@@ -66,9 +62,7 @@ class ExecutionReplayTests(unittest.TestCase):
                     "drives_execution": index != 1,
                     "body": f"Reply {index}",
                 }
-                source_events.insert_source_and_event(
-                    conn, "repo:example/backend", event, "2026-10-24T00:00:00+00:00"
-                )
+                source_events.insert_source_and_event(conn, "repo:example/backend", event, "2026-10-24T00:00:00+00:00")
                 workflow_signals.record_subject_signal(
                     conn,
                     self.binding,
@@ -92,12 +86,8 @@ class ExecutionReplayTests(unittest.TestCase):
             )
             self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2
-            )
-            child = conn.execute(
-                "SELECT task_id FROM tasks WHERE parent_task_id=?", (self.task,)
-            ).fetchone()[0]
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
+            child = conn.execute("SELECT task_id FROM tasks WHERE parent_task_id=?", (self.task,)).fetchone()[0]
             events = {
                 row[0]
                 for row in conn.execute(
@@ -107,9 +97,7 @@ class ExecutionReplayTests(unittest.TestCase):
             }
             self.assertEqual(events, {"reply-0", "reply-1", "reply-2"})
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM execution_pending_facts WHERE consumed_at IS NULL"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM execution_pending_facts WHERE consumed_at IS NULL").fetchone()[0],
                 0,
             )
 
@@ -117,11 +105,7 @@ class ExecutionReplayTests(unittest.TestCase):
         self.migrate_replies()
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE wakeups SET status='consumed'")
-            self.assertTrue(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_id="repo:example/backend"
-                )
-            )
+            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_id="repo:example/backend"))
 
     def test_migrated_facts_wait_after_audit_retry_exhaustion(self):
         from robert_agent.delivery.application import submission as worker_result
@@ -140,9 +124,7 @@ class ExecutionReplayTests(unittest.TestCase):
                 "observe_worktree_status",
                 return_value="clean",
             ),
-            patch.object(
-                worker_result.action_scope, "observe_head", return_value="saved-head"
-            ),
+            patch.object(worker_result.action_scope, "observe_head", return_value="saved-head"),
         ):
             receipt = worker_result.record_result(
                 self.db,
@@ -152,9 +134,7 @@ class ExecutionReplayTests(unittest.TestCase):
                     "output_type": "new_pr",
                     "submission": {
                         "planned_github_actions": test_run_once._new_pr_actions(),
-                        "consumed_event_fingerprints": [
-                            self.event["event_fingerprint"]
-                        ],
+                        "consumed_event_fingerprints": [self.event["event_fingerprint"]],
                         "verification": [test_run_once._verification_evidence()],
                         "used_skills": [],
                         "handoff": "ready",
@@ -186,9 +166,7 @@ class ExecutionReplayTests(unittest.TestCase):
                         [],
                         {},
                     )
-            metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM tasks").fetchone()[0]
-            )
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM tasks").fetchone()[0])
             self.assertEqual(metadata["audit_retry_required"], receipt["result_id"])
             self.assertEqual(
                 execution_store.get_binding(conn, "task", self.task)["binding_status"],
@@ -212,11 +190,7 @@ class ExecutionReplayTests(unittest.TestCase):
                     conn.execute("SELECT * FROM execution_pending_facts").fetchall(),
                     facts,
                 )
-                self.assertIsNone(
-                    conn.execute(
-                        "SELECT consumed_at FROM execution_pending_facts LIMIT 1"
-                    ).fetchone()[0]
-                )
+                self.assertIsNone(conn.execute("SELECT consumed_at FROM execution_pending_facts LIMIT 1").fetchone()[0])
         loop = loop_engine.run_loop(
             self.fixture.config_path,
             dry_run=True,
@@ -227,9 +201,7 @@ class ExecutionReplayTests(unittest.TestCase):
         self.assertEqual(loop["stop_reason"], "no_runnable_work")
         with closing(sqlite3.connect(self.db)) as conn, conn:
             # Once explicit recovery clears the fence, the same facts become runnable.
-            conn.execute(
-                "UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.audit_retry_required')"
-            )
+            conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.audit_retry_required')")
             self.assertTrue(
                 loop_engine.has_runnable_local_work(
                     conn,
@@ -247,22 +219,10 @@ class ExecutionReplayTests(unittest.TestCase):
                 (json.dumps({"reason_code": "source_context_missing"}),),
             )
             facts = conn.execute("SELECT * FROM execution_pending_facts").fetchall()
-            self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_id="repo:example/backend"
-                )
-            )
-            conn.execute(
-                "UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.execution_attention')"
-            )
-            self.assertTrue(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_id="repo:example/backend"
-                )
-            )
-            self.assertEqual(
-                conn.execute("SELECT * FROM execution_pending_facts").fetchall(), facts
-            )
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_id="repo:example/backend"))
+            conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.execution_attention')")
+            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_id="repo:example/backend"))
+            self.assertEqual(conn.execute("SELECT * FROM execution_pending_facts").fetchall(), facts)
 
     def test_untrusted_reply_stops_with_actionable_attention_without_busy_loop(self):
         self.migrate_replies(trusted=False)
@@ -277,14 +237,8 @@ class ExecutionReplayTests(unittest.TestCase):
             control = execution_store.get_binding(conn, "task", self.task)
             self.assertEqual(control["binding_status"], "attention")
             self.assertIn("required_action", json.loads(control["metadata_json"]))
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_id="repo:example/backend"
-                )
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_id="repo:example/backend"))
 
     def test_stale_remediation_generation_consumed_without_new_attempt_or_budget_reset(
         self,
@@ -311,31 +265,19 @@ class ExecutionReplayTests(unittest.TestCase):
             )
             for _ in range(2):
                 self.assertEqual(
-                    execution_replay.decisions(
-                        conn, "repo:example/backend", "2026-10-24T01:00:00+00:00", []
-                    ),
+                    execution_replay.decisions(conn, "repo:example/backend", "2026-10-24T01:00:00+00:00", []),
                     [],
                 )
             self.assertEqual(
-                conn.execute(
-                    "SELECT attempt_count FROM pr_remediation_episodes"
-                ).fetchone()[0],
+                conn.execute("SELECT attempt_count FROM pr_remediation_episodes").fetchone()[0],
                 1,
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT recovery_attempts FROM execution_subjects WHERE subject_id='ep'"
-                ).fetchone()[0],
+                conn.execute("SELECT recovery_attempts FROM execution_subjects WHERE subject_id='ep'").fetchone()[0],
                 1,
             )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertIsNotNone(
-                conn.execute(
-                    "SELECT consumed_at FROM execution_pending_facts"
-                ).fetchone()[0]
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
+            self.assertIsNotNone(conn.execute("SELECT consumed_at FROM execution_pending_facts").fetchone()[0])
 
     def test_canceled_subject_facts_are_disposed_without_reviving_work(self):
         self.migrate_replies()
@@ -343,31 +285,16 @@ class ExecutionReplayTests(unittest.TestCase):
             conn.execute("UPDATE tasks SET lifecycle='canceled'")
             conn.execute("UPDATE execution_subjects SET binding_status='terminal'")
             self.assertEqual(
-                execution_replay.decisions(
-                    conn, "repo:example/backend", "2026-10-24T01:00:00+00:00", []
-                ),
+                execution_replay.decisions(conn, "repo:example/backend", "2026-10-24T01:00:00+00:00", []),
                 [],
             )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM execution_pending_facts WHERE consumed_at IS NULL"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM execution_pending_facts WHERE consumed_at IS NULL").fetchone()[0],
                 0,
             )
             resolutions = [
-                json.loads(row[0])
-                for row in conn.execute(
-                    "SELECT resolution_json FROM execution_pending_facts"
-                )
+                json.loads(row[0]) for row in conn.execute("SELECT resolution_json FROM execution_pending_facts")
             ]
-            self.assertTrue(
-                all(row["reason"] == "subject_terminal" for row in resolutions)
-            )
-            self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_id="repo:example/backend"
-                )
-            )
+            self.assertTrue(all(row["reason"] == "subject_terminal" for row in resolutions))
+            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_id="repo:example/backend"))

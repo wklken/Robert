@@ -151,9 +151,7 @@ class DashboardFixture(SummaryFixture):
                 """,
                 (
                     now,
-                    json.dumps(
-                        {"audit": audit, "result_id": "result-failed"}, sort_keys=True
-                    ),
+                    json.dumps({"audit": audit, "result_id": "result-failed"}, sort_keys=True),
                 ),
             )
             conn.execute(

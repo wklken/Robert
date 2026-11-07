@@ -31,9 +31,7 @@ class PublishCommentTests(PublicationFixture):
                 )
             )
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -161,9 +159,7 @@ class PublishCommentTests(PublicationFixture):
             calls.append((command, kwargs))
             return Completed()
 
-        result = publish.publish_ready_actions(
-            db_path, dry_run=False, run_command=fake_run
-        )
+        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)

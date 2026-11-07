@@ -42,15 +42,11 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
                     now=handoff["next_retry_at"],
                 )
             )
-        with mock.patch.object(
-            values, "utc_now", return_value=handoff["next_retry_at"]
-        ):
+        with mock.patch.object(values, "utc_now", return_value=handoff["next_retry_at"]):
             self.assertTrue(self.cycle(self.empty)["ok"])
             self.assertTrue(self.cycle(self.empty)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:
-            children = conn.execute(
-                "SELECT task_id FROM tasks WHERE parent_task_id=?", (self.task,)
-            ).fetchall()
+            children = conn.execute("SELECT task_id FROM tasks WHERE parent_task_id=?", (self.task,)).fetchall()
             self.assertEqual(len(children), 1)
             self.assertEqual(
                 conn.execute(
@@ -65,9 +61,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         with mock.patch.object(
             assigned_workspace,
             "prepare_worktree",
-            side_effect=subprocess.CalledProcessError(
-                1, ["git", "fetch"], stderr="permission denied"
-            ),
+            side_effect=subprocess.CalledProcessError(1, ["git", "fetch"], stderr="permission denied"),
         ):
             self.cycle(self.empty)
         lifecycle, handoff = self.state()
@@ -76,9 +70,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         with closing(sqlite3.connect(self.db)) as conn:
             item_id = conn.execute("SELECT work_item_id FROM work_items").fetchone()[0]
             self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM work_item_events WHERE event_type='execution_failed'"
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type='execution_failed'").fetchone()[0],
                 1,
             )
         card = board.get_work_item_detail(self.db, item_id)
@@ -104,22 +96,16 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         # This is the persisted state left by the old finalizer after its Git commit boundary.
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE tasks SET lifecycle='completed'")
-            conn.execute(
-                "UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')"
-            )
+            conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')")
             conn.execute("UPDATE github_actions SET audit_status='accepted'")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertTrue(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/backend"], config_result=self.config
-                )
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/backend"], config_result=self.config)
             )
         self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM tasks WHERE parent_task_id=?", (self.task,)
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM tasks WHERE parent_task_id=?", (self.task,)).fetchone()[0],
                 1,
             )
 
@@ -140,9 +126,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
             due = state["next_retry_at"]
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/backend"], config_result=self.config
-                )
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/backend"], config_result=self.config)
             )
             item = conn.execute("SELECT work_item_id FROM work_items").fetchone()[0]
         card = board.get_work_item_detail(self.db, item)
@@ -163,9 +147,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         )
         self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
-            child = conn.execute(
-                "SELECT task_id FROM tasks WHERE parent_task_id=?", (self.task,)
-            ).fetchone()
+            child = conn.execute("SELECT task_id FROM tasks WHERE parent_task_id=?", (self.task,)).fetchone()
             self.assertIsNotNone(child)
             self.assertEqual(
                 conn.execute(
@@ -175,9 +157,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
                 "event:comment:pending",
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT lifecycle FROM tasks WHERE task_id=?", (self.task,)
-                ).fetchone()[0],
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task,)).fetchone()[0],
                 "completed",
             )
 
@@ -187,23 +167,15 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         def cancel(*args, **kwargs):
             with closing(sqlite3.connect(self.db)) as conn, conn:
                 conn.execute("UPDATE work_items SET canceled_at=?", (values.utc_now(),))
-                conn.execute(
-                    "UPDATE workstreams SET lifecycle='canceled',active_task_id=NULL"
-                )
+                conn.execute("UPDATE workstreams SET lifecycle='canceled',active_task_id=NULL")
             return original(*args, **kwargs)
 
-        with mock.patch.object(
-            assigned_workspace, "prepare_worktree", side_effect=cancel
-        ):
+        with mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=cancel):
             self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/backend"], config_result=self.config
-                )
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/backend"], config_result=self.config)
             )
 
     def test_revoked_pending_request_settles_without_creating_child(self):
@@ -222,13 +194,9 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         with mock.patch.object(values, "utc_now", return_value=due):
             self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT lifecycle,active_task_id FROM workstreams"
-                ).fetchone(),
+                conn.execute("SELECT lifecycle,active_task_id FROM workstreams").fetchone(),
                 ("completed", None),
             )
             self.assertEqual(
@@ -258,26 +226,18 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
                 values.utc_now(),
             )
             conn.execute("UPDATE github_actions SET audit_status='accepted'")
-            conn.execute(
-                "UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')"
-            )
+            conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertTrue(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/backend"], config_result=self.config
-                )
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/backend"], config_result=self.config)
             )
         self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT task_kind FROM tasks WHERE parent_task_id=?", (self.task,)
-                ).fetchone()[0],
+                conn.execute("SELECT task_kind FROM tasks WHERE parent_task_id=?", (self.task,)).fetchone()[0],
                 "human_request",
             )
             self.assertEqual(
-                execution_store.get_binding(conn, "remediation_episode", "episode")[
-                    "binding_status"
-                ],
+                execution_store.get_binding(conn, "remediation_episode", "episode")["binding_status"],
                 "active",
             )

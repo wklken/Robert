@@ -31,9 +31,7 @@ class RepairTests(RepairFixture):
             )
             self.assertIn("Known regression", item[3])
             self.assertIn("The matching consumer records a receipt", item[3])
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 0)
         stages = self.repair.status(self.config, self.incident_id)["verification"]
         self.assertEqual(
             set(stages),
@@ -68,9 +66,7 @@ class RepairTests(RepairFixture):
         self.assertEqual(two["status"], "backlog")
         self.assertEqual(two["auto_status"], "restricted_launcher_unverified")
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 0)
 
     def test_auto_requires_fixed_route_current_policy_and_rejects_recursion(self):
         policy = self.auto_policy()
@@ -83,34 +79,18 @@ class RepairTests(RepairFixture):
         self.assertEqual(created["status"], "activated")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                self.repair.preparation_route(
-                    conn, created["task_id"], self.config, self.repo
-                ),
+                self.repair.preparation_route(conn, created["task_id"], self.config, self.repo),
                 "new-pr",
             )
-            self.assertIsNotNone(
-                self.repair.authorized_repair(
-                    conn, created["task_id"], self.config, "r", "open_pr"
-                )
-            )
-            self.assertIsNone(
-                self.repair.authorized_repair(
-                    conn, created["task_id"], self.config, "r", "comment"
-                )
-            )
+            self.assertIsNotNone(self.repair.authorized_repair(conn, created["task_id"], self.config, "r", "open_pr"))
+            self.assertIsNone(self.repair.authorized_repair(conn, created["task_id"], self.config, "r", "comment"))
             policy["allowed_actions"] = ["open_pr"]
-            self.assertIsNone(
-                self.repair.authorized_repair(
-                    conn, created["task_id"], self.config, "r", "open_pr"
-                )
-            )
+            self.assertIsNone(self.repair.authorized_repair(conn, created["task_id"], self.config, "r", "open_pr"))
         repair_failure = self.incident("task", created["task_id"])
         rejected = self.repair.propose(self.config, repair_failure, now=self.when)
         self.assertEqual(rejected["status"], "repair_recursion_blocked")
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM work_items").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM work_items").fetchone()[0], 1)
 
     def test_verification_separates_real_checks_merge_deployment_and_original_progress(
         self,
@@ -231,12 +211,8 @@ class RepairTests(RepairFixture):
                         now,
                     ),
                 )
-            daemon_state.start_daemon_run(
-                conn, config_path=self.config_file, owner_id="daemon", now=now
-            )
-            daemon_state.acquire_daemon_lease(
-                conn, resource_key="fixture", owner_id="daemon", ttl_seconds=60, now=now
-            )
+            daemon_state.start_daemon_run(conn, config_path=self.config_file, owner_id="daemon", now=now)
+            daemon_state.acquire_daemon_lease(conn, resource_key="fixture", owner_id="daemon", ttl_seconds=60, now=now)
 
         def remote(path, jq):
             if path.endswith("/pulls/42"):
@@ -261,9 +237,7 @@ class RepairTests(RepairFixture):
             "source_revision": old_revision,
         }
         with (
-            patch.object(
-                self.repair, "probe_restricted_launcher", return_value={"ok": True}
-            ),
+            patch.object(self.repair, "probe_restricted_launcher", return_value={"ok": True}),
             patch.object(self.repair, "_github", side_effect=remote),
         ):
             old = self.repair.verify(
@@ -274,15 +248,9 @@ class RepairTests(RepairFixture):
                 now=self.when,
             )
             self.assertEqual(old["verification"]["code_verified"]["status"], "verified")
-            self.assertEqual(
-                old["verification"]["mainline_verified"]["status"], "verified"
-            )
-            self.assertEqual(
-                old["verification"]["deployed_verified"]["status"], "pending"
-            )
-            self.assertEqual(
-                old["verification"]["original_progress"]["status"], "pending"
-            )
+            self.assertEqual(old["verification"]["mainline_verified"]["status"], "verified")
+            self.assertEqual(old["verification"]["deployed_verified"]["status"], "pending")
+            self.assertEqual(old["verification"]["original_progress"]["status"], "pending")
             runtime["source_revision"] = merged
             deployed = self.repair.verify(
                 self.config,
@@ -291,12 +259,8 @@ class RepairTests(RepairFixture):
                 runtime=runtime,
                 now=self.when,
             )
-            self.assertEqual(
-                deployed["verification"]["deployed_verified"]["status"], "verified"
-            )
-            self.assertEqual(
-                deployed["verification"]["original_progress"]["status"], "pending"
-            )
+            self.assertEqual(deployed["verification"]["deployed_verified"]["status"], "verified")
+            self.assertEqual(deployed["verification"]["original_progress"]["status"], "pending")
 
             def progress(evidence):
                 with closing(sqlite3.connect(self.db)) as conn, conn:

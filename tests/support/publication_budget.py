@@ -100,7 +100,5 @@ class PublicationBudgetFixture(unittest.TestCase):
 
     def cycle(self, seconds=0):
         self.now += timedelta(seconds=seconds)
-        with mock.patch.object(
-            publication_values, "now", return_value=self.now.isoformat()
-        ):
+        with mock.patch.object(publication_values, "now", return_value=self.now.isoformat()):
             return publish.publish_ready_actions(self.db, run_command=self.runner)

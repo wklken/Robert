@@ -32,9 +32,7 @@ class ReviewRegressionTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         with patch.dict(os.environ, {"HOME": str(fixture.db.parent)}):
-            self.assertIn(
-                "execution_timings", status.build_status("~/" + fixture.db.name)
-            )
+            self.assertIn("execution_timings", status.build_status("~/" + fixture.db.name))
 
     def test_prepared_and_failed_spawn_are_not_worker_execution(self):
         from robert_agent.readmodels import execution_metrics
@@ -44,12 +42,8 @@ class ReviewRegressionTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.execute("UPDATE tasks SET created_at='2026-10-24T00:00:00Z'")
-            conn.execute(
-                "UPDATE attempts SET status='prepared',started_at='2026-10-24T00:00:00Z'"
-            )
-            self.assertIsNone(
-                execution_metrics.task_timing(conn, "task-1")["queue_seconds"]
-            )
+            conn.execute("UPDATE attempts SET status='prepared',started_at='2026-10-24T00:00:00Z'")
+            self.assertIsNone(execution_metrics.task_timing(conn, "task-1")["queue_seconds"])
             dispatch_queue._record_dispatch_result(
                 conn,
                 "attempt-1",
@@ -59,9 +53,7 @@ class ReviewRegressionTests(unittest.TestCase):
                     "safe_error": "cannot spawn",
                 },
             )
-            self.assertIsNone(
-                execution_metrics.task_timing(conn, "task-1")["worker_seconds"]
-            )
+            self.assertIsNone(execution_metrics.task_timing(conn, "task-1")["worker_seconds"])
 
     def test_terminal_tasks_hide_stale_wait_metadata(self):
         from tests.support.publication_budget import PublicationBudgetFixture
@@ -73,9 +65,7 @@ class ReviewRegressionTests(unittest.TestCase):
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.execute(
                 "UPDATE tasks SET lifecycle='canceled', metadata_json=?",
-                (
-                    '{"wait_state":{"reason_code":"repository_busy","since":"now","lease_expires_at":"later"}}',
-                ),
+                ('{"wait_state":{"reason_code":"repository_busy","since":"now","lease_expires_at":"later"}}',),
             )
             timing = execution_metrics.task_timing(conn, "t")
             self.assertEqual(timing["waiting_reason"], "terminal")
@@ -134,9 +124,7 @@ class ReviewRegressionTests(unittest.TestCase):
                 conn.execute("SELECT status,failure_json FROM attempts").fetchone(),
                 ("running", None),
             )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
         payload["submission"]["planned_github_actions"] = [
             {"type": "comment", "body": "Which version should I target?"}
         ]
@@ -144,12 +132,8 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertTrue(accepted["ok"], accepted)
         self.assertIsNone(child.poll())
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
         child.terminate()
         child.wait(timeout=10)
         with closing(sqlite3.connect(db)) as conn, conn:
@@ -160,6 +144,4 @@ class ReviewRegressionTests(unittest.TestCase):
                 now,
                 resume_attempt=preparation.create_resume_attempt_and_prompt,
             )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")

@@ -9,9 +9,7 @@ class RoutingTests(unittest.TestCase):
         internal_worker_name = "robert-worker"
         for route_id, route_config in route.ROUTES.items():
             with self.subTest(route_id=route_id):
-                self.assertNotIn(
-                    internal_worker_name, route_config["recommended_skills"]
-                )
+                self.assertNotIn(internal_worker_name, route_config["recommended_skills"])
 
     def test_web_analysis_routes_to_local_result(self):
         from robert_agent.workflows import routes as route
@@ -62,9 +60,7 @@ class RoutingTests(unittest.TestCase):
             f"{background}\n{request} @robert-bot\n",
         ):
             with self.subTest(body=body):
-                intent = discover.infer_intent(
-                    "调研：能否使用 ty 替代 mypy", body, "comment", "robert-bot"
-                )
+                intent = discover.infer_intent("调研：能否使用 ty 替代 mypy", body, "comment", "robert-bot")
                 self.assertEqual(intent, "analysis")
                 policy = route.route_task({"intent": intent, "source_type": "issue"})
                 self.assertEqual(policy["expected_output"], "comment_analysis")
@@ -93,9 +89,7 @@ class RoutingTests(unittest.TestCase):
             ("The summary endpoint has a bug @robert-bot", "bug_fix"),
         ):
             with self.subTest(body=body):
-                self.assertEqual(
-                    discover.infer_intent("", body, "comment", "robert-bot"), expected
-                )
+                self.assertEqual(discover.infer_intent("", body, "comment", "robert-bot"), expected)
 
     def test_quoted_and_code_instructions_do_not_override_live_statistics_request(self):
         from robert_agent.adapters.github import discovery as discover
@@ -110,9 +104,7 @@ class RoutingTests(unittest.TestCase):
             with self.subTest(background=background):
                 body = f"{background}\n统计报错结果 @robert-bot"
                 self.assertEqual(
-                    discover.infer_intent(
-                        "Bug: failed checks", body, "comment", "robert-bot"
-                    ),
+                    discover.infer_intent("Bug: failed checks", body, "comment", "robert-bot"),
                     "analysis",
                 )
 
@@ -335,9 +327,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("For comments supply type and body", prompt)
         self.assertIn('"planned_github_actions"', prompt)
         self.assertNotIn('"actual_github_actions"', prompt)
-        self.assertIn(
-            "For open_pr supply type, title/body and issue_resolution", prompt
-        )
+        self.assertIn("For open_pr supply type, title/body and issue_resolution", prompt)
         self.assertIn("push_existing_pr has only type", prompt)
         self.assertIn("stable action markers", prompt)
         self.assertIn('"used_skills"', prompt)
@@ -396,9 +386,7 @@ class RoutingTests(unittest.TestCase):
         from robert_agent.context import prompts as render_prompt
         from robert_agent.workflows import routes as route
 
-        route_result = route.route_task(
-            {"intent": "bug_fix", "source_type": "pull_request", "has_open_dd_pr": True}
-        )
+        route_result = route.route_task({"intent": "bug_fix", "source_type": "pull_request", "has_open_dd_pr": True})
         prompt = render_prompt.render_prompt(
             task={
                 "task_id": "task-1",
@@ -456,9 +444,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("other configured runtime skill directories", prompt)
         self.assertIn("symlinks that resolve into runtime skill directories", prompt)
         self.assertIn("does not authorize installing or activating them", prompt)
-        self.assertIn(
-            "does not override read-only classification or review scope", prompt
-        )
+        self.assertIn("does not override read-only classification or review scope", prompt)
         self.assertNotIn("You must not create, modify, or install skills.", prompt)
 
     def test_prompt_requires_waiting_output_for_blocked_execution(self):
@@ -471,9 +457,7 @@ class RoutingTests(unittest.TestCase):
                 "attempt_id": "attempt-1",
                 "workstream_id": "github:example/repo!77",
             },
-            route_result=route.route_task(
-                {"intent": "bug_fix", "has_open_dd_pr": True}
-            ),
+            route_result=route.route_task({"intent": "bug_fix", "has_open_dd_pr": True}),
             events=[{"event_fingerprint": "comment:77"}],
             runtime_context={"result_script": "/agent/result.py"},
         )
@@ -481,9 +465,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("--output-type waiting_for_user", prompt)
         self.assertIn('"kind": "scope_decision"', prompt)
         self.assertIn('"operator_question"', prompt)
-        self.assertIn(
-            "recommended_route does not change an execution result's lifecycle", prompt
-        )
+        self.assertIn("recommended_route does not change an execution result's lifecycle", prompt)
 
     def test_ci_remediation_prompt_uses_evidence_without_review_point_contract(self):
         from robert_agent.context import prompts as render_prompt
@@ -548,9 +530,7 @@ class RoutingTests(unittest.TestCase):
             route.route_task(task),
             [
                 {
-                    "event_fingerprint": (
-                        "github-system:merge-conflict:77:head-1:base-1"
-                    ),
+                    "event_fingerprint": ("github-system:merge-conflict:77:head-1:base-1"),
                     "metadata": {
                         "remediation": {
                             "episode_id": "episode-conflict",

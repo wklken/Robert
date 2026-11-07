@@ -11,11 +11,7 @@ from tests.support.vote_files import VoteFileFixture
 class VoteFileTests(VoteFileFixture):
     def test_valid_vote_and_explicit_abstention(self):
         self.assertEqual(self.read(self.ballot)["choice_id"], "A")
-        self.assertIsNone(
-            self.read(
-                {**self.ballot, "choice_id": None, "abstain_reason": "Need evidence"}
-            )["choice_id"]
-        )
+        self.assertIsNone(self.read({**self.ballot, "choice_id": None, "abstain_reason": "Need evidence"})["choice_id"])
 
     def test_invalid_identity_options_missing_reasons_and_unknown_evidence(self):
         for mutation in [
@@ -108,6 +104,4 @@ class VoteFileTests(VoteFileFixture):
         self.assertTrue(vote_workspace.same_sources(manifest, newer))
         newer["discussion"][0]["body"] = "Edited decision"
         self.assertFalse(vote_workspace.same_sources(manifest, newer))
-        self.assertFalse(
-            vote_workspace.same_sources(manifest, {**current, "discussion": []})
-        )
+        self.assertFalse(vote_workspace.same_sources(manifest, {**current, "discussion": []}))

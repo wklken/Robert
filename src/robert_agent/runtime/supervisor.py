@@ -78,18 +78,10 @@ def run(config, *, once=False, stop=None):
                 if maintenance is not None and maintenance.poll() is not None:
                     maintenance.wait()
                     maintenance = None
-                if (
-                    maintenance is not None
-                    and time.monotonic() - maintenance_started > 360
-                ):
+                if maintenance is not None and time.monotonic() - maintenance_started > 360:
                     _stop_child(maintenance)
                     maintenance = None
-                if (
-                    result["ok"]
-                    and settings.get("repair")
-                    and maintenance is None
-                    and not once
-                ):
+                if result["ok"] and settings.get("repair") and maintenance is None and not once:
                     maintenance = subprocess.Popen(
                         [
                             sys.executable,
@@ -153,9 +145,7 @@ def _repair_once(config_path):
     config = validate_config.validate_config(config_path, skip_external=True)
     if config.get("ok"):
         supervision_repair.poll(config)
-        supervision_repair_followup.poll(
-            config, runtime=supervision_health.runtime_status(config)
-        )
+        supervision_repair_followup.poll(config, runtime=supervision_health.runtime_status(config))
 
 
 def main(argv=None):

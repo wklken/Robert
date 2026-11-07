@@ -94,15 +94,11 @@ repos:
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["raw_event_count"], 1)
         self.assertEqual(result["normalized_event_count"], 1)
-        self.assertEqual(
-            result["sample_events"][0]["event_fingerprint"], "mention:issue-77"
-        )
+        self.assertEqual(result["sample_events"][0]["event_fingerprint"], "mention:issue-77")
         self.assertEqual(result["sample_events"][0]["mentions_dd"], True)
         self.assertTrue(any("--assignee" in call for call in calls))
         self.assertTrue(any("--mentions" in call for call in calls))
-        self.assertTrue(
-            any(call[:3] == ["gh", "api", "notifications"] for call in calls)
-        )
+        self.assertTrue(any(call[:3] == ["gh", "api", "notifications"] for call in calls))
         self.assertFalse((self.data_dir / "dd.sqlite3").exists())
 
 

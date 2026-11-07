@@ -70,17 +70,13 @@ class LifecycleFollowupTests(unittest.TestCase):
         f = self.fixture(paused_fixture.PausedWorkerSupervisionFixture)
         process = f.process(age=0)
         with closing(sqlite3.connect(f.db)) as conn:
-            task, attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            task, attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         payload = {
             "task_id": task,
             "attempt_id": attempt,
             "output_type": "comment_analysis",
             "submission": {
-                "planned_github_actions": [
-                    {"type": "comment", "body": "Analysis finished"}
-                ],
+                "planned_github_actions": [{"type": "comment", "body": "Analysis finished"}],
                 "consumed_event_fingerprints": ["comment:first"],
                 "verification": [],
                 "handoff": "done",
@@ -92,9 +88,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             "_record_result_db",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
-            self.assertEqual(
-                worker_result.record_result(f.db, payload)["status"], "deferred"
-            )
+            self.assertEqual(worker_result.record_result(f.db, payload)["status"], "deferred")
         f.stop(process)
         with result_spool.locked_record(f.db, attempt):
             cycle = run_once.run_once(
@@ -107,9 +101,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             )
             self.assertTrue(cycle["ok"], cycle)
         with closing(sqlite3.connect(f.db)) as conn:
-            self.assertNotEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed"
-            )
+            self.assertNotEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
         self.assertEqual(worker_result.replay_pending_results(f.db)["recorded"], 1)
         self.assertFalse(list(result_spool.directory(f.db).glob("rejected/*.json")))
 
@@ -118,20 +110,13 @@ class LifecycleFollowupTests(unittest.TestCase):
         cfg = json.loads(f.config_path.read_text())
         cfg.setdefault("scheduler", {})["max_concurrency"] = 3
         cfg["repos"][0]["max_concurrency"] = 1
-        cfg["repos"].append(
-            {**cfg["repos"][0], "full_name": "example/healthy", "max_concurrency": 2}
-        )
+        cfg["repos"].append({**cfg["repos"][0], "full_name": "example/healthy", "max_concurrency": 2})
         f.config_path.write_text(json.dumps(cfg))
         tasks = {}
-        for repo, count in zip(
-            validate_config.validate_config(f.config_path)["repos"], (3, 1)
-        ):
+        for repo, count in zip(validate_config.validate_config(f.config_path)["repos"], (3, 1)):
             with closing(sqlite3.connect(f.db_path)) as conn, conn:
                 rid = work_repositories.upsert_repo(conn, repo)
-            tasks[rid] = [
-                self.create(f, repo_id=rid, key=rid + str(i))["task_id"]
-                for i in range(count)
-            ]
+            tasks[rid] = [self.create(f, repo_id=rid, key=rid + str(i))["task_id"] for i in range(count)]
         f._run_local_cycle()
         with closing(sqlite3.connect(f.db_path)) as conn, conn:
             conn.execute(
@@ -160,9 +145,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             )
         self.assertTrue(cycle["ok"], cycle)
         self.assertEqual(launch.call_count, 1)
-        self.assertEqual(
-            launch.call_args.kwargs["task_id"], tasks["repo:example/healthy"][0]
-        )
+        self.assertEqual(launch.call_args.kwargs["task_id"], tasks["repo:example/healthy"][0])
 
     def test_ordinary_prepared_request_rechecks_current_trust(self):
         f = self.fixture(run_fixture.RepositoryCycleFixture)
@@ -173,9 +156,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             skip_external=True,
             skip_publish=True,
         )
-        f.config_path.write_text(
-            f.config_path.read_text().replace("- wklken", "- replacement")
-        )
+        f.config_path.write_text(f.config_path.read_text().replace("- wklken", "- replacement"))
         with (
             mock.patch.object(
                 dispatch_queue,
@@ -198,9 +179,7 @@ class LifecycleFollowupTests(unittest.TestCase):
                 ("failed", "canceled"),
             )
             self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/backend"], include_publication=False
-                )
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/backend"], include_publication=False)
             )
 
     def test_unavailable_manual_worker_stops_automatic_drain_until_retry(self):
@@ -219,9 +198,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             ),
             mock.patch.object(worker, "dispatch_worker") as launch,
         ):
-            run_once.run_once(
-                f.config_path, dry_run=False, skip_external=True, skip_publish=True
-            )
+            run_once.run_once(f.config_path, dry_run=False, skip_external=True, skip_publish=True)
         launch.assert_not_called()
         with closing(sqlite3.connect(f.db_path)) as conn:
             self.assertFalse(
@@ -268,9 +245,7 @@ class LifecycleFollowupTests(unittest.TestCase):
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES('task','ws','running',?,?)",
                 (now, now),
             )
-        with mock.patch.object(
-            monitor, "supervise_running_attempts", return_value=1
-        ) as supervise:
+        with mock.patch.object(monitor, "supervise_running_attempts", return_value=1) as supervise:
             result = worker_supervision.run(f.config_path)
         self.assertTrue(result["ok"])
         self.assertEqual(result["supervised_count"], 1)
@@ -286,9 +261,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             side_effect=subprocess.TimeoutExpired(["git", "status"], 5),
         ) as inspect:
             for i in range(3):
-                when = (
-                    datetime.fromisoformat(now) + timedelta(seconds=20 * i)
-                ).isoformat()
+                when = (datetime.fromisoformat(now) + timedelta(seconds=20 * i)).isoformat()
                 with closing(sqlite3.connect(f.db)) as conn, conn:
                     monitor.supervise_running_attempts(
                         conn,
@@ -298,11 +271,7 @@ class LifecycleFollowupTests(unittest.TestCase):
                         resume_attempt=preparation.create_resume_attempt_and_prompt,
                     )
                     if i < 2:
-                        self.assertFalse(
-                            loop_engine.has_runnable_local_work(
-                                conn, repo_ids=[repo], now=when
-                            )
-                        )
+                        self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=[repo], now=when))
             with closing(sqlite3.connect(f.db)) as conn, conn:
                 monitor.supervise_running_attempts(
                     conn,
@@ -311,13 +280,9 @@ class LifecycleFollowupTests(unittest.TestCase):
                     (datetime.fromisoformat(now) + timedelta(hours=5)).isoformat(),
                     resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
-                self.assertFalse(
-                    loop_engine.has_runnable_local_work(conn, repo_ids=[repo])
-                )
+                self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=[repo]))
                 self.assertEqual(capacity.running_attempt_count(conn, repo), 0)
-                self.assertGreater(
-                    conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 0
-                )
+                self.assertGreater(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 0)
         self.assertEqual(inspect.call_count, 3)
 
     def test_audit_inspection_timeout_stops_without_discarding_result(self):
@@ -335,13 +300,9 @@ class LifecycleFollowupTests(unittest.TestCase):
             f.cycle(f.empty)
         self.assertEqual(inspect.call_count, 3)
         with closing(sqlite3.connect(f.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1)
             self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    conn, repo_ids=["repo:example/backend"], config_result=f.config
-                )
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:example/backend"], config_result=f.config)
             )
             item = conn.execute("SELECT work_item_id FROM work_items").fetchone()[0]
         card = board.get_work_item_detail(f.db, item)
@@ -366,28 +327,20 @@ class LifecycleFollowupTests(unittest.TestCase):
         f.cycle(f.empty)
         with closing(sqlite3.connect(f.db)) as conn:
             self.assertIsNotNone(
-                json.loads(
-                    conn.execute("SELECT metadata_json FROM worker_results").fetchone()[
-                        0
-                    ]
-                ).get("audit")
+                json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]).get("audit")
             )
-            self.assertGreaterEqual(
-                conn.execute("SELECT count(*) FROM attempts").fetchone()[0], before
-            )
+            self.assertGreaterEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], before)
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM attempts WHERE task_id=?", (f.task,)
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM attempts WHERE task_id=?", (f.task,)).fetchone()[0],
                 1,
             )
 
     def test_domain_failure_does_not_latch_control_lane(self):
         f = self.fixture(board_fixture.BoardControlIntegrationFixture)
         with closing(daemon_state.connect(f.db_path)) as conn, conn:
-            owner = daemon_state.start_daemon_run(
-                conn, config_path=str(f.config_path), owner_id="control"
-            )["daemon_run_id"]
+            owner = daemon_state.start_daemon_run(conn, config_path=str(f.config_path), owner_id="control")[
+                "daemon_run_id"
+            ]
         context = daemon.DaemonContext(
             str(f.config_path),
             None,
@@ -412,9 +365,9 @@ class LifecycleFollowupTests(unittest.TestCase):
     def test_quota_deferral_never_consumes_control_failure_budget(self):
         f = self.fixture(board_fixture.BoardControlIntegrationFixture)
         with closing(daemon_state.connect(f.db_path)) as conn, conn:
-            owner = daemon_state.start_daemon_run(
-                conn, config_path=str(f.config_path), owner_id="quota"
-            )["daemon_run_id"]
+            owner = daemon_state.start_daemon_run(conn, config_path=str(f.config_path), owner_id="quota")[
+                "daemon_run_id"
+            ]
         context = daemon.DaemonContext(
             str(f.config_path),
             None,
@@ -454,18 +407,12 @@ class LifecycleFollowupTests(unittest.TestCase):
         def prepare(repo, *args, **kwargs):
             if repo["full_name"] == "example/repo":
                 failures.append(repo["full_name"])
-                raise subprocess.CalledProcessError(
-                    128, ["git", "fetch"], stderr="Permission denied"
-                )
+                raise subprocess.CalledProcessError(128, ["git", "fetch"], stderr="Permission denied")
             return original(repo, *args, **kwargs)
 
-        with mock.patch.object(
-            assigned_workspace, "prepare_worktree", side_effect=prepare
-        ):
+        with mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=prepare):
             for _ in range(3):
-                cycle = run_once.run_once(
-                    f.config_path, dry_run=True, skip_external=True, skip_publish=True
-                )
+                cycle = run_once.run_once(f.config_path, dry_run=True, skip_external=True, skip_publish=True)
                 self.assertTrue(cycle["ok"], cycle)
         self.assertEqual(len(failures), 1)
         with closing(sqlite3.connect(f.db_path)) as conn:
@@ -477,9 +424,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             self.assertEqual(states[f.repo_id], "failed")
             self.assertEqual(states["repo:example/healthy"], "queued")
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM work_item_events WHERE event_type='execution_failed'"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM work_item_events WHERE event_type='execution_failed'").fetchone()[0],
                 1,
             )
 
@@ -522,9 +467,9 @@ class LifecycleFollowupTests(unittest.TestCase):
         f = self.fixture(board_fixture.BoardControlIntegrationFixture)
         self.create(f)
         with closing(daemon_state.connect(f.db_path)) as conn, conn:
-            owner = daemon_state.start_daemon_run(
-                conn, config_path=str(f.config_path), owner_id="exception"
-            )["daemon_run_id"]
+            owner = daemon_state.start_daemon_run(conn, config_path=str(f.config_path), owner_id="exception")[
+                "daemon_run_id"
+            ]
         context = daemon.DaemonContext(
             str(f.config_path),
             None,

@@ -19,9 +19,7 @@ from urllib.parse import urlsplit
 
 
 def _digest(value):
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, default=str).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class GitHubReadSession:
@@ -108,13 +106,9 @@ class GitHubReadSession:
         if read and key in self._memo:
             self._stats["cache_hits"] += 1
             return copy.deepcopy(self._memo[key])
-        endpoint = (
-            args[2].split("?")[0] if args[:2] == ["gh", "api"] else "search/issues"
-        )
+        endpoint = args[2].split("?")[0] if args[:2] == ["gh", "api"] else "search/issues"
         endpoint = re.sub(r"/\d+(?=/|$)", "/:number", endpoint)
-        metric = self._stats["endpoints"].setdefault(
-            endpoint, {"calls": 0, "duration_seconds": 0.0}
-        )
+        metric = self._stats["endpoints"].setdefault(endpoint, {"calls": 0, "duration_seconds": 0.0})
         started = time.monotonic()
         self._stats["calls"] += 1
         metric["calls"] += 1
@@ -180,9 +174,7 @@ class GitHubReadSession:
     ):
         from robert_agent.adapters.github import discovery as discover
 
-        source = discover.source_key(
-            repo["full_name"], raw.get("source_type", "issue"), raw["number"]
-        )
+        source = discover.source_key(repo["full_name"], raw.get("source_type", "issue"), raw["number"])
         key = "source:" + source + ":" + raw["event_type"]
         context = [
             repo["github_account"],
@@ -190,9 +182,7 @@ class GitHubReadSession:
             sorted(review_author_allowlist or []),
             source in set(known_workstreams or []),
         ]
-        version = _digest(
-            [discover.SOURCE_CONTEXT_VERSION, raw, context, notification_hints]
-        )
+        version = _digest([discover.SOURCE_CONTEXT_VERSION, raw, context, notification_hints])
         cached = self._get(key, version)
         if cached is not None:
             self._stats["cache_hits"] += 1
@@ -210,9 +200,7 @@ class GitHubReadSession:
     def collect_events(self, repo_config, **kwargs):
         from robert_agent.adapters.github import discovery as discover
 
-        return discover.collect_live_events(
-            repo_config, runner=self, read_session=self, **kwargs
-        )
+        return discover.collect_live_events(repo_config, runner=self, read_session=self, **kwargs)
 
     def _page(self, endpoint, marker=None):
         args = [
@@ -244,17 +232,13 @@ class GitHubReadSession:
             self.poll_interval_seconds = int(interval)
         retry_after = headers.get("retry-after", "")
         if retry_after.isdigit():
-            self.poll_interval_seconds = max(
-                self.poll_interval_seconds or 0, int(retry_after)
-            )
+            self.poll_interval_seconds = max(self.poll_interval_seconds or 0, int(retry_after))
         if status == 304:
             if response.returncode:
                 self._stats["errors"] -= 1
             return status, headers, []
         if response.returncode or status != 200:
-            raise subprocess.CalledProcessError(
-                response.returncode or 1, args, response.stdout, response.stderr
-            )
+            raise subprocess.CalledProcessError(response.returncode or 1, args, response.stdout, response.stderr)
         payload = json.loads(parts[1] if len(parts) == 2 else "")
         if not isinstance(payload, list):
             raise ValueError("GitHub notification page did not return a list")
@@ -275,14 +259,10 @@ class GitHubReadSession:
 
         key = "notifications"
         cached = self._get(key)
-        status, headers, payload = self._page(
-            "notifications?per_page=50", (cached or {}).get("last_modified")
-        )
+        status, headers, payload = self._page("notifications?per_page=50", (cached or {}).get("last_modified"))
         if status == 304:
             if cached is None:
-                raise ValueError(
-                    "GitHub returned304 without a complete local notification snapshot"
-                )
+                raise ValueError("GitHub returned304 without a complete local notification snapshot")
             hints = cached["hints"]
             self._stats["cache_hits"] += 1
         else:
@@ -295,14 +275,8 @@ class GitHubReadSession:
                     break
                 next_url = match[1]
                 parsed = urlsplit(next_url)
-                expected_host = (
-                    "api.github.com" if self.host == "github.com" else self.host
-                )
-                if (
-                    parsed.scheme != "https"
-                    or parsed.hostname != expected_host
-                    or next_url in visited
-                ):
+                expected_host = "api.github.com" if self.host == "github.com" else self.host
+                if parsed.scheme != "https" or parsed.hostname != expected_host or next_url in visited:
                     raise ValueError("Invalid GitHub notification pagination link")
                 visited.add(next_url)
                 next_status, next_headers, page = self._page(next_url)
@@ -310,11 +284,7 @@ class GitHubReadSession:
                     raise ValueError("Incomplete GitHub notification pagination")
                 notifications.extend(page)
                 link = next_headers.get("link", "")
-            hints = [
-                raw
-                for item in notifications
-                if (raw := discover._notification_to_raw(item))
-            ]
+            hints = [raw for item in notifications if (raw := discover._notification_to_raw(item))]
             self._put(
                 key,
                 "",

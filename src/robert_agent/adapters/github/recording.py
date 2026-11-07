@@ -34,10 +34,6 @@ class ReplayRunner:
         key = github_client.command_key(args)
         if key not in self.responses or self.responses[key] is None:
             if kwargs.get("check"):
-                raise subprocess.CalledProcessError(
-                    1, args, "", "remote observation unavailable"
-                )
-            return subprocess.CompletedProcess(
-                args, 1, "", "remote observation unavailable"
-            )
+                raise subprocess.CalledProcessError(1, args, "", "remote observation unavailable")
+            return subprocess.CompletedProcess(args, 1, "", "remote observation unavailable")
         return subprocess.CompletedProcess(args, 0, self.responses[key], "")

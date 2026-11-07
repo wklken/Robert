@@ -39,9 +39,7 @@ class RuntimeRemediationTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,priority,created_at,updated_at) VALUES ('t','w','running','P1','2026-10-26','2026-10-26')"
             )
-            conn.execute(
-                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','t',1,'running')"
-            )
+            conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','t',1,'running')")
 
     def test_command_completion_does_not_wait_for_heartbeat_deadline(self):
         started = time.monotonic()
@@ -59,10 +57,7 @@ class RuntimeRemediationTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.0)
 
     def test_identical_snapshots_refresh_liveness_without_duplicating_history(self):
-        stamps = [
-            datetime.fromisoformat(f"2026-10-26T00:00:0{second}+00:00")
-            for second in range(1, 4)
-        ]
+        stamps = [datetime.fromisoformat(f"2026-10-26T00:00:0{second}+00:00") for second in range(1, 4)]
         with patch.object(snapshot, "datetime") as clock:
             clock.now.side_effect = stamps
             for _ in range(3):
@@ -76,41 +71,25 @@ class RuntimeRemediationTests(unittest.TestCase):
                     "Wait for command completion",
                 )
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 1
-            )
-            actual = conn.execute(
-                "SELECT heartbeat_at FROM attempts WHERE attempt_id='a'"
-            ).fetchone()[0]
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 1)
+            actual = conn.execute("SELECT heartbeat_at FROM attempts WHERE attempt_id='a'").fetchone()[0]
             self.assertEqual(actual, stamps[-1].isoformat())
-        snapshot.record_snapshot(
-            self.db, "t", "a", "verify", "completed", "Command exited 0"
-        )
+        snapshot.record_snapshot(self.db, "t", "a", "verify", "completed", "Command exited 0")
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 2)
 
     def test_duplicate_snapshot_does_not_bypass_task_ownership(self):
         snapshot.record_snapshot(self.db, "t", "a", "verify", "running", "Working")
         with self.assertRaisesRegex(ValueError, "does not belong"):
-            snapshot.record_snapshot(
-                self.db, "other-task", "a", "verify", "running", "Working"
-            )
+            snapshot.record_snapshot(self.db, "other-task", "a", "verify", "running", "Working")
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 1)
 
     def test_activity_queries_do_not_scan_completed_history(self):
         with closing(sqlite3.connect(self.db)) as conn:
             for table in ("review_runs", "vote_runs"):
-                plan = conn.execute(
-                    f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE slot_reserved=1"
-                ).fetchall()
-                self.assertTrue(
-                    any("USING INDEX" in row[3] for row in plan), (table, plan)
-                )
+                plan = conn.execute(f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE slot_reserved=1").fetchall()
+                self.assertTrue(any("USING INDEX" in row[3] for row in plan), (table, plan))
             plan = conn.execute("""EXPLAIN QUERY PLAN SELECT phase,status,summary,next_step
                 FROM worker_phases WHERE attempt_id='a'
                 ORDER BY created_at DESC,phase_id DESC LIMIT 1""").fetchall()
@@ -130,13 +109,9 @@ class RuntimeRemediationTests(unittest.TestCase):
                 conn.executescript(legacy)
                 module.initialize(conn)
                 table = "review_runs" if module is review_store else "vote_runs"
-                columns = {
-                    row[1] for row in conn.execute(f"PRAGMA table_info({table})")
-                }
+                columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
                 self.assertTrue({"model", "slot_reserved", "started_at"} <= columns)
-                plan = conn.execute(
-                    f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE slot_reserved=1"
-                ).fetchall()
+                plan = conn.execute(f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE slot_reserved=1").fetchall()
                 self.assertTrue(any("USING INDEX" in row[3] for row in plan), plan)
 
     def test_file_hash_preserves_digest_with_bounded_memory(self):

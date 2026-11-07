@@ -316,18 +316,11 @@ def verify_gateway_commands(dry_run=False):
             "command": command,
             "stdout": completed.stdout.strip(),
             "safe_error": (
-                "OpenClaw gateway returned invalid command-list JSON. "
-                "Restart the OpenClaw gateway and try again."
+                "OpenClaw gateway returned invalid command-list JSON. Restart the OpenClaw gateway and try again."
             ),
         }
-    command_names = {
-        str(item.get("name"))
-        for item in payload.get("commands", [])
-        if isinstance(item, dict)
-    }
-    missing = [
-        required for required in REQUIRED_COMMANDS if required not in command_names
-    ]
+    command_names = {str(item.get("name")) for item in payload.get("commands", []) if isinstance(item, dict)}
+    missing = [required for required in REQUIRED_COMMANDS if required not in command_names]
     if missing:
         return {
             "ok": False,

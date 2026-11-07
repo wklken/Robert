@@ -166,9 +166,7 @@ def build_result(
         payload["review_point_evaluation"] = list(review_point_evaluation)
     if review_input_kind is not None:
         if review_input_kind not in ("request", "review_feedback", "mixed"):
-            raise ValueError(
-                "review_input_kind must be request, review_feedback or mixed"
-            )
+            raise ValueError("review_input_kind must be request, review_feedback or mixed")
         payload["review_input_kind"] = review_input_kind
     if operator_question is not None:
         payload["operator_question"] = operator_question
@@ -181,9 +179,7 @@ def build_result(
         "attempt_id": attempt_id,
         "output_type": output_type,
         "submission": {
-            key: value
-            for key, value in payload.items()
-            if key not in {"task_id", "attempt_id", "output_type"}
+            key: value for key, value in payload.items() if key not in {"task_id", "attempt_id", "output_type"}
         },
     }
 
@@ -201,9 +197,7 @@ def _unavailable():
 def _lookup(db_path, envelope, digest):
     with closing(sqlite3.connect(db_path, timeout=0.1)) as conn:
         execution_store.require_migrated(conn)
-        _, rejection = result_validation.context(
-            conn, envelope["task_id"], envelope["attempt_id"], include_scope=False
-        )
+        _, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"], include_scope=False)
         if rejection:
             return rejection
         row = conn.execute(
@@ -231,9 +225,7 @@ def _lookup(db_path, envelope, digest):
 
 def _prepare(db_path, envelope):
     with closing(sqlite3.connect(db_path, timeout=0.1)) as conn:
-        settings, rejection = result_validation.context(
-            conn, envelope["task_id"], envelope["attempt_id"]
-        )
+        settings, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"])
         if rejection:
             return None, rejection
         try:
@@ -243,27 +235,17 @@ def _prepare(db_path, envelope):
         else:
             checked = audit_result.audit_result(normalized, final=False, **settings)
             if checked["ok"]:
-                if any(
-                    action["type"] == "push_existing_pr"
-                    for action in normalized["planned_github_actions"]
-                ):
-                    if (
-                        action_scope.observe_worktree_status(settings["action_scope"])
-                        != "clean"
-                    ):
+                if any(action["type"] == "push_existing_pr" for action in normalized["planned_github_actions"]):
+                    if action_scope.observe_worktree_status(settings["action_scope"]) != "clean":
                         response = result_validation.failure(
                             {
                                 "violations": ["uncommitted_worktree"],
                                 "safe_error": "Push results require a clean worktree with all task-owned changes committed.",
                             }
                         )
-                        result_validation.record_diagnostic(
-                            db_path, envelope, response["reason_code"]
-                        )
+                        result_validation.record_diagnostic(db_path, envelope, response["reason_code"])
                         return None, response
-                    normalized["submission_head_sha"] = action_scope.observe_head(
-                        settings["action_scope"]
-                    )
+                    normalized["submission_head_sha"] = action_scope.observe_head(settings["action_scope"])
                 return normalized, None
             response = result_validation.failure(checked)
     result_validation.record_diagnostic(db_path, envelope, response["reason_code"])
@@ -275,8 +257,7 @@ def record_result(db_path, payload, *, notifier=None):
         not isinstance(payload, dict)
         or set(payload) != {"task_id", "attempt_id", "output_type", "submission"}
         or not all(
-            isinstance(payload.get(name), str) and payload[name]
-            for name in ("task_id", "attempt_id", "output_type")
+            isinstance(payload.get(name), str) and payload[name] for name in ("task_id", "attempt_id", "output_type")
         )
     ):
         return {
@@ -345,9 +326,7 @@ def _record_result_db(
     used_skills, skill_error = _validate_used_skills(payload.get("used_skills"))
     if skill_error:
         return {"ok": False, "status": "failed_validation", "safe_error": skill_error}
-    verification, verification_error = _validate_verification(
-        payload.get("verification", [])
-    )
+    verification, verification_error = _validate_verification(payload.get("verification", []))
     if verification_error:
         return {
             "ok": False,
@@ -363,9 +342,7 @@ def _record_result_db(
             "status": "failed_validation",
             "safe_error": "consumed_work_item_event_ids must be a string list",
         }
-    operator_question, question_error = _validate_operator_question(
-        payload.get("operator_question")
-    )
+    operator_question, question_error = _validate_operator_question(payload.get("operator_question"))
     if question_error:
         return {
             "ok": False,
@@ -402,9 +379,7 @@ def _record_result_db(
     metadata["submission_fingerprint"] = payload["_submission_fingerprint"]
     metadata["result_contract"] = payload["_result_contract"]
     metadata["normalizer_version"] = payload["_normalizer_version"]
-    metadata["normalized_payload"] = {
-        key: value for key, value in payload.items() if not key.startswith("_")
-    }
+    metadata["normalized_payload"] = {key: value for key, value in payload.items() if not key.startswith("_")}
     created_at = datetime.now(timezone.utc)
     result_created_at = created_at.isoformat()
     result_id = f"result-{uuid4().hex[:12]}"
@@ -413,9 +388,7 @@ def _record_result_db(
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
         conn.execute("BEGIN IMMEDIATE")
-        metadata["result_saved_at"] = result_spool.saved_at(
-            db_path, payload["attempt_id"]
-        )
+        metadata["result_saved_at"] = result_spool.saved_at(db_path, payload["attempt_id"])
         metadata["result_ingested_at"] = datetime.now(timezone.utc).isoformat()
         task = conn.execute(
             "SELECT lifecycle, task_kind, metadata_json FROM tasks WHERE task_id=?",
@@ -435,21 +408,14 @@ def _record_result_db(
             "SELECT metadata_json,status FROM attempts WHERE attempt_id=? AND task_id=?",
             (payload["attempt_id"], payload["task_id"]),
         ).fetchone()
-        if (
-            not bound
-            or json.loads(bound[0] or "{}").get("result_contract")
-            != result_contract.CONTRACT_ID
-        ):
+        if not bound or json.loads(bound[0] or "{}").get("result_contract") != result_contract.CONTRACT_ID:
             return {"ok": False, "status": "unsupported_contract"}
         existing = conn.execute(
             "SELECT result_id, metadata_json FROM worker_results WHERE attempt_id=?",
             (payload["attempt_id"],),
         ).fetchone()
         if existing:
-            if (
-                json.loads(existing[1] or "{}").get("submission_fingerprint")
-                == metadata["submission_fingerprint"]
-            ):
+            if json.loads(existing[1] or "{}").get("submission_fingerprint") == metadata["submission_fingerprint"]:
                 return {
                     "ok": True,
                     "status": "recorded",
@@ -483,9 +449,7 @@ def _record_result_db(
             error = None
             if operator_question is None:
                 error = "waiting_for_user requires operator_question"
-            elif (not origin or origin[0] == "github") and not any(
-                a.get("type") == "comment" for a in actions
-            ):
+            elif (not origin or origin[0] == "github") and not any(a.get("type") == "comment" for a in actions):
                 error = "GitHub waiting_for_user requires a public comment action"
             if error:
                 return {

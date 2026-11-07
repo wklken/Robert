@@ -32,9 +32,7 @@ class ReviewDispatchTests(unittest.TestCase):
             tree = root / "tree"
             tree.mkdir()
             prompt = root / "reviewer-prompt.md"
-            prompt.write_bytes(
-                "Review 统一上下文\nNo interpolation: $ROBERT_REVIEW_OUTPUT_DIR\n".encode()
-            )
+            prompt.write_bytes("Review 统一上下文\nNo interpolation: $ROBERT_REVIEW_OUTPUT_DIR\n".encode())
             binary = root / "fake_model.py"
             binary.write_text("""import hashlib,json,os,sys
 from pathlib import Path
@@ -42,9 +40,7 @@ payload={'prompt_sha256':hashlib.sha256(sys.stdin.buffer.read()).hexdigest(),'cw
 Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'captured.json').write_text(json.dumps(payload))
 """)
             observed = []
-            with patch.dict(
-                os.environ, {"ROBERT_REVIEW_OUTPUT_DIR": "spoofed-parent-value"}
-            ):
+            with patch.dict(os.environ, {"ROBERT_REVIEW_OUTPUT_DIR": "spoofed-parent-value"}):
                 for agent in ("codex", "claude"):
                     output = root / agent
                     output.mkdir()
@@ -66,13 +62,9 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'captured.json').write_text(json.dum
                     )
                     self.assertTrue(result["ok"], result)
                     if not result.get("process_exited"):
-                        self.assertEqual(
-                            _BACKGROUND_PROCESSES.pop(result["pid"]).wait(timeout=5), 0
-                        )
+                        self.assertEqual(_BACKGROUND_PROCESSES.pop(result["pid"]).wait(timeout=5), 0)
                     observed.append(json.loads((output / "captured.json").read_text()))
-                    self.assertEqual(
-                        os.environ["ROBERT_REVIEW_OUTPUT_DIR"], "spoofed-parent-value"
-                    )
+                    self.assertEqual(os.environ["ROBERT_REVIEW_OUTPUT_DIR"], "spoofed-parent-value")
                     self.assertEqual(Path(result["stdout_path"]).parent, output)
             self.assertEqual(observed[0]["prompt_sha256"], observed[1]["prompt_sha256"])
             self.assertEqual(observed[0]["cwd"], observed[1]["cwd"])

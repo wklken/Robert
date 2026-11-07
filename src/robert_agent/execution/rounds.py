@@ -56,12 +56,7 @@ def _run_stopped(run):
         and not recorded.get("cleanup_pending")
     ):
         return True  # Dispatcher failed before Popen returned a process.
-    if (
-        type(pid) is not int
-        or pid <= 1
-        or pid == os.getpgrp()
-        or recorded.get("process_group_id", pid) != pid
-    ):
+    if type(pid) is not int or pid <= 1 or pid == os.getpgrp() or recorded.get("process_group_id", pid) != pid:
         return False
     # Reuse complete identity / trusted Popen-exit evidence and descendant
     # observation. Neither a terminal run status nor an absent PID is proof.
@@ -79,25 +74,18 @@ def observe_exit(conn, task_id):
     if conn.in_transaction:
         raise ValueError("native exit observation requires no active transaction")
     snapshot = _exit_snapshot(conn, task_id)
-    stopped = [
-        [run["run_id"] for run in runs if _run_stopped(run)] for _, runs in snapshot
-    ]
+    stopped = [[run["run_id"] for run in runs if _run_stopped(run)] for _, runs in snapshot]
     return {
         "task_id": task_id,
         "snapshot": snapshot,
         "stopped_run_ids": stopped,
-        "all_stopped": all(
-            len(runs) == len(ids) for (_, runs), ids in zip(snapshot, stopped)
-        ),
+        "all_stopped": all(len(runs) == len(ids) for (_, runs), ids in zip(snapshot, stopped)),
     }
 
 
 def exit_observation_current(conn, task_id, observation):
     """Revalidate the full session/run set, including newly registered children."""
-    return (
-        observation["task_id"] == task_id
-        and _exit_snapshot(conn, task_id) == observation["snapshot"]
-    )
+    return observation["task_id"] == task_id and _exit_snapshot(conn, task_id) == observation["snapshot"]
 
 
 def release_observed_slots(conn, task_id, observation):
@@ -110,9 +98,7 @@ def release_observed_slots(conn, task_id, observation):
         raise ValueError("native slot release requires a write transaction")
     if not exit_observation_current(conn, task_id, observation):
         return False
-    for store, (_, runs), stopped in zip(
-        STORES, observation["snapshot"], observation["stopped_run_ids"]
-    ):
+    for store, (_, runs), stopped in zip(STORES, observation["snapshot"], observation["stopped_run_ids"]):
         for run in runs:
             if run["slot_reserved"] and run["run_id"] in stopped:
                 store.release_finished_slot(conn, run)

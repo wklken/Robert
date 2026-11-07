@@ -20,9 +20,7 @@ class RunDirectoryRecoveryTests(unittest.TestCase):
                     db = root / "state.sqlite3"
                     with closing(sqlite3.connect(db)) as conn, conn:
                         conn.execute("CREATE TABLE tasks(task_id TEXT PRIMARY KEY)")
-                        conn.execute(
-                            "CREATE TABLE attempts(attempt_id TEXT PRIMARY KEY)"
-                        )
+                        conn.execute("CREATE TABLE attempts(attempt_id TEXT PRIMARY KEY)")
                         conn.execute("INSERT INTO attempts VALUES ('attempt')")
                         store.initialize(conn)
                         request = store.enqueue(
@@ -48,9 +46,7 @@ class RunDirectoryRecoveryTests(unittest.TestCase):
                                 root,
                                 "hash",
                             )
-                            Path(old["output_dir"], "result.json").write_text(
-                                "untrusted orphan result"
-                            )
+                            Path(old["output_dir"], "result.json").write_text("untrusted orphan result")
                             raise RuntimeError("rollback")
                     with store.connect(db) as conn:
                         new = store.new_run(

@@ -29,9 +29,7 @@ def delivery_receipt(conn, action, result, now):
     metadata = publication_values.decode_json(action.get("metadata_json"))
     marker = publication_effects.hidden_marker(
         metadata.get("body", ""),
-        WORKSTREAM_MARKER_RE
-        if action["action_type"] == "open_pr"
-        else COMMENT_MARKER_RE,
+        WORKSTREAM_MARKER_RE if action["action_type"] == "open_pr" else COMMENT_MARKER_RE,
     )
     return {
         "schema_version": 1,
@@ -41,17 +39,11 @@ def delivery_receipt(conn, action, result, now):
         "action_type": action["action_type"],
         "scope": scope,
         "external_id": result.get("external_id") or reconciliation.get("external_id"),
-        "target_url": result.get("target_url")
-        or reconciliation.get("target_url")
-        or action.get("target_url"),
+        "target_url": result.get("target_url") or reconciliation.get("target_url") or action.get("target_url"),
         "result_head_sha": (
             result.get("result_head_sha")
             or reconciliation.get("source_sha")
-            or (
-                reconciliation.get("remote_sha")
-                if action["action_type"] == "push_existing_pr"
-                else None
-            )
+            or (reconciliation.get("remote_sha") if action["action_type"] == "push_existing_pr" else None)
             or response.get("head_sha")
         ),
         "expected_marker": marker,
@@ -94,30 +86,22 @@ def mark_published(conn, action, result, now, intent=None):
             action["action_id"],
         ),
     )
-    publication_notifications.resolve_action_notification(
-        conn, action, "github_publish_failed", result, now
-    )
+    publication_notifications.resolve_action_notification(conn, action, "github_publish_failed", result, now)
     if intent:
         current = intent["status"]
         if current in {"executing", "failed"}:
             if current == "failed":
-                execution_store.transition_publication_intent(
-                    conn, intent["publication_id"], "executing", now
-                )
+                execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
             execution_store.transition_publication_intent(
                 conn,
                 intent["publication_id"],
                 "published",
                 now,
                 remote_evidence={
-                    **publication_values.decode_json(
-                        intent.get("remote_evidence_json")
-                    ),
+                    **publication_values.decode_json(intent.get("remote_evidence_json")),
                     "status": "confirmed_effect",
                     "reason_code": "publisher_success",
-                    "reconciliation": (result.get("response") or {}).get(
-                        "reconciliation", {}
-                    ),
+                    "reconciliation": (result.get("response") or {}).get("reconciliation", {}),
                     "receipt": receipt,
                 },
             )

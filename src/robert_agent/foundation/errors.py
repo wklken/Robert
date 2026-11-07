@@ -10,10 +10,7 @@ def safe_discovery_error(exc):
         command = [str(part) for part in cmd]
         return {
             "status": "failed_discovery",
-            "safe_error": (
-                f"GitHub discovery command failed with exit {exc.returncode}: "
-                + " ".join(command)
-            ),
+            "safe_error": (f"GitHub discovery command failed with exit {exc.returncode}: " + " ".join(command)),
             "returncode": exc.returncode,
             "command": command,
         }
@@ -72,10 +69,7 @@ def safe_route_error(exc):
         return {
             "ok": False,
             "status": "failed_route",
-            "safe_error": (
-                f"worktree preparation command failed with exit {exc.returncode}: "
-                + " ".join(command)
-            ),
+            "safe_error": (f"worktree preparation command failed with exit {exc.returncode}: " + " ".join(command)),
             "returncode": exc.returncode,
             "command": command,
         }

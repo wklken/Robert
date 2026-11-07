@@ -22,10 +22,7 @@ SUMMARY_TABLES = [
 
 def summarize_database(db_path):
     with closing(sqlite3.connect(db_path)) as conn, conn:
-        summary = {
-            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in SUMMARY_TABLES
-        }
+        summary = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in SUMMARY_TABLES}
         summary["rejected_worker_results"] = conn.execute(
             """
             SELECT COUNT(*)
@@ -93,9 +90,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True)
     args = parser.parse_args(argv)
-    return emit(
-        {"ok": True, "status": "summarized", "summary": summarize_database(args.db)}
-    )
+    return emit({"ok": True, "status": "summarized", "summary": summarize_database(args.db)})
 
 
 if __name__ == "__main__":

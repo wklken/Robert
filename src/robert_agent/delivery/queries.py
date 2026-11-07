@@ -20,18 +20,12 @@ def ready_actions(conn, limit, repo_id=None, task_ids=None, action_ids=None):
         """
         params.append(repo_id)
     if task_ids is not None:
-        repo_filter += (
-            " AND github_actions.task_id IN (" + ",".join("?" for _ in task_ids) + ")"
-        )
+        repo_filter += " AND github_actions.task_id IN (" + ",".join("?" for _ in task_ids) + ")"
         params.extend(task_ids)
     if action_ids is not None:
         if not action_ids:
             return []
-        repo_filter += (
-            " AND github_actions.action_id IN ("
-            + ",".join("?" for _ in action_ids)
-            + ")"
-        )
+        repo_filter += " AND github_actions.action_id IN (" + ",".join("?" for _ in action_ids) + ")"
         params.extend(action_ids)
     repo_filter += """ AND NOT EXISTS (SELECT 1 FROM github_actions earlier
         JOIN publication_intents intent ON intent.action_id=earlier.action_id
@@ -74,10 +68,7 @@ def ready_actions(conn, limit, repo_id=None, task_ids=None, action_ids=None):
 
 def retry_budget_exhausted(prior, now):
     first = prior.get("first_failed_at") or now
-    elapsed = (
-        retry_policy.timestamp(now) - retry_policy.timestamp(first)
-    ).total_seconds()
+    elapsed = (retry_policy.timestamp(now) - retry_policy.timestamp(first)).total_seconds()
     return (
-        int(prior.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS
-        or elapsed >= retry_policy.MAX_ELAPSED_SECONDS
+        int(prior.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS or elapsed >= retry_policy.MAX_ELAPSED_SECONDS
     )

@@ -51,9 +51,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
             )
         return fixture, entry["round_id"]
 
-    def run_record(
-        self, fixture, store, round_id, *, status="running", reserved=1, dispatch=EXITED
-    ):
+    def run_record(self, fixture, store, round_id, *, status="running", reserved=1, dispatch=EXITED):
         with store.connect(fixture.db) as conn:
             run = store.new_run(
                 conn,
@@ -75,12 +73,9 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
 
     def state(self, fixture, store, round_id):
         with store.connect(fixture.db) as conn:
-            parent = dict(
-                conn.execute("SELECT * FROM attempts WHERE attempt_id='bad'").fetchone()
-            )
+            parent = dict(conn.execute("SELECT * FROM attempts WHERE attempt_id='bad'").fetchone())
             occupied = conn.execute(
-                "SELECT COUNT(*) FROM attempts a WHERE task_id='bad' AND "
-                + supervise.occupied_attempt_sql()
+                "SELECT COUNT(*) FROM attempts a WHERE task_id='bad' AND " + supervise.occupied_attempt_sql()
             ).fetchone()[0]
             return parent, occupied, store.runs(conn, round_id)
 
@@ -115,21 +110,12 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     report_bytes = report.read_bytes()
                     identity = self.process_identity(stopped=True)
                     with driver.store.connect(fixture.db) as conn:
-                        results = [
-                            tuple(row)
-                            for row in conn.execute("SELECT * FROM worker_results")
-                        ]
+                        results = [tuple(row) for row in conn.execute("SELECT * FROM worker_results")]
                         before_runs = driver.store.runs(conn, driver.round_id)
-                        before_session = driver.store.session(
-                            conn, task_id=driver.task_id
-                        )
+                        before_session = driver.store.session(conn, task_id=driver.task_id)
                         self.assertEqual(len(before_runs), 4)
                         self.assertTrue(
-                            all(
-                                run["status"] == "succeeded"
-                                and not run["slot_reserved"]
-                                for run in before_runs
-                            )
+                            all(run["status"] == "succeeded" and not run["slot_reserved"] for run in before_runs)
                         )
                         conn.execute(
                             "UPDATE attempts SET status=?,finished_at='original',metadata_json="
@@ -143,9 +129,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                                 "UPDATE tasks SET metadata_json=json_set(metadata_json,"
                                 "'$.execution_attention',json(?)) WHERE task_id=?",
                                 (
-                                    json.dumps(
-                                        {"reason_code": "result_contract_cutover"}
-                                    ),
+                                    json.dumps({"reason_code": "result_contract_cutover"}),
                                     driver.task_id,
                                 ),
                             )
@@ -161,30 +145,20 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                             parent["status"],
                             "failed" if status == "running" else "completed",
                         )
-                        self.assertTrue(
-                            json.loads(parent["metadata_json"]).get(
-                                "process_stopped_at"
-                            )
-                        )
+                        self.assertTrue(json.loads(parent["metadata_json"]).get("process_stopped_at"))
                         if status == "completed":
                             self.assertEqual(parent["finished_at"], "original")
                         self.assertEqual(
                             conn.execute(
-                                "SELECT COUNT(*) FROM attempts a WHERE "
-                                + supervise.occupied_attempt_sql()
+                                "SELECT COUNT(*) FROM attempts a WHERE " + supervise.occupied_attempt_sql()
                             ).fetchone()[0],
                             0,
                         )
                         self.assertEqual(
-                            [
-                                tuple(row)
-                                for row in conn.execute("SELECT * FROM worker_results")
-                            ],
+                            [tuple(row) for row in conn.execute("SELECT * FROM worker_results")],
                             results,
                         )
-                        self.assertEqual(
-                            driver.store.runs(conn, driver.round_id), before_runs
-                        )
+                        self.assertEqual(driver.store.runs(conn, driver.round_id), before_runs)
                         self.assertEqual(
                             driver.store.session(conn, task_id=driver.task_id),
                             before_session,
@@ -215,9 +189,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
             with self.subTest(store=store.__name__):
                 fixture, round_id = self.fixture(store)
                 self.run_record(fixture, store, round_id)
-                unknown_id = self.run_record(
-                    fixture, store, round_id, status="starting", dispatch={}
-                )
+                unknown_id = self.run_record(fixture, store, round_id, status="starting", dispatch={})
                 self.observe(fixture)
                 parent, occupied, runs = self.state(fixture, store, round_id)
                 self.assertEqual((parent["status"], occupied), ("running", 1))
@@ -260,13 +232,9 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
         ]
         for store in native_rounds.STORES:
             for dispatch, status in cases:
-                with self.subTest(
-                    store=store.__name__, dispatch=dispatch, status=status
-                ):
+                with self.subTest(store=store.__name__, dispatch=dispatch, status=status):
                     fixture, round_id = self.fixture(store)
-                    self.run_record(
-                        fixture, store, round_id, status=status, dispatch=dispatch
-                    )
+                    self.run_record(fixture, store, round_id, status=status, dispatch=dispatch)
                     self.observe(fixture)
                     parent, occupied, runs = self.state(fixture, store, round_id)
                     self.assertEqual(
@@ -309,22 +277,15 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                 with self.subTest(store=store.__name__, change=change):
                     fixture, round_id = self.fixture(store)
                     identity = self.process_identity(stopped=True)
-                    run_id = self.run_record(
-                        fixture, store, round_id, dispatch=identity
-                    )
+                    run_id = self.run_record(fixture, store, round_id, dispatch=identity)
                     original = attempt_process.dispatch_status
                     changed = []
 
                     def inspect(metadata):
-                        if (
-                            metadata["dispatch"].get("pid") == identity["pid"]
-                            and not changed
-                        ):
+                        if metadata["dispatch"].get("pid") == identity["pid"] and not changed:
                             # This writer must succeed while the OS observation runs.
                             with (
-                                closing(
-                                    sqlite3.connect(fixture.db, timeout=0.05)
-                                ) as conn,
+                                closing(sqlite3.connect(fixture.db, timeout=0.05)) as conn,
                                 conn,
                             ):
                                 conn.execute("BEGIN IMMEDIATE")
@@ -362,9 +323,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                             changed.append(True)
                         return original(metadata)
 
-                    with patch.object(
-                        attempt_process, "dispatch_status", side_effect=inspect
-                    ):
+                    with patch.object(attempt_process, "dispatch_status", side_effect=inspect):
                         self.observe(fixture)
                     self.assertTrue(changed)
                     parent, occupied, runs = self.state(fixture, store, round_id)
@@ -378,16 +337,10 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                 self.run_record(fixture, store, round_id)
                 with task_publication_lock(fixture.db, "bad") as acquired:
                     self.assertTrue(acquired)
-                    self.assertFalse(
-                        result_cutover.prepare(fixture.db, now=fixture.now)["ok"]
-                    )
-                    self.assertEqual(
-                        self.state(fixture, store, round_id)[0]["status"], "running"
-                    )
+                    self.assertFalse(result_cutover.prepare(fixture.db, now=fixture.now)["ok"])
+                    self.assertEqual(self.state(fixture, store, round_id)[0]["status"], "running")
                 self.observe(fixture)
-                self.assertEqual(
-                    self.state(fixture, store, round_id)[0]["status"], "failed"
-                )
+                self.assertEqual(self.state(fixture, store, round_id)[0]["status"], "failed")
 
     def test_dead_model_leader_with_live_descendant_retains_parent_and_slot(self):
         for store in native_rounds.STORES:
@@ -401,9 +354,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     f"Path({str(ready)!r}).touch()\n"
                     f"while not Path({str(release)!r}).exists(): time.sleep(.01)\n"
                 )
-                process = subprocess.Popen(
-                    [sys.executable, "-c", code], start_new_session=True
-                )
+                process = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
                 try:
                     deadline = time.monotonic() + 5
                     while not ready.exists() and time.monotonic() < deadline:

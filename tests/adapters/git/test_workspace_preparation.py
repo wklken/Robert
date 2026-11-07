@@ -73,9 +73,7 @@ class WorkspacePreparationTests(TemporaryWorkspace):
             worktree.subprocess.run = original_run
 
         self.assertEqual(result["mode"], "reuse_existing_worktree")
-        self.assertEqual(
-            result["worktree_path"], "/tmp/repo/.worktrees/issue-2878-mcp-proxy"
-        )
+        self.assertEqual(result["worktree_path"], "/tmp/repo/.worktrees/issue-2878-mcp-proxy")
         self.assertEqual(
             result["commands"],
             ["reuse existing worktree /tmp/repo/.worktrees/issue-2878-mcp-proxy"],

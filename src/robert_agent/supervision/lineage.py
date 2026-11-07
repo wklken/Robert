@@ -20,9 +20,7 @@ class Admission:
 
 
 def _digest(*parts):
-    return hashlib.sha256(
-        json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
 def github_key(event):
@@ -53,8 +51,7 @@ def is_driving_github_input(event):
         "authorized_trigger",
         "authorized_system_trigger",
     } or (
-        event.get("authorization_status")
-        in {"accepted_context", "accepted_review_participant"}
+        event.get("authorization_status") in {"accepted_context", "accepted_review_participant"}
         and event.get("drives_execution") is True
     )
 
@@ -137,11 +134,7 @@ def record_disposition(
             "consumer": consumer,
             "due_at": due_at,
             "reason_code": reason_code,
-            **(
-                {"lineage_key": lineage_key}
-                if disposition in _OWNED_DISPOSITIONS
-                else {}
-            ),
+            **({"lineage_key": lineage_key} if disposition in _OWNED_DISPOSITIONS else {}),
         },
         sort_keys=True,
     )

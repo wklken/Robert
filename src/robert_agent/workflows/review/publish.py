@@ -58,9 +58,7 @@ def validate_action(action, scope):
     if not scope.get("repo") or repo.casefold() != scope["repo"].casefold():
         raise ValueError("review repository is outside its trusted scope")
     if ("pull_request", number) not in {
-        (item.get("source_type"), item.get("number"))
-        for item in scope.get("sources", [])
-        if isinstance(item, dict)
+        (item.get("source_type"), item.get("number")) for item in scope.get("sources", []) if isinstance(item, dict)
     }:
         raise ValueError("review PR is outside its trusted source scope")
     for field, scoped_field in SCOPE_FIELDS.items():
@@ -76,9 +74,7 @@ def validate_action(action, scope):
         raise ValueError("review publication only permits COMMENT")
     path = Path(scope["review_report_path"])
     if not path.is_absolute() or path.resolve() != path or path.is_symlink():
-        raise ValueError(
-            "registered review report path contains symlinks or is not canonical"
-        )
+        raise ValueError("registered review report path contains symlinks or is not canonical")
     try:
         raw = path.read_bytes()
         body = raw.decode("utf-8")
@@ -100,10 +96,7 @@ def validate_action(action, scope):
         "### Dismissed Findings",
         "### Agent Agreement Summary",
     ]
-    if (
-        any(heading not in body.splitlines() for heading in headings)
-        or "[from Robert]" not in body
-    ):
+    if any(heading not in body.splitlines() for heading in headings) or "[from Robert]" not in body:
         raise ValueError("review report is missing the required report structure")
     return action, repo, number, marker
 
@@ -149,9 +142,7 @@ def reconcile(action, scope, run_command):
     try:
         data, repo, number, marker = validate_action(action, scope)
     except (ValueError, TypeError, OSError) as exc:
-        return _result(
-            "unknown", "review_artifact_or_scope_invalid", error_type=type(exc).__name__
-        )
+        return _result("unknown", "review_artifact_or_scope_invalid", error_type=type(exc).__name__)
     command = [
         "gh",
         "api",
@@ -181,19 +172,13 @@ def reconcile(action, scope, run_command):
                 and not isinstance(review.get("body"), str)
             ):
                 raise ValueError("malformed PR review record")
-        matches = [
-            review
-            for review in reviews
-            if isinstance(review.get("body"), str) and marker in review["body"]
-        ]
+        matches = [review for review in reviews if isinstance(review.get("body"), str) and marker in review["body"]]
     except Exception as exc:
         return _result("unknown", "review_query_failed", error_type=type(exc).__name__)
     if not matches:
         return _result("confirmed_absent", "review_lookup_complete_absent")
     if len(matches) != 1:
-        return _result(
-            "unknown", "review_round_marker_conflict", match_count=len(matches)
-        )
+        return _result("unknown", "review_round_marker_conflict", match_count=len(matches))
     review = matches[0]
     digest = hashlib.sha256(review["body"].encode("utf-8")).hexdigest()
     if (

@@ -157,9 +157,7 @@ repos:
         self.assertTrue(result["ok"], result)
         return result
 
-    def issue_assignment(
-        self, intent="analysis", body="@robert-bot please analyze this"
-    ):
+    def issue_assignment(self, intent="analysis", body="@robert-bot please analyze this"):
         return {
             "id": "assign-issue-101",
             "number": 101,
@@ -453,9 +451,7 @@ repos:
             """
         )
         prompt = Path(result["prompt_paths"][0]).read_text(encoding="utf-8")
-        self.assertEqual(
-            row[0:3], ("github:example/backend!707", "review-pr", "pr_review_comment")
-        )
+        self.assertEqual(row[0:3], ("github:example/backend!707", "review-pr", "pr_review_comment"))
         self.assertEqual(row[3], "review/pr-707-review-feature-pr")
         self.assertTrue(row[4].endswith(".worktrees/review__pr-707-review-feature-pr"))
         self.assertIn('allowed_github_actions: ["comment"]', prompt)
@@ -480,9 +476,7 @@ repos:
         metadata = json.loads(metadata_json)
         self.assertEqual(metadata["review_participants"], ["feature-author"])
         self.assertEqual(metadata["review_authorized_by"], "wklken")
-        self.assertEqual(
-            metadata["review_authorized_event"], "review_request:review-request-707"
-        )
+        self.assertEqual(metadata["review_authorized_event"], "review_request:review-request-707")
 
     def test_pr_author_contributor_followup_is_context_without_worker(self):
         self.create_review_pr_workstream()
@@ -727,9 +721,7 @@ repos:
                         {
                             "type": "comment",
                             "target_url": "https://github.com/example/backend/issues/101",
-                            "body": _dd_comment_body(
-                                "Please confirm the desired behavior.", task_id=task_id
-                            ),
+                            "body": _dd_comment_body("Please confirm the desired behavior.", task_id=task_id),
                         }
                     ],
                     "consumed_event_fingerprints": ["assigned:assign-issue-101"],
@@ -768,9 +760,7 @@ repos:
         )
         waiting_item = board.list_board(self.db_path)["items"][0]
         self.assertEqual(waiting_item["column"], "waiting")
-        self.assertEqual(
-            waiting_item["attention_signals"][0]["type"], "operator_question"
-        )
+        self.assertEqual(waiting_item["attention_signals"][0]["type"], "operator_question")
 
         context = self.run_fixture(
             [

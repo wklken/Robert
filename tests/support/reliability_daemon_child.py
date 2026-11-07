@@ -45,11 +45,7 @@ def local_git(command, **kwargs):
     with (root / "calls.jsonl").open("a") as output:
         output.write(json.dumps(command) + "\n")
     completed = subprocess.run(command, **kwargs)
-    if (
-        crash_after_push
-        and command[:2] == ["git", "push"]
-        and completed.returncode == 0
-    ):
+    if crash_after_push and command[:2] == ["git", "push"] and completed.returncode == 0:
         os._exit(73)
     return completed
 

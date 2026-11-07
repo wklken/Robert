@@ -8,9 +8,7 @@ from tests.support.repository_cycle import (
 class AttemptIdentityTests(RepositoryCycleFixture):
     def test_dispatch_process_status_requires_complete_recorded_identity(self):
 
-        status = attempt_process.dispatch_status(
-            {"dispatch": {"pid": 43210, "status": "running"}}
-        )
+        status = attempt_process.dispatch_status({"dispatch": {"pid": 43210, "status": "running"}})
 
         self.assertEqual(status["status"], "unknown")
         self.assertEqual(status["reason"], "identity_unverified")
@@ -19,9 +17,7 @@ class AttemptIdentityTests(RepositoryCycleFixture):
         original_inspect = worker_identity.inspect_recorded_identity
         try:
             worker_identity.inspect_recorded_identity = lambda _identity: "dead"
-            status = attempt_process.dispatch_status(
-                {"dispatch": self._recorded_identity(43210)}
-            )
+            status = attempt_process.dispatch_status({"dispatch": self._recorded_identity(43210)})
         finally:
             worker_identity.inspect_recorded_identity = original_inspect
 
@@ -39,9 +35,7 @@ class AttemptIdentityTests(RepositoryCycleFixture):
             ),
             patch.object(worker_identity, "live_process_group", return_value=False),
         ):
-            result = attempt_process.terminate_attempt(
-                {"dispatch": self._recorded_identity(24680)}
-            )
+            result = attempt_process.terminate_attempt({"dispatch": self._recorded_identity(24680)})
 
         self.assertEqual(result["status"], "already_dead")
         self.assertEqual(result["pid"], 24680)
@@ -57,9 +51,7 @@ class AttemptIdentityTests(RepositoryCycleFixture):
             ),
             patch.object(worker_identity, "live_process_group", return_value=False),
         ):
-            status = attempt_process.dispatch_status(
-                {"dispatch": self._recorded_identity(13579)}
-            )
+            status = attempt_process.dispatch_status({"dispatch": self._recorded_identity(13579)})
 
         self.assertEqual(status["status"], "dead")
         self.assertEqual(status["reason"], "process_missing_or_zombie")

@@ -137,9 +137,7 @@ def propose_candidates(conn, repo_id, run_now):
                 _candidate_prompt_text(row, metadata),
                 _candidate_type(row["kind"]),
                 source_json,
-                json.dumps(
-                    metadata.get("evidence") or [], ensure_ascii=False, sort_keys=True
-                ),
+                json.dumps(metadata.get("evidence") or [], ensure_ascii=False, sort_keys=True),
                 row["confidence"],
                 run_now,
                 json.dumps(
@@ -158,9 +156,7 @@ def propose_candidates(conn, repo_id, run_now):
     }
 
 
-def approve_candidate(
-    conn, candidate_id, scope_type, scope_value, approved_by, run_now
-):
+def approve_candidate(conn, candidate_id, scope_type, scope_value, approved_by, run_now):
     scope_type = _text(scope_type)
     if scope_type not in VALID_SCOPE_TYPES:
         return {
@@ -327,9 +323,7 @@ def _knowledge_score(row, route_result, event_terms, workstream_id):
     return 0
 
 
-def load_runtime_knowledge(
-    conn, repo_id, route_result, events, workstream_id=None, limit=5
-):
+def load_runtime_knowledge(conn, repo_id, route_result, events, workstream_id=None, limit=5):
     rows = conn.execute(
         """
         SELECT knowledge_id, candidate_id, repo_id, scope_type, scope_value,
@@ -361,9 +355,7 @@ def load_runtime_knowledge(
             continue
         item["score"] = score
         matched.append(item)
-    matched.sort(
-        key=lambda item: (-item["score"], item["approved_at"], item["knowledge_id"])
-    )
+    matched.sort(key=lambda item: (-item["score"], item["approved_at"], item["knowledge_id"]))
     return matched[:limit]
 
 

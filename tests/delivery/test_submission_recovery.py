@@ -17,9 +17,7 @@ class SubmissionRemediationTests(unittest.TestCase):
 
     def test_target_errors_list_exact_allowed_urls(self):
         settings = self.settings()
-        settings["action_scope"]["sources"].append(
-            {"source_type": "pull_request", "number": 2}
-        )
+        settings["action_scope"]["sources"].append({"source_type": "pull_request", "number": 2})
         expected = ["https://github.com/x/y/issues/1", "https://github.com/x/y/pull/2"]
         for target in (
             None,
@@ -33,15 +31,11 @@ class SubmissionRemediationTests(unittest.TestCase):
             with self.subTest(target=target):
                 with self.assertRaises(result_contract.InvalidSubmission) as caught:
                     result_contract.normalize(envelope, settings)
-                self.assertEqual(
-                    caught.exception.response().get("allowed_target_urls"), expected
-                )
+                self.assertEqual(caught.exception.response().get("allowed_target_urls"), expected)
                 # A candidate can be copied verbatim without guessing or normalization.
                 action["target_url"] = expected[1]
                 self.assertEqual(
-                    result_contract.normalize(envelope, settings)[
-                        "planned_github_actions"
-                    ][0]["target_url"],
+                    result_contract.normalize(envelope, settings)["planned_github_actions"][0]["target_url"],
                     expected[1],
                 )
 
@@ -70,20 +64,14 @@ class SubmissionRemediationTests(unittest.TestCase):
             self.assertEqual(pending[0].read_bytes(), saved)
             different = self.envelope(task, attempt)
             different["submission"]["handoff"] = "another result"
-            self.assertEqual(
-                result.record_result(db, different)["status"], "result_conflict"
-            )
+            self.assertEqual(result.record_result(db, different)["status"], "result_conflict")
         self.assertEqual(result.replay_pending_results(db)["recorded"], 1)
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1)
 
     def test_database_error_before_save_is_not_acknowledged(self):
         db, task, attempt, _, _ = self.prepare("comment")
-        with patch.object(
-            result, "_prepare", side_effect=sqlite3.DatabaseError("disk I/O error")
-        ):
+        with patch.object(result, "_prepare", side_effect=sqlite3.DatabaseError("disk I/O error")):
             receipt = result.record_result(db, self.envelope(task, attempt))
         self.assertFalse(receipt["ok"], receipt)
         self.assertEqual(receipt["status"], "validation_unavailable")
@@ -104,9 +92,7 @@ class SubmissionRemediationTests(unittest.TestCase):
                 self.assertEqual(result.replay_pending_results(db)["deferred"], 1)
             self.assertEqual(result.replay_pending_results(db)["rejected"], 1)
         self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
-        self.assertEqual(
-            len(list((result_spool.directory(db) / "rejected").glob("*.json"))), 1
-        )
+        self.assertEqual(len(list((result_spool.directory(db) / "rejected").glob("*.json"))), 1)
 
     def test_pr_body_allows_documentation_refs_but_rejects_issue_directives(self):
         allowed = [
@@ -144,6 +130,4 @@ class SubmissionRemediationTests(unittest.TestCase):
                 else:
                     normalized = result_contract.normalize(envelope, self.settings())
                     self.assertIn(body, normalized["planned_github_actions"][0]["body"])
-                    self.assertIn(
-                        "Refs #1", normalized["planned_github_actions"][0]["body"]
-                    )
+                    self.assertIn("Refs #1", normalized["planned_github_actions"][0]["body"])

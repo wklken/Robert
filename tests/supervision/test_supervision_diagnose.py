@@ -115,9 +115,7 @@ class DiagnosisTests(unittest.TestCase):
 
     def metadata(self):
         with closing(sqlite3.connect(self.db)) as conn:
-            checkpoint = supervision_store.get_checkpoint(
-                conn, "diagnosis", self.incident_id, "analysis"
-            )
+            checkpoint = supervision_store.get_checkpoint(conn, "diagnosis", self.incident_id, "analysis")
         return checkpoint["metadata"]
 
     def test_default_off_and_profile_rejects_unsafe_environment_and_command(self):
@@ -146,15 +144,11 @@ class DiagnosisTests(unittest.TestCase):
                 "MODEL_FIXTURE": "allowed-for-test",
             },
         ):
-            self.assertEqual(
-                self.diagnose.poll(self.config, now=self.when)["status"], "launched"
-            )
+            self.assertEqual(self.diagnose.poll(self.config, now=self.when)["status"], "launched")
             self.poll("succeeded")
         recorded = self.metadata()
         self.assertEqual(recorded["diagnosis"]["recommended_action"], "reconcile")
-        self.assertEqual(
-            recorded["diagnosis"]["expected_progress"], "Observe a matching receipt"
-        )
+        self.assertEqual(recorded["diagnosis"]["expected_progress"], "Observe a matching receipt")
         with closing(sqlite3.connect(self.db)) as conn:
             status, evidence = conn.execute(
                 "SELECT status,evidence_json FROM supervision_incidents WHERE incident_id=?",
@@ -166,12 +160,8 @@ class DiagnosisTests(unittest.TestCase):
     def test_rejects_unbound_or_unrecognized_recommendations(self):
         variants = (
             VALID_WRAPPER.replace("'reconcile'", "'run_shell'"),
-            VALID_WRAPPER.replace(
-                "[bundle['evidence'][0]['id']]", "['invented-evidence']"
-            ),
-            VALID_WRAPPER.replace(
-                "'bundle_sha256': digest", "'bundle_sha256': 'wrong'"
-            ),
+            VALID_WRAPPER.replace("[bundle['evidence'][0]['id']]", "['invented-evidence']"),
+            VALID_WRAPPER.replace("'bundle_sha256': digest", "'bundle_sha256': 'wrong'"),
         )
         for index, wrapper in enumerate(variants):
             with (
@@ -179,22 +169,16 @@ class DiagnosisTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {"MODEL_FIXTURE": "allowed-for-test"}),
             ):
                 self.set_wrapper(wrapper, cooldown_seconds=1)
-                self.poll(
-                    "invalid_output", now=self.when + timedelta(seconds=index * 10)
-                )
+                self.poll("invalid_output", now=self.when + timedelta(seconds=index * 10))
                 self.assertNotIn("diagnosis", self.metadata())
 
     def test_invalid_unicode_model_output_does_not_crash_observer(self):
-        self.set_wrapper(
-            VALID_WRAPPER.replace("'Observe a matching receipt'", "chr(0xd800)")
-        )
+        self.set_wrapper(VALID_WRAPPER.replace("'Observe a matching receipt'", "chr(0xd800)"))
         with mock.patch.dict(os.environ, {"MODEL_FIXTURE": "allowed-for-test"}):
             self.poll("invalid_output")
         self.assertEqual(self.metadata()["status"], "invalid_output")
         with closing(sqlite3.connect(self.db)) as conn:
-            runner = supervision_store.get_checkpoint(
-                conn, "diagnostic", "installation", "runner"
-            )["metadata"]
+            runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
         self.assertIsNone(runner["claim"])
 
     def test_reaped_short_process_completion_retries_after_database_contention(self):
@@ -219,17 +203,13 @@ class DiagnosisTests(unittest.TestCase):
         self.assertEqual(len(set(calls)), 1)
         self.assertEqual(self.metadata()["status"], "succeeded")
         with closing(sqlite3.connect(self.db)) as conn:
-            runner = supervision_store.get_checkpoint(
-                conn, "diagnostic", "installation", "runner"
-            )["metadata"]
+            runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
         self.assertIsNone(runner["claim"])
         self.assertEqual(len(runner["hourly_calls"]), 1)
 
     def test_prelaunch_failure_completion_survives_database_contention(self):
         original = self.diagnose._complete
-        for index, target in enumerate(
-            ("tempfile.TemporaryDirectory", "build_worker_launch")
-        ):
+        for index, target in enumerate(("tempfile.TemporaryDirectory", "build_worker_launch")):
             with self.subTest(target=target):
                 self.set_wrapper(VALID_WRAPPER, cooldown_seconds=1)
                 calls = []
@@ -253,9 +233,7 @@ class DiagnosisTests(unittest.TestCase):
                     self.poll("launch_failed", now=when)
                 self.assertEqual(len(set(calls)), 1)
                 with closing(sqlite3.connect(self.db)) as conn:
-                    runner = supervision_store.get_checkpoint(
-                        conn, "diagnostic", "installation", "runner"
-                    )["metadata"]
+                    runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
                 self.assertIsNone(runner["claim"])
                 self.assertEqual(len(runner["hourly_calls"]), index + 1)
 
@@ -284,9 +262,7 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
                     self.incident_id,
                 ),
             )
-            conn.execute(
-                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','target',1,'running')"
-            )
+            conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','target',1,'running')")
             conn.executemany(
                 """INSERT INTO worker_phases(phase_id,attempt_id,phase,status,summary,created_at)
                    VALUES (?,'a','execute','running',?,?)""",
@@ -354,9 +330,7 @@ while True:
         self.assertGreater(record["bundle_bytes"], record["byte_limit"])
         self.assertLess(len(json.dumps(record)), 512)
         with closing(sqlite3.connect(self.db)) as conn:
-            runner = supervision_store.get_checkpoint(
-                conn, "diagnostic", "installation", "runner"
-            )["metadata"]
+            runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
         self.assertEqual(len(runner["hourly_calls"]), 1)
         self.assertIsNone(runner["claim"])
 
@@ -377,12 +351,8 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
             conn.execute(
                 "UPDATE supervision_incidents SET scope_type='controller',evidence_json=?,expected_progress_json=? WHERE incident_id=?",
                 (
-                    json.dumps(
-                        {f"e{i}": "𠀀" * 1800 for i in range(6)}, ensure_ascii=False
-                    ),
-                    json.dumps(
-                        {f"p{i}": "𠀀" * 700 for i in range(4)}, ensure_ascii=False
-                    ),
+                    json.dumps({f"e{i}": "𠀀" * 1800 for i in range(6)}, ensure_ascii=False),
+                    json.dumps({f"p{i}": "𠀀" * 700 for i in range(4)}, ensure_ascii=False),
                     self.incident_id,
                 ),
             )
@@ -413,13 +383,9 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
                 self.when.isoformat(),
             )
         later = self.when + timedelta(seconds=60)
-        self.assertEqual(
-            self.diagnose.poll(self.config, now=later)["status"], "launched"
-        )
+        self.assertEqual(self.diagnose.poll(self.config, now=later)["status"], "launched")
         result = self.poll("succeeded", now=later)
-        self.assertEqual(
-            result["candidate_id"], "candidate:small:worker_progress_stalled"
-        )
+        self.assertEqual(result["candidate_id"], "candidate:small:worker_progress_stalled")
 
     def test_provider_429_blocks_other_targets_and_survives_restart(self):
         wrapper = """import json,sys
@@ -450,9 +416,7 @@ sys.exit(75)
                 self.when.isoformat(),
             )
         later = self.when + timedelta(seconds=5)
-        self.assertEqual(
-            self.diagnose.poll(self.config, now=later)["status"], "provider_cooldown"
-        )
+        self.assertEqual(self.diagnose.poll(self.config, now=later)["status"], "provider_cooldown")
         restarted = subprocess.run(
             [
                 sys.executable,
@@ -470,21 +434,15 @@ sys.exit(75)
         self.assertEqual(json.loads(restarted.stdout)["status"], "provider_cooldown")
         self.poll("provider_rate_limited", now=self.when + timedelta(seconds=121))
         self.assertEqual(
-            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=243))[
-                "status"
-            ],
+            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=243))["status"],
             "rate_limited",
         )
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM supervision_recovery_actions"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM supervision_recovery_actions").fetchone()[0],
                 0,
             )
-            runner = supervision_store.get_checkpoint(
-                conn, "diagnostic", "installation", "runner"
-            )["metadata"]
+            runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
             self.assertEqual(len(runner["hourly_calls"]), 2)
             self.assertIsNone(runner["claim"])
 
@@ -528,13 +486,9 @@ sys.exit(75)
                     + "},sys.stdout); sys.exit(75)",
                     cooldown_seconds=1,
                 )
-                self.poll(
-                    "invalid_output", now=self.when + timedelta(seconds=index * 10)
-                )
+                self.poll("invalid_output", now=self.when + timedelta(seconds=index * 10))
         with closing(sqlite3.connect(self.db)) as conn:
-            runner = supervision_store.get_checkpoint(
-                conn, "diagnostic", "installation", "runner"
-            )["metadata"]
+            runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
             self.assertNotIn("provider_not_before", runner)
 
     def test_timeout_reaps_process_and_cooldown_and_hourly_budget_persist(self):
@@ -548,9 +502,7 @@ sys.exit(75)
         self.assertEqual(self.metadata()["status"], "timed_out")
         self.diagnose.shutdown(self.config)
         self.assertEqual(
-            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=5))[
-                "status"
-            ],
+            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=5))["status"],
             "rate_limited",
         )
 
@@ -592,12 +544,8 @@ raise RuntimeError('missing persisted child identity')
         self.poll("previous_process_running")
         result = self.poll("timed_out", now=self.when + timedelta(seconds=31))
         self.assertEqual(result["incident_id"], self.incident_id)
-        self.assertFalse(
-            worker_identity.live_process_group(identity["process_group_id"])
-        )
+        self.assertFalse(worker_identity.live_process_group(identity["process_group_id"]))
         self.assertEqual(
-            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=32))[
-                "status"
-            ],
+            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=32))["status"],
             "cooldown",
         )

@@ -24,9 +24,7 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -108,9 +106,7 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=95)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -124,9 +120,7 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
                 (
                     old,
                     old,
-                    json.dumps(
-                        {"dispatch": self._recorded_identity(12345)}, sort_keys=True
-                    ),
+                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
                     attempt_id,
                 ),
             )
@@ -172,12 +166,8 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
-            notification = conn.execute(
-                "SELECT notification_type, status FROM notifications"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
+            notification = conn.execute("SELECT notification_type, status FROM notifications").fetchone()
         self.assertEqual(attempt_status, "failed")
         self.assertEqual(task_lifecycle, "failed")
         self.assertEqual(workstream, ("failed", None))

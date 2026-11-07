@@ -43,10 +43,7 @@ class GitHubBoardRecoveryFixture(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.db)) as c, c:
             self.parent = c.execute("SELECT task_id FROM tasks").fetchone()[0]
-            self.original = {
-                p: Path(p).read_bytes()
-                for (p,) in c.execute("SELECT path FROM artifacts")
-            }
+            self.original = {p: Path(p).read_bytes() for (p,) in c.execute("SELECT path FROM artifacts")}
             c.execute(
                 "UPDATE tasks SET lifecycle='waiting_for_user' WHERE task_id=?",
                 (self.parent,),
@@ -56,9 +53,7 @@ class GitHubBoardRecoveryFixture(unittest.TestCase):
                 (values.utc_now(), self.parent),
             )
             c.execute("UPDATE workstreams SET lifecycle='waiting_for_user'")
-            self.item = work_items.resolve_work_item_for_workstream(
-                c, "github:example/repo#70"
-            )
+            self.item = work_items.resolve_work_item_for_workstream(c, "github:example/repo#70")
             for (decision,) in c.execute(
                 "SELECT event_id FROM work_item_events WHERE event_type='operator_decision_required'"
             ).fetchall():
@@ -101,18 +96,12 @@ class GitHubBoardRecoveryFixture(unittest.TestCase):
             }
         )
         with closing(sqlite3.connect(self.db)) as c, c:
-            requested = c.execute(
-                "SELECT created_at FROM wakeups WHERE task_id=?", (self.task_id,)
-            ).fetchone()[0]
+            requested = c.execute("SELECT created_at FROM wakeups WHERE task_id=?", (self.task_id,)).fetchone()[0]
             when = datetime.fromisoformat(requested).timestamp() + (1 if fresh else -1)
             scan_batches.save_reads(
                 c,
                 self.fixture.repo_id,
-                {
-                    github_client.command_key(
-                        ["gh", "api", "repos/example/repo/issues/70"]
-                    ): json.dumps(payload)
-                },
+                {github_client.command_key(["gh", "api", "repos/example/repo/issues/70"]): json.dumps(payload)},
                 when,
             )
 

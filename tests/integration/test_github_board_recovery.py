@@ -23,9 +23,7 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
         result = self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
-                c.execute(
-                    "SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 1,
             )
             self.assertEqual(c.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
@@ -34,9 +32,7 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
                 (self.task_id,),
             ).fetchone()[0]
             self.assertEqual(
-                c.execute(
-                    "SELECT status FROM wakeups WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT status FROM wakeups WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 "consumed",
             )
             self.assertIsNotNone(execution_store.get_binding(c, "task", self.task_id))
@@ -44,16 +40,12 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
         self.assertIn("Analyze the architecture and draw sequence diagrams.", text)
         self.assertIn("Read the full issue body and draw the architecture.", text)
         self.assertIn("origin_type: github", text)
-        self.assertEqual(
-            self.original, {p: Path(p).read_bytes() for p in self.original}
-        )
+        self.assertEqual(self.original, {p: Path(p).read_bytes() for p in self.original})
         self.assertTrue(result["prompt_paths"])
         self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
-                c.execute(
-                    "SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 1,
             )
 
@@ -61,18 +53,14 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
         self.read(fresh=False)
         with closing(sqlite3.connect(self.db)) as c:
             self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    c, repo_id=self.fixture.repo_id, include_publication=False
-                )
+                loop_engine.has_runnable_local_work(c, repo_id=self.fixture.repo_id, include_publication=False)
             )
         result = self.cycle()
         self.assertFalse(result["prompt_paths"])
         self.read()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertTrue(
-                loop_engine.has_runnable_local_work(
-                    c, repo_id=self.fixture.repo_id, include_publication=False
-                )
+                loop_engine.has_runnable_local_work(c, repo_id=self.fixture.repo_id, include_publication=False)
             )
 
     def test_failed_refresh_is_visible_and_stops_empty_drains(self):
@@ -80,21 +68,15 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
         self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
-                c.execute(
-                    "SELECT lifecycle FROM tasks WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 "failed",
             )
             self.assertEqual(
-                c.execute(
-                    "SELECT count(*) FROM work_item_events WHERE event_type='execution_failed'"
-                ).fetchone()[0],
+                c.execute("SELECT count(*) FROM work_item_events WHERE event_type='execution_failed'").fetchone()[0],
                 1,
             )
             self.assertFalse(
-                loop_engine.has_runnable_local_work(
-                    c, repo_id=self.fixture.repo_id, include_publication=False
-                )
+                loop_engine.has_runnable_local_work(c, repo_id=self.fixture.repo_id, include_publication=False)
             )
 
     def test_cancel_before_scan_does_not_launch_an_attempt(self):
@@ -110,9 +92,7 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
         self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
-                c.execute(
-                    "SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 0,
             )
 
@@ -142,15 +122,11 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
         self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
-                c.execute(
-                    "SELECT lifecycle FROM tasks WHERE task_id=?", (failed,)
-                ).fetchone()[0],
+                c.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (failed,)).fetchone()[0],
                 "completed",
             )
             self.assertEqual(
-                c.execute(
-                    "SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 1,
             )
 
@@ -166,13 +142,7 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
                     c.execute(
                         "UPDATE tasks SET metadata_json=? WHERE task_id=?",
                         (
-                            json.dumps(
-                                {
-                                    "execution_attention": {
-                                        "reason_code": "worker_identity_attention"
-                                    }
-                                }
-                            )
+                            json.dumps({"execution_attention": {"reason_code": "worker_identity_attention"}})
                             if kind == "attention"
                             else "{}",
                             self.parent,
@@ -216,15 +186,11 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
             self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(
-                c.execute(
-                    "SELECT lifecycle FROM tasks WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 "canceled",
             )
             self.assertEqual(
-                c.execute(
-                    "SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)
-                ).fetchone()[0],
+                c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)).fetchone()[0],
                 0,
             )
 
@@ -235,9 +201,7 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
         self.fixture.config_path.write_text(json.dumps(config))
         self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
-            row = c.execute(
-                "SELECT metadata_json FROM work_item_events WHERE event_type='execution_failed'"
-            ).fetchone()
+            row = c.execute("SELECT metadata_json FROM work_item_events WHERE event_type='execution_failed'").fetchone()
             self.assertEqual(
                 json.loads(row[0])["reason_code"],
                 "github_operator_authorization_unavailable",
@@ -245,9 +209,7 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
 
     def test_notification_does_not_reuse_old_trust_boolean(self):
         with closing(sqlite3.connect(self.db)) as c, c:
-            for event_id, raw in c.execute(
-                "SELECT event_id,payload_json FROM github_events"
-            ).fetchall():
+            for event_id, raw in c.execute("SELECT event_id,payload_json FROM github_events").fetchall():
                 event = json.loads(raw)
                 event.update(event_type="notification", trusted_trigger_found=True)
                 c.execute(
@@ -261,13 +223,9 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
             with self.subTest(command=command):
                 self.fixture._finish_task(self.task_id, values.utc_now())
                 with closing(sqlite3.connect(self.db)) as c, c:
-                    c.execute(
-                        "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL"
-                    )
+                    c.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
                     if command == "reopen":
-                        c.execute(
-                            "UPDATE work_items SET completed_at=?", (values.utc_now(),)
-                        )
+                        c.execute("UPDATE work_items SET completed_at=?", (values.utc_now(),))
                     else:
                         work_items.record_system_event(
                             c,
@@ -353,9 +311,7 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
                             "DELETE FROM execution_subjects WHERE subject_id=?",
                             (self.task_id,),
                         )
-                        c.execute(
-                            "DELETE FROM work_item_events WHERE event_type='execution_failed'"
-                        )
+                        c.execute("DELETE FROM work_item_events WHERE event_type='execution_failed'")
                     self.read({"state": "open"})
                     with closing(sqlite3.connect(self.db)) as c, c:
                         c.execute("UPDATE github_scan_reads SET response_json=NULL")

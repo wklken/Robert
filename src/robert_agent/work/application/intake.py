@@ -57,9 +57,7 @@ def admit_requests(
             dispatch_queue,
             min(
                 dispatch_budget["remaining"],
-                dispatch_budget.get("repo_remaining", {}).get(
-                    repo_id, dispatch_budget["remaining"]
-                ),
+                dispatch_budget.get("repo_remaining", {}).get(repo_id, dispatch_budget["remaining"]),
             ),
         )
         if repo_id in dispatch_budget.get("repo_remaining", {}):
@@ -121,15 +119,11 @@ def admit_requests(
 
     track_admission = supervision_store.has_schema(conn)
     for event in decisions:
-        source_id, event_id = source_events.insert_source_and_event(
-            conn, repo_id, event, run_now
-        )
+        source_id, event_id = source_events.insert_source_and_event(conn, repo_id, event, run_now)
         admission = None
         if track_admission and supervision_lineage.is_driving_github_input(event):
             # Retain acceptance before any preparation releases the writer.
-            admission = supervision_lineage.record_github_received(
-                conn, event, event_id, repo_id, source_id, run_now
-            )
+            admission = supervision_lineage.record_github_received(conn, event, event_id, repo_id, source_id, run_now)
         if (
             event.get("authorization_status") == "context_only"
             and event.get("actor_login") != repo["github_account"]
@@ -140,8 +134,7 @@ def admit_requests(
             work_admission.append_event_to_active_task(conn, event, "context", run_now)
             continue
         if (
-            event.get("authorization_status")
-            in {"authorized_trigger", "accepted_context"}
+            event.get("authorization_status") in {"authorized_trigger", "accepted_context"}
             and event.get("actor_login") in repo.get("trusted_actors", [])
             and event.get("intent") == "vote"
         ):
@@ -173,8 +166,7 @@ def admit_requests(
         # become pending context that a still-running reviewer can consume.
         if (
             event.get("source_type") == "pull_request"
-            and event.get("authorization_status")
-            in {"authorized_trigger", "accepted_context"}
+            and event.get("authorization_status") in {"authorized_trigger", "accepted_context"}
             and (
                 event.get("authorization_status") == "authorized_trigger"
                 or event.get("actor_login") in repo.get("trusted_actors", [])
@@ -205,14 +197,9 @@ def admit_requests(
         workflow_fact = facts.apply_workflow_event_fact(conn, event, run_now)
         if workflow_fact:
             attempt_id = workflow_fact.get("attempt_id")
-            if (
-                workflow_fact.get("classification") == workflow_events.INVALIDATING
-                and attempt_id
-            ):
+            if workflow_fact.get("classification") == workflow_events.INVALIDATING and attempt_id:
                 invalidation_attempt_ids.append(attempt_id)
-        remediation_episode_id = (
-            (event.get("metadata") or {}).get("remediation") or {}
-        ).get("episode_id")
+        remediation_episode_id = ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id")
         if remediation_episode_id and not execution_ownership.claim_episode(
             conn,
             remediation_episode_id,
@@ -243,18 +230,12 @@ def admit_requests(
             )
             continue
         if work_policies.is_driving_context_event(event):
-            waiting_task = source_events.waiting_task_state(
-                conn, event["workstream_id"]
-            )
+            waiting_task = source_events.waiting_task_state(conn, event["workstream_id"])
             if waiting_task:
-                if not execution_ownership.waiting_reply_allowed(
-                    conn, waiting_task["task_id"], run_now
-                ):
+                if not execution_ownership.waiting_reply_allowed(conn, waiting_task["task_id"], run_now):
                     continue
                 if not work_policies.is_trusted_actor(event, repo):
-                    work_admission.append_event_to_active_task(
-                        conn, event, "context", run_now
-                    )
+                    work_admission.append_event_to_active_task(conn, event, "context", run_now)
                     continue
                 work_items.record_github_response(
                     conn,
@@ -281,9 +262,7 @@ def admit_requests(
                 )
                 try:
                     conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-                    worktree_result = assigned_workspace.prepare_worktree(
-                        repo, event, route_result, dry_run
-                    )
+                    worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
                 except ControlDeadlineExceeded:
                     raise
                 except (
@@ -311,20 +290,14 @@ def admit_requests(
                 # releases the writer. Never rewrite that stopped parent.
                 if not conn.in_transaction:
                     conn.execute("BEGIN IMMEDIATE")
-                current_waiting = source_events.waiting_task_state(
-                    conn, event["workstream_id"]
-                )
+                current_waiting = source_events.waiting_task_state(conn, event["workstream_id"])
                 if (
                     not current_waiting
                     or current_waiting["task_id"] != waiting_task["task_id"]
-                    or not execution_ownership.parent_allows_child(
-                        conn, waiting_task["task_id"]
-                    )
+                    or not execution_ownership.parent_allows_child(conn, waiting_task["task_id"])
                 ):
                     continue
-                task_state.complete_waiting_parent(
-                    conn, waiting_task["task_id"], run_now
-                )
+                task_state.complete_waiting_parent(conn, waiting_task["task_id"], run_now)
                 task_info = preparation.create_task_attempt_and_prompt(
                     conn,
                     data_dir,
@@ -341,9 +314,7 @@ def admit_requests(
                 )
                 if task_info is None:
                     continue
-                supervision_lineage.record_task_disposition(
-                    conn, admission, task_info["task_id"], run_now
-                )
+                supervision_lineage.record_task_disposition(conn, admission, task_info["task_id"], run_now)
                 waiting_vote = vote_store.session(conn, task_id=waiting_task["task_id"])
                 if waiting_vote and waiting_vote["status"] == "waiting_for_user":
                     vote_store.update(
@@ -352,9 +323,7 @@ def admit_requests(
                         status="superseded",
                         error=f"waiting vote replaced by independent {route_result['route_id']} request",
                     )
-                execution_ownership.close_terminal_task(
-                    conn, waiting_task["task_id"], run_now
-                )
+                execution_ownership.close_terminal_task(conn, waiting_task["task_id"], run_now)
                 dispatcher.queue_dispatch(
                     dispatch_queue,
                     task_info,
@@ -368,9 +337,7 @@ def admit_requests(
                 known_workstreams.add(task_info["workstream_id"])
                 continue
             if event["workstream_id"] in active_workstreams:
-                appended = work_admission.append_event_to_active_task(
-                    conn, event, "context", run_now
-                )
+                appended = work_admission.append_event_to_active_task(conn, event, "context", run_now)
                 if appended:
                     if admission is not None:
                         supervision_lineage.record_task_disposition(
@@ -438,9 +405,7 @@ def admit_requests(
                 conn, repo, event, retry_parent_id
             ):
                 continue
-            retry_context = work_queries.failed_parent_context_events(
-                conn, retry_parent_id
-            )
+            retry_context = work_queries.failed_parent_context_events(conn, retry_parent_id)
             # A completed request's issue title describes old work. Infer
             # this new instruction on its own; ambiguous questions go to
             # classification instead of inheriting an old "bug"/"报错".
@@ -458,13 +423,9 @@ def admit_requests(
                 }
             )
             retry_related = (
-                github_requests.dedupe_events_by_fingerprint(retry_context + [event])
-                if retry_context
-                else None
+                github_requests.dedupe_events_by_fingerprint(retry_context + [event]) if retry_context else None
             )
-            stream = workstream.plan_event(
-                task_event, active_workstreams=active_workstreams
-            )
+            stream = workstream.plan_event(task_event, active_workstreams=active_workstreams)
             route_result = workflow_routing.effective_route(
                 config_result,
                 repo,
@@ -472,9 +433,7 @@ def admit_requests(
             )
             try:
                 conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-                worktree_result = assigned_workspace.prepare_worktree(
-                    repo, task_event, route_result, dry_run
-                )
+                worktree_result = assigned_workspace.prepare_worktree(repo, task_event, route_result, dry_run)
             except ControlDeadlineExceeded:
                 raise
             except (
@@ -515,9 +474,7 @@ def admit_requests(
             )
             if task_info is None:
                 continue
-            supervision_lineage.record_task_disposition(
-                conn, admission, task_info["task_id"], run_now
-            )
+            supervision_lineage.record_task_disposition(conn, admission, task_info["task_id"], run_now)
             dispatcher.queue_dispatch(
                 dispatch_queue,
                 task_info,
@@ -537,9 +494,7 @@ def admit_requests(
             continue
         stream = workstream.plan_event(event, active_workstreams=active_workstreams)
         if stream["action"] == "append_pending_event":
-            appended = work_admission.append_event_to_active_task(
-                conn, event, "pending", run_now
-            )
+            appended = work_admission.append_event_to_active_task(conn, event, "pending", run_now)
             if appended and admission is not None:
                 supervision_lineage.record_task_disposition(
                     conn,
@@ -573,9 +528,7 @@ def admit_requests(
         )
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-            worktree_result = assigned_workspace.prepare_worktree(
-                repo, event, route_result, dry_run
-            )
+            worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
         except ControlDeadlineExceeded:
             raise
         except (
@@ -613,9 +566,7 @@ def admit_requests(
         )
         if task_info is None:
             continue
-        supervision_lineage.record_task_disposition(
-            conn, admission, task_info["task_id"], run_now
-        )
+        supervision_lineage.record_task_disposition(conn, admission, task_info["task_id"], run_now)
         dispatcher.queue_dispatch(
             dispatch_queue,
             task_info,

@@ -42,9 +42,9 @@ dependency; its bounded version keeps the same contract engine across the CI mat
 The architecture tests additionally reject cycles across the complete module graph.
 
 Ruff is also the Python formatter. Its version is pinned in the development
-extra so local formatting and CI agree. Use the default stable style (88 columns,
-double quotes, spaces); Markdown prompt fixtures are excluded. Apply formatting
-with `python3 -m ruff format src tests`, then run the checks below. CI rejects
+extra so local formatting and CI agree. Use the stable style with a 120-column
+line length, double quotes and spaces; Markdown prompt fixtures are excluded.
+Apply formatting with `python3 -m ruff format src tests`, then run the checks below. CI rejects
 formatting drift without modifying files.
 
 ```bash

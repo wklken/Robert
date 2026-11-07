@@ -60,20 +60,13 @@ def _entry_terms(entry, payload, workstream_id, route_result=None):
         "memory_thread_key": [entry["memory_thread_key"]],
         "workstream_id": [workstream_id],
         "kind": [entry["kind"]],
-        "expected_output": [
-            _text(route_result.get("expected_output"))
-            or _text(payload.get("output_type"))
-        ],
+        "expected_output": [_text(route_result.get("expected_output")) or _text(payload.get("output_type"))],
         "route_id": [_text(route_result.get("route_id"))],
         "path": _lower_list(entry.get("paths")),
         "symbol": _lower_list(entry.get("symbols")),
         "keyword": _lower_list(entry.get("keywords")),
     }
-    return {
-        term_type: [term for term in values if term]
-        for term_type, values in terms.items()
-        if any(values)
-    }
+    return {term_type: [term for term in values if term] for term_type, values in terms.items() if any(values)}
 
 
 def _query_terms(route_result, events):
@@ -156,8 +149,7 @@ def _normalize_entry(raw_entry, payload, workstream_id):
         "keywords": _lower_list(raw_entry.get("keywords")),
         "evidence": _json_list(raw_entry.get("evidence")),
         "confidence": confidence,
-        "memory_thread_key": _text(raw_entry.get("memory_thread_key"))
-        or _thread_key(payload, workstream_id),
+        "memory_thread_key": _text(raw_entry.get("memory_thread_key")) or _thread_key(payload, workstream_id),
     }
     return entry, None
 
@@ -383,8 +375,7 @@ def record_memory_delta(conn, result_payload, workstream_id, repo_id, run_now):
         return {
             "status": "skipped",
             "recorded_count": 0,
-            "safe_error": "; ".join(error for error in skipped if error)
-            or "no valid memory entries",
+            "safe_error": "; ".join(error for error in skipped if error) or "no valid memory entries",
         }
     return {
         "status": "recorded",
@@ -425,9 +416,7 @@ def _candidate_ids_from_threads(conn, repo_id, thread_keys):
             """,
             (repo_id, thread_key),
         ):
-            scores[memory_id] = (
-                scores.get(memory_id, 0) + TERM_WEIGHTS["memory_thread_key"]
-            )
+            scores[memory_id] = scores.get(memory_id, 0) + TERM_WEIGHTS["memory_thread_key"]
     return scores
 
 
@@ -449,14 +438,10 @@ def _thread_keys(workstream_id, events):
     return keys
 
 
-def retrieve_memories(
-    conn, repo_id, workstream_id, route_result, events, limit=5, runtime_knowledge=None
-):
+def retrieve_memories(conn, repo_id, workstream_id, route_result, events, limit=5, runtime_knowledge=None):
     query_terms = _query_terms(route_result, events)
     boost_terms = _runtime_boost_terms(runtime_knowledge)
-    thread_scores = _candidate_ids_from_threads(
-        conn, repo_id, _thread_keys(workstream_id, events)
-    )
+    thread_scores = _candidate_ids_from_threads(conn, repo_id, _thread_keys(workstream_id, events))
     term_scores = _candidate_ids_from_terms(conn, repo_id, query_terms)
     boost_scores = _candidate_ids_from_terms(conn, repo_id, boost_terms)
     scores = dict(term_scores)
@@ -507,7 +492,5 @@ def retrieve_memories(
                 "updated_at": updated_at,
             }
         )
-    memories.sort(
-        key=lambda item: (-item["score"], item["updated_at"], item["memory_id"])
-    )
+    memories.sort(key=lambda item: (-item["score"], item["updated_at"], item["memory_id"]))
     return memories[:limit]

@@ -224,14 +224,8 @@ def _current_evidence(db_path):
             """,
             (task_id,),
         ).fetchall()
-        accepted_count = sum(
-            count for audit, _publish, count in action_rows if audit == "accepted"
-        )
-        not_published_count = sum(
-            count
-            for _audit, publish, count in action_rows
-            if publish == "not_published"
-        )
+        accepted_count = sum(count for audit, _publish, count in action_rows if audit == "accepted")
+        not_published_count = sum(count for _audit, publish, count in action_rows if publish == "not_published")
     evidence = {
         "db_exists": True,
         "task_id": task_id,
@@ -309,9 +303,7 @@ def live_worker_acceptance(
             "safe_error": first_run.get("safe_error", "live worker dispatch failed"),
         }
 
-    worker_evidence = _wait_for_worker_result(
-        db_path, timeout_seconds, poll_interval_seconds
-    )
+    worker_evidence = _wait_for_worker_result(db_path, timeout_seconds, poll_interval_seconds)
     if not worker_evidence.get("result_id"):
         return {
             "ok": False,
@@ -343,9 +335,7 @@ def live_worker_acceptance(
             "first_run": first_run,
             "second_run": second_run,
             "evidence": final_evidence,
-            "safe_error": second_run.get(
-                "safe_error", "dry-run audit or publication failed"
-            ),
+            "safe_error": second_run.get("safe_error", "dry-run audit or publication failed"),
         }
     if final_evidence["action_counts"]["accepted"] == 0:
         return {

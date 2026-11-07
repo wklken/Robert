@@ -23,11 +23,7 @@ def _boot_context():
     """Read a boot token without changing global process-identity semantics."""
     try:
         if sys.platform.startswith("linux"):
-            token = (
-                Path("/proc/sys/kernel/random/boot_id")
-                .read_text(encoding="ascii")
-                .strip()
-            )
+            token = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
             namespace = os.readlink("/proc/self/ns/pid")
             if token and namespace:
                 return {
@@ -75,9 +71,7 @@ def _retire(conn, child, *, resolution, current_context=None):
     if status == "stopped":
         return {"ok": True, "status": "already_stopped", "child_id": identifier}
     if control_children.owner_lease_active(conn, owner):
-        raise ValueError(
-            "Cannot acknowledge a control child while its daemon owner lease is active"
-        )
+        raise ValueError("Cannot acknowledge a control child while its daemon owner lease is active")
     changed = control_children.mark_retired(conn, identifier)
     if not changed:
         raise ValueError("Control child no longer has a recoverable status")
@@ -101,9 +95,7 @@ def _retire(conn, child, *, resolution, current_context=None):
 
 
 def list_children(db_path):
-    with closing(
-        sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
-    ) as conn:
+    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as conn:
         rows = control_children.list_children(conn)
         return {
             "ok": True,
@@ -114,9 +106,7 @@ def list_children(db_path):
                     "lane": lane,
                     "status": status,
                     "identity": json.loads(encoded),
-                    "owner_lease_active": control_children.owner_lease_active(
-                        conn, owner
-                    ),
+                    "owner_lease_active": control_children.owner_lease_active(conn, owner),
                 }
                 for identifier, owner, lane, encoded, status in rows
             ],
@@ -126,11 +116,7 @@ def list_children(db_path):
 def acknowledge_stopped(db_path, identifier):
     """Record an operator assertion; this operation never signals a process."""
     with (
-        closing(
-            sqlite3.connect(
-                Path(db_path).resolve().as_uri() + "?mode=rw", uri=True, timeout=5
-            )
-        ) as conn,
+        closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=rw", uri=True, timeout=5)) as conn,
         conn,
     ):
         transactions.begin_immediate(conn)
@@ -171,18 +157,14 @@ class ControlLane:
         # The wrapper cannot execute any remote work until it atomically saves
         # its own identity. Recovery can cancel an unclaimed starting row.
         with closing(sqlite3.connect(self.db_path, timeout=5)) as conn, conn:
-            control_children.record_starting(
-                conn, self.identifier, self.owner, self.lane
-            )
+            control_children.record_starting(conn, self.identifier, self.owner, self.lane)
         try:
             self.output = tempfile.TemporaryFile(mode="w+t")
             self.error = tempfile.TemporaryFile(mode="w+t")
             environment = {
                 **os.environ,
                 "_ROBERT_EXECUTOR_ID": self.identifier,
-                "_ROBERT_CONTROL_DEADLINE": str(
-                    self.started + max(0.1, timeout_seconds - 2)
-                ),
+                "_ROBERT_CONTROL_DEADLINE": str(self.started + max(0.1, timeout_seconds - 2)),
             }
             wrapper = [
                 sys.executable,
@@ -282,9 +264,7 @@ class ControlLane:
 
 def recover(db_path, *, scope_key, current_owner):
     with closing(sqlite3.connect(db_path, timeout=5)) as conn:
-        rows = control_children.previous_owner_children(
-            conn, scope_key=scope_key, current_owner=current_owner
-        )
+        rows = control_children.previous_owner_children(conn, scope_key=scope_key, current_owner=current_owner)
     safe = True
     current_context = _boot_context() if rows else None
     for identifier, encoded, status, owner, lane in rows:
@@ -320,9 +300,7 @@ def recover(db_path, *, scope_key, current_owner):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Inspect or recover owned scanner/publisher children"
-    )
+    parser = argparse.ArgumentParser(description="Inspect or recover owned scanner/publisher children")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--child", action="store_true")
     mode.add_argument(

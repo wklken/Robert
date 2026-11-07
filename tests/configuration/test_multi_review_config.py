@@ -93,9 +93,7 @@ class ReviewConcurrencyConfigTests(ReviewConcurrencyConfigFixture):
     def test_review_limit_requires_a_positive_integer(self):
         for value in (True, False, 0, -1, 1.5, "2", None, [], {}):
             with self.subTest(value=value):
-                result = self.validate(
-                    {**self.config, "scheduler": {"model_max_concurrency": value}}
-                )
+                result = self.validate({**self.config, "scheduler": {"model_max_concurrency": value}})
                 self.assertFalse(result["ok"], result)
                 self.assertEqual(result["status"], "failed_config")
                 self.assertIn("model_max_concurrency", result["safe_error"])
@@ -108,18 +106,14 @@ class ReviewConcurrencyConfigTests(ReviewConcurrencyConfigFixture):
             elif location == "global-route":
                 config["routes"] = {"review-pr": {"model_max_concurrency": 2}}
             else:
-                config["repos"][0]["routes"] = {
-                    "review-pr": {"model_max_concurrency": 2}
-                }
+                config["repos"][0]["routes"] = {"review-pr": {"model_max_concurrency": 2}}
             with self.subTest(location=location):
                 result = self.validate(config)
                 self.assertFalse(result["ok"], result)
                 self.assertIn("model_max_concurrency", result["safe_error"])
 
     def test_schema_exposes_review_limit_only_at_root(self):
-        schema = json.loads(
-            resource("schemas/config.schema.json").read_text(encoding="utf-8")
-        )
+        schema = json.loads(resource("schemas/config.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(
             schema["properties"]["scheduler"]["properties"]["model_max_concurrency"],
             {"type": "integer", "minimum": 1, "default": 4},
@@ -128,6 +122,4 @@ class ReviewConcurrencyConfigTests(ReviewConcurrencyConfigFixture):
             "model_max_concurrency",
             schema["properties"]["repos"]["items"]["properties"],
         )
-        self.assertNotIn(
-            "model_max_concurrency", schema["$defs"]["routeOverride"]["properties"]
-        )
+        self.assertNotIn("model_max_concurrency", schema["$defs"]["routeOverride"]["properties"])

@@ -12,9 +12,7 @@ class DashboardOperatorStateTests(DashboardFixture):
 
         tasks = {task["task_id"]: task for task in data["recent_tasks"]}
         self.assertEqual(tasks["task-worker"]["operator_state"], "worker_running")
-        self.assertEqual(
-            tasks["task-worker"]["next_action"], "wait_for_worker_completion"
-        )
+        self.assertEqual(tasks["task-worker"]["next_action"], "wait_for_worker_completion")
         self.assertEqual(tasks["task-worker"]["latest_attempt_status"], "running")
         self.assertEqual(tasks["task-stale"]["operator_state"], "worker_stale")
         self.assertEqual(tasks["task-stale"]["next_action"], "inspect_worker_heartbeat")
@@ -23,22 +21,14 @@ class DashboardOperatorStateTests(DashboardFixture):
         self.assertEqual(tasks["task-timeout"]["next_action"], "inspect_worker_timeout")
         self.assertEqual(tasks["task-timeout"]["latest_attempt_status"], "failed")
         self.assertEqual(tasks["task-publish"]["operator_state"], "waiting_publish")
-        self.assertEqual(
-            tasks["task-publish"]["next_action"], "publish_accepted_github_actions"
-        )
+        self.assertEqual(tasks["task-publish"]["next_action"], "publish_accepted_github_actions")
         self.assertEqual(tasks["task-publish"]["pending_publish_actions"], 1)
         self.assertEqual(tasks["task-user"]["operator_state"], "waiting_user")
-        self.assertEqual(
-            tasks["task-user"]["next_action"], "wait_for_trusted_user_reply"
-        )
+        self.assertEqual(tasks["task-user"]["next_action"], "wait_for_trusted_user_reply")
         self.assertEqual(tasks["task-failed"]["operator_state"], "needs_attention")
+        self.assertEqual(tasks["task-failed"]["next_action"], "inspect_failure_notification")
         self.assertEqual(
-            tasks["task-failed"]["next_action"], "inspect_failure_notification"
-        )
-        self.assertEqual(
-            tasks["task-failed"]["latest_notification"]["metadata"]["audit"][
-                "safe_error"
-            ],
+            tasks["task-failed"]["latest_notification"]["metadata"]["audit"]["safe_error"],
             "open_pr action missing fields: ['base']",
         )
 
@@ -65,15 +55,9 @@ class DashboardOperatorStateTests(DashboardFixture):
         data = dashboard.build_dashboard_data(db_path)
 
         tasks = {task["task_id"]: task for task in data["recent_tasks"]}
-        self.assertEqual(
-            tasks["task-result-pending"]["operator_state"], "result_pending_audit"
-        )
-        self.assertEqual(
-            tasks["task-result-pending"]["next_action"], "wait_next_cycle_or_run_once"
-        )
-        self.assertEqual(
-            tasks["task-result-pending"]["latest_attempt_status"], "completed"
-        )
+        self.assertEqual(tasks["task-result-pending"]["operator_state"], "result_pending_audit")
+        self.assertEqual(tasks["task-result-pending"]["next_action"], "wait_next_cycle_or_run_once")
+        self.assertEqual(tasks["task-result-pending"]["latest_attempt_status"], "completed")
         alerts = {alert["alert_type"]: alert for alert in data["operator_alerts"]}
         self.assertEqual(alerts["result_pending_audit_tasks"]["severity"], "warning")
 
@@ -100,23 +84,14 @@ class DashboardOperatorStateTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        steps = {
-            (step["target_kind"], step["target_id"]): step
-            for step in data["operator_next_steps"]
-        }
-        self.assertEqual(
-            steps[("task", "task-stale")]["next_action"], "inspect_worker_heartbeat"
-        )
+        steps = {(step["target_kind"], step["target_id"]): step for step in data["operator_next_steps"]}
+        self.assertEqual(steps[("task", "task-stale")]["next_action"], "inspect_worker_heartbeat")
         self.assertEqual(steps[("task", "task-stale")]["attempt_id"], "attempt-stale")
         self.assertEqual(steps[("task", "task-stale")]["attempt_status"], "stale")
         self.assertIsNotNone(steps[("task", "task-stale")]["heartbeat_at"])
         self.assertIsNotNone(steps[("task", "task-stale")]["started_at"])
-        self.assertEqual(
-            steps[("task", "task-timeout")]["next_action"], "inspect_worker_timeout"
-        )
-        self.assertEqual(
-            steps[("task", "task-timeout")]["attempt_id"], "attempt-timeout"
-        )
+        self.assertEqual(steps[("task", "task-timeout")]["next_action"], "inspect_worker_timeout")
+        self.assertEqual(steps[("task", "task-timeout")]["attempt_id"], "attempt-timeout")
         self.assertEqual(steps[("task", "task-timeout")]["attempt_status"], "failed")
         self.assertIsNotNone(steps[("task", "task-timeout")]["finished_at"])
 
@@ -126,10 +101,7 @@ class DashboardOperatorStateTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        steps = {
-            (step["target_kind"], step["target_id"]): step
-            for step in data["operator_next_steps"]
-        }
+        steps = {(step["target_kind"], step["target_id"]): step for step in data["operator_next_steps"]}
         self.assertEqual(
             steps[("task", "task-failed")]["next_action"],
             "inspect_failure_notification",

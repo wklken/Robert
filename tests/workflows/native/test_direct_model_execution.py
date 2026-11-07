@@ -63,9 +63,7 @@ assert not loaded, f'stage executor loaded workflows: {sorted(loaded)}'
             self.no_system_sandbox(),
             patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": "", "CODEX_HOME": ""}),
         ):
-            driver = review_coordinator.Coordinator(
-                fixture.db, task, attempt, fetch_pr=fixture.pr, launcher=launch
-            )
+            driver = review_coordinator.Coordinator(fixture.db, task, attempt, fetch_pr=fixture.pr, launcher=launch)
             report = driver.run()
         self.assertTrue(report.is_file())
         self.assertEqual(len(calls), 4)  # prepare, two reviewers, synthesis
@@ -157,6 +155,4 @@ Path(os.environ['TMPDIR'],'scratch').write_text('temporary')
                     patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(config)}),
                 ):
                     with self.assertRaisesRegex(RuntimeError, "must not overlap"):
-                        stage_environment(
-                            manifest, output, root / "data", workflow_name="vote"
-                        )
+                        stage_environment(manifest, output, root / "data", workflow_name="vote")

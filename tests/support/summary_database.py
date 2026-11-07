@@ -263,9 +263,7 @@ class SummaryFixture(TemporaryWorkspace):
                 """,
                 (
                     now,
-                    json.dumps(
-                        {"body": self._dd_comment_body("ready")}, sort_keys=True
-                    ),
+                    json.dumps({"body": self._dd_comment_body("ready")}, sort_keys=True),
                 ),
             )
             conn.execute(
@@ -328,7 +326,4 @@ class SummaryFixture(TemporaryWorkspace):
             )
 
     def _dd_comment_body(self, text):
-        return (
-            "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n"
-            + text
-        )
+        return "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n" + text

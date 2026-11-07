@@ -40,9 +40,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
         tree.mkdir()
 
         def git(*args):
-            return subprocess.run(
-                ["git", *args], cwd=tree, text=True, capture_output=True, check=True
-            ).stdout.strip()
+            return subprocess.run(["git", *args], cwd=tree, text=True, capture_output=True, check=True).stdout.strip()
 
         git("init", "-b", "main")
         git("config", "user.email", "probe@example.invalid")
@@ -154,9 +152,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
         def transport(command, **kwargs):
             calls.append(command)
             if command[:2] == ["git", "ls-remote"]:
-                return subprocess.CompletedProcess(
-                    command, 0, remote_head + " refs/heads/main\n", ""
-                )
+                return subprocess.CompletedProcess(command, 0, remote_head + " refs/heads/main\n", "")
             if command[:2] == ["git", "fetch"]:
                 # The actual divergent commit already exists in this temp repository.
                 return subprocess.CompletedProcess(command, 0, "", "")
@@ -187,12 +183,8 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                 "FROM github_actions WHERE result_id=? ORDER BY created_at,action_id",
                 (receipt["result_id"],),
             ).fetchall()
-            task_state = conn.execute(
-                "SELECT lifecycle FROM tasks WHERE task_id=?", (task_id,)
-            ).fetchone()[0]
-            attempt_state = conn.execute(
-                "SELECT status FROM attempts WHERE attempt_id=?", (attempt_id,)
-            ).fetchone()[0]
+            task_state = conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0]
+            attempt_state = conn.execute("SELECT status FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()[0]
             intents = conn.execute(
                 "SELECT ga.action_type,pi.status FROM publication_intents pi "
                 "JOIN github_actions ga ON ga.action_id=pi.action_id "
@@ -200,9 +192,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                 (receipt["result_id"],),
             ).fetchall()
         second = publish.publish_ready_actions(db, run_command=transport)
-        assert (
-            publication["skipped_count"] == 2 and publication["published_count"] == 0
-        ), publication
+        assert publication["skipped_count"] == 2 and publication["published_count"] == 0, publication
         assert [row[:3] for row in after] == [
             ("push_existing_pr", "accepted", "skipped"),
             ("comment", "accepted", "skipped"),
@@ -225,9 +215,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
             try:
                 now = values.utc_now()
                 with closing(sqlite3.connect(f.db_path)) as c, c:
-                    for old_id, source_key in c.execute(
-                        "SELECT source_id,source_key FROM github_sources"
-                    ).fetchall():
+                    for old_id, source_key in c.execute("SELECT source_id,source_key FROM github_sources").fetchall():
                         canonical = values.github_source_id(source_key)
                         c.execute(
                             "UPDATE github_sources SET source_id=? WHERE source_id=?",
@@ -243,9 +231,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     event = next(e for e in choices if e["task_kind"] == kind)
                     routed = route.route_task(event)
                     # Use the supported dry-run worktree preparation; no real Git worker.
-                    tree = assigned_workspace.prepare_worktree(
-                        f.repo, event, routed, True
-                    )
+                    tree = assigned_workspace.prepare_worktree(f.repo, event, routed, True)
                     task = preparation.create_task_attempt_and_prompt(
                         c,
                         Path(f.tmp.name) / "data",
@@ -282,9 +268,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                         "summary": "Which behavior should be preserved?",
                     },
                 )
-                recorded = result.record_result(
-                    f.db_path, envelope, notifier=lambda _: None
-                )
+                recorded = result.record_result(f.db_path, envelope, notifier=lambda _: None)
                 assert recorded["ok"], recorded
                 with closing(sqlite3.connect(f.db_path)) as c, c:
                     audited = result_audit.audit_completed_results(
@@ -299,23 +283,17 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                         [],
                         None,
                     )
-                    scope = json.loads(
-                        c.execute(
-                            "SELECT metadata_json FROM worker_results"
-                        ).fetchone()[0]
-                    )["audit"]["action_scope"]
+                    scope = json.loads(c.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["audit"][
+                        "action_scope"
+                    ]
                     state = {
                         "task": c.execute("SELECT lifecycle FROM tasks").fetchone()[0],
-                        "audit": c.execute(
-                            "SELECT audit_status FROM github_actions"
-                        ).fetchone()[0],
+                        "audit": c.execute("SELECT audit_status FROM github_actions").fetchone()[0],
                         "episode": c.execute(
                             "SELECT status FROM pr_remediation_episodes WHERE episode_id=?",
                             (scope["episode_id"],),
                         ).fetchone()[0],
-                        "scope_current": execution_operations.publication_scope_is_current(
-                            c, task["task_id"], scope
-                        ),
+                        "scope_current": execution_operations.publication_scope_is_current(c, task["task_id"], scope),
                     }
                 calls = []
 
@@ -323,12 +301,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     calls.append(cmd)
                     payload = (
                         []
-                        if not (
-                            "--method" in cmd
-                            or "-X" in cmd
-                            or "-f" in cmd
-                            or "--input" in cmd
-                        )
+                        if not ("--method" in cmd or "-X" in cmd or "-f" in cmd or "--input" in cmd)
                         else {
                             "id": 123,
                             "html_url": "https://github.com/example/backend/pull/13#issuecomment-123",
@@ -340,22 +313,14 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                 with closing(sqlite3.connect(f.db_path)) as c:
                     final = {
                         "task": c.execute("SELECT lifecycle FROM tasks").fetchone()[0],
-                        "action": c.execute(
-                            "SELECT publish_status FROM github_actions"
-                        ).fetchone()[0],
-                        "intent": c.execute(
-                            "SELECT status FROM publication_intents"
-                        ).fetchone()[0],
+                        "action": c.execute("SELECT publish_status FROM github_actions").fetchone()[0],
+                        "intent": c.execute("SELECT status FROM publication_intents").fetchone()[0],
                         "binding": c.execute(
                             "SELECT binding_status FROM execution_subjects WHERE subject_id=?",
                             (scope["episode_id"],),
                         ).fetchone()[0],
                     }
-                assert (
-                    audited == 1
-                    and state["audit"] == "accepted"
-                    and state["scope_current"]
-                ), state
+                assert audited == 1 and state["audit"] == "accepted" and state["scope_current"], state
                 assert pub["ok"] and calls and final["action"] == "published", pub
                 with closing(sqlite3.connect(f.db_path)) as c, c:
                     completion.finalize_published_results(
@@ -370,19 +335,14 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                         [],
                         None,
                     )
-                    assert (
-                        c.execute("SELECT lifecycle FROM tasks").fetchone()[0]
-                        == "waiting_for_user"
-                    )
+                    assert c.execute("SELECT lifecycle FROM tasks").fetchone()[0] == "waiting_for_user"
                     assert (
                         c.execute(
                             "SELECT count(*) FROM work_item_events WHERE event_type='operator_question'"
                         ).fetchone()[0]
                         == 1
                     )
-                    execution_ownership.close_subject(
-                        c, "remediation_episode", scope["episode_id"], now
-                    )
+                    execution_ownership.close_subject(c, "remediation_episode", scope["episode_id"], now)
                     parent_id = task["task_id"]
                 # Exercise the supported pipeline after the Episode owner has closed.
                 from tests.support import board_control_integration as board_fixture
@@ -421,9 +381,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     from robert_agent.work.application import commands as work_items
 
                     with closing(sqlite3.connect(f.db_path)) as conn:
-                        item_id = conn.execute(
-                            "SELECT work_item_id FROM work_items"
-                        ).fetchone()[0]
+                        item_id = conn.execute("SELECT work_item_id FROM work_items").fetchone()[0]
                     card = board.get_work_item_detail(f.db_path, item_id)
                     context = work_items.CommandContext(
                         "operator",
@@ -448,9 +406,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                             conn,
                             "repo:example/backend",
                             {
-                                github_client.command_key(
-                                    ["gh", "api", "repos/example/backend/issues/13"]
-                                ): json.dumps(
+                                github_client.command_key(["gh", "api", "repos/example/backend/issues/13"]): json.dumps(
                                     {
                                         "state": "open",
                                         "body": "Repair PR",
@@ -490,17 +446,13 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
         self.addCleanup(f.doCleanups)
         f.deliver("first")
         with closing(sqlite3.connect(f.db_path)) as conn:
-            task, attempt = conn.execute(
-                "SELECT task_id,attempt_id FROM attempts"
-            ).fetchone()
+            task, attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
         payload = {
             "task_id": task,
             "attempt_id": attempt,
             "output_type": "comment_analysis",
             "submission": {
-                "planned_github_actions": [
-                    {"type": "comment", "body": "Analysis finished"}
-                ],
+                "planned_github_actions": [{"type": "comment", "body": "Analysis finished"}],
                 "consumed_event_fingerprints": ["comment:first"],
                 "verification": [],
                 "handoff": "done",
@@ -547,9 +499,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
         self.assertEqual(publication["pending_count"], 0)
         f.deliver("new-after-reopen")
         with closing(sqlite3.connect(f.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
 
     def test_remote_close_preserves_unknown_effect_until_read_only_reconciliation(self):
         from tests.support import publication_reconcile as fixtures
@@ -569,28 +519,20 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                         return fixtures.Completed("[]")
                     return fixtures.Completed("", 1, "connection reset after response")
 
-                first = publish.publish_ready_actions(
-                    fixture.db_path, run_command=lost_response
-                )
+                first = publish.publish_ready_actions(fixture.db_path, run_command=lost_response)
                 self.assertEqual(first["failed_count"], 1)
                 with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
                     conn.execute("UPDATE tasks SET lifecycle='canceled'")
                     conn.execute(
                         "UPDATE github_actions SET metadata_json=json_remove(metadata_json,'$.publish.next_retry_at')"
                     )
-                    publication_outcomes.retire_unstarted_actions(
-                        conn, "task-1", values.utc_now()
-                    )
+                    publication_outcomes.retire_unstarted_actions(conn, "task-1", values.utc_now())
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT publish_status FROM github_actions"
-                        ).fetchone()[0],
+                        conn.execute("SELECT publish_status FROM github_actions").fetchone()[0],
                         "not_published",
                     )
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT status FROM publication_intents"
-                        ).fetchone()[0],
+                        conn.execute("SELECT status FROM publication_intents").fetchone()[0],
                         "executing",
                     )
                 calls = []
@@ -612,21 +554,15 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     )
                     return fixtures.Completed(json.dumps([comments]))
 
-                recovered = publish.publish_ready_actions(
-                    fixture.db_path, run_command=reconcile
-                )
+                recovered = publish.publish_ready_actions(fixture.db_path, run_command=reconcile)
                 self.assertTrue(recovered["ok"], recovered)
                 with closing(sqlite3.connect(fixture.db_path)) as conn:
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT publish_status FROM github_actions"
-                        ).fetchone()[0],
+                        conn.execute("SELECT publish_status FROM github_actions").fetchone()[0],
                         "published" if present else "skipped",
                     )
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT status FROM publication_intents"
-                        ).fetchone()[0],
+                        conn.execute("SELECT status FROM publication_intents").fetchone()[0],
                         "published" if present else "confirmed_absent",
                     )
                 self.assertTrue(calls)

@@ -21,19 +21,13 @@ def publish(config_path, *, dry_run=False):
         return config
     from robert_agent.execution.application import cutover as result_cutover
 
-    cutover = (
-        result_cutover.check(config["db_path"])
-        if dry_run
-        else result_cutover.prepare(config["db_path"])
-    )
+    cutover = result_cutover.check(config["db_path"]) if dry_run else result_cutover.prepare(config["db_path"])
     if not cutover["ok"]:
         return cutover
     results, repo_ids = [], []
     for repo in config["repos"]:
         with closing(sqlite3.connect(config["db_path"])) as conn:
-            row = conn.execute(
-                "SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)
-            ).fetchone()
+            row = conn.execute("SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)).fetchone()
         if row:
             repo_ids.append(row[0])
     if not dry_run:
@@ -59,20 +53,14 @@ def publish(config_path, *, dry_run=False):
             publication as supervision_publication,
         )
 
-        kwargs = (
-            {"config": config} if supervision_publication.needs_config(config) else {}
-        )
+        kwargs = {"config": config} if supervision_publication.needs_config(config) else {}
         results.append(
-            publisher.publish_ready_actions(
-                config["db_path"], repo_id=repo_id, dry_run=dry_run, limit=5, **kwargs
-            )
+            publisher.publish_ready_actions(config["db_path"], repo_id=repo_id, dry_run=dry_run, limit=5, **kwargs)
         )
     wakeup_notifier.notify(config["db_path"])
     return {
         "ok": all(result.get("ok") for result in results),
         "status": "published",
         "repo_count": len(results),
-        "failure_scope": "task"
-        if any(not result.get("ok") for result in results)
-        else None,
+        "failure_scope": "task" if any(not result.get("ok") for result in results) else None,
     }

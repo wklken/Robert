@@ -15,14 +15,10 @@ def require_idle_repository(conn, repo_id, now):
         (repo_id, now),
     ).fetchone()
     if busy:
-        raise WorkItemConflictError(
-            "The repository is processing a cycle. Refresh and retry after it finishes."
-        )
+        raise WorkItemConflictError("The repository is processing a cycle. Refresh and retry after it finishes.")
 
 
-def cancel_execution(
-    conn, item, facts, now, db_path, locks, *, abandon_review_run_ids=()
-):
+def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_run_ids=()):
     from robert_agent.work.errors import WorkItemConflictError
 
     # The write transaction prevents a new engine lease. Publication has its
@@ -66,8 +62,7 @@ def cancel_execution(
         outcome = attempt_process.terminate_attempt(metadata)
         if outcome.get("status") not in {"terminated", "not_found", "already_dead"}:
             raise WorkItemConflictError(
-                "Worker could not be stopped: "
-                + str(outcome.get("reason") or outcome.get("status"))
+                "Worker could not be stopped: " + str(outcome.get("reason") or outcome.get("status"))
             )
         metadata["termination"] = outcome
         metadata["process_stopped_at"] = now
@@ -96,9 +91,7 @@ def cancel_execution(
 
     subjects = {("task", task_id) for (task_id,) in task_ids}
     for (task_id,) in task_ids:
-        task = conn.execute(
-            "SELECT task_kind, metadata_json FROM tasks WHERE task_id=?", (task_id,)
-        ).fetchone()
+        task = conn.execute("SELECT task_kind, metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if task and task[0] in {"ci_remediation", "merge_conflict_remediation"}:
             try:
                 metadata = json.loads(task[1]) if task[1] else {}
@@ -106,9 +99,7 @@ def cancel_execution(
                 metadata = {}
             metadata = metadata or {}
             if metadata.get("remediation_episode_id"):
-                subjects.add(
-                    ("remediation_episode", metadata["remediation_episode_id"])
-                )
+                subjects.add(("remediation_episode", metadata["remediation_episode_id"]))
     for subject_type, subject_id in sorted(subjects):
         binding = execution_store.get_binding(conn, subject_type, subject_id)
         if not binding or binding["binding_status"] == "terminal":

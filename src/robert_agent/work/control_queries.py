@@ -34,10 +34,7 @@ def lifecycle_facts(conn, item, *, controls=None):
             metadata = json.loads(attempt["metadata_json"] or "{}")
             termination = metadata.get("termination") or {}
             supervision = metadata.get("supervise") or {}
-            if (
-                isinstance(supervision, dict)
-                and supervision.get("status") == "worker_identity_attention"
-            ):
+            if isinstance(supervision, dict) and supervision.get("status") == "worker_identity_attention":
                 cleanup.append(
                     safe_text(
                         supervision.get("reason")
@@ -52,9 +49,7 @@ def lifecycle_facts(conn, item, *, controls=None):
             "not_found",
             "already_dead",
         }:
-            cleanup.append(
-                safe_text(termination.get("reason") or termination.get("status"))
-            )
+            cleanup.append(safe_text(termination.get("reason") or termination.get("status")))
     cursor = conn.execute(
         f"""SELECT ga.*, pi.status AS intent_status FROM github_actions ga JOIN tasks t ON t.task_id=ga.task_id
         LEFT JOIN publication_intents pi ON pi.action_id=ga.action_id
@@ -81,10 +76,7 @@ def lifecycle_facts(conn, item, *, controls=None):
                 "status": "publish_failed",
                 "safe_error": "Publication reconciliation requires operator attention.",
             }
-        if (
-            isinstance(publication, dict)
-            and publication.get("status") == "publish_failed"
-        ):
+        if isinstance(publication, dict) and publication.get("status") == "publish_failed":
             failed.append(
                 {
                     "action_id": action["action_id"],
@@ -93,11 +85,7 @@ def lifecycle_facts(conn, item, *, controls=None):
                     + " "
                     + safe_text(
                         publication.get("required_action")
-                        or (
-                            ("Next retry: " + publication["next_retry_at"])
-                            if publication.get("next_retry_at")
-                            else ""
-                        )
+                        or (("Next retry: " + publication["next_retry_at"]) if publication.get("next_retry_at") else "")
                     ),
                     "failed_at": publication.get("failed_at"),
                     **{
@@ -120,12 +108,7 @@ def lifecycle_facts(conn, item, *, controls=None):
     ):
         stopped = json.loads(encoded or "{}").get("execution_attention")
         if isinstance(stopped, dict):
-            attention.append(
-                safe_text(
-                    stopped.get("reason_code")
-                    or "Execution requires operator attention."
-                )
-            )
+            attention.append(safe_text(stopped.get("reason_code") or "Execution requires operator attention."))
     from robert_agent.adapters.sqlite import execution_control as execution_store
 
     subjects = set()
@@ -142,17 +125,11 @@ def lifecycle_facts(conn, item, *, controls=None):
         binding = controls.get(key)
         if binding and (
             binding["binding_status"] == "attention"
-            or (
-                binding.get("owner_engine") == "dbos"
-                and binding["binding_status"] != "terminal"
-            )
+            or (binding.get("owner_engine") == "dbos" and binding["binding_status"] != "terminal")
         ):
             metadata = json.loads(binding["metadata_json"] or "{}")
             attention.append(
-                safe_text(
-                    metadata.get("reason_code")
-                    or "Execution requires operator attention or offline migration."
-                )
+                safe_text(metadata.get("reason_code") or "Execution requires operator attention or offline migration.")
             )
     source = conn.execute(
         "SELECT state FROM github_sources WHERE source_id=?",

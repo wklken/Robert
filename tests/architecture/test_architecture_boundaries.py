@@ -19,25 +19,17 @@ def import_graph(package):
         dependencies = set()
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
-                dependencies.update(
-                    alias.name for alias in node.names if alias.name in modules
-                )
+                dependencies.update(alias.name for alias in node.names if alias.name in modules)
             elif isinstance(node, ast.ImportFrom):
                 parent = node.module or ""
                 if node.level:
-                    package_name = (
-                        name if path.name == "__init__.py" else name.rsplit(".", 1)[0]
-                    )
-                    prefix = package_name.split(".")[
-                        : len(package_name.split(".")) - node.level + 1
-                    ]
+                    package_name = name if path.name == "__init__.py" else name.rsplit(".", 1)[0]
+                    prefix = package_name.split(".")[: len(package_name.split(".")) - node.level + 1]
                     parent = ".".join([*prefix, *([parent] if parent else [])])
                 if parent in modules:
                     dependencies.add(parent)
                 dependencies.update(
-                    f"{parent}.{alias.name}"
-                    for alias in node.names
-                    if f"{parent}.{alias.name}" in modules
+                    f"{parent}.{alias.name}" for alias in node.names if f"{parent}.{alias.name}" in modules
                 )
         graph[name] = dependencies
     return graph
@@ -58,9 +50,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         remaining = set(self.graph)
         while remaining:
             ready = {name for name in remaining if not (self.graph[name] & remaining)}
-            self.assertTrue(
-                ready, "cyclic source imports: " + ", ".join(sorted(remaining))
-            )
+            self.assertTrue(ready, "cyclic source imports: " + ", ".join(sorted(remaining)))
             remaining.difference_update(ready)
 
     def test_configuration_imports_only_configuration_and_boundary_capabilities(self):
@@ -75,19 +65,14 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 for dependency in dependencies:
                     self.assertTrue(
                         dependency == "robert_agent"
-                        or any(
-                            dependency == prefix or dependency.startswith(prefix + ".")
-                            for prefix in allowed
-                        ),
+                        or any(dependency == prefix or dependency.startswith(prefix + ".") for prefix in allowed),
                         (name, dependency),
                     )
 
     def test_pure_policies_have_no_application_dependencies(self):
         for name in ("work.policies", "delivery.policies"):
             self.assert_dependencies("robert_agent." + name, ())
-        self.assert_dependencies(
-            "robert_agent.work.inputs", {"robert_agent.work.errors"}
-        )
+        self.assert_dependencies("robert_agent.work.inputs", {"robert_agent.work.errors"})
 
     def test_leaf_capabilities_do_not_import_their_callers(self):
         lower = (
@@ -115,17 +100,14 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for name, dependencies in self.graph.items():
             if ".application." in name or name.endswith(".application"):
                 continue
-            if not any(
-                name.startswith("robert_agent." + owner + ".") for owner in lower
-            ):
+            if not any(name.startswith("robert_agent." + owner + ".") for owner in lower):
                 continue
             for dependency in dependencies:
                 self.assertFalse(
                     ".application." in dependency
                     or dependency.endswith(".application")
                     or any(
-                        dependency == "robert_agent." + owner
-                        or dependency.startswith("robert_agent." + owner + ".")
+                        dependency == "robert_agent." + owner or dependency.startswith("robert_agent." + owner + ".")
                         for owner in upper
                     ),
                     (name, dependency),
@@ -166,9 +148,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
     def test_migrated_consumers_do_not_borrow_runtime_or_view_functions(self):
         # Missing old modules cannot disappear silently from the import graph.
         root_exports = {"__version__", "paths", "resource_files"} | {
-            path.name
-            for path in PACKAGE.iterdir()
-            if path.is_dir() and (path / "__init__.py").exists()
+            path.name for path in PACKAGE.iterdir() if path.is_dir() and (path / "__init__.py").exists()
         }
         for path in PACKAGE.rglob("*.py"):
             for node in ast.walk(ast.parse(path.read_text())):
@@ -177,11 +157,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                         {alias.name for alias in node.names} <= root_exports,
                         (path, node.lineno),
                     )
-                elif (
-                    isinstance(node, ast.ImportFrom)
-                    and node.module
-                    and node.module.startswith("robert_agent.")
-                ):
+                elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("robert_agent."):
                     self.assertIn(node.module, self.graph, (path, node.lineno))
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
@@ -218,10 +194,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             if ".application." in name or name.startswith("robert_agent.workflows."):
                 for dependency in dependencies:
                     self.assertFalse(
-                        any(
-                            dependency == item or dependency.startswith(item + ".")
-                            for item in forbidden
-                        ),
+                        any(dependency == item or dependency.startswith(item + ".") for item in forbidden),
                         (name, dependency),
                     )
 

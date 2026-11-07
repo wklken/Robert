@@ -58,12 +58,8 @@ def _task(db, task_id, lineage, *, parent=None, work_item=False):
     attempt = "attempt-" + task_id
     with closing(sqlite3.connect(db)) as conn, conn:
         if parent:
-            (stream,) = conn.execute(
-                "SELECT workstream_id FROM tasks WHERE task_id=?", (parent,)
-            ).fetchone()
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (parent,)
-            )
+            (stream,) = conn.execute("SELECT workstream_id FROM tasks WHERE task_id=?", (parent,)).fetchone()
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (parent,))
             conn.execute(
                 "UPDATE workstreams SET active_task_id=? WHERE workstream_id=?",
                 (task_id, stream),
@@ -194,9 +190,7 @@ def _command(mode, fixture, *arguments):
 
 def _environment():
     return {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(("ROBERT_", "_ROBERT_", "GH_", "GITHUB_"))
+        key: value for key, value in os.environ.items() if not key.startswith(("ROBERT_", "_ROBERT_", "GH_", "GITHUB_"))
     }
 
 
@@ -209,9 +203,7 @@ def _call(mode, fixture, *arguments):
         timeout=10,
     )
     if child.returncode:
-        raise AssertionError(
-            f"{mode} subprocess failed ({child.returncode}): {child.stderr}"
-        )
+        raise AssertionError(f"{mode} subprocess failed ({child.returncode}): {child.stderr}")
     return json.loads(child.stdout)
 
 
@@ -240,20 +232,11 @@ def _race_claims(root, fixture, contender_count):
         replies = [root / f"contender-{index}.json" for index in range(contender_count)]
         _wait(lambda: all(path.exists() for path in ready), "process readiness")
         (root / "start").touch()
-        _wait(
-            lambda: all(path.exists() for path in replies), "committed claim verdicts"
-        )
+        _wait(lambda: all(path.exists() for path in replies), "committed claim verdicts")
         outcomes = [json.loads(path.read_text()) for path in replies]
-        winners = [
-            index
-            for index, reply in enumerate(outcomes)
-            if reply["status"] == "claimed"
-        ]
+        winners = [index for index, reply in enumerate(outcomes) if reply["status"] == "claimed"]
         assert len(winners) == 1, outcomes
-        assert (
-            sum(reply["status"] == "blocked" for reply in outcomes)
-            == contender_count - 1
-        ), outcomes
+        assert sum(reply["status"] == "blocked" for reply in outcomes) == contender_count - 1, outcomes
         (winner,) = winners
         assert processes[winner].poll() is None, "winner exited before crash injection"
         processes[winner].kill()
@@ -314,9 +297,7 @@ def _crash(root):
     ) == [("applying", 1, 1)]
     expired = _later(claim["claim_expires_at"], 1)
     verified = _call("verify", fixture, expired)
-    assert verified == [{"action_id": request["action_id"], "status": "unknown"}], (
-        verified
-    )
+    assert verified == [{"action_id": request["action_id"], "status": "unknown"}], verified
     restarted = _call("claim", fixture, expired)
     assert restarted["status"] == "blocked", restarted
     assert _read(
@@ -354,9 +335,7 @@ def _cancel(root):
         kind="audit_retry",
         target=result_id,
     )
-    fixture = _fixture(
-        root, db, config, task="cancel", kind="audit_retry", target=result_id
-    )
+    fixture = _fixture(root, db, config, task="cancel", kind="audit_retry", target=result_id)
     claim_result = _call("claim", fixture, _now())
     assert claim_result["status"] == "claimed", claim_result
     canceled = _call("cancel", fixture)
@@ -373,15 +352,9 @@ def _cancel(root):
             receipt={"reason_code": "operator_canceled"},
             now=now,
         )
-    assert _read(db, "SELECT status,budget_cost FROM supervision_recovery_actions") == [
-        ("rejected", 0)
-    ]
-    assert _read(db, "SELECT lifecycle FROM tasks WHERE task_id='cancel'") == [
-        ("canceled",)
-    ]
-    assert _read(
-        db, "SELECT json_extract(metadata_json,'$.audit') FROM worker_results"
-    ) == [(None,)]
+    assert _read(db, "SELECT status,budget_cost FROM supervision_recovery_actions") == [("rejected", 0)]
+    assert _read(db, "SELECT lifecycle FROM tasks WHERE task_id='cancel'") == [("canceled",)]
+    assert _read(db, "SELECT json_extract(metadata_json,'$.audit') FROM worker_results") == [(None,)]
     return _report(
         "operator_cancel_fences_older_audit",
         start,
@@ -418,18 +391,14 @@ def _replay_and_successor(root):
         generation=fingerprint,
     )
     assert _call("replay", fixture) == {"recorded": 1, "deferred": 0, "rejected": 0}
-    [(state, budget, due)] = _read(
-        db, "SELECT status,budget_cost,next_check_at FROM supervision_recovery_actions"
-    )
+    [(state, budget, due)] = _read(db, "SELECT status,budget_cost,next_check_at FROM supervision_recovery_actions")
     assert (state, budget) == ("observing", 1) and not path.exists()
     [(result_id, occurred_at, observed_fingerprint)] = _read(
         db,
         "SELECT result_id,created_at,json_extract(metadata_json,'$.submission_fingerprint') FROM worker_results",
     )
     assert observed_fingerprint == fingerprint
-    assert _read(
-        db, "SELECT result_id FROM wakeups WHERE reason='worker_result_ready'"
-    ) == [(result_id,)]
+    assert _read(db, "SELECT result_id FROM wakeups WHERE reason='worker_result_ready'") == [(result_id,)]
     verified = _call("verify", fixture, _later(due, 1))
     assert verified == [
         {
@@ -459,9 +428,7 @@ def _replay_and_successor(root):
         "rejected": 0,
     }
     assert not new_path.exists()
-    assert _read(db, "SELECT status,budget_cost FROM supervision_recovery_actions") == [
-        ("succeeded", 1)
-    ]
+    assert _read(db, "SELECT status,budget_cost FROM supervision_recovery_actions") == [("succeeded", 1)]
     return _report(
         "durable_replay_verify_successor_budget",
         start,
@@ -488,9 +455,7 @@ def _child(mode, fixture, *arguments):
     payload = json.loads(Path(fixture).read_text())
     db, config = payload.pop("db"), payload.pop("config")
     if mode == "cancel":
-        context = work_items.CommandContext(
-            "operator", "simulation-operator", frozenset({"repo"}), frozenset()
-        )
+        context = work_items.CommandContext("operator", "simulation-operator", frozenset({"repo"}), frozenset())
         return work_items.execute_command(
             db,
             "item-" + payload["task_id"],
@@ -501,9 +466,7 @@ def _child(mode, fixture, *arguments):
             notifier=lambda _: None,
         )
     if mode == "replay":
-        return result.replay_pending_results(
-            db, config=config, attempt_id=payload["target_id"]
-        )
+        return result.replay_pending_results(db, config=config, attempt_id=payload["target_id"])
     if mode == "verify":
         with closing(sqlite3.connect(db)) as conn, conn:
             return supervision_actions.verify(conn, observations=[], now=arguments[0])
@@ -531,7 +494,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--child":
         print(json.dumps(_child(*sys.argv[2:])))
     else:
-        with tempfile.TemporaryDirectory(
-            prefix="robert-recovery-simulation-"
-        ) as directory:
+        with tempfile.TemporaryDirectory(prefix="robert-recovery-simulation-") as directory:
             print(json.dumps(run(Path(directory)), indent=2))

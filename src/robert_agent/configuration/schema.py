@@ -39,12 +39,8 @@ def apply_schema(value, spec, schema, path):
         return None
     if kind and not valid[kind]:
         raise ValueError(f"{path} must be {kind}")
-    if "const" in spec and (
-        type(value) is not type(spec["const"]) or value != spec["const"]
-    ):
-        raise ValueError(
-            f"{path} must be {spec['const']}; see docs/reference.md#configuration"
-        )
+    if "const" in spec and (type(value) is not type(spec["const"]) or value != spec["const"]):
+        raise ValueError(f"{path} must be {spec['const']}; see docs/reference.md#configuration")
     if "enum" in spec and value not in spec["enum"]:
         raise ValueError(f"{path} must be one of {spec['enum']}")
     if kind == "object":
@@ -63,29 +59,18 @@ def apply_schema(value, spec, schema, path):
                 raise ValueError(f"unsupported config field: {path}.{name}")
             result[name] = apply_schema(value[name], child, schema, f"{path}.{name}")
         for name, child in properties.items():
-            resolved = (
-                schema["$defs"][child["$ref"].rsplit("/", 1)[1]]
-                if "$ref" in child
-                else child
-            )
+            resolved = schema["$defs"][child["$ref"].rsplit("/", 1)[1]] if "$ref" in child else child
             if name not in result and "default" in resolved:
-                result[name] = apply_schema(
-                    deepcopy(resolved["default"]), child, schema, f"{path}.{name}"
-                )
+                result[name] = apply_schema(deepcopy(resolved["default"]), child, schema, f"{path}.{name}")
         return result
     if kind == "array":
         if len(value) < spec.get("minItems", 0):
             raise ValueError(f"{path} must contain at least {spec['minItems']} items")
         if "maxItems" in spec and len(value) > spec["maxItems"]:
             raise ValueError(f"{path} must contain at most {spec['maxItems']} items")
-        if spec.get("uniqueItems") and len(
-            {json.dumps(v, sort_keys=True) for v in value}
-        ) != len(value):
+        if spec.get("uniqueItems") and len({json.dumps(v, sort_keys=True) for v in value}) != len(value):
             raise ValueError(f"{path} entries must be unique")
-        return [
-            apply_schema(item, spec["items"], schema, f"{path}[{index}]")
-            for index, item in enumerate(value)
-        ]
+        return [apply_schema(item, spec["items"], schema, f"{path}[{index}]") for index, item in enumerate(value)]
     if kind == "string" and len(value.strip()) < spec.get("minLength", 0):
         raise ValueError(f"{path} must not be empty")
     for bound, failed in (

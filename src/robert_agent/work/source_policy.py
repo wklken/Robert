@@ -8,8 +8,7 @@ def event_identity(raw):
     return (
         raw.get("source_type", "issue"),
         raw.get("number"),
-        raw.get("event_fingerprint")
-        or f"{raw.get('event_type')}:{raw.get('id') or raw.get('event_id')}",
+        raw.get("event_fingerprint") or f"{raw.get('event_type')}:{raw.get('id') or raw.get('event_id')}",
     )
 
 
@@ -31,14 +30,8 @@ def refresh_pending_events(events, pending, covered, repo):
             refreshed["trusted_trigger_found"] = bool(
                 raw.get("authorization_lookup_complete") is not False
                 and (
-                    (
-                        raw.get("assigned_to") == account
-                        and raw.get("assignment_actor_login") in trusted
-                    )
-                    or (
-                        raw.get("requested_reviewer") == account
-                        and raw.get("requester_login") in trusted
-                    )
+                    (raw.get("assigned_to") == account and raw.get("assignment_actor_login") in trusted)
+                    or (raw.get("requested_reviewer") == account and raw.get("requester_login") in trusted)
                     or (refreshed["mentions_dd"] and raw.get("actor_login") in trusted)
                 )
             )
@@ -49,9 +42,7 @@ def refresh_pending_events(events, pending, covered, repo):
 def reauthorize_saved_request(event, repo, *, known_workstreams=()):
     candidate = {
         **event,
-        "mentions_dd": bool(
-            discover.bot_requests(event.get("body"), repo["github_account"])
-        ),
+        "mentions_dd": bool(discover.bot_requests(event.get("body"), repo["github_account"])),
     }
     if candidate.get("event_type") == "notification":
         trusted = set(repo.get("trusted_actors", []))
@@ -66,11 +57,7 @@ def reauthorize_saved_request(event, repo, *, known_workstreams=()):
                     candidate.get("requested_reviewer") == repo["github_account"]
                     and candidate.get("requester_login") in trusted
                 )
-                or (
-                    candidate["mentions_dd"] and candidate.get("actor_login") in trusted
-                )
+                or (candidate["mentions_dd"] and candidate.get("actor_login") in trusted)
             )
         )
-    return authorize.authorize_event(
-        candidate, repo, known_workstreams=set(known_workstreams)
-    )
+    return authorize.authorize_event(candidate, repo, known_workstreams=set(known_workstreams))

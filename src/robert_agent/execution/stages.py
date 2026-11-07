@@ -24,14 +24,10 @@ from robert_agent.execution import progress as snapshot
 
 class StageStore(Protocol):
     def connect(self, db_path: str) -> ContextManager[sqlite3.Connection]: ...
-    def session(
-        self, conn: sqlite3.Connection, *, task_id: str
-    ) -> dict[str, Any] | None: ...
+    def session(self, conn: sqlite3.Connection, *, task_id: str) -> dict[str, Any] | None: ...
     def now(self) -> str: ...
     def digest(self, path: str | Path) -> str: ...
-    def update(
-        self, conn: sqlite3.Connection, round_id: str, **fields: Any
-    ) -> None: ...
+    def update(self, conn: sqlite3.Connection, round_id: str, **fields: Any) -> None: ...
     def runs(self, conn: sqlite3.Connection, round_id: str) -> list[dict[str, Any]]: ...
     def new_run(
         self,
@@ -44,15 +40,11 @@ class StageStore(Protocol):
         prompt_sha256: str,
         model: str | None = None,
     ) -> dict[str, Any]: ...
-    def update_run(
-        self, conn: sqlite3.Connection, run_id: str, **fields: Any
-    ) -> None: ...
+    def update_run(self, conn: sqlite3.Connection, run_id: str, **fields: Any) -> None: ...
     def reserve_slot(self, conn: sqlite3.Connection, run_id: str) -> bool: ...
     def release_slot(self, conn: sqlite3.Connection, run_id: str) -> None: ...
     def reserved_runs(self, conn: sqlite3.Connection) -> list[dict[str, Any]]: ...
-    def release_finished_slot(
-        self, conn: sqlite3.Connection, run: dict[str, Any]
-    ) -> None: ...
+    def release_finished_slot(self, conn: sqlite3.Connection, run: dict[str, Any]) -> None: ...
 
 
 class StageWorkspace(Protocol):
@@ -85,9 +77,7 @@ def _raise_rate_limit(launched):
         try:
             with Path(path).open("rb") as stream:
                 stream.seek(max(0, Path(path).stat().st_size - 32768))
-                logs[kind] = {
-                    "tail": stream.read(32768).decode("utf-8", errors="replace")
-                }
+                logs[kind] = {"tail": stream.read(32768).decode("utf-8", errors="replace")}
         except OSError:
             continue
     failure = retry_policy.terminal_rate_limit(logs)
@@ -265,9 +255,7 @@ class StageCoordinator:
         # heartbeat is diagnostic and must not turn a busy writer into a failed
         # model round or make every reviewer contend on the same UPDATE.
         now = time.monotonic()
-        if now < self._next_heartbeat_at or not self._heartbeat_lock.acquire(
-            blocking=False
-        ):
+        if now < self._next_heartbeat_at or not self._heartbeat_lock.acquire(blocking=False):
             return
         try:
             if now < self._next_heartbeat_at:
@@ -286,9 +274,7 @@ class StageCoordinator:
                     "database is locked",
                     "database table is locked",
                     "database schema is locked",
-                } and not message.startswith(
-                    ("database table is locked:", "database schema is locked:")
-                ):
+                } and not message.startswith(("database table is locked:", "database schema is locked:")):
                     raise
                 self._next_heartbeat_at = now + 1
             else:
@@ -338,16 +324,12 @@ class StageCoordinator:
 
         def reconcile(run):
             try:
-                self._wait(
-                    run, run["dispatch"], workers[run["worker_id"]]["timeout_seconds"]
-                )
+                self._wait(run, run["dispatch"], workers[run["worker_id"]]["timeout_seconds"])
             except StageStopped:
                 raise
             except RuntimeError as exc:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(
-                        conn, run["run_id"], status="failed", error=str(exc)
-                    )
+                    store.update_run(conn, run["run_id"], status="failed", error=str(exc))
 
         self.parallel(pending, reconcile)
 
@@ -381,12 +363,8 @@ class StageCoordinator:
         reserved = []
         with self.store.connect(self.db_path) as conn:
             for run_store, table in self.slot_stores:
-                if conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE name=?", (table,)
-                ).fetchone():
-                    reserved.extend(
-                        (run_store, run) for run in run_store.reserved_runs(conn)
-                    )
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
+                    reserved.extend((run_store, run) for run in run_store.reserved_runs(conn))
         for run_store, run in reserved:
             if _launch_failed_without_process(run["dispatch"]) or (
                 run["dispatch"] and _group_finished(run["dispatch"])
@@ -432,16 +410,10 @@ class StageCoordinator:
                             store.update_run(
                                 conn,
                                 run["run_id"],
-                                status="running"
-                                if launched.get("ok") or launched.get("pid")
-                                else "failed",
+                                status="running" if launched.get("ok") or launched.get("pid") else "failed",
                                 dispatch_json=json.dumps(launched),
                             )
-                            fresh = next(
-                                r
-                                for r in store.runs(conn, self.round_id)
-                                if r["run_id"] == run["run_id"]
-                            )
+                            fresh = next(r for r in store.runs(conn, self.round_id) if r["run_id"] == run["run_id"])
                         run.update(fresh)
                         return launched
             self.stopping.wait(self.poll_seconds)
@@ -487,18 +459,14 @@ class StageCoordinator:
         store = self.store
         names = self.handoff_files[run["stage"]]
         parent = "runs" if run["stage"] == self.voter_stage else run["stage"]
-        sealed = (
-            Path(self.manifest["artifact_root"]) / parent / "sealed" / run["run_id"]
-        )
+        sealed = Path(self.manifest["artifact_root"]) / parent / "sealed" / run["run_id"]
         self.artifact_files.safe_path(sealed, self.manifest["artifact_root"])
         sealed.mkdir(parents=True, exist_ok=True)
         marker = sealed / "seal.json"
         identity = {"run_id": run["run_id"], "prompt_sha256": run["prompt_sha256"]}
         if not marker.exists():
             hashes = {}
-            output = self.artifact_files.safe_path(
-                run["output_dir"], self.manifest["artifact_root"]
-            )
+            output = self.artifact_files.safe_path(run["output_dir"], self.manifest["artifact_root"])
             directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 for name in names:
@@ -523,9 +491,7 @@ class StageCoordinator:
                 os.close(directory_fd)
             self.artifact_files.atomic_json(marker, {**identity, "files": hashes})
         saved = json.loads(marker.read_text(encoding="utf-8"))
-        if any(saved.get(key) != value for key, value in identity.items()) or set(
-            saved.get("files", {})
-        ) != set(names):
+        if any(saved.get(key) != value for key, value in identity.items()) or set(saved.get("files", {})) != set(names):
             raise ValueError("review seal identity changed")
         for name, expected in saved["files"].items():
             path = self.artifact_files.safe_path(sealed / name, sealed)
@@ -538,9 +504,7 @@ class StageCoordinator:
         started = datetime.fromisoformat(run.get("started_at") or run["created_at"])
         while not launched.get("process_exited"):
             self.check_active()
-            proc = self.processes.get(launched.get("pid")) or dispatch.tracked_process(
-                launched.get("pid")
-            )
+            proc = self.processes.get(launched.get("pid")) or dispatch.tracked_process(launched.get("pid"))
             if proc is not None:
                 code = proc.poll()
                 if code is not None:
@@ -560,13 +524,9 @@ class StageCoordinator:
             if (datetime.now(timezone.utc) - started).total_seconds() > timeout:
                 termination = worker_identity.terminate_recorded_identity(launched)
                 if termination["status"] == "attention":
-                    raise StageStopped(
-                        "review worker timeout termination requires attention"
-                    )
+                    raise StageStopped("review worker timeout termination requires attention")
                 if not _wait_for_group_exit(launched):
-                    raise StageStopped(
-                        "review worker timeout left a process group; inspect remaining processes"
-                    )
+                    raise StageStopped("review worker timeout left a process group; inspect remaining processes")
                 self.release_slot(run)
                 raise RuntimeError("review worker timed out")
             time.sleep(self.poll_seconds)
@@ -579,9 +539,7 @@ class StageCoordinator:
         self.release_slot(run)
         _raise_rate_limit(launched)
         if launched.get("returncode", 0) != 0:
-            raise RuntimeError(
-                f"review worker exited with code {launched['returncode']}"
-            )
+            raise RuntimeError(f"review worker exited with code {launched['returncode']}")
 
     def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""
@@ -592,9 +550,7 @@ class StageCoordinator:
             raise ValueError("review prompt hash mismatch")
         with store.connect(self.db_path) as conn:
             prior = [
-                r
-                for r in store.runs(conn, self.round_id)
-                if r["stage"] == stage and r["worker_id"] == worker["name"]
+                r for r in store.runs(conn, self.round_id) if r["stage"] == stage and r["worker_id"] == worker["name"]
             ]
         for run in reversed(prior):
             if run["status"] in {"prepared", "waiting"} and not run["slot_reserved"]:
@@ -607,9 +563,7 @@ class StageCoordinator:
                     )
                 continue
             if run["prompt_sha256"] != prompt_hash:
-                if stage == "synthesis" or (
-                    stage == "prepare" and not self.manifest.get("frozen")
-                ):
+                if stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen")):
                     if run["status"] in {"running", "succeeded"}:
                         with store.connect(self.db_path) as conn:
                             store.update_run(
@@ -621,9 +575,7 @@ class StageCoordinator:
                     continue
                 raise ValueError("same-round prompt changed")
             if run["status"] == "starting" and not run["dispatch"]:
-                raise StageStopped(
-                    "model launch outcome unknown; cancel and inspect this round"
-                )
+                raise StageStopped("model launch outcome unknown; cancel and inspect this round")
             if run["status"] not in {"succeeded", "running"}:
                 continue
             try:
@@ -642,16 +594,12 @@ class StageCoordinator:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(
-                        conn, run["run_id"], status="failed", error=str(exc)
-                    )
+                    store.update_run(conn, run["run_id"], status="failed", error=str(exc))
                 break
         self.check_active()
         with store.connect(self.db_path) as conn:
             previous = [
-                r
-                for r in store.runs(conn, self.round_id)
-                if r["stage"] == stage and r["worker_id"] == worker["name"]
+                r for r in store.runs(conn, self.round_id) if r["stage"] == stage and r["worker_id"] == worker["name"]
             ]
             model = worker["default_model"]
             limited = [
@@ -669,10 +617,7 @@ class StageCoordinator:
             elif (
                 worker.get("fallback_model")
                 and len(previous) >= 2
-                and all(
-                    r["status"] == "failed" and r["error"] == "review worker timed out"
-                    for r in previous[-2:]
-                )
+                and all(r["status"] == "failed" and r["error"] == "review worker timed out" for r in previous[-2:])
             ):
                 model = worker["fallback_model"]
             run = store.new_run(
@@ -696,9 +641,7 @@ class StageCoordinator:
             launched = self.launch_with_slot(run, worker, prompt_path, environment)
             if not launched.get("ok"):
                 if launched.get("pid") and not _wait_for_group_exit(launched):
-                    raise StageStopped(
-                        "failed model launch left a process group; inspect remaining processes"
-                    )
+                    raise StageStopped("failed model launch left a process group; inspect remaining processes")
                 self.release_slot(run)
                 _raise_rate_limit(launched)
                 raise RuntimeError(launched.get("safe_error", "review launch failed"))
@@ -715,24 +658,12 @@ class StageCoordinator:
             raise
         except Exception as exc:
             with store.connect(self.db_path) as conn:
-                current = next(
-                    r
-                    for r in store.runs(conn, self.round_id)
-                    if r["run_id"] == run["run_id"]
-                )
+                current = next(r for r in store.runs(conn, self.round_id) if r["run_id"] == run["run_id"])
                 if current["status"] == "starting" and not current["dispatch"]:
-                    raise StageStopped(
-                        "model launch outcome unknown; inspect before retry"
-                    ) from exc
+                    raise StageStopped("model launch outcome unknown; inspect before retry") from exc
                 store.update_run(conn, run["run_id"], status="failed", error=str(exc))
-            if (
-                isinstance(exc, ModelRateLimited)
-                and worker.get("fallback_model")
-                and model != worker["fallback_model"]
-            ):
-                return self.run_phase(
-                    stage, worker, prompt_path, validate, input_hash=input_hash
-                )
+            if isinstance(exc, ModelRateLimited) and worker.get("fallback_model") and model != worker["fallback_model"]:
+                return self.run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
             raise
 
     def prompt(self, name, text):

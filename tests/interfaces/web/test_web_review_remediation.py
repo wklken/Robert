@@ -74,9 +74,7 @@ class WebReviewRemediationTests(unittest.TestCase):
                 (task, json.dumps({"reason_code": "cleanup_pending"})),
             )
         self.assertEqual(
-            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"][
-                "bucket"
-            ],
+            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"],
             "needs_attention",
         )
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -89,9 +87,7 @@ class WebReviewRemediationTests(unittest.TestCase):
                 (task,),
             )
         self.assertNotEqual(
-            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"][
-                "bucket"
-            ],
+            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"],
             "history",
         )
 
@@ -110,9 +106,7 @@ class WebReviewRemediationTests(unittest.TestCase):
                 (json.dumps({"dispatch": {"pid": 123}}),),
             )
         self.assertNotEqual(
-            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"][
-                "bucket"
-            ],
+            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"],
             "history",
         )
 
@@ -124,9 +118,7 @@ class WebReviewRemediationTests(unittest.TestCase):
                 "INSERT INTO workstreams(workstream_id,repo_id,origin_workstream_id,lifecycle,created_at,updated_at) VALUES ('child','r',?,'active','2026-10-29','2026-10-29')",
                 (item["workstream_id"],),
             )
-        with mock.patch.object(
-            board, "_project_item", wraps=board._project_item
-        ) as project:
+        with mock.patch.object(board, "_project_item", wraps=board._project_item) as project:
             detail = workbench.get_work_item(self.db, "child")
         self.assertEqual(detail["lifecycle"]["work_item_id"], item["work_item_id"])
         self.assertEqual(project.call_count, 1)
@@ -134,18 +126,14 @@ class WebReviewRemediationTests(unittest.TestCase):
     def test_hidden_history_does_not_build_card_projections(self):
         for index in range(12):
             self.create(str(index), cancel=True)
-        with mock.patch.object(
-            board, "_project_item", wraps=board._project_item
-        ) as project:
+        with mock.patch.object(board, "_project_item", wraps=board._project_item) as project:
             self.assertEqual(board.list_board(self.db, limit=1)["items"], [])
         self.assertEqual(project.call_count, 0)
 
     def test_board_reads_controls_once_for_all_visible_cards(self):
         for index in range(8):
             self.create(str(index))
-        with mock.patch.object(
-            execution_store, "read_controls", wraps=execution_store.read_controls
-        ) as read:
+        with mock.patch.object(execution_store, "read_controls", wraps=execution_store.read_controls) as read:
             result = board.list_board(self.db, limit=2)
         self.assertEqual(len(result["items"]), 2)
         self.assertEqual(result["counts"]["todo"], 8)
@@ -166,9 +154,7 @@ class WebReviewRemediationTests(unittest.TestCase):
                 "UPDATE workstreams SET repo_id='other' WHERE workstream_id=?",
                 (other["workstream_id"],),
             )
-        with mock.patch.object(
-            board, "_project_item", wraps=board._project_item
-        ) as project:
+        with mock.patch.object(board, "_project_item", wraps=board._project_item) as project:
             result = board.list_board(self.db, repo="o/r", limit=1)
         self.assertEqual(result["counts"]["todo"], 1)
         self.assertEqual(project.call_count, 1)
@@ -198,9 +184,7 @@ class WebReviewRemediationTests(unittest.TestCase):
         target = self.create("target")
         for index in range(12):
             self.create(str(index), cancel=True)
-        with mock.patch.object(
-            board, "_project_item", wraps=board._project_item
-        ) as project:
+        with mock.patch.object(board, "_project_item", wraps=board._project_item) as project:
             detail = workbench.get_work_item(self.db, target["workstream_id"])
         self.assertEqual(detail["id"], target["workstream_id"])
         self.assertEqual(project.call_count, 1)

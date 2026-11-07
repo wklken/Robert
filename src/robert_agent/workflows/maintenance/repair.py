@@ -58,9 +58,7 @@ def _path(config):
 
 def _connect(config, *, readonly=False):
     mode = "ro" if readonly else "rw"
-    conn = sqlite3.connect(
-        f"{_path(config).as_uri()}?mode={mode}", uri=True, timeout=0.1
-    )
+    conn = sqlite3.connect(f"{_path(config).as_uri()}?mode={mode}", uri=True, timeout=0.1)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
@@ -68,11 +66,7 @@ def _connect(config, *, readonly=False):
 
 def _policy(config):
     settings = config.get("supervision", {})
-    return (
-        None
-        if settings.get("mode") == "off"
-        else normalize_repair(settings.get("repair"))
-    )
+    return None if settings.get("mode") == "off" else normalize_repair(settings.get("repair"))
 
 
 def _repo(config, policy):
@@ -80,8 +74,7 @@ def _repo(config, policy):
         (
             repo
             for repo in config.get("repos", [])
-            if repo["full_name"].casefold() == policy["repository"]
-            and repo.get("enabled", True)
+            if repo["full_name"].casefold() == policy["repository"] and repo.get("enabled", True)
         ),
         None,
     )
@@ -90,11 +83,7 @@ def _repo(config, policy):
 def _fingerprint_file(value):
     path = Path(value).resolve()
     info = path.stat()
-    if (
-        not stat.S_ISREG(info.st_mode)
-        or info.st_mode & 0o022
-        or info.st_uid not in {0, os.geteuid()}
-    ):
+    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or info.st_uid not in {0, os.geteuid()}:
         raise ValueError("maintenance executable is not a trusted regular file")
     return [
         str(path),
@@ -115,18 +104,10 @@ def _auto_authorization(config, policy, repo):
     ):
         return None
     worker = next(
-        (
-            item
-            for item in config.get("workers", [])
-            if item["name"] == policy["worker"]
-        ),
+        (item for item in config.get("workers", []) if item["name"] == policy["worker"]),
         None,
     )
-    if (
-        not worker
-        or worker["agent"] != "command"
-        or not is_repair_argv(worker.get("command_argv"))
-    ):
+    if not worker or worker["agent"] != "command" or not is_repair_argv(worker.get("command_argv")):
         return None
     try:
         profile = normalize_diagnosis(
@@ -145,9 +126,7 @@ def _auto_authorization(config, policy, repo):
         ]
         for argv in (policy["launcher"], worker["command_argv"]):
             executable_ids.extend(
-                _fingerprint_file(arg)
-                for arg in argv[1:]
-                if Path(arg).is_absolute() and Path(arg).is_file()
+                _fingerprint_file(arg) for arg in argv[1:] if Path(arg).is_absolute() and Path(arg).is_file()
             )
     except (OSError, ValueError):
         return None
@@ -332,8 +311,7 @@ def probe_restricted_launcher(config, worktree_path, *, authorization):
         if source_git.is_relative_to(tree) or tree.is_relative_to(source_git):
             return {"ok": False, "status": "restricted_launcher_unverified"}
         guards = [
-            directory / (".robert-isolation-probe-" + nonce)
-            for directory in {data, source, source_git, tree_root}
+            directory / (".robert-isolation-probe-" + nonce) for directory in {data, source, source_git, tree_root}
         ]
         credentials = _json(_credential_probe_paths())
         with tempfile.TemporaryDirectory(prefix="robert-repair-probe-") as home:
@@ -367,10 +345,7 @@ def probe_restricted_launcher(config, worktree_path, *, authorization):
             if code == 0 and group_stopped:
                 fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 with os.fdopen(fd, "rb") as stream:
-                    if (
-                        stat.S_ISREG(os.fstat(stream.fileno()).st_mode)
-                        and stream.read(33) == nonce.encode()
-                    ):
+                    if stat.S_ISREG(os.fstat(stream.fileno()).st_mode) and stream.read(33) == nonce.encode():
                         return {"ok": True, "status": "verified"}
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
         pass
@@ -385,22 +360,12 @@ def probe_restricted_launcher(config, worktree_path, *, authorization):
 def authorized_repair(conn, task_id, config, repo_id, action_type=None):
     binding = supervision_store.repair_task(conn, task_id)
     policy = _policy(config or {})
-    if (
-        not binding
-        or not policy
-        or (action_type is not None and action_type not in ACTIONS)
-    ):
+    if not binding or not policy or (action_type is not None and action_type not in ACTIONS):
         return None
     repo = _repo(config, policy)
-    if (
-        repo is None
-        or (authorization := _auto_authorization(config, policy, repo)) is None
-    ):
+    if repo is None or (authorization := _auto_authorization(config, policy, repo)) is None:
         return None
-    if (
-        binding.get("policy_digest") != authorization["policy_digest"]
-        or binding.get("worker") != policy["worker"]
-    ):
+    if binding.get("policy_digest") != authorization["policy_digest"] or binding.get("worker") != policy["worker"]:
         return None
     row = conn.execute(
         """SELECT t.route_id,t.expected_output,t.routing_mode,t.requested_worker,
@@ -425,9 +390,7 @@ def authorized_repair(conn, task_id, config, repo_id, action_type=None):
 
 
 def preparation_route(conn, task_id, config, repo):
-    row = conn.execute(
-        "SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)
-    ).fetchone()
+    row = conn.execute("SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)).fetchone()
     return ROUTE if row and authorized_repair(conn, task_id, config, row[0]) else None
 
 
@@ -440,15 +403,11 @@ def _state(conn, key):
 
 
 def _store(conn, key, metadata, now):
-    supervision_store.update_checkpoint(
-        conn, *key, metadata=metadata, now=now.isoformat()
-    )
+    supervision_store.update_checkpoint(conn, *key, metadata=metadata, now=now.isoformat())
 
 
 def _incident(conn, incident_id):
-    return conn.execute(
-        "SELECT * FROM supervision_incidents WHERE incident_id=?", (incident_id,)
-    ).fetchone()
+    return conn.execute("SELECT * FROM supervision_incidents WHERE incident_id=?", (incident_id,)).fetchone()
 
 
 def _diagnosis(conn, incident):
@@ -463,9 +422,7 @@ def _diagnosis(conn, incident):
     ):
         return None
     target = supervision_diagnose._target(incident, "incident")
-    if _digest(supervision_diagnose._snapshot(conn, target)) != analysis.get(
-        "input_generation"
-    ):
+    if _digest(supervision_diagnose._snapshot(conn, target)) != analysis.get("input_generation"):
         return None
     return output
 
@@ -550,11 +507,7 @@ def propose(config, incident_id, *, now=None):
     repo = _repo(config, policy)
     if repo is None:
         return _proposal_status("maintenance_repository_unavailable")
-    current = (
-        supervision_rules.timestamp(now)
-        if now is not None
-        else datetime.now(timezone.utc)
-    )
+    current = supervision_rules.timestamp(now) if now is not None else datetime.now(timezone.utc)
     try:
         with closing(_connect(config, readonly=True)) as conn:
             if not supervision_store.has_schema(conn):
@@ -569,23 +522,13 @@ def propose(config, incident_id, *, now=None):
             ancestor = _repair_ancestor(conn, incident)
             if not ancestor and not _diagnosis(conn, incident):
                 return _proposal_status("no_current_repair_diagnosis")
-        authorization = (
-            _auto_authorization(config, policy, repo) if not ancestor else None
-        )
-        auto_status = (
-            "not_requested"
-            if policy["mode"] == "backlog"
-            else "maintenance_policy_incomplete"
-        )
+        authorization = _auto_authorization(config, policy, repo) if not ancestor else None
+        auto_status = "not_requested" if policy["mode"] == "backlog" else "maintenance_policy_incomplete"
         if authorization:
             root = Path(repo["worktree_root"]).resolve()
             root.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(
-                prefix=".robert-repair-probe-", dir=root
-            ) as probe_tree:
-                checked = probe_restricted_launcher(
-                    config, probe_tree, authorization=authorization
-                )
+            with tempfile.TemporaryDirectory(prefix=".robert-repair-probe-", dir=root) as probe_tree:
+                checked = probe_restricted_launcher(config, probe_tree, authorization=authorization)
             auto_status = checked["status"]
             if not checked["ok"]:
                 authorization = None
@@ -613,9 +556,7 @@ def propose(config, incident_id, *, now=None):
                         {**origin, "repair_failure_incident_id": incident_id},
                         current,
                     )
-                return _proposal_status(
-                    "repair_recursion_blocked", work_item_id=ancestor[0]
-                )
+                return _proposal_status("repair_recursion_blocked", work_item_id=ancestor[0])
             diagnosis = _diagnosis(conn, incident)
             if not diagnosis:
                 return _proposal_status("no_current_repair_diagnosis")
@@ -627,17 +568,11 @@ def propose(config, incident_id, *, now=None):
                 return _proposal_status("maintenance_repository_unavailable")
             if authorization:
                 fresh = _auto_authorization(config, policy, repo)
-                if (
-                    not fresh
-                    or fresh["policy_digest"] != authorization["policy_digest"]
-                ):
+                if not fresh or fresh["policy_digest"] != authorization["policy_digest"]:
                     authorization, auto_status = None, "maintenance_policy_changed"
             root_cause = json.loads(incident["metadata_json"]).get("confirmed_root_key")
             identity = (
-                root_cause
-                if isinstance(root_cause, str)
-                and re.fullmatch(r"[0-9a-f]{64}", root_cause)
-                else incident_id
+                root_cause if isinstance(root_cause, str) and re.fullmatch(r"[0-9a-f]{64}", root_cause) else incident_id
             )
             root_key = _digest([policy["repository"], identity])
             idempotency = "supervision-repair:" + root_key
@@ -649,8 +584,7 @@ def propose(config, incident_id, *, now=None):
             recent = [
                 stamp
                 for stamp in prior.get("created_at", [])
-                if (parsed := supervision_rules.timestamp(stamp)) is not None
-                and parsed > current - timedelta(days=1)
+                if (parsed := supervision_rules.timestamp(stamp)) is not None and parsed > current - timedelta(days=1)
             ]
             if not existing and len(recent) >= policy["max_repairs_per_day"]:
                 return _proposal_status("rate_limited")
@@ -663,18 +597,14 @@ def propose(config, incident_id, *, now=None):
                 "base_branch": repo["default_base_branch"],
                 "automatic": authorization is not None,
                 "worker": policy["worker"] if authorization else None,
-                "policy_digest": authorization["policy_digest"]
-                if authorization
-                else None,
+                "policy_digest": authorization["policy_digest"] if authorization else None,
                 "auto_status": auto_status,
             }
             created, is_new = work_items.create_supervision_repair(
                 conn,
                 repo_id=row[0],
                 title=f"Investigate Robert supervision: {label}",
-                description=_repair_brief(
-                    conn, incident_id, diagnosis, repo["default_base_branch"]
-                ),
+                description=_repair_brief(conn, incident_id, diagnosis, repo["default_base_branch"]),
                 repair=provenance,
                 now=current.isoformat(),
                 idempotency_key=idempotency,
@@ -725,11 +655,7 @@ def poll(config, *, now=None):
                 (row[0] for row in rows if _diagnosis(conn, _incident(conn, row[0]))),
                 None,
             )
-        return (
-            propose(config, candidate, now=now)
-            if candidate
-            else _proposal_status("idle")
-        )
+        return propose(config, candidate, now=now) if candidate else _proposal_status("idle")
     except (OSError, sqlite3.Error, ValueError):
         return _proposal_status("unavailable")
 
@@ -743,9 +669,7 @@ def status(config, incident_id):
     return _proposal_status(
         link["status"],
         **{key: item for key, item in link.items() if key != "status"},
-        verification={
-            stage: verification.get(stage, {"status": "pending"}) for stage in _STAGES
-        },
+        verification={stage: verification.get(stage, {"status": "pending"}) for stage in _STAGES},
     )
 
 
@@ -789,9 +713,7 @@ def _delivery(conn, work_item_id):
     push, opened = receipts.get("push_existing_pr", {}), receipts.get("open_pr", {})
     return {
         **dict(result),
-        "pr_url": opened.get("target_url")
-        if push.get("result_head_sha") == result["revision"]
-        else None,
+        "pr_url": opened.get("target_url") if push.get("result_head_sha") == result["revision"] else None,
     }
 
 
@@ -808,12 +730,7 @@ def _code_binding(config, checkout, delivery, policy, repo):
     if not commands[0] or not policy["verification_commands"]:
         return None
     paths = [argv[0] for argv in commands]
-    paths += [
-        arg
-        for argv in commands
-        for arg in argv[1:]
-        if Path(arg).is_absolute() and Path(arg).is_file()
-    ]
+    paths += [arg for argv in commands for arg in argv[1:] if Path(arg).is_absolute() and Path(arg).is_file()]
     if config.get("config_path"):
         paths.append(config["config_path"])
     return _digest(
@@ -868,14 +785,10 @@ def _code_proof(config, checkout, delivery, policy, repo):
         deadline = time.monotonic() + 300
         tests = []
         with (
-            supervision_git.materialized_checkout(
-                checkout, revision, config["data_dir"], worktree_root
-            ) as isolated,
+            supervision_git.materialized_checkout(checkout, revision, config["data_dir"], worktree_root) as isolated,
             tempfile.TemporaryDirectory(prefix="robert-repair-verification-") as home,
         ):
-            if not probe_restricted_launcher(
-                config, isolated, authorization=authorization
-            )["ok"]:
+            if not probe_restricted_launcher(config, isolated, authorization=authorization)["ok"]:
                 return unavailable
             env = repair_environment(authorization, home)
             for argv in policy["verification_commands"]:
@@ -931,9 +844,7 @@ def _code_proof(config, checkout, delivery, policy, repo):
 
 
 def _github(path, jq):
-    reply = subprocess.run(
-        ["gh", "api", path, "--jq", jq], capture_output=True, text=True, timeout=10
-    )
+    reply = subprocess.run(["gh", "api", path, "--jq", jq], capture_output=True, text=True, timeout=10)
     if reply.returncode or len(reply.stdout) > 8192:
         raise ValueError("trusted remote observation unavailable")
     return json.loads(reply.stdout)
@@ -1045,9 +956,7 @@ def _deployment(conn, runtime, mainline, repo, now):
         or worker_identity.inspect_recorded_identity(identity) != "alive_same"
     ):
         return reason
-    if not _contains(
-        repo, mainline.get("merged_revision"), runtime.get("source_revision")
-    ):
+    if not _contains(repo, mainline.get("merged_revision"), runtime.get("source_revision")):
         return reason
     return {
         "status": "verified",
@@ -1080,11 +989,7 @@ def _original_progress(conn, incident, deployment):
     progress = json.loads(incident["resolution_evidence_json"])
     occurred_at = progress.get("occurred_at") if isinstance(progress, dict) else None
     try:
-        occurred = (
-            datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
-            if isinstance(occurred_at, str)
-            else None
-        )
+        occurred = datetime.fromisoformat(occurred_at.replace("Z", "+00:00")) if isinstance(occurred_at, str) else None
     except ValueError:
         occurred = None
     resolved = supervision_rules.timestamp(incident["resolved_at"])
@@ -1121,19 +1026,13 @@ def _verification_owner(conn, item_id, repository):
     ).fetchone()
 
 
-def verify(
-    config, incident_id, *, checkout, runtime=None, now=None, expected_delivery=None
-):
+def verify(config, incident_id, *, checkout, runtime=None, now=None, expected_delivery=None):
     """Explicitly verify a repair checkout and inspect its downstream evidence."""
     policy = _policy(config)
     repo = _repo(config, policy) if policy else None
     if not repo:
         return _proposal_status("maintenance_repository_unavailable")
-    current = (
-        supervision_rules.timestamp(now)
-        if now is not None
-        else datetime.now(timezone.utc)
-    )
+    current = supervision_rules.timestamp(now) if now is not None else datetime.now(timezone.utc)
     try:
         with closing(_connect(config, readonly=True)) as conn:
             link = _state(conn, _link_key(incident_id))
@@ -1141,9 +1040,7 @@ def verify(
                 return _proposal_status("not_found")
             if link.get("base_branch") != repo["default_base_branch"]:
                 return _proposal_status("maintenance_policy_changed")
-            if not _verification_owner(
-                conn, link["work_item_id"], policy["repository"]
-            ):
+            if not _verification_owner(conn, link["work_item_id"], policy["repository"]):
                 return _proposal_status("maintenance_policy_changed")
             delivery = _delivery(conn, link["work_item_id"])
             if delivery:
@@ -1151,10 +1048,7 @@ def verify(
                 previous = _state(conn, proof_key)
         if not delivery:
             return _proposal_status("repair_result_unverified")
-        if (
-            expected_delivery is not None
-            and (delivery["result_id"], delivery["revision"]) != expected_delivery
-        ):
+        if expected_delivery is not None and (delivery["result_id"], delivery["revision"]) != expected_delivery:
             return _proposal_status("repair_evidence_changed")
         checkout = Path(checkout).resolve()
         binding = _code_binding(config, checkout, delivery, policy, repo)
@@ -1168,11 +1062,7 @@ def verify(
         else:
             code = _code_proof(config, checkout, delivery, policy, repo)
             if code["status"] == "verified":
-                if (
-                    not binding
-                    or _code_binding(config, checkout, delivery, policy, repo)
-                    != binding
-                ):
+                if not binding or _code_binding(config, checkout, delivery, policy, repo) != binding:
                     code = {
                         "status": "unobservable",
                         "reason_code": "verification_inputs_changed",
@@ -1198,18 +1088,14 @@ def verify(
             if (
                 _state(conn, _link_key(incident_id)) != link
                 or _delivery(conn, link["work_item_id"]) != delivery
-                or not _verification_owner(
-                    conn, link["work_item_id"], policy["repository"]
-                )
+                or not _verification_owner(conn, link["work_item_id"], policy["repository"])
             ):
                 return _proposal_status("repair_evidence_changed")
             verification = {
                 "code_verified": code,
                 "mainline_verified": mainline,
                 "deployed_verified": deployed,
-                "original_progress": _original_progress(
-                    conn, _incident(conn, incident_id), deployed
-                ),
+                "original_progress": _original_progress(conn, _incident(conn, incident_id), deployed),
             }
             if code["status"] == "verified":
                 _store(conn, proof_key, code, current)

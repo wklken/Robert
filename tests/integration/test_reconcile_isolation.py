@@ -25,9 +25,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 conn,
             ):
                 conn.execute("UPDATE github_sources SET state='open'")
-                conn.execute(
-                    "UPDATE execution_subjects SET binding_status=?", (binding_status,)
-                )
+                conn.execute("UPDATE execution_subjects SET binding_status=?", (binding_status,))
                 self.assertEqual(
                     source_lifecycle.reconcile_remote_source_states(
                         conn,
@@ -43,15 +41,11 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                     "closed",
                 )
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT lifecycle FROM tasks WHERE task_id=?", (task,)
-                    ).fetchone()[0],
+                    conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task,)).fetchone()[0],
                     "completed",
                 )
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT binding_status FROM execution_subjects"
-                    ).fetchone()[0],
+                    conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
                     binding_status,
                 )
                 self.assertEqual(
@@ -78,18 +72,14 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
 
         def broken(conn, *args):
             if args[5] == 123:
-                conn.execute(
-                    "UPDATE github_sources SET title='partial' WHERE number=123"
-                )
+                conn.execute("UPDATE github_sources SET title='partial' WHERE number=123")
                 raise ValueError("broken source")
             return record(conn, *args)
 
         with (
             closing(sqlite3.connect(self.db)) as conn,
             conn,
-            mock.patch.object(
-                source_lifecycle, "record_remote_terminal_state", side_effect=broken
-            ),
+            mock.patch.object(source_lifecycle, "record_remote_terminal_state", side_effect=broken),
         ):
             self.assertEqual(
                 source_lifecycle.reconcile_remote_source_states(
@@ -101,9 +91,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 ),
                 1,
             )
-            rows = conn.execute(
-                "SELECT number,state,title FROM github_sources ORDER BY number"
-            ).fetchall()
+            rows = conn.execute("SELECT number,state,title FROM github_sources ORDER BY number").fetchall()
             self.assertEqual(rows[0][1], "open")
             self.assertNotEqual(rows[0][2], "partial")
             self.assertEqual(rows[1][1], "closed")
@@ -138,28 +126,20 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
             return original(conn, repo_id, *args, **kwargs)
 
         with (
-            mock.patch.object(
-                monitor, "supervise_running_attempts", side_effect=supervise
-            ),
-            mock.patch.object(
-                discovery, "collect_account_notifications", return_value={}
-            ),
+            mock.patch.object(monitor, "supervise_running_attempts", side_effect=supervise),
+            mock.patch.object(discovery, "collect_account_notifications", return_value={}),
             mock.patch.object(discovery, "collect_live_events", side_effect=discover),
         ):
             result = run_once.run_once(
                 self.fixture.config_path,
                 dry_run=True,
-                discovery_runner=lambda args, **kw: subprocess.CompletedProcess(
-                    args, 0, "{}", ""
-                ),
+                discovery_runner=lambda args, **kw: subprocess.CompletedProcess(args, 0, "{}", ""),
             )
         self.assertFalse(result["ok"])
         self.assertIn("example/second", called)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT github_account FROM repos WHERE repo_id='repo:example/backend'"
-                ).fetchone()[0],
+                conn.execute("SELECT github_account FROM repos WHERE repo_id='repo:example/backend'").fetchone()[0],
                 "robert-bot",
             )
             self.assertEqual(
@@ -173,16 +153,12 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
         task = self.seed("attention")
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE tasks SET lifecycle='running'")
-            conn.execute(
-                "UPDATE workstreams SET lifecycle='active',active_task_id=?", (task,)
-            )
+            conn.execute("UPDATE workstreams SET lifecycle='active',active_task_id=?", (task,))
             conn.execute("UPDATE attempts SET status='running',metadata_json='{}'")
         with (
             closing(sqlite3.connect(self.db)) as conn,
             conn,
-            mock.patch.object(
-                monitor, "terminate_owned_attempt", return_value={"status": "attention"}
-            ),
+            mock.patch.object(monitor, "terminate_owned_attempt", return_value={"status": "attention"}),
         ):
             self.assertEqual(
                 source_lifecycle.reconcile_remote_source_states(
@@ -194,20 +170,14 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 ),
                 0,
             )
-            self.assertEqual(
-                conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed"
-            )
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
             self.assertEqual(
                 conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0],
                 task,
             )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
-            self.assertEqual(
-                conn.execute(
-                    "SELECT binding_status FROM execution_subjects"
-                ).fetchone()[0],
+                conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
                 "attention",
             )
 
@@ -224,22 +194,16 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
 
         def record(conn, *args):
             if args[5] == 123:
-                conn.execute(
-                    "UPDATE github_sources SET title='checkpoint' WHERE number=123"
-                )
+                conn.execute("UPDATE github_sources SET title='checkpoint' WHERE number=123")
                 conn.commit()
-                conn.execute(
-                    "UPDATE github_sources SET title='uncommitted' WHERE number=123"
-                )
+                conn.execute("UPDATE github_sources SET title='uncommitted' WHERE number=123")
                 raise RuntimeError("failure after external I/O checkpoint")
             return original(conn, *args)
 
         with (
             closing(sqlite3.connect(self.db)) as conn,
             conn,
-            mock.patch.object(
-                source_lifecycle, "record_remote_terminal_state", side_effect=record
-            ),
+            mock.patch.object(source_lifecycle, "record_remote_terminal_state", side_effect=record),
         ):
             self.assertEqual(
                 source_lifecycle.reconcile_remote_source_states(
@@ -252,15 +216,11 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 1,
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT title FROM github_sources WHERE number=123"
-                ).fetchone()[0],
+                conn.execute("SELECT title FROM github_sources WHERE number=123").fetchone()[0],
                 "checkpoint",
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT state FROM github_sources WHERE number=124"
-                ).fetchone()[0],
+                conn.execute("SELECT state FROM github_sources WHERE number=124").fetchone()[0],
                 "closed",
             )
 
@@ -284,6 +244,4 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
             side_effect=ControlDeadlineExceeded("probe", 0),
         ):
             with self.assertRaises(ControlDeadlineExceeded):
-                run_once.run_once(
-                    self.fixture.config_path, dry_run=True, skip_external=True
-                )
+                run_once.run_once(self.fixture.config_path, dry_run=True, skip_external=True)

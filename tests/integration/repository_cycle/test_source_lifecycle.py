@@ -26,9 +26,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         )
         db = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE github_sources SET state='closed' WHERE source_key='github:example/backend#123'"
-            )
+            conn.execute("UPDATE github_sources SET state='closed' WHERE source_key='github:example/backend#123'")
             event = {
                 "source_key": "github:example/backend#123",
                 "source_type": "issue",
@@ -38,19 +36,11 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 "actor_login": "wklken",
                 "event_at": "2026-07-31T10:00:00Z",
             }
-            source_events.insert_source_and_event(
-                conn, "repo:example/backend", event, event["event_at"]
-            )
-            self.assertEqual(
-                conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed"
-            )
+            source_events.insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
             event.update(state="open", event_fingerprint="comment:explicit-reopen")
-            source_events.insert_source_and_event(
-                conn, "repo:example/backend", event, event["event_at"]
-            )
-            self.assertEqual(
-                conn.execute("SELECT state FROM github_sources").fetchone()[0], "open"
-            )
+            source_events.insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "open")
 
     def test_remote_close_reconciles_an_unfinished_historical_issue_item(self):
         from robert_agent.readmodels import board
@@ -72,17 +62,11 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 )
                 db = fixture.data_dir / "dd.sqlite3"
                 with closing(sqlite3.connect(db)) as conn, conn:
-                    item = work_items._item_from_row(
-                        conn.execute("SELECT * FROM work_items").fetchone()
-                    )
-                    conn.execute(
-                        "UPDATE work_items SET completed_at=NULL, canceled_at=NULL"
-                    )
+                    item = work_items._item_from_row(conn.execute("SELECT * FROM work_items").fetchone())
+                    conn.execute("UPDATE work_items SET completed_at=NULL, canceled_at=NULL")
                     conn.execute("UPDATE tasks SET lifecycle='completed'")
                     conn.execute("UPDATE attempts SET status='completed'")
-                    conn.execute(
-                        "UPDATE workstreams SET lifecycle='completed', active_task_id=NULL"
-                    )
+                    conn.execute("UPDATE workstreams SET lifecycle='completed', active_task_id=NULL")
                     work_items.record_system_event(
                         conn,
                         item["work_item_id"],
@@ -100,9 +84,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
 
                     def runner(args, **_kwargs):
                         calls.append(args)
-                        self.assertEqual(
-                            args, ["gh", "api", "repos/example/backend/issues/123"]
-                        )
+                        self.assertEqual(args, ["gh", "api", "repos/example/backend/issues/123"])
                         return _Completed(args, json.dumps(remote))
 
                     reconciled = source_lifecycle.reconcile_remote_source_states(
@@ -122,16 +104,12 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 self.assertEqual(detail["attention_signals"], [])
                 self.assertNotIn("approve", detail["valid_commands"])
                 self.assertEqual(
-                    detail["completed_at"]
-                    if state_reason == "completed"
-                    else detail["canceled_at"],
+                    detail["completed_at"] if state_reason == "completed" else detail["canceled_at"],
                     remote["closed_at"],
                 )
                 version = detail["version"]
                 with closing(sqlite3.connect(db)) as conn, conn:
-                    self.assertEqual(
-                        conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
-                    )
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
                     self.assertEqual(
                         source_lifecycle.reconcile_remote_source_states(
                             conn,
@@ -254,9 +232,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         def fake_closed_issue_runner(args, **_kwargs):
             if args[:3] == ["gh", "search", "issues"]:
@@ -322,13 +298,9 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         self.assertEqual(attempt, ("canceled",))
         self.assertEqual(workstream, ("canceled", None))
         self.assertEqual(source[0], "closed")
-        self.assertEqual(
-            json.loads(source[1])["remote_state"]["state_reason"], "not_planned"
-        )
+        self.assertEqual(json.loads(source[1])["remote_state"]["state_reason"], "not_planned")
         self.assertEqual(audit[0], "remote_source_closed")
-        self.assertEqual(
-            json.loads(audit[1])["source_key"], "github:example/backend#123"
-        )
+        self.assertEqual(json.loads(audit[1])["source_key"], "github:example/backend#123")
 
     def test_active_pr_task_is_canceled_when_remote_pr_is_merged(self):
         from robert_agent.runtime import cycle as run_once
@@ -412,9 +384,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         self.assertEqual(workstream, ("completed", None))
         self.assertTrue(source_metadata["remote_state"]["merged"])
         self.assertEqual(audit[0], "remote_pr_merged")
-        self.assertEqual(
-            json.loads(audit[1])["source_key"], "github:example/backend!456"
-        )
+        self.assertEqual(json.loads(audit[1])["source_key"], "github:example/backend!456")
 
     def test_completed_pr_workstream_marks_review_item_done_when_remote_pr_is_merged(
         self,
@@ -625,9 +595,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         self.assertEqual(workstream, ("canceled", None))
         self.assertFalse(source_metadata["remote_state"]["merged"])
         self.assertEqual(audit[0], "remote_pr_closed")
-        self.assertEqual(
-            json.loads(audit[1])["source_key"], "github:example/backend!457"
-        )
+        self.assertEqual(json.loads(audit[1])["source_key"], "github:example/backend!457")
 
     def test_closed_issue_source_is_skipped_before_dispatch(self):
         from robert_agent.runtime import cycle as run_once
@@ -683,9 +651,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 WHERE event_fingerprint = 'comment:closed-issue-comment'
                 """
             ).fetchone()[0]
-            audit = conn.execute(
-                "SELECT event_type, payload_json FROM audit_events"
-            ).fetchone()
+            audit = conn.execute("SELECT event_type, payload_json FROM audit_events").fetchone()
             route_output = json.loads(
                 conn.execute(
                     """
@@ -703,9 +669,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         self.assertEqual(event_status, "ignored_current_state_closed")
         self.assertEqual(audit[0], "current_state_closed")
         self.assertEqual(audit_payload["terminal_reason"], "remote_source_closed")
-        self.assertEqual(
-            audit_payload["skip_reason"], "source_already_closed_before_dispatch"
-        )
+        self.assertEqual(audit_payload["skip_reason"], "source_already_closed_before_dispatch")
         self.assertEqual(
             source_metadata["current_state_reconciliation"]["terminal_reason"],
             "remote_source_closed",
@@ -761,9 +725,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                     """
                 ).fetchone()[0]
             )
-            audit_payload = json.loads(
-                conn.execute("SELECT payload_json FROM audit_events").fetchone()[0]
-            )
+            audit_payload = json.loads(conn.execute("SELECT payload_json FROM audit_events").fetchone()[0])
         self.assertEqual(task_count, 0)
         self.assertEqual(audit_payload["terminal_reason"], "remote_pr_merged")
         self.assertTrue(audit_payload["remote_state"]["merged"])
@@ -850,9 +812,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
             skip_external=True,
         )
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute("UPDATE tasks SET lifecycle = 'running'")
             conn.execute(
                 "UPDATE attempts SET status = 'running', metadata_json = json_set(?, '$.result_contract', 'compact-v1')",
@@ -876,13 +836,9 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 "remote_issue_closed",
                 datetime.now(timezone.utc).isoformat(),
             )
-            conn.execute(
-                "UPDATE attempts SET metadata_json = json_set('{}', '$.result_contract', 'compact-v1')"
-            )
+            conn.execute("UPDATE attempts SET metadata_json = json_set('{}', '$.result_contract', 'compact-v1')")
             self.assertFalse(source_lifecycle.record_remote_terminal_state(*args))
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             conn.execute(
                 "UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1')",
                 (json.dumps({"dispatch": {"pid": 12345}}),),
@@ -893,9 +849,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 return_value={"status": "permission_denied"},
             ):
                 source_lifecycle.record_remote_terminal_state(*args)
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             self.assertEqual(
                 conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0],
                 task_id,
@@ -906,8 +860,6 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 return_value={"status": "terminated"},
             ):
                 source_lifecycle.record_remote_terminal_state(*args)
-            status, metadata = conn.execute(
-                "SELECT status,metadata_json FROM attempts"
-            ).fetchone()
+            status, metadata = conn.execute("SELECT status,metadata_json FROM attempts").fetchone()
             self.assertEqual(status, "canceled")
             self.assertEqual(json.loads(metadata)["dispatch"]["pid"], 12345)

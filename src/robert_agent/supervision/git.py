@@ -35,8 +35,7 @@ def binding(scope):
     if not isinstance(value, dict):
         raise OSError("Maintenance Git binding unavailable")
     tree, branch, base, remote, private = (
-        value.get(key)
-        for key in ("worktree", "branch", "base_sha", "remote", "private_root")
+        value.get(key) for key in ("worktree", "branch", "base_sha", "remote", "private_root")
     )
     if (
         not isinstance(tree, str)
@@ -111,9 +110,7 @@ def _run(
         options.extend(
             (
                 "-c",
-                "credential.helper=!"
-                + shlex.quote(os.path.abspath(helper))
-                + " auth git-credential",
+                "credential.helper=!" + shlex.quote(os.path.abspath(helper)) + " auth git-credential",
             )
         )
     if index is not None:
@@ -149,11 +146,7 @@ def _regular(parent, name, maximum):
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     with os.fdopen(fd, "rb") as stream:
         before = os.fstat(stream.fileno())
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or before.st_size > maximum
-        ):
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > maximum:
             raise OSError("Invalid maintenance Git metadata file")
         yield stream, before.st_size
         after = os.fstat(stream.fileno())
@@ -184,9 +177,7 @@ def _branch_head(metadata, expected_branch=None):
     if not head.startswith(prefix):
         raise OSError("Invalid maintenance HEAD")
     branch = head[len(prefix) :]
-    if not _BRANCH.fullmatch(branch) or (
-        expected_branch is not None and branch != expected_branch
-    ):
+    if not _BRANCH.fullmatch(branch) or (expected_branch is not None and branch != expected_branch):
         raise OSError("Maintenance branch changed")
     parts = ["refs", "heads", *branch.split("/")]
     try:
@@ -250,9 +241,7 @@ def _copy_objects(metadata, destination):
                         raise OSError("Maintenance Git metadata entry count exceeded")
                     if not pattern.fullmatch(item.name):
                         continue
-                    remaining -= _copy_file(
-                        source, item.name, directory / item.name, remaining
-                    )
+                    remaining -= _copy_file(source, item.name, directory / item.name, remaining)
 
 
 def require_standalone(checkout):
@@ -264,17 +253,13 @@ def require_standalone(checkout):
 
 
 @contextmanager
-def _view(
-    checkout, private_root, *, branch=None, runner=subprocess.run, copy_index=False
-):
+def _view(checkout, private_root, *, branch=None, runner=subprocess.run, copy_index=False):
     # The cwd and the entire Git directory are private. Model data enter only
     # through regular Git object files, a validated ref, and an optional index.
     checkout = Path(checkout)
     if not checkout.is_absolute() or checkout.resolve() != checkout:
         raise OSError("Invalid maintenance checkout")
-    with tempfile.TemporaryDirectory(
-        prefix=".robert-git-view-", dir=private_root
-    ) as temp:
+    with tempfile.TemporaryDirectory(prefix=".robert-git-view-", dir=private_root) as temp:
         private = Path(temp)
         _checked(
             _run(
@@ -291,9 +276,7 @@ def _view(
             _copy_objects(metadata, private / "objects")
             if copy_index:
                 _copy_file(metadata, "index", private / "model-index", 8 * 1024 * 1024)
-        object_type = _checked(
-            _run(private, ["cat-file", "-t", revision], runner=runner)
-        )
+        object_type = _checked(_run(private, ["cat-file", "-t", revision], runner=runner))
         if object_type != "commit":
             raise OSError("Maintenance revision is not a commit")
         _checked(
@@ -355,9 +338,7 @@ def _status(private, checkout, revision, runner):
 
 
 def _validate_base(private, base, revision, runner):
-    _checked(
-        _run(private, ["merge-base", "--is-ancestor", base, revision], runner=runner)
-    )
+    _checked(_run(private, ["merge-base", "--is-ancestor", base, revision], runner=runner))
 
 
 def observe(scope, *, runner=subprocess.run):
@@ -376,10 +357,7 @@ def observe(scope, *, runner=subprocess.run):
 
 def clean_revision(checkout, revision, private_root):
     with _view(checkout, private_root, copy_index=True) as (private, head):
-        return (
-            head == revision
-            and _status(private, checkout, head, subprocess.run) == "clean"
-        )
+        return head == revision and _status(private, checkout, head, subprocess.run) == "clean"
 
 
 @contextmanager
@@ -390,9 +368,7 @@ def materialized_checkout(checkout, revision, private_root, worktree_root):
             raise OSError("Maintenance checkout moved before verification")
         branch = "robert-verify"
         _checked(_run(private, ["update-ref", "refs/heads/" + branch, revision]))
-        with tempfile.TemporaryDirectory(
-            prefix=".robert-repair-verify-", dir=worktree_root
-        ) as directory:
+        with tempfile.TemporaryDirectory(prefix=".robert-repair-verify-", dir=worktree_root) as directory:
             isolated = Path(directory)
             _checked(
                 _run(
@@ -444,19 +420,13 @@ def push(scope, revision, *, before_push, runner=subprocess.run):
 
 def remote_branch(scope, *, runner=subprocess.run):
     value = binding(scope)
-    with tempfile.TemporaryDirectory(
-        prefix=".robert-git-remote-", dir=value["private_root"]
-    ) as temp:
+    with tempfile.TemporaryDirectory(prefix=".robert-git-remote-", dir=value["private_root"]) as temp:
         remote, branch = value["remote"], value["branch"]
-        return _remote_call(
-            Path(temp), ["ls-remote", "--heads", remote, "refs/heads/" + branch], runner
-        )
+        return _remote_call(Path(temp), ["ls-remote", "--heads", remote, "refs/heads/" + branch], runner)
 
 
 def source_git_directory(source):
-    raw = _checked(
-        _run(source, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
-    )
+    raw = _checked(_run(source, ["rev-parse", "--path-format=absolute", "--git-common-dir"]))
     return Path(raw).resolve(strict=True)
 
 

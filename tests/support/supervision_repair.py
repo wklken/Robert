@@ -124,9 +124,7 @@ class RepairFixture(unittest.TestCase):
             "mode": "auto",
             "repository": "acme/robert",
             "worker": "repair",
-            "allowed_actions": ["push_existing_pr", "open_pr"]
-            if actions is None
-            else actions,
+            "allowed_actions": ["push_existing_pr", "open_pr"] if actions is None else actions,
             "launcher": [sys.executable, str(self.launcher)],
             "verification_commands": [[sys.executable, "-c", "pass"]],
         }

@@ -23,10 +23,7 @@ class SupervisionRulesTests(unittest.TestCase):
             "process_status": "unknown",
             **changes,
         }
-        return {
-            row["rule_id"]: row
-            for row in supervision_rules.evaluate_task(facts, now=NOW)
-        }
+        return {row["rule_id"]: row for row in supervision_rules.evaluate_task(facts, now=NOW)}
 
     def test_unknown_worker_is_not_declared_dead(self):
         row = self.observations()["worker_state_mismatch"]
@@ -39,9 +36,7 @@ class SupervisionRulesTests(unittest.TestCase):
         self.assertNotIn("positive_evidence", row)
 
     def test_old_dead_worker_without_result_is_confirmed(self):
-        row = self.observations(process_status="dead", spool_status="missing")[
-            "worker_state_mismatch"
-        ]
+        row = self.observations(process_status="dead", spool_status="missing")["worker_state_mismatch"]
         self.assertEqual(row["classification"], "confirmed")
         self.assertEqual(row["evidence"]["attempt_id"], "attempt")
 
@@ -55,9 +50,7 @@ class SupervisionRulesTests(unittest.TestCase):
         row = self.observations(**facts)["result_not_consumed"]
         self.assertEqual(row["classification"], "expected_wait")
         self.assertNotIn("positive_evidence", row)
-        row = self.observations(
-            **facts, attempt_status="completed", process_stopped_at=OLD
-        )["result_not_consumed"]
+        row = self.observations(**facts, attempt_status="completed", process_stopped_at=OLD)["result_not_consumed"]
         self.assertEqual(row["positive_evidence"]["result_id"], "result")
 
     def test_backoff_suppresses_publication_and_handoff_age(self):
@@ -94,7 +87,5 @@ class SupervisionRulesTests(unittest.TestCase):
 
     def test_heartbeat_changes_do_not_change_progress_token(self):
         first = self.observations(process_status="alive_same")["worker_state_mismatch"]
-        second = self.observations(process_status="alive_same", heartbeat_at=LATER)[
-            "worker_state_mismatch"
-        ]
+        second = self.observations(process_status="alive_same", heartbeat_at=LATER)["worker_state_mismatch"]
         self.assertEqual(first["progress_token"], second["progress_token"])

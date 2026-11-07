@@ -125,9 +125,7 @@ repos:
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
             attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
+            action_status = conn.execute("SELECT audit_status, publish_status FROM github_actions").fetchone()
         self.assertEqual(task_lifecycle, "running")
         self.assertEqual(attempt_status, "completed")
         self.assertEqual(action_status, ("accepted", "not_published"))
@@ -185,9 +183,7 @@ repos:
         workspace.mkdir()
         prepared = live_worker_acceptance._isolated_config(self.config_path, workspace)
         self.assertTrue(prepared["ok"], prepared)
-        config = validate_config.validate_config(
-            prepared["config_path"], skip_external=True
-        )
+        config = validate_config.validate_config(prepared["config_path"], skip_external=True)
         self.assertTrue(config["ok"], config)
         repo = config["repos"][0]
         result = worktree.plan_analysis_worktree(
@@ -228,9 +224,7 @@ repos:
         self.assertTrue(result["ok"], result)
         isolated = json.loads(Path(result["config_path"]).read_text(encoding="utf-8"))
         self.assertEqual(list(isolated["workers"]), ["default", "reviewer"])
-        self.assertEqual(
-            isolated["workers"]["default"]["fallback_model"], "gpt-5.6-sol"
-        )
+        self.assertEqual(isolated["workers"]["default"]["fallback_model"], "gpt-5.6-sol")
         self.assertEqual(isolated["workers"]["reviewer"]["adapter"], "codex")
         self.assertEqual(
             isolated["routes"]["review-pr"],

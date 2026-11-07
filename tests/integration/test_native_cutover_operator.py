@@ -68,9 +68,7 @@ class NativeCutoverOperatorTests(unittest.TestCase):
         fixture.cycle([])
         with closing(sqlite3.connect(fixture.db)) as conn:
             self.assertEqual(native_rounds.session(conn, task_id=task), original)
-            child = conn.execute(
-                "SELECT task_id FROM tasks WHERE parent_task_id=?", (task,)
-            ).fetchone()[0]
+            child = conn.execute("SELECT task_id FROM tasks WHERE parent_task_id=?", (task,)).fetchone()[0]
             recovered = native_rounds.session(conn, task_id=child)
             self.assertIsNotNone(recovered)
             self.assertNotEqual(recovered["round_id"], original["round_id"])
@@ -154,6 +152,4 @@ class NativeCutoverOperatorTests(unittest.TestCase):
                 vote_store.session(conn, round_id=recovering.round_id)["status"],
                 "published",
             )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 2)

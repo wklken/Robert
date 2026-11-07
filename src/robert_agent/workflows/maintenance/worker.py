@@ -32,9 +32,7 @@ def launch_profile(config, task_id, attempt_id, worker):
     """Keep repository modules out of the trusted outer broker's import path."""
     # The trusted broker rechecks controller credential paths at dispatch.
     # The inner worker's separate environment excludes these overrides.
-    environment = sorted(
-        {"GH_CONFIG_DIR", "XDG_CONFIG_HOME", *worker.get("environment_allowlist", [])}
-    )
+    environment = sorted({"GH_CONFIG_DIR", "XDG_CONFIG_HOME", *worker.get("environment_allowlist", [])})
     return {
         "agent": "command",
         "command_argv": [
@@ -101,8 +99,7 @@ def _cleanup_group(proc):
                     identity = worker_identity.capture_process_identity(pid)
                     if (
                         identity["process_group_id"] == os.getpgrp()
-                        and worker_identity.inspect_recorded_identity(identity)
-                        == "alive_same"
+                        and worker_identity.inspect_recorded_identity(identity) == "alive_same"
                     ):
                         os.kill(pid, signal.SIGKILL)
                 except (ProcessLookupError, worker_identity.IdentityReadError):
@@ -126,9 +123,7 @@ def run(config, task_id, attempt_id, prompt):
         ).fetchone()
         if not row or not row["worktree_path"]:
             return {"ok": False, "status": "repair_target_missing"}
-        authorization = supervision_repair.authorized_repair(
-            conn, task_id, config, row["repo_id"]
-        )
+        authorization = supervision_repair.authorized_repair(conn, task_id, config, row["repo_id"])
     if not authorization:
         return {"ok": False, "status": "repair_policy_rejected"}
     try:
@@ -145,9 +140,7 @@ def run(config, task_id, attempt_id, prompt):
         supervision_git.require_standalone(value["worktree"])
     except (OSError, ValueError):
         return {"ok": False, "status": "repair_git_binding_unavailable"}
-    probed = supervision_repair.probe_restricted_launcher(
-        config, row["worktree_path"], authorization=authorization
-    )
+    probed = supervision_repair.probe_restricted_launcher(config, row["worktree_path"], authorization=authorization)
     if not probed["ok"]:
         return probed
     stop_requested = False
@@ -156,9 +149,7 @@ def run(config, task_id, attempt_id, prompt):
         nonlocal stop_requested
         stop_requested = True
 
-    handlers = {
-        sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)
-    }
+    handlers = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
     proc = None
     try:
         with tempfile.TemporaryDirectory(prefix="robert-repair-model-") as home:
@@ -238,16 +229,12 @@ def run(config, task_id, attempt_id, prompt):
                 return {"ok": False, "status": "invalid_repair_submission"}
             # Policy may be revoked while the model runs. Never submit under a
             # stale profile; ordinary result validation rechecks task ownership.
-            current = validate_config.validate_config(
-                config["config_path"], skip_external=True
-            )
+            current = validate_config.validate_config(config["config_path"], skip_external=True)
             if not current.get("ok"):
                 return {"ok": False, "status": "repair_policy_rejected"}
             with closing(sqlite3.connect(config["db_path"])) as conn:
                 conn.row_factory = sqlite3.Row
-                if not supervision_repair.authorized_repair(
-                    conn, task_id, current, row["repo_id"]
-                ):
+                if not supervision_repair.authorized_repair(conn, task_id, current, row["repo_id"]):
                     return {"ok": False, "status": "repair_policy_rejected"}
             return result.record_result(
                 config["db_path"],
@@ -275,11 +262,7 @@ def main():
     parser.add_argument("--attempt-id", required=True)
     args = parser.parse_args()
     config = validate_config.validate_config(args.config, skip_external=True)
-    response = (
-        run(config, args.task_id, args.attempt_id, sys.stdin.read())
-        if config.get("ok")
-        else config
-    )
+    response = run(config, args.task_id, args.attempt_id, sys.stdin.read()) if config.get("ok") else config
     print(json.dumps(response))
     return 0 if response.get("ok") else 1
 

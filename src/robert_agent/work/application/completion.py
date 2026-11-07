@@ -56,16 +56,10 @@ def pending_events_for_task(conn, task_id, consumed_fingerprints):
         """,
         (task_id,),
     ).fetchall()
-    return [
-        json.loads(payload)
-        for payload, fingerprint in rows
-        if fingerprint not in consumed
-    ]
+    return [json.loads(payload) for payload, fingerprint in rows if fingerprint not in consumed]
 
 
-def _materialize_open_pr_workstream(
-    conn, repo_id, repo_full_name, origin_workstream_id, action, run_now
-):
+def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workstream_id, action, run_now):
     match = re.search(r"/pull/(\d+)/?$", action.get("url") or "")
     if not match:
         return
@@ -183,9 +177,7 @@ def recover_pending_handoffs(
         if child:
             recovered += 1
         state = values.json_object(
-            conn.execute(
-                "SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)
-            ).fetchone()[0]
+            conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0]
         ).get("pending_handoff", {})
         if state.get("status") not in {"pending", "attention"}:
             execution_ownership.close_terminal_task(conn, task_id, run_now)
@@ -209,15 +201,9 @@ def _create_child_task_for_pending_events(
 ):
     from robert_agent.supervision import actions as supervision_actions
 
-    if parent_task_id and not execution_ownership.parent_allows_child(
-        conn, parent_task_id
-    ):
+    if parent_task_id and not execution_ownership.parent_allows_child(conn, parent_task_id):
         return None
-    remediation_context = (
-        ((pending_events[0].get("metadata") or {}).get("remediation") or {})
-        if pending_events
-        else {}
-    )
+    remediation_context = ((pending_events[0].get("metadata") or {}).get("remediation") or {}) if pending_events else {}
     if remediation_context.get("episode_id") and not execution_ownership.claim_episode(
         conn,
         remediation_context["episode_id"],
@@ -225,9 +211,7 @@ def _create_child_task_for_pending_events(
     ):
         return None
     if not pending_events:
-        _save_pending_handoff(
-            conn, parent_task_id, {"status": "completed", "retryable": False}
-        )
+        _save_pending_handoff(conn, parent_task_id, {"status": "completed", "retryable": False})
         conn.execute(
             """
             UPDATE workstreams
@@ -249,8 +233,7 @@ def _create_child_task_for_pending_events(
                     repo,
                     known_workstreams=(
                         ()
-                        if pending_event.get("event_type")
-                        in {"assigned", "review_request", "notification"}
+                        if pending_event.get("event_type") in {"assigned", "review_request", "notification"}
                         else (workstream_id,)
                     ),
                 )
@@ -259,9 +242,7 @@ def _create_child_task_for_pending_events(
         None,
     )
     if child_event is None:
-        _save_pending_handoff(
-            conn, parent_task_id, {"status": "completed", "retryable": False}
-        )
+        _save_pending_handoff(conn, parent_task_id, {"status": "completed", "retryable": False})
         conn.execute(
             """
             UPDATE workstreams
@@ -276,15 +257,12 @@ def _create_child_task_for_pending_events(
         "source_relationship": workstream.source_relationship(child_event),
     }
     route_result = workflow_routing.effective_route(config_result, repo, child_event)
-    parent = conn.execute(
-        "SELECT metadata_json FROM tasks WHERE task_id=?", (parent_task_id,)
-    ).fetchone()
+    parent = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (parent_task_id,)).fetchone()
     metadata = values.json_object(parent[0]) if parent else {}
     handoff = metadata.get("pending_handoff") or {}
     if not handoff.get("retryable", True) or (
         handoff.get("next_retry_at")
-        and retry_policy.timestamp(handoff["next_retry_at"])
-        > retry_policy.timestamp(run_now)
+        and retry_policy.timestamp(handoff["next_retry_at"]) > retry_policy.timestamp(run_now)
     ):
         return None
     _save_pending_handoff(conn, parent_task_id, {**handoff, "status": "pending"})
@@ -303,9 +281,7 @@ def _create_child_task_for_pending_events(
     claim = gate.get("claim")
     conn.commit()  # Persist continuation ownership before external Git I/O.
     try:
-        worktree_result = assigned_workspace.prepare_worktree(
-            repo, child_event, route_result, dry_run
-        )
+        worktree_result = assigned_workspace.prepare_worktree(repo, child_event, route_result, dry_run)
     except ControlDeadlineExceeded:
         raise
     except (OSError, subprocess.SubprocessError) as exc:
@@ -315,10 +291,7 @@ def _create_child_task_for_pending_events(
             conn.execute("BEGIN IMMEDIATE")
         checked_at = values.utc_now() if claim else run_now
         if not _pending_handoff_current(conn, parent_task_id, workstream_id) or (
-            claim
-            and not supervision_actions.current(
-                conn, claim, config=recovery_config, now=checked_at
-            )
+            claim and not supervision_actions.current(conn, claim, config=recovery_config, now=checked_at)
         ):
             if claim:
                 supervision_actions.finish(
@@ -365,12 +338,8 @@ def _create_child_task_for_pending_events(
                     conn,
                     item["work_item_id"],
                     event_type="execution_failed",
-                    idempotency_key="pending-handoff:"
-                    + parent_task_id
-                    + ":"
-                    + failure["first_failed_at"],
-                    body="Pending request preparation stopped. "
-                    + failure["required_action"],
+                    idempotency_key="pending-handoff:" + parent_task_id + ":" + failure["first_failed_at"],
+                    body="Pending request preparation stopped. " + failure["required_action"],
                     metadata={
                         "kind": "pending_handoff",
                         "task_id": parent_task_id,
@@ -382,14 +351,8 @@ def _create_child_task_for_pending_events(
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     checked_at = values.utc_now() if claim else run_now
-    if (
-        parent_task_id
-        and not _pending_handoff_current(conn, parent_task_id, workstream_id)
-    ) or (
-        claim
-        and not supervision_actions.current(
-            conn, claim, config=recovery_config, now=checked_at
-        )
+    if (parent_task_id and not _pending_handoff_current(conn, parent_task_id, workstream_id)) or (
+        claim and not supervision_actions.current(conn, claim, config=recovery_config, now=checked_at)
     ):
         if claim:
             supervision_actions.finish(
@@ -416,8 +379,7 @@ def _create_child_task_for_pending_events(
         + [
             pending_event
             for pending_event in pending_events
-            if pending_event.get("event_fingerprint")
-            != child_event.get("event_fingerprint")
+            if pending_event.get("event_fingerprint") != child_event.get("event_fingerprint")
         ],
     )
     if task_info is None:
@@ -520,29 +482,19 @@ def _create_child_task_for_recommended_route(
         return None
     consumed_fingerprints = set(consumed_event_fingerprints or [])
     child_event = next(
-        (
-            event
-            for event in related_events
-            if event.get("event_fingerprint") in consumed_fingerprints
-        ),
+        (event for event in related_events if event.get("event_fingerprint") in consumed_fingerprints),
         related_events[0],
     )
-    related_events = [child_event] + [
-        event for event in related_events if event is not child_event
-    ]
+    related_events = [child_event] + [event for event in related_events if event is not child_event]
     stream = {
         "workstream_id": workstream_id,
         "source_relationship": workstream.source_relationship(child_event),
     }
-    route_result = workflow_routing.effective_route(
-        config_result, repo, child_event, recommended_route
-    )
+    route_result = workflow_routing.effective_route(config_result, repo, child_event, recommended_route)
     worktree_event = dict(child_event)
     if branch_slug:
         worktree_event["branch_slug"] = branch_slug
-    if route_result["route_id"] == "update-existing-pr" and not worktree_event.get(
-        "existing_pr_head_branch"
-    ):
+    if route_result["route_id"] == "update-existing-pr" and not worktree_event.get("existing_pr_head_branch"):
         branch_name = _latest_workstream_update_branch(
             conn,
             workstream_id,
@@ -559,8 +511,7 @@ def _create_child_task_for_recommended_route(
     handoff = parent_metadata.get("classification_handoff") or {}
     if not handoff.get("retryable", True) or (
         handoff.get("next_retry_at")
-        and retry_policy.timestamp(handoff["next_retry_at"])
-        > retry_policy.timestamp(run_now)
+        and retry_policy.timestamp(handoff["next_retry_at"]) > retry_policy.timestamp(run_now)
     ):
         return None
     conn.execute(
@@ -570,15 +521,11 @@ def _create_child_task_for_recommended_route(
     )
     conn.commit()  # Persist the handoff before external Git; do not pin the writer.
     try:
-        worktree_result = assigned_workspace.prepare_worktree(
-            repo, worktree_event, route_result, dry_run
-        )
+        worktree_result = assigned_workspace.prepare_worktree(repo, worktree_event, route_result, dry_run)
     except ControlDeadlineExceeded:
         raise
     except (OSError, subprocess.SubprocessError) as exc:
-        failure = retry_policy.failure_state(
-            handoff, getattr(exc, "stderr", None) or str(exc), run_now
-        )
+        failure = retry_policy.failure_state(handoff, getattr(exc, "stderr", None) or str(exc), run_now)
         conn.execute(
             """UPDATE tasks SET metadata_json=json_set(metadata_json,
             '$.classification_handoff',json(?)) WHERE task_id=?""",
@@ -673,9 +620,7 @@ def finalize_accepted_result(
         if related_item:
             work_item_row = (related_item["work_item_id"], related_item["origin_type"])
     if payload["output_type"] == "waiting_for_user":
-        _mark_consumed_events(
-            conn, payload["task_id"], payload["consumed_event_fingerprints"]
-        )
+        _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
         if work_item_row:
             question = payload.get("operator_question") or {}
             work_items.record_system_event(
@@ -691,12 +636,8 @@ def finalize_accepted_result(
                 },
                 now=run_now,
             )
-        work_application_lifecycle.mark_task_waiting_for_user(
-            conn, payload["task_id"], workstream_id, run_now
-        )
-        subject_type, subject_id = execution_ownership.subject_for_task(
-            conn, payload["task_id"]
-        )
+        work_application_lifecycle.mark_task_waiting_for_user(conn, payload["task_id"], workstream_id, run_now)
+        subject_type, subject_id = execution_ownership.subject_for_task(conn, payload["task_id"])
         if subject_type == "remediation_episode":
             remediation.exhaust_episode(
                 conn,
@@ -720,9 +661,7 @@ def finalize_accepted_result(
         payload["task_id"],
         include_consumed=payload["output_type"] == "classification_result",
     )
-    _mark_consumed_events(
-        conn, payload["task_id"], payload["consumed_event_fingerprints"]
-    )
+    _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
     pending_events = pending_events_for_task(
         conn,
         payload["task_id"],
@@ -732,11 +671,7 @@ def finalize_accepted_result(
         "UPDATE tasks SET lifecycle = 'completed', updated_at = ? WHERE task_id = ?",
         (run_now, payload["task_id"]),
     )
-    if (
-        work_item_row
-        and work_item_row[1] == "web"
-        and payload["output_type"] == "local_result"
-    ):
+    if work_item_row and work_item_row[1] == "web" and payload["output_type"] == "local_result":
         work_items.record_system_event(
             conn,
             work_item_row[0],
@@ -832,9 +767,7 @@ def finalize_accepted_result(
         config_result=config_result,
     )
     handoff = values.json_object(
-        conn.execute(
-            "SELECT metadata_json FROM tasks WHERE task_id=?", (payload["task_id"],)
-        ).fetchone()[0]
+        conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (payload["task_id"],)).fetchone()[0]
     ).get("pending_handoff", {})
     if handoff.get("status") not in {"pending", "attention"}:
         execution_ownership.close_terminal_task(conn, payload["task_id"], run_now)
@@ -911,10 +844,7 @@ def recover_orphaned_classification_results(
         if not execution_ownership.parent_allows_child(conn, row[1]):
             continue
         workstream_id = row[8]
-        if (
-            values.json_object(result_row[7]).get("result_contract")
-            != result_contract.CONTRACT_ID
-        ):
+        if values.json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
             # Old results remain audit history or unresolved cutover work. Never
             # consume, publish or terminalize them through the new protocol.
             continue
@@ -1005,12 +935,7 @@ def _complete_published_analysis_items(conn, repo_id, run_now):
             current = work_items._active_or_latest_task(conn, item["workstream_id"])
             if not current or current["task_id"] != item["analysis_task_id"]:
                 continue
-            if (
-                facts["running"]
-                or facts["actions"]
-                or facts["cleanup_pending"]
-                or facts["workflow_attention"]
-            ):
+            if facts["running"] or facts["actions"] or facts["cleanup_pending"] or facts["workflow_attention"]:
                 continue
             if work_items._unresolved_event(
                 conn,
@@ -1086,19 +1011,14 @@ def finalize_published_results(
         if not execution_ownership.claim_task(conn, row[1], run_now):
             continue
         workstream_id = row[8]
-        if (
-            values.json_object(result_row[7]).get("result_contract")
-            != result_contract.CONTRACT_ID
-        ):
+        if values.json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
             # Old results remain audit history or unresolved cutover work. Never
             # consume, publish or terminalize them through the new protocol.
             continue
         payload = results.load_result_payload(conn, result_row)
         if not results.result_audit_accepted(conn, payload["result_id"]):
             continue
-        if work_application_lifecycle.finalize_superseded_result(
-            conn, payload["result_id"], run_now
-        ):
+        if work_application_lifecycle.finalize_superseded_result(conn, payload["result_id"], run_now):
             finalized += 1
             continue
         if not results.result_actions_all_published(conn, payload["result_id"]):

@@ -53,6 +53,7 @@ dev = [
 
 [tool.ruff]
 target-version = "py311"
+line-length = 120
 
 [tool.ruff.format]
 # Python formatting must not rewrite Markdown prompt fixtures or instructions.

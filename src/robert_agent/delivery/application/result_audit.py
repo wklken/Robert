@@ -142,10 +142,7 @@ def audit_completed_results(
         verification_policy = route.verification_policy_for(row[13])
         task_kind = row[14]
         task_metadata = values.json_object(row[15])
-        if (
-            values.json_object(result_row[7]).get("result_contract")
-            != result_contract.CONTRACT_ID
-        ):
+        if values.json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
             # Old results remain audit history or unresolved cutover work. Never
             # consume, publish or terminalize them through the new protocol.
             continue
@@ -187,14 +184,10 @@ def audit_completed_results(
             raise
         except subprocess.TimeoutExpired as exc:
             checked_at = values.utc_now() if claim else run_now
-            if claim and not _revalidate_audit_claim(
-                conn, claim, recovery_config, checked_at
-            ):
+            if claim and not _revalidate_audit_claim(conn, claim, recovery_config, checked_at):
                 continue
             failure = {
-                **retry_policy.failure_state(
-                    observation, "Audit inspection timed out", run_now
-                ),
+                **retry_policy.failure_state(observation, "Audit inspection timed out", run_now),
                 "status": "inspection_timeout",
                 "timeout_seconds": exc.timeout,
             }
@@ -265,9 +258,7 @@ def audit_completed_results(
                     remediation_evidence=payload.get("remediation_evidence"),
                 )
         checked_at = values.utc_now() if claim else run_now
-        if claim and not _revalidate_audit_claim(
-            conn, claim, recovery_config, checked_at
-        ):
+        if claim and not _revalidate_audit_claim(conn, claim, recovery_config, checked_at):
             continue
         if not execution_ownership.claim_task(conn, payload["task_id"], run_now):
             continue
@@ -304,15 +295,9 @@ def audit_completed_results(
             now=run_now,
         )
         if audit["status"] != "accepted":
-            action_status = (
-                "policy_violation"
-                if audit["status"] == "policy_violation"
-                else "failed"
-            )
+            action_status = "policy_violation" if audit["status"] == "policy_violation" else "failed"
             results.set_github_actions_status(conn, payload["result_id"], action_status)
-            work_application_lifecycle.finalize_failed_task(
-                conn, payload["task_id"], workstream_id, run_now, audit
-            )
+            work_application_lifecycle.finalize_failed_task(conn, payload["task_id"], workstream_id, run_now, audit)
             execution_notifications.insert(
                 conn,
                 "worker_result_rejected",
@@ -335,9 +320,7 @@ def audit_completed_results(
             repo_id=repo_id,
             run_now=run_now,
         )
-        results.record_result_project_memory_status(
-            conn, payload["result_id"], memory_status
-        )
+        results.record_result_project_memory_status(conn, payload["result_id"], memory_status)
         if results.result_actions_all_published(conn, payload["result_id"]):
             try:
                 completion.finalize_accepted_result(
@@ -359,8 +342,6 @@ def audit_completed_results(
             except subprocess.TimeoutExpired:
                 continue
         else:
-            work_application_lifecycle.mark_task_waiting_for_publish(
-                conn, payload["task_id"], workstream_id, run_now
-            )
+            work_application_lifecycle.mark_task_waiting_for_publish(conn, payload["task_id"], workstream_id, run_now)
         audited += 1
     return audited

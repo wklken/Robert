@@ -41,9 +41,7 @@ def _json_object(value):
 
 
 def ordinary_dispatch_allowed(conn, task_id, repo):
-    row = conn.execute(
-        "SELECT task_kind,metadata_json FROM tasks WHERE task_id=?", (task_id,)
-    ).fetchone()
+    row = conn.execute("SELECT task_kind,metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
     if not row or row[0] != "human_request":
         return True  # System remediation is governed by its Episode policy.
     metadata = _json_object(row[1])

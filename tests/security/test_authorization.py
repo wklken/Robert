@@ -137,9 +137,7 @@ class AuthorizationTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(
-            decisions[0]["authorization_status"], "ignored_untrusted_trigger"
-        )
+        self.assertEqual(decisions[0]["authorization_status"], "ignored_untrusted_trigger")
         self.assertFalse(decisions[0]["creates_task"])
 
     def test_external_event_cannot_claim_github_system_authority(self):

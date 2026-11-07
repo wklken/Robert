@@ -26,9 +26,7 @@ class PendingContinuationTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            parent_task_id, parent_attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            parent_task_id, parent_attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -112,20 +110,16 @@ class PendingContinuationTests(RepositoryCycleFixture):
 
         self.assertTrue(audited["ok"], audited)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            tasks = conn.execute(
-                "SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at"
-            ).fetchall()
-            active_task_id = conn.execute(
-                "SELECT active_task_id FROM workstreams"
-            ).fetchone()[0]
+            tasks = conn.execute("SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at").fetchall()
+            active_task_id = conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0]
             if legacy_untrusted:
                 self.assertEqual(len(tasks), 1)
                 self.assertEqual(tasks[0][2], "completed")
                 self.assertIsNone(active_task_id)
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT count(*) FROM github_events WHERE actor_login='external-author'"
-                    ).fetchone()[0],
+                    conn.execute("SELECT count(*) FROM github_events WHERE actor_login='external-author'").fetchone()[
+                        0
+                    ],
                     2,
                 )
                 return
@@ -159,11 +153,7 @@ class PendingContinuationTests(RepositoryCycleFixture):
         self.assertIn("comment:comment-3", child_prompt)
 
     def test_saved_trusted_assignment_can_spawn_child_without_mention(self):
-        self.test_unconsumed_pending_event_creates_child_task_after_parent_result(
-            pending_assignment=True
-        )
+        self.test_unconsumed_pending_event_creates_child_task_after_parent_result(pending_assignment=True)
 
     def test_legacy_participant_pending_events_cannot_spawn_child(self):
-        self.test_unconsumed_pending_event_creates_child_task_after_parent_result(
-            legacy_untrusted=True
-        )
+        self.test_unconsumed_pending_event_creates_child_task_after_parent_result(legacy_untrusted=True)

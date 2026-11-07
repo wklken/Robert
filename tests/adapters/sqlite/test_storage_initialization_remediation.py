@@ -64,15 +64,11 @@ class StorageInitializationRemediationTests(unittest.TestCase):
         storage.init_database(self.db)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT workstream_id FROM tasks WHERE task_id='t'"
-                ).fetchone()[0],
+                conn.execute("SELECT workstream_id FROM tasks WHERE task_id='t'").fetchone()[0],
                 "github:example/r!2",
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT recommended_skills_json FROM route_decisions WHERE task_id='t'"
-                ).fetchone()[0],
+                conn.execute("SELECT recommended_skills_json FROM route_decisions WHERE task_id='t'").fetchone()[0],
                 '["legacy-skill"]',
             )
             self.assertEqual(
@@ -90,9 +86,7 @@ class StorageInitializationRemediationTests(unittest.TestCase):
                 3,
             )
             self.assertIsNotNone(
-                conn.execute(
-                    "SELECT work_item_id FROM work_items WHERE workstream_id='github:example/r#1'"
-                ).fetchone()
+                conn.execute("SELECT work_item_id FROM work_items WHERE workstream_id='github:example/r#1'").fetchone()
             )
         self.assertEqual(self.markers(), [(name,) for name in DATA_MIGRATIONS])
 
@@ -114,29 +108,19 @@ class StorageInitializationRemediationTests(unittest.TestCase):
         with patch.object(storage.sqlite3, "connect", side_effect=traced):
             storage.init_database(self.db)
         normalized = [" ".join(sql.lower().split()) for sql in statements]
+        self.assertFalse(any("select distinct t.task_id, t.lifecycle, gs.repo_id" in sql for sql in normalized))
         self.assertFalse(
-            any(
-                "select distinct t.task_id, t.lifecycle, gs.repo_id" in sql
-                for sql in normalized
-            )
-        )
-        self.assertFalse(
-            any(
-                sql.startswith("update route_decisions set recommended_skills_json")
-                for sql in normalized
-            )
+            any(sql.startswith("update route_decisions set recommended_skills_json") for sql in normalized)
         )
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT recommended_skills_json FROM route_decisions"
-                ).fetchone()[0],
+                conn.execute("SELECT recommended_skills_json FROM route_decisions").fetchone()[0],
                 "[]",
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT lifecycle FROM workstreams WHERE workstream_id='github:example/r!2'"
-                ).fetchone()[0],
+                conn.execute("SELECT lifecycle FROM workstreams WHERE workstream_id='github:example/r!2'").fetchone()[
+                    0
+                ],
                 "canceled",
             )
 
@@ -148,18 +132,14 @@ class StorageInitializationRemediationTests(unittest.TestCase):
                 closing(sqlite3.connect(self.db)) as conn,
                 conn,
             ):
-                previous = conn.execute(
-                    "SELECT checksum FROM schema_migrations WHERE name=?", (name,)
-                ).fetchone()
+                previous = conn.execute("SELECT checksum FROM schema_migrations WHERE name=?", (name,)).fetchone()
                 if previous:
                     conn.execute(
                         "UPDATE schema_migrations SET checksum='wrong' WHERE name=?",
                         (name,),
                     )
                 else:
-                    version = conn.execute(
-                        "SELECT max(version)+1 FROM schema_migrations"
-                    ).fetchone()[0]
+                    version = conn.execute("SELECT max(version)+1 FROM schema_migrations").fetchone()[0]
                     conn.execute(
                         "INSERT INTO schema_migrations VALUES (?,?,'wrong','2026-10-26')",
                         (version, name),
@@ -187,18 +167,14 @@ class StorageInitializationRemediationTests(unittest.TestCase):
         self.assertEqual(self.markers(), [])
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT workstream_id FROM tasks WHERE task_id='t'"
-                ).fetchone()[0],
+                conn.execute("SELECT workstream_id FROM tasks WHERE task_id='t'").fetchone()[0],
                 "github:example/r#1",
             )
         storage.init_database(self.db)
         self.assertEqual(self.markers(), [(name,) for name in DATA_MIGRATIONS])
 
     def test_late_initialization_failure_does_not_record_completion_early(self):
-        with patch.object(
-            vote_store, "initialize", side_effect=RuntimeError("late failure")
-        ):
+        with patch.object(vote_store, "initialize", side_effect=RuntimeError("late failure")):
             with self.assertRaisesRegex(RuntimeError, "late failure"):
                 storage.init_database(self.db)
         self.assertEqual(self.markers(), [])

@@ -46,9 +46,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                         command_runner=control_commands.run_command,
                     )
                 self.assertEqual(
-                    conn.execute("SELECT audit_status FROM github_actions").fetchone()[
-                        0
-                    ],
+                    conn.execute("SELECT audit_status FROM github_actions").fetchone()[0],
                     "accepted",
                 )
 
@@ -65,9 +63,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 return_value=subprocess.CompletedProcess([], 0, "", ""),
             ) as runner:
                 with self.assertRaises(subprocess.TimeoutExpired):
-                    evidence.run_inspection_command(
-                        ["git", "status", "--short"], fixture.root
-                    )
+                    evidence.run_inspection_command(["git", "status", "--short"], fixture.root)
                 with closing(sqlite3.connect(db)) as conn:
                     with self.assertRaises(subprocess.TimeoutExpired):
                         scope.for_result(
@@ -86,20 +82,14 @@ class ControlplaneRemediationTests(unittest.TestCase):
         db = fixture.root / "dd.sqlite3"
         fixture._init_summary_db(db)
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.process_stopped_at')"
-            )
-        self.assertEqual(
-            publish.publish_ready_actions(db, dry_run=True)["pending_count"], 0
-        )
+            conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.process_stopped_at')")
+        self.assertEqual(publish.publish_ready_actions(db, dry_run=True)["pending_count"], 0)
         with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute(
                 "UPDATE attempts SET metadata_json=json_set(metadata_json,'$.process_stopped_at',?)",
                 (datetime.now(timezone.utc).isoformat(),),
             )
-        self.assertEqual(
-            publish.publish_ready_actions(db, dry_run=True)["pending_count"], 1
-        )
+        self.assertEqual(publish.publish_ready_actions(db, dry_run=True)["pending_count"], 1)
 
     def test_notification_delivery_queries_only_pending_history(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,19 +104,14 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 conn.executemany(
                     """INSERT INTO notifications(notification_id,notification_type,
                     channel,status,created_at,metadata_json) VALUES (?,'notice','local','recorded',?,?)""",
-                    [
-                        (str(i), now, '{"delivery":{"status":"sent"}}')
-                        for i in range(1000)
-                    ],
+                    [(str(i), now, '{"delivery":{"status":"sent"}}') for i in range(1000)],
                 )
                 conn.execute(
                     """INSERT INTO notifications(notification_id,notification_type,
                     channel,status,created_at) VALUES ('pending','notice','local','recorded',?)""",
                     (now,),
                 )
-                plan = " ".join(
-                    row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql)
-                )
+                plan = " ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql))
                 self.assertIn("USING INDEX", plan)
             received = []
 
@@ -135,9 +120,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 0, "", "")
 
             self.assertEqual(
-                notify.deliver_pending(
-                    db, command=["receiver"], runner=receiver, now=now
-                )["sent"],
+                notify.deliver_pending(db, command=["receiver"], runner=receiver, now=now)["sent"],
                 1,
             )
             self.assertEqual(len(received), 1)
@@ -158,9 +141,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 self.assertEqual(discover.infer_intent("", body, "comment"), "analysis")
         for body in ["prefix", "fixture", "suffix", "debug information"]:
             with self.subTest(body=body):
-                self.assertNotEqual(
-                    discover.infer_intent("", body, "comment"), "bug_fix"
-                )
+                self.assertNotEqual(discover.infer_intent("", body, "comment"), "bug_fix")
         for body in [
             "实现用户登录",
             "支持增量同步",
@@ -170,9 +151,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
             with self.subTest(body=body):
                 intent = discover.infer_intent("", body, "comment")
                 self.assertEqual(
-                    route.route_task({"intent": intent, "source_type": "issue"})[
-                        "route_id"
-                    ],
+                    route.route_task({"intent": intent, "source_type": "issue"})["route_id"],
                     "new-pr",
                 )
 
@@ -212,9 +191,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 "",
             )
 
-        daemon.run_daemon(
-            config, once=True, child_runner=child, rate_limit_runner=rates, now=now
-        )
+        daemon.run_daemon(config, once=True, child_runner=child, rate_limit_runner=rates, now=now)
         self.assertEqual(len(calls), 1)
         self.assertNotIn("--skip-publish", calls[0])
 
@@ -225,9 +202,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
             directory.mkdir()
             import hashlib
 
-            entries = sorted(
-                (hashlib.sha256(str(i).encode()).hexdigest(), str(i)) for i in range(3)
-            )
+            entries = sorted((hashlib.sha256(str(i).encode()).hexdigest(), str(i)) for i in range(3))
             for i, (key, attempt) in enumerate(entries):
                 payload = {
                     "attempt_id": attempt,
@@ -245,14 +220,10 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 (directory / (key + ".json")).write_text(json.dumps(record))
             received = []
             for _ in range(3):
-                with mock.patch.object(
-                    result_spool.time, "monotonic", side_effect=[0, 0, 3]
-                ):
+                with mock.patch.object(result_spool.time, "monotonic", side_effect=[0, 0, 3]):
                     result_spool.replay(
                         db,
-                        lambda *args, **kwargs: (
-                            received.append(True) or {"ok": True, "status": "recorded"}
-                        ),
+                        lambda *args, **kwargs: received.append(True) or {"ok": True, "status": "recorded"},
                     )
             self.assertEqual(received, [True])
             self.assertEqual(len(list(directory.glob("*.invalid"))), 2)
@@ -266,9 +237,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
         with mock.patch.object(daemon.time, "monotonic", return_value=1):
             daemon._maybe_prune(fixture.context, now=retention_fixture.NOW)
         with fixture.connect() as conn:
-            remaining = conn.execute(
-                "SELECT count(*) FROM daemon_events WHERE event_type='poll'"
-            ).fetchone()[0]
+            remaining = conn.execute("SELECT count(*) FROM daemon_events WHERE event_type='poll'").fetchone()[0]
         self.assertLess(remaining, 150)
 
     def test_timed_out_control_child_releases_only_its_own_run_lease(self):
@@ -278,9 +247,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
             storage.init_database(db)
             now = datetime.now(timezone.utc).isoformat()
             with closing(daemon_state.connect(db)) as conn, conn:
-                daemon_state.start_daemon_run(
-                    conn, config_path="/config", owner_id="daemon", now=now
-                )
+                daemon_state.start_daemon_run(conn, config_path="/config", owner_id="daemon", now=now)
                 conn.execute(
                     "INSERT INTO agent_runs(run_id,status,started_at) VALUES ('unrelated','running',?)",
                     (now,),
@@ -328,22 +295,14 @@ time.sleep(30)
                 # Start the cleanup deadline only after the fixture run/lease
                 # exists; interpreter startup can exceed 0.3s on loaded CI.
                 deadline = time.monotonic() + 10
-                while (
-                    not ready.exists()
-                    and process.poll() is None
-                    and time.monotonic() < deadline
-                ):
+                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.01)
-                self.assertTrue(
-                    ready.exists(), "control child did not persist its run and lease"
-                )
+                self.assertTrue(ready.exists(), "control child did not persist its run and lease")
                 return process
 
             with (
                 mock.patch.object(daemon, "build_loop_command", return_value=command),
-                mock.patch.object(
-                    daemon.subprocess, "Popen", side_effect=start_ready_child
-                ),
+                mock.patch.object(daemon.subprocess, "Popen", side_effect=start_ready_child),
             ):
                 response = daemon._run_local_drain(context)
             self.assertFalse(response["ok"])
@@ -351,21 +310,15 @@ time.sleep(30)
             self.assertTrue(response["child"]["process_group_stopped"])
             with closing(sqlite3.connect(db)) as conn:
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT status FROM agent_runs WHERE run_id='timed'"
-                    ).fetchone()[0],
+                    conn.execute("SELECT status FROM agent_runs WHERE run_id='timed'").fetchone()[0],
                     "failed",
                 )
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT status FROM leases WHERE owner_id='timed'"
-                    ).fetchone()[0],
+                    conn.execute("SELECT status FROM leases WHERE owner_id='timed'").fetchone()[0],
                     "released",
                 )
                 self.assertEqual(
-                    conn.execute(
-                        "SELECT status FROM agent_runs WHERE run_id='unrelated'"
-                    ).fetchone()[0],
+                    conn.execute("SELECT status FROM agent_runs WHERE run_id='unrelated'").fetchone()[0],
                     "running",
                 )
 

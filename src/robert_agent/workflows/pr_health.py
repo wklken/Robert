@@ -98,9 +98,7 @@ def failure_signature(failures):
         normalized.append(
             {
                 "check_name": str(failure.get("check_name") or ""),
-                "failure_summary": _normalize_failure_text(
-                    failure.get("failure_summary") or ""
-                ),
+                "failure_summary": _normalize_failure_text(failure.get("failure_summary") or ""),
             }
         )
     encoded = json.dumps(
@@ -165,11 +163,7 @@ def _workflow_observation(
             ],
             runner=runner,
         )
-        failed_jobs = [
-            job
-            for job in _items(jobs_payload, "jobs")
-            if job.get("conclusion") == "failure"
-        ]
+        failed_jobs = [job for job in _items(jobs_payload, "jobs") if job.get("conclusion") == "failure"]
         excerpts = []
         evidence_status = "available"
         for job in failed_jobs:
@@ -336,8 +330,7 @@ def collect_ci_observations(
             runner=runner,
         )
         for check in _items(checks_payload, "check_runs")
-        if check.get("name") in allowed
-        and _mapping(check.get("app")).get("slug") != "github-actions"
+        if check.get("name") in allowed and _mapping(check.get("app")).get("slug") != "github-actions"
     )
     return observations
 
@@ -365,17 +358,11 @@ def summarize_ci(observations, check_allowlist):
         if check_name not in check_allowlist:
             continue
         current = latest.get(check_name)
-        if current is None or _observation_freshness(
-            observation
-        ) > _observation_freshness(current):
+        if current is None or _observation_freshness(observation) > _observation_freshness(current):
             latest[check_name] = observation
 
     missing = [name for name in check_allowlist if name not in latest]
-    incomplete = [
-        name
-        for name, observation in latest.items()
-        if observation.get("status") != "completed"
-    ]
+    incomplete = [name for name, observation in latest.items() if observation.get("status") != "completed"]
     if missing or incomplete:
         return {
             "status": "waiting",
@@ -399,11 +386,7 @@ def summarize_ci(observations, check_allowlist):
             "observations": list(latest.values()),
         }
 
-    failures = [
-        observation
-        for observation in latest.values()
-        if observation.get("conclusion") == "failure"
-    ]
+    failures = [observation for observation in latest.values() if observation.get("conclusion") == "failure"]
     if failures:
         if any(failure.get("evidence_status") != "available" for failure in failures):
             return {
@@ -413,11 +396,7 @@ def summarize_ci(observations, check_allowlist):
                 "failures": failures,
                 "observations": list(latest.values()),
             }
-        signature = (
-            failures[0].get("failure_signature")
-            if len(failures) == 1
-            else failure_signature(failures)
-        )
+        signature = failures[0].get("failure_signature") if len(failures) == 1 else failure_signature(failures)
         return {
             "status": "failing",
             "failures": failures,
@@ -425,10 +404,7 @@ def summarize_ci(observations, check_allowlist):
             "observations": list(latest.values()),
         }
 
-    if all(
-        observation.get("conclusion") in SUCCESSFUL_CONCLUSIONS
-        for observation in latest.values()
-    ):
+    if all(observation.get("conclusion") in SUCCESSFUL_CONCLUSIONS for observation in latest.values()):
         return {
             "status": "green",
             "observations": list(latest.values()),
@@ -436,11 +412,6 @@ def summarize_ci(observations, check_allowlist):
     return {
         "status": "manual",
         "reason": "unsupported_conclusion",
-        "manual_conclusions": sorted(
-            {
-                str(observation.get("conclusion") or "")
-                for observation in latest.values()
-            }
-        ),
+        "manual_conclusions": sorted({str(observation.get("conclusion") or "") for observation in latest.values()}),
         "observations": list(latest.values()),
     }

@@ -35,9 +35,7 @@ class ReconcileIsolationFixture(unittest.TestCase):
             )
             conn.execute("UPDATE tasks SET lifecycle='completed'")
             conn.execute("UPDATE attempts SET status='completed',metadata_json='{}'")
-            conn.execute(
-                "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL"
-            )
+            conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
             execution_store.close_binding(conn, "task", task_id, "2026-10-28T07:00:00Z")
             conn.execute("UPDATE execution_subjects SET binding_status=?", (status,))
         return task_id
@@ -47,9 +45,7 @@ class ReconcileIsolationFixture(unittest.TestCase):
         return subprocess.CompletedProcess(
             args,
             0,
-            json.dumps(
-                {"state": "closed", "merged": True, "merged_at": "2026-10-28T07:10:33Z"}
-            ),
+            json.dumps({"state": "closed", "merged": True, "merged_at": "2026-10-28T07:10:33Z"}),
             "",
         )
 

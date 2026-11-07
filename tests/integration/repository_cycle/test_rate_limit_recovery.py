@@ -19,17 +19,12 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
         from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._rate_limited_attempt()
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
-            result = run_once.run_once(
-                self.config_path, dry_run=True, skip_external=True
-            )
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+            result = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn:
             attempts = conn.execute(
-                "SELECT attempt_id,status,worktree_path,metadata_json,failure_json"
-                " FROM attempts ORDER BY attempt_no"
+                "SELECT attempt_id,status,worktree_path,metadata_json,failure_json FROM attempts ORDER BY attempt_no"
             ).fetchall()
             self.assertEqual([row[1] for row in attempts], ["failed", "prepared"])
             self.assertEqual(attempts[0][2], attempts[1][2])
@@ -73,22 +68,12 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
                 fixture = RepositoryCycleFixture()
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
-                db_path, _, _ = fixture._rate_limited_attempt(
-                    fallback=fallback, model=model, phase=True
-                )
-                with patch.object(
-                    attempt_process, "dispatch_status", return_value={"status": "dead"}
-                ):
-                    run_once.run_once(
-                        fixture.config_path, dry_run=True, skip_external=True
-                    )
+                db_path, _, _ = fixture._rate_limited_attempt(fallback=fallback, model=model, phase=True)
+                with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+                    run_once.run_once(fixture.config_path, dry_run=True, skip_external=True)
                 with closing(sqlite3.connect(db_path)) as conn:
-                    self.assertEqual(
-                        conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-                    )
-                    failure = json.loads(
-                        conn.execute("SELECT failure_json FROM attempts").fetchone()[0]
-                    )
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+                    failure = json.loads(conn.execute("SELECT failure_json FROM attempts").fetchone()[0])
                     self.assertEqual(failure["error_class"], "rate_limited")
 
     def test_immediate_rate_limit_exit_enters_fallback_recovery(self):
@@ -109,9 +94,7 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
             "default_effort": "high",
         }
         with (
-            patch.object(
-                dispatch_queue, "ensure_dispatch_worktree", return_value=worktree
-            ),
+            patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value=worktree),
             patch.object(
                 cycle_worker,
                 "dispatch_worker",
@@ -141,31 +124,21 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
                 workers=[worker],
             )
         self.assertTrue(dispatched[0]["ok"], dispatched)
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
             metadata = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM attempts ORDER BY attempt_no DESC LIMIT 1"
-                ).fetchone()[0]
+                conn.execute("SELECT metadata_json FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
             )
-            self.assertEqual(
-                metadata["resume"]["model_fallback"]["model"], "model-fallback"
-            )
+            self.assertEqual(metadata["resume"]["model_fallback"]["model"], "model-fallback")
 
     def test_fallback_rate_limit_stops_after_one_automatic_switch(self):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, _ = self._rate_limited_attempt()
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             current_id, raw = conn.execute(
@@ -196,17 +169,11 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
                 " VALUES ('fallback-log',?,?,'worker_stdout',?,?)",
                 (task_id, current_id, str(log), datetime.now(timezone.utc).isoformat()),
             )
-        with patch.object(
-            attempt_process, "dispatch_status", return_value={"status": "dead"}
-        ):
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2
-            )
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
             failure = json.loads(
                 conn.execute(
                     "SELECT failure_json FROM attempts WHERE attempt_id=?",
@@ -243,13 +210,9 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
                     "dispatch_status",
                     return_value={"status": process_status},
                 ):
-                    run_once.run_once(
-                        fixture.config_path, dry_run=True, skip_external=True
-                    )
+                    run_once.run_once(fixture.config_path, dry_run=True, skip_external=True)
                 with closing(sqlite3.connect(db_path)) as conn:
-                    self.assertEqual(
-                        conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-                    )
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
 
     def test_rate_limit_after_recorded_result_does_not_resume(self):
         from unittest.mock import patch
@@ -258,9 +221,7 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
         db_path, task_id, attempt_id = self._rate_limited_attempt()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE tasks SET expected_output='local_result'")
-            conn.execute(
-                "UPDATE route_decisions SET expected_output='local_result', route_id='local-result'"
-            )
+            conn.execute("UPDATE route_decisions SET expected_output='local_result', route_id='local-result'")
         payload = worker_result.build_result(
             task_id,
             attempt_id,
@@ -273,9 +234,7 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
         )
         self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            with patch.object(
-                attempt_process, "dispatch_status", return_value={"status": "dead"}
-            ):
+            with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
                 monitor.supervise_running_attempts(
                     conn,
                     "repo:example/backend",
@@ -286,12 +245,8 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
                     repo={"default_base_branch": "master"},
                     resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts").fetchone()[0], "completed"
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
 
     def test_real_worker_rate_limit_switches_model_and_records_result(self):
         import sys
@@ -300,9 +255,7 @@ class RateLimitRecoveryTests(RepositoryCycleFixture):
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE tasks SET expected_output='local_result'")
-            conn.execute(
-                "UPDATE route_decisions SET expected_output='local_result', route_id='local-result'"
-            )
+            conn.execute("UPDATE route_decisions SET expected_output='local_result', route_id='local-result'")
         binary = self.root / "limited-worker.py"
         binary.write_text("""import json,sys,time
 from pathlib import Path
@@ -342,9 +295,7 @@ time.sleep(.3)
                 ).fetchone()[0]
                 target, worktree = dispatch_queue.current_dispatch_target(conn, current)
             Path(worktree["worktree_path"]).mkdir(parents=True, exist_ok=True)
-            with patch.object(
-                dispatch_queue, "ensure_dispatch_worktree", return_value=worktree
-            ):
+            with patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value=worktree):
                 launched = dispatch_queue.dispatch_queued(
                     db_path,
                     ["repo:example/backend"],
@@ -376,17 +327,10 @@ time.sleep(.3)
                 )
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(
-                [
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT status FROM attempts ORDER BY attempt_no"
-                    )
-                ],
+                [row[0] for row in conn.execute("SELECT status FROM attempts ORDER BY attempt_no")],
                 ["failed", "completed"],
             )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1)
         models = self.data_dir / "artifacts" / task_id / "models.jsonl"
         self.assertEqual(
             [json.loads(line) for line in models.read_text().splitlines()],

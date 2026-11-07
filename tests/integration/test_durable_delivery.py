@@ -23,17 +23,13 @@ class DeliveryAndRecoveryTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.row_factory = sqlite3.Row
-            conn.execute(
-                "UPDATE github_actions SET metadata_json=json_set(metadata_json,'$.publish.retryable',0)"
-            )
+            conn.execute("UPDATE github_actions SET metadata_json=json_set(metadata_json,'$.publish.retryable',0)")
             for i in range(25):
                 conn.execute(
                     "INSERT INTO github_actions SELECT ?,result_id,task_id,action_type,target_url,external_id,audit_status,publish_status,created_at,metadata_json FROM github_actions WHERE action_id='push'",
                     ("stopped-" + str(i),),
                 )
-            conn.execute(
-                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a2','t',2,'completed')"
-            )
+            conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a2','t',2,'completed')")
             conn.execute(
                 "INSERT INTO worker_results SELECT 'r2',task_id,'a2',output_type,consumed_event_fingerprints_json,verification_json,handoff,created_at,metadata_json FROM worker_results WHERE result_id='r'"
             )
@@ -74,12 +70,8 @@ result_spool.submit(sys.argv[1],p,writer,prepare=result._prepare,lookup=result._
         self.assertEqual(child.returncode, 73, child.stderr)
         self.assertEqual(result.replay_pending_results(fixture.db)["recorded"], 1)
         with closing(sqlite3.connect(fixture.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1
-            )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM wakeups").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT count(*) FROM wakeups").fetchone()[0], 1)
 
     def test_30_second_write_lock_preserves_offline_result(self):
         import json
@@ -114,11 +106,7 @@ print(json.dumps(result.record_result(sys.argv[1],json.load(open(sys.argv[2]))))
         self.assertEqual(result.replay_pending_results(fixture.db)["recorded"], 1)
         self.assertEqual(result.replay_pending_results(fixture.db)["recorded"], 0)
         with closing(sqlite3.connect(fixture.db)) as conn:
-            timing = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )
+            timing = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
             from robert_agent.readmodels.execution_metrics import _seconds
 
-            self.assertGreaterEqual(
-                _seconds(timing["result_saved_at"], timing["result_ingested_at"]), 29
-            )
+            self.assertGreaterEqual(_seconds(timing["result_saved_at"], timing["result_ingested_at"]), 29)

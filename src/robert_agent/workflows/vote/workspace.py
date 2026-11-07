@@ -23,11 +23,7 @@ def api(repo, endpoint, *, run_command=None):
 
 def read_source(repo, number, source_type, *, run_command=None):
     endpoint = f"{'pulls' if source_type == 'pull_request' else 'issues'}/{number}"
-    value = (
-        api(repo, endpoint, run_command=run_command)
-        if run_command
-        else api(repo, endpoint)
-    )
+    value = api(repo, endpoint, run_command=run_command) if run_command else api(repo, endpoint)
     if not isinstance(value, dict) or value.get("number") != number:
         raise ValueError("invalid GitHub vote source")
     discussion = []
@@ -55,9 +51,7 @@ def read_source(repo, number, source_type, *, run_command=None):
         if result.returncode:
             raise ValueError("vote discussion query failed")
         pages = json.loads(result.stdout)
-        if not isinstance(pages, list) or any(
-            not isinstance(page, list) for page in pages
-        ):
+        if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
             raise ValueError("invalid paginated vote discussion")
         for page in pages:
             for comment in page:
@@ -77,9 +71,7 @@ def source_records(source, event):
             "url": source.get("html_url") or event.get("html_url"),
         }
     }
-    cutoff = max(
-        [e.get("event_at") or "" for e in [event, *event.get("clarifications", [])]]
-    )
+    cutoff = max([e.get("event_at") or "" for e in [event, *event.get("clarifications", [])]])
     for comment in source.get("discussion", []):
         if (
             cutoff
@@ -130,9 +122,7 @@ def same_sources(manifest, current):
         }
     for key, value in manifest["sources"].items():
         if key not in available or any(
-            available[key].get(field) != entry
-            for field, entry in value.items()
-            if field != "url"
+            available[key].get(field) != entry for field, entry in value.items() if field != "url"
         ):
             return False
     return True
@@ -142,11 +132,7 @@ def prepare(repo, data_dir, round_id, event, workers, source):
     if source.get("state") != "open" or source.get("merged"):
         raise ValueError("vote source is closed")
     root = (
-        Path(data_dir)
-        / "artifacts"
-        / "votes"
-        / hashlib.sha256(repo["full_name"].encode()).hexdigest()[:16]
-        / round_id
+        Path(data_dir) / "artifacts" / "votes" / hashlib.sha256(repo["full_name"].encode()).hexdigest()[:16] / round_id
     )
     context = root / "context"
     context.mkdir(parents=True, exist_ok=True)
@@ -155,8 +141,7 @@ def prepare(repo, data_dir, round_id, event, workers, source):
         manifest = vote_files._read_json(saved)
         if (
             manifest.get("round_id") != round_id
-            or manifest.get("event", {}).get("event_fingerprint")
-            != event["event_fingerprint"]
+            or manifest.get("event", {}).get("event_fingerprint") != event["event_fingerprint"]
         ):
             raise ValueError("vote manifest identity changed")
         verify_snapshot(manifest)
@@ -198,9 +183,7 @@ def prepare(repo, data_dir, round_id, event, workers, source):
             [event],
         )
         manifest["code_manifest"] = code
-        manifest.update(
-            {key: code[key] for key in ("head_sha", "base_sha", "base_ref")}
-        )
+        manifest.update({key: code[key] for key in ("head_sha", "base_sha", "base_ref")})
         manifest["source_worktree"] = code["worktree_path"]
         manifest["worktree_path"] = code["worktree_path"]
     for name, value in [("request.json", event), ("sources.json", sources)]:
@@ -228,9 +211,7 @@ def add_issue_code(manifest, repo):
         source_hashes=review_workspace._source_hashes(tree),
     )
     # Still before ballot freeze: a second prepare gets the source it requested.
-    manifest["snapshot_id"] = hashlib.sha256(
-        (manifest["snapshot_id"] + sha).encode()
-    ).hexdigest()[:24]
+    manifest["snapshot_id"] = hashlib.sha256((manifest["snapshot_id"] + sha).encode()).hexdigest()[:24]
     vote_files.atomic_json(Path(manifest["context_dir"]) / "manifest.json", manifest)
 
 
@@ -244,11 +225,8 @@ def verify_snapshot(manifest):
     elif manifest.get("source_worktree"):
         tree = Path(manifest["source_worktree"])
         if (
-            review_workspace._git(tree, "rev-parse", "HEAD").strip()
-            != manifest["head_sha"]
-            or review_workspace._git(
-                tree, "status", "--porcelain=v1", "--untracked-files=all"
-            ).strip()
+            review_workspace._git(tree, "rev-parse", "HEAD").strip() != manifest["head_sha"]
+            or review_workspace._git(tree, "status", "--porcelain=v1", "--untracked-files=all").strip()
             or review_workspace._git(tree, "ls-files", "--others", "-z")
             or review_workspace._source_hashes(tree) != manifest["source_hashes"]
         ):
@@ -256,10 +234,8 @@ def verify_snapshot(manifest):
     if manifest.get("frozen"):
         if (
             vote_files.digest(manifest["prompt_path"]) != manifest["prompt_sha256"]
-            or Path(manifest["prompt_path"]).read_text()
-            != vote_files.voter_prompt(manifest)
-            or vote_files._read_json(Path(manifest["context_dir"]) / "manifest.json")
-            != manifest
+            or Path(manifest["prompt_path"]).read_text() != vote_files.voter_prompt(manifest)
+            or vote_files._read_json(Path(manifest["context_dir"]) / "manifest.json") != manifest
         ):
             raise ValueError("frozen vote manifest or prompt changed")
     return True

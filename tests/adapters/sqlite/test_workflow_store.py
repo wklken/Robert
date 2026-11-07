@@ -94,35 +94,19 @@ class WorkflowStoreTests(unittest.TestCase):
         self.conn.commit()
 
     def test_binding_is_idempotent_and_rejects_conflicts(self):
-        first = workflow_store.bind_subject(
-            self.conn, "task", "task-1", "human_request", "dbos", NOW
-        )
-        same = workflow_store.bind_subject(
-            self.conn, "task", "task-1", "human_request", "dbos", NOW
-        )
+        first = workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "dbos", NOW)
+        same = workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "dbos", NOW)
 
         self.assertEqual(first, same)
         self.assertEqual(first["workflow_id"], "robert:v1:task:task-1")
         with self.assertRaises(ValueError):
-            workflow_store.bind_subject(
-                self.conn, "task", "task-1", "human_request", "legacy", NOW
-            )
+            workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "legacy", NOW)
         with self.assertRaises(ValueError):
             workflow_store.assert_owner(self.conn, "task", "task-1", "legacy")
 
     def test_schema_has_all_workflow_storage_tables_and_indexes(self):
-        tables = {
-            row[0]
-            for row in self.conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
-        indexes = {
-            row[0]
-            for row in self.conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'index'"
-            )
-        }
+        tables = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        indexes = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
         self.assertTrue(
             {
                 "workflow_bindings",
@@ -142,9 +126,7 @@ class WorkflowStoreTests(unittest.TestCase):
 
     def test_only_human_tasks_and_remediation_episodes_can_bind(self):
         with self.assertRaises(ValueError):
-            workflow_store.bind_subject(
-                self.conn, "task", "task-remediation", "pr_remediation", "legacy", NOW
-            )
+            workflow_store.bind_subject(self.conn, "task", "task-remediation", "pr_remediation", "legacy", NOW)
         with self.assertRaises(ValueError):
             workflow_store.bind_subject(
                 self.conn,
@@ -162,68 +144,42 @@ class WorkflowStoreTests(unittest.TestCase):
         self.assertIsNone(binding["workflow_id"])
 
     def test_waiting_for_user_task_remains_eligible_for_legacy_migration(self):
-        binding = workflow_store.ensure_legacy_binding(
-            self.conn, "task", "task-waiting", "human_request", NOW
-        )
+        binding = workflow_store.ensure_legacy_binding(self.conn, "task", "task-waiting", "human_request", NOW)
 
         self.assertEqual(binding["binding_status"], "active")
         self.assertEqual(binding["owner_engine"], "legacy")
 
     def test_publication_intent_is_idempotent(self):
-        first = execution_store.prepare_publication_intent(
-            self.conn, "action-1", "publish:action-1", "request-1", NOW
-        )
-        same = execution_store.prepare_publication_intent(
-            self.conn, "action-1", "publish:action-1", "request-1", NOW
-        )
+        first = execution_store.prepare_publication_intent(self.conn, "action-1", "publish:action-1", "request-1", NOW)
+        same = execution_store.prepare_publication_intent(self.conn, "action-1", "publish:action-1", "request-1", NOW)
 
         self.assertEqual(first, same)
         with self.assertRaises(ValueError):
             execution_store.prepare_publication_intent(
                 self.conn, "action-1", "publish:action-1", "different-request", NOW
             )
-        published = execution_store.transition_publication_intent(
-            self.conn, first["publication_id"], "executing", NOW
-        )
-        published = execution_store.transition_publication_intent(
-            self.conn, first["publication_id"], "published", NOW
-        )
+        published = execution_store.transition_publication_intent(self.conn, first["publication_id"], "executing", NOW)
+        published = execution_store.transition_publication_intent(self.conn, first["publication_id"], "published", NOW)
         self.assertEqual("published", published["status"])
 
     def test_publication_intent_rejects_illegal_state_jumps(self):
-        intent = execution_store.prepare_publication_intent(
-            self.conn, "action-1", "publish:action-1", "request-1", NOW
-        )
+        intent = execution_store.prepare_publication_intent(self.conn, "action-1", "publish:action-1", "request-1", NOW)
 
-        with self.assertRaisesRegex(
-            ValueError, "illegal publication intent transition"
-        ):
-            execution_store.transition_publication_intent(
-                self.conn, intent["publication_id"], "published", NOW
-            )
-        executing = execution_store.transition_publication_intent(
-            self.conn, intent["publication_id"], "executing", NOW
-        )
+        with self.assertRaisesRegex(ValueError, "illegal publication intent transition"):
+            execution_store.transition_publication_intent(self.conn, intent["publication_id"], "published", NOW)
+        executing = execution_store.transition_publication_intent(self.conn, intent["publication_id"], "executing", NOW)
         absent = execution_store.transition_publication_intent(
             self.conn, executing["publication_id"], "confirmed_absent", NOW
         )
-        retrying = execution_store.transition_publication_intent(
-            self.conn, absent["publication_id"], "executing", NOW
-        )
+        retrying = execution_store.transition_publication_intent(self.conn, absent["publication_id"], "executing", NOW)
         attention = execution_store.transition_publication_intent(
             self.conn, retrying["publication_id"], "attention", NOW
         )
-        with self.assertRaisesRegex(
-            ValueError, "illegal publication intent transition"
-        ):
-            execution_store.transition_publication_intent(
-                self.conn, attention["publication_id"], "executing", NOW
-            )
+        with self.assertRaisesRegex(ValueError, "illegal publication intent transition"):
+            execution_store.transition_publication_intent(self.conn, attention["publication_id"], "executing", NOW)
 
     def test_terminal_binding_cannot_be_reopened_as_attention(self):
-        workflow_store.bind_subject(
-            self.conn, "task", "task-1", "human_request", "legacy", NOW
-        )
+        workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "legacy", NOW)
         workflow_store.close_binding(self.conn, "task", "task-1", NOW)
 
         with self.assertRaisesRegex(ValueError, "terminal"):

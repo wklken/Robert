@@ -108,12 +108,8 @@ class SupervisionActionTests(unittest.TestCase):
         self.assertEqual(len(first), 1)
         self.assertEqual(first[0]["status"], "requested")
         self.assertEqual(self.plan(), [])
-        self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0
-        )
-        self.assertEqual(
-            self.conn.execute("SELECT status FROM attempts").fetchone()[0], "running"
-        )
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
 
     def test_expired_unclaimed_request_cannot_repeat_same_generation(self):
         self.assertEqual(len(self.plan()), 1)
@@ -128,9 +124,7 @@ class SupervisionActionTests(unittest.TestCase):
             [],
         )
         self.assertEqual(
-            self.conn.execute(
-                "SELECT status,budget_cost FROM supervision_recovery_actions"
-            ).fetchall(),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchall(),
             [("rejected", 0)],
         )
         self.assertEqual(
@@ -159,9 +153,7 @@ class SupervisionActionTests(unittest.TestCase):
         self.plan()
         self.assertEqual(self.begin(generation="replacement")["status"], "blocked")
         self.assertEqual(
-            self.conn.execute(
-                "SELECT status,budget_cost FROM supervision_recovery_actions"
-            ).fetchone(),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(),
             ("rejected", 0),
         )
 
@@ -180,14 +172,10 @@ class SupervisionActionTests(unittest.TestCase):
                 now=NOW,
             )
         )
-        self.assertTrue(
-            actions.finish(self.conn, claim, outcome="observing", receipt={}, now=NOW)
-        )
+        self.assertTrue(actions.finish(self.conn, claim, outcome="observing", receipt={}, now=NOW))
         actions.verify(self.conn, observations=[], now=NOW)
         self.assertEqual(
-            self.conn.execute(
-                "SELECT status FROM supervision_recovery_actions"
-            ).fetchone()[0],
+            self.conn.execute("SELECT status FROM supervision_recovery_actions").fetchone()[0],
             "observing",
         )
 
@@ -198,15 +186,11 @@ class SupervisionActionTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as restarted, restarted:
             actions.verify(restarted, observations=[], now=LATER)
         self.assertEqual(
-            self.conn.execute(
-                "SELECT status,budget_cost FROM supervision_recovery_actions"
-            ).fetchone(),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(),
             ("unknown", 1),
         )
         self.assertEqual(
-            self.begin(config={"supervision": {"mode": "observe"}}, now=LATER)[
-                "status"
-            ],
+            self.begin(config={"supervision": {"mode": "observe"}}, now=LATER)["status"],
             "blocked",
         )
         self.conn.execute(
@@ -220,9 +204,7 @@ class SupervisionActionTests(unittest.TestCase):
         )
         actions.verify(self.conn, observations=[], now=RECHECK)
         self.assertEqual(
-            self.conn.execute(
-                "SELECT status FROM supervision_recovery_actions"
-            ).fetchone()[0],
+            self.conn.execute("SELECT status FROM supervision_recovery_actions").fetchone()[0],
             "unknown",
         )
         self.conn.execute(
@@ -231,9 +213,7 @@ class SupervisionActionTests(unittest.TestCase):
         )
         actions.verify(self.conn, observations=[], now=RECHECK_AGAIN)
         self.assertEqual(
-            self.conn.execute(
-                "SELECT status,budget_cost FROM supervision_recovery_actions"
-            ).fetchone(),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(),
             ("succeeded", 1),
         )
 
@@ -272,9 +252,7 @@ class SupervisionActionTests(unittest.TestCase):
                     self.assertFalse(self.conn.in_transaction)
                 validate.assert_not_called()
         self.assertEqual(
-            self.conn.execute(
-                "SELECT COUNT(*) FROM supervision_recovery_actions"
-            ).fetchone()[0],
+            self.conn.execute("SELECT COUNT(*) FROM supervision_recovery_actions").fetchone()[0],
             0,
         )
 
@@ -299,20 +277,14 @@ class SupervisionActionTests(unittest.TestCase):
                     )
                 )
             validate.assert_not_called()
-            self.assertEqual(
-                self.begin(config=config)["reason_code"], "recovery_policy_unavailable"
-            )
+            self.assertEqual(self.begin(config=config)["reason_code"], "recovery_policy_unavailable")
             validate.assert_called_once()
 
     def test_cancellation_after_claim_prevents_later_application(self):
         self.plan()
         claim = self.begin()["claim"]
         self.conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id='task'")
-        self.assertFalse(
-            actions.current(
-                self.conn, claim, config=self.config, now=NOW, generation="fingerprint"
-            )
-        )
+        self.assertFalse(actions.current(self.conn, claim, config=self.config, now=NOW, generation="fingerprint"))
 
     def test_killed_audit_claim_releases_scope_without_refunding_budget(self):
         self.conn.execute("UPDATE attempts SET status='completed'")
@@ -374,15 +346,11 @@ time.sleep(30)
         with closing(sqlite3.connect(self.db)) as restarted, restarted:
             actions.verify(restarted, observations=[], now=LATER)
         self.assertEqual(
-            self.conn.execute(
-                "SELECT status,budget_cost FROM supervision_recovery_actions"
-            ).fetchone(),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(),
             ("failed", 1),
         )
         self.assertIsNone(
-            self.conn.execute(
-                "SELECT json_extract(metadata_json,'$.audit') FROM worker_results"
-            ).fetchone()[0]
+            self.conn.execute("SELECT json_extract(metadata_json,'$.audit') FROM worker_results").fetchone()[0]
         )
         self.assertEqual(
             actions.begin(
@@ -395,9 +363,7 @@ time.sleep(30)
             )["status"],
             "legacy",
         )
-        self.assertFalse(
-            actions.current(self.conn, verdict["claim"], config=self.config, now=LATER)
-        )
+        self.assertFalse(actions.current(self.conn, verdict["claim"], config=self.config, now=LATER))
 
     def test_disk_policy_changes_fence_stale_config(self):
         root = self.db.parent
@@ -440,23 +406,13 @@ time.sleep(30)
         self.assertTrue(startup["ok"], startup)
         self.assertEqual(len(self.plan(config=startup)), 1)
         claim = self.begin(config=startup)["claim"]
-        self.assertTrue(
-            actions.current(
-                self.conn, claim, config=startup, now=NOW, generation="fingerprint"
-            )
-        )
+        self.assertTrue(actions.current(self.conn, claim, config=startup, now=NOW, generation="fingerprint"))
         raw["supervision"] = {"mode": "observe"}
         save()
-        self.assertFalse(
-            actions.current(
-                self.conn, claim, config=startup, now=NOW, generation="fingerprint"
-            )
-        )
+        self.assertFalse(actions.current(self.conn, claim, config=startup, now=NOW, generation="fingerprint"))
         self.task("replacement", "fresh-lineage")
         fresh = {**self.observation("replacement"), "lineage_key": "fresh-lineage"}
-        self.assertEqual(
-            actions.plan(self.conn, observations=[fresh], now=NOW, config=startup), []
-        )
+        self.assertEqual(actions.plan(self.conn, observations=[fresh], now=NOW, config=startup), [])
         raw["supervision"] = self.config["supervision"]
         save()
         self.assertEqual(

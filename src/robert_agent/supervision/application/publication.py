@@ -27,12 +27,8 @@ def fresh_config(config, db=None):
     if config and config.get("config_path"):
         from robert_agent.configuration import command as validate_config
 
-        current = validate_config.validate_config(
-            config["config_path"], skip_external=True
-        )
-        if not current.get("ok") or (
-            db and Path(current["db_path"]).resolve() != Path(db).resolve()
-        ):
+        current = validate_config.validate_config(config["config_path"], skip_external=True)
+        if not current.get("ok") or (db and Path(current["db_path"]).resolve() != Path(db).resolve()):
             return {}
         return current
     return config or {}
@@ -78,9 +74,7 @@ def begin(db, action, config, now):
         native_retry = bool(
             executing
             or needs_claim
-            or (json.loads(action["metadata_json"] or "{}").get("publish") or {}).get(
-                "attempt_count"
-            )
+            or (json.loads(action["metadata_json"] or "{}").get("publish") or {}).get("attempt_count")
         )
         if (
             not native_retry
@@ -111,11 +105,7 @@ def begin(db, action, config, now):
         )
         # A recovered task lock permits reading the same earlier remote effect,
         # even if the writer crashed after it charged its recovery claim.
-        if (
-            verdict["status"] == "blocked"
-            and executing
-            and supervision_store.has_schema(conn)
-        ):
+        if verdict["status"] == "blocked" and executing and supervision_store.has_schema(conn):
             row = conn.execute(
                 """SELECT * FROM supervision_recovery_actions WHERE scope_type='task'
                 AND scope_id=? AND target_id=? AND action_kind IN ('publication_retry','publication_reconcile')
@@ -136,9 +126,7 @@ def begin(db, action, config, now):
     return {
         **verdict,
         "guard_required": repair or verdict["status"] == "claimed",
-        "reconcile_only": bool(
-            executing and (needs_claim or verdict["status"] == "claimed")
-        ),
+        "reconcile_only": bool(executing and (needs_claim or verdict["status"] == "claimed")),
     }
 
 
@@ -150,9 +138,7 @@ def guard(db, action, state, config, now):
         if not allowed or state.get("reconcile_only"):
             return False
         if state.get("claim") and state["status"] == "claimed":
-            if not supervision_actions.publication_current(
-                conn, state["claim"], config=config, now=now
-            ):
+            if not supervision_actions.publication_current(conn, state["claim"], config=config, now=now):
                 return False
             if not repair:
                 from robert_agent.execution import rounds as native_rounds
@@ -163,11 +149,7 @@ def guard(db, action, state, config, now):
                     (action["task_id"],),
                 ).fetchone()
                 repo = next(
-                    (
-                        value
-                        for value in config.get("repos", ())
-                        if row and value["full_name"] == row[0]
-                    ),
+                    (value for value in config.get("repos", ()) if row and value["full_name"] == row[0]),
                     None,
                 )
                 if not repo:
@@ -176,9 +158,7 @@ def guard(db, action, state, config, now):
                 return (
                     workflow_routing.native_request_allowed(native, repo, config)
                     if native
-                    else work_admission.ordinary_dispatch_allowed(
-                        conn, action["task_id"], repo
-                    )
+                    else work_admission.ordinary_dispatch_allowed(conn, action["task_id"], repo)
                 )
     return True
 
@@ -190,6 +170,4 @@ def finish(conn, state, *, outcome, action_id, now, reason=None):
         receipt = {"action_id": action_id}
         if reason:
             receipt["reason_code"] = reason
-        supervision_actions.finish(
-            conn, claim, outcome=outcome, receipt=receipt, now=now
-        )
+        supervision_actions.finish(conn, claim, outcome=outcome, receipt=receipt, now=now)

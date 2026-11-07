@@ -26,9 +26,7 @@ class WorkstreamTests(unittest.TestCase):
             "event_fingerprint": "review:1",
             "workstream_id": "github:example/backend!456",
             "origin_workstream_id": "github:example/backend#123",
-            "metadata": {
-                "dd_workstream": {"workstream_id": "github:example/backend#123"}
-            },
+            "metadata": {"dd_workstream": {"workstream_id": "github:example/backend#123"}},
         }
 
         decision = workstream.plan_event(event, active_workstreams=set())

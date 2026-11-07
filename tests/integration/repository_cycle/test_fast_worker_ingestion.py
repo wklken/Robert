@@ -121,9 +121,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
                             }
                         ],
                         "consumed_event_fingerprints": ["comment:comment-analysis"],
-                        "verification": [
-                            _verification_evidence("python -B -m unittest")
-                        ],
+                        "verification": [_verification_evidence("python -B -m unittest")],
                         "handoff": "ready",
                         "used_skills": ["fast-code-path"],
                     },
@@ -155,9 +153,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
-            result_count = conn.execute(
-                "SELECT COUNT(*) FROM worker_results"
-            ).fetchone()[0]
+            result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
         self.assertEqual(attempt_status, "completed")
         self.assertEqual(result_count, 1)
 
@@ -204,9 +200,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             action_status = conn.execute(
                 "SELECT audit_status, publish_status FROM github_actions WHERE task_id = ?",
                 (task_id,),
@@ -301,12 +295,8 @@ raise SystemExit(0 if record["ok"] else 1)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[
-                    0
-                ]
-                result_count = conn.execute(
-                    "SELECT COUNT(*) FROM worker_results"
-                ).fetchone()[0]
+                attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
+                result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
                 if result_count:
                     monitor.supervise_running_attempts(
                         conn,
@@ -315,33 +305,23 @@ raise SystemExit(0 if record["ok"] else 1)
                         values.utc_now(),
                         resume_attempt=preparation.create_resume_attempt_and_prompt,
                     )
-                    attempt_status = conn.execute(
-                        "SELECT status FROM attempts"
-                    ).fetchone()[0]
+                    attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
             if attempt_status == "completed" and result_count == 1:
                 break
             time.sleep(0.1)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
-            attempt_status, metadata_json = conn.execute(
-                "SELECT status, metadata_json FROM attempts"
-            ).fetchone()
-            result_count = conn.execute(
-                "SELECT COUNT(*) FROM worker_results"
-            ).fetchone()[0]
-            notification_count = conn.execute(
-                "SELECT COUNT(*) FROM notifications"
-            ).fetchone()[0]
+            attempt_status, metadata_json = conn.execute("SELECT status, metadata_json FROM attempts").fetchone()
+            result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
+            notification_count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
         metadata = json.loads(metadata_json or "{}")
         dispatch_metadata = metadata.get("dispatch") or {}
         worker_logs = {}
         for key in ["stdout_path", "stderr_path"]:
             path = dispatch_metadata.get(key)
             if path:
-                worker_logs[key] = Path(path).read_text(
-                    encoding="utf-8", errors="replace"
-                )
+                worker_logs[key] = Path(path).read_text(encoding="utf-8", errors="replace")
         self.assertEqual(task_lifecycle, "queued")
         self.assertEqual(
             attempt_status,
@@ -352,9 +332,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 "worker_logs": worker_logs,
             },
         )
-        self.assertEqual(
-            result_count, 1, {"dispatch": dispatch_metadata, "worker_logs": worker_logs}
-        )
+        self.assertEqual(result_count, 1, {"dispatch": dispatch_metadata, "worker_logs": worker_logs})
         self.assertEqual(notification_count, 0)
 
         original_publish = publish.publish_ready_actions
@@ -393,8 +371,6 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
         self.assertEqual(task_lifecycle, "completed")
         self.assertEqual(workstream, ("completed", None))

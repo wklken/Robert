@@ -39,9 +39,7 @@ class RepairGitTests(unittest.TestCase):
         self.base = git(self.checkout, "rev-parse", "HEAD")
         self.marker = self.root / "escaped"
         self.script = self.checkout / ".git" / "hooks" / "escape"
-        self.script.write_text(
-            "#!/bin/sh\nprintf escaped > " + shlex.quote(str(self.marker)) + "\n"
-        )
+        self.script.write_text("#!/bin/sh\nprintf escaped > " + shlex.quote(str(self.marker)) + "\n")
         self.script.chmod(0o700)
         self.scope = {
             "supervision_repair": True,
@@ -72,21 +70,15 @@ class RepairGitTests(unittest.TestCase):
             f'[diff "escape"]\n    textconv = {self.script}\n'
             f"[core]\n    fsmonitor = {self.script}\n"
         )
-        (self.checkout / ".gitattributes").write_text(
-            "owned.txt filter=escape diff=escape\n"
-        )
+        (self.checkout / ".gitattributes").write_text("owned.txt filter=escape diff=escape\n")
         git(self.checkout, "add", ".gitattributes")
         git(self.checkout, "commit", "-qm", "attributes")
         git(self.checkout, "config", "include.path", str(hostile))
-        (self.checkout / ".git" / "objects" / "info" / "alternates").write_text(
-            str(self.root / "missing") + "\n"
-        )
+        (self.checkout / ".git" / "objects" / "info" / "alternates").write_text(str(self.root / "missing") + "\n")
         self.assertEqual(action_scope.observe_worktree_status(self.scope), "clean")
         self.assertFalse(self.marker.exists())
         self.assertTrue(
-            supervision_git.clean_revision(
-                self.checkout, action_scope.observe_head(self.scope), self.private
-            )
+            supervision_git.clean_revision(self.checkout, action_scope.observe_head(self.scope), self.private)
         )
         self.assertFalse(self.marker.exists())
 

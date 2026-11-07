@@ -63,9 +63,7 @@ class RepairCredentialIsolationTests(unittest.TestCase):
             xdg_config = root / "xdg"
             for path in (source, tree, data, controller_home):
                 path.mkdir(parents=True)
-            subprocess.run(
-                ["git", "init", "-q", "--template=", str(source)], check=True
-            )
+            subprocess.run(["git", "init", "-q", "--template=", str(source)], check=True)
             database = data / "state.sqlite3"
             config_file = root / "config.json"
             for path in (database, config_file):
@@ -162,9 +160,7 @@ class RepairCredentialIsolationTests(unittest.TestCase):
                     self.assertEqual(broker.get(key), value)
                 self.assertNotIn("GH_TOKEN", broker)
                 with patch.dict(os.environ, broker, clear=True):
-                    inner = supervision_repair.repair_environment(
-                        {"worker": worker}, root / "private"
-                    )
+                    inner = supervision_repair.repair_environment({"worker": worker}, root / "private")
                 self.assertEqual(inner["HOME"], str(root / "private"))
                 self.assertEqual(inner["MODEL_FIXTURE"], "enabled")
                 self.assertNotIn("GH_CONFIG_DIR", inner)

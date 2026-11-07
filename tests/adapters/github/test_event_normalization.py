@@ -81,13 +81,9 @@ class EventNormalizationTests(unittest.TestCase):
         )
 
         self.assertEqual(events[0]["workstream_id"], "github:example/backend!701")
-        self.assertEqual(
-            events[0]["origin_workstream_id"], "github:example/backend#123"
-        )
+        self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#123")
         self.assertTrue(events[0]["has_open_dd_pr"])
-        self.assertEqual(
-            events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent"
-        )
+        self.assertEqual(events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent")
 
     def test_legacy_dd_workstream_metadata_maps_to_origin_workstream_id(self):
         from robert_agent.adapters.github import discovery as discover
@@ -108,9 +104,7 @@ class EventNormalizationTests(unittest.TestCase):
         )
 
         self.assertEqual(events[0]["workstream_id"], "github:example/backend!701")
-        self.assertEqual(
-            events[0]["origin_workstream_id"], "github:example/backend#123"
-        )
+        self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#123")
 
     def test_dd_pr_event_keeps_pr_workstream_and_tracks_origin_issue(self):
         from robert_agent.adapters.github import discovery as discover
@@ -137,6 +131,4 @@ class EventNormalizationTests(unittest.TestCase):
         )
 
         self.assertEqual(events[0]["workstream_id"], "github:example/backend!456")
-        self.assertEqual(
-            events[0]["origin_workstream_id"], "github:example/backend#123"
-        )
+        self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#123")

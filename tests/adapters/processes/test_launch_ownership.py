@@ -29,13 +29,9 @@ class LaunchOwnershipTests(unittest.TestCase):
                     "Popen",
                     return_value=SimpleNamespace(pid=987654, poll=lambda: 2),
                 ),
-                patch.object(
-                    dispatch.worker_identity, "cleanup_new_process", return_value=False
-                ),
+                patch.object(dispatch.worker_identity, "cleanup_new_process", return_value=False),
             ):
-                result = dispatch.dispatch_worker(
-                    "task", "attempt", prompt, dry_run=False, startup_probe_seconds=0
-                )
+                result = dispatch.dispatch_worker("task", "attempt", prompt, dry_run=False, startup_probe_seconds=0)
             self.assertTrue(result["cleanup_pending"])
             self.assertTrue(result["process_exited"])
 
@@ -47,12 +43,8 @@ class LaunchOwnershipTests(unittest.TestCase):
             side_effect=AssertionError("unverified PID must not be signaled"),
         ):
             with patch.object(worker_identity, "live_process_group", return_value=True):
-                self.assertEqual(
-                    attempt_process.terminate_attempt(metadata)["status"], "attention"
-                )
-            with patch.object(
-                worker_identity, "live_process_group", return_value=False
-            ):
+                self.assertEqual(attempt_process.terminate_attempt(metadata)["status"], "attention")
+            with patch.object(worker_identity, "live_process_group", return_value=False):
                 self.assertEqual(
                     attempt_process.terminate_attempt(metadata)["status"],
                     "already_dead",
@@ -145,9 +137,7 @@ class LaunchOwnershipTests(unittest.TestCase):
             )
         self.assertFalse(result["ok"])
         with closing(sqlite3.connect(fixture.data_dir / "dd.sqlite3")) as conn:
-            status, task_id = conn.execute(
-                "SELECT status,task_id FROM attempts"
-            ).fetchone()
+            status, task_id = conn.execute("SELECT status,task_id FROM attempts").fetchone()
             self.assertEqual(status, "stale")
             self.assertEqual(
                 capacity.running_attempt_count_for_repos(

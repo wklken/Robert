@@ -65,9 +65,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
                 "2026-07-26T00:02:00Z",
             )
             counts = (
-                conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[
-                    0
-                ],
+                conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0],
                 conn.execute("SELECT COUNT(*) FROM github_events").fetchone()[0],
             )
 
@@ -86,9 +84,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
                 self.runner(author="someone-else"),
                 "2026-07-26T00:01:00Z",
             )
-            episode_count = conn.execute(
-                "SELECT COUNT(*) FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_count = conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0]
         self.assertEqual(decisions, [])
         self.assertEqual(episode_count, 0)
 
