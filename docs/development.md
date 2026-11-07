@@ -25,9 +25,15 @@ Production defaults remain `~/.config/robert/config.yml` and
 ## Testing
 
 Run focused tests first, then the complete gate:
+The Ruff rules and import-linter layer contracts are defined in `pyproject.toml`.
+Install the development extra to run both. Import-linter is a development-only
+dependency; its bounded version keeps the same contract engine on Python 3.10–3.14.
+The architecture tests additionally reject cycles across the complete module graph.
 
 ```bash
-python3 -B -m unittest tests.test_cli
+python3 -B -m unittest tests.interfaces.cli.test_cli
+python3 -m ruff check src tests
+lint-imports --config pyproject.toml --no-cache
 python3 -B -m unittest discover -s tests
 python3 -B -m compileall -q src
 python3 -m build
@@ -44,6 +50,19 @@ python3 -m venv /tmp/robert-smoke
 
 Tests use isolated temporary configuration and data directories instead of
 production paths.
+
+Tests follow the owning domains under `tests/work/`, `tests/execution/`,
+`tests/delivery/`, `tests/supervision/` and the other source boundaries. Adapter
+tests live under the corresponding `tests/adapters/` protocol directory.
+Repository-cycle scenarios stay under `tests/integration/repository_cycle/`;
+real-process simulations and browser tests have their own directories. Shared
+fixtures live in `tests/support/` and do not contain test methods. Each test
+module should focus on one target or one integration behavior.
+
+See [test rules](../tests/AGENTS.md) before adding fixtures or changing discovery.
+Plans and review notes under `docs/superpowers/` and `docs/reviews/` are local
+archives ignored by Git; durable usage and architecture rules belong in the
+published guides.
 
 ## Architecture Decisions
 
@@ -289,14 +308,19 @@ Result: every command exited successfully.
 
 ## Controlled Acceptance Evidence
 
+The timestamps, results and evidence hashes below describe the historical release
+environment. Command blocks show the current equivalent entrypoints; they are
+not a claim that the new commands were executed at those historical timestamps.
+See the [source layout upgrade guide](source-layout-upgrade.md) before rerunning them.
+
 ### Controlled Issue-to-PR
 
 - Timestamp: `2026-07-23 11:27:37 +08:00`
-- Command:
+- Current equivalent command:
 
 ```bash
 /tmp/robert-final-smoke/bin/python \
-  -m robert_agent.controlled_e2e_acceptance \
+  -m robert_agent.acceptance.controlled_e2e \
   --config /tmp/robert-acceptance-config.yml \
   --workspace-dir /tmp/robert-acceptance-controlled \
   --timeout-seconds 60 \
@@ -314,11 +338,11 @@ Result: every command exited successfully.
 ### Live Read-Only Discovery
 
 - Timestamp: `2026-07-23 11:28:31 +08:00`
-- Command:
+- Current equivalent command:
 
 ```bash
 /tmp/robert-final-smoke/bin/python \
-  -m robert_agent.live_discovery_acceptance \
+  -m robert_agent.acceptance.discovery \
   --config /tmp/robert-acceptance-config.yml \
   --limit 10
 ```
@@ -334,11 +358,11 @@ Result: every command exited successfully.
 ### Isolated Worktree
 
 - Timestamp: `2026-07-23 11:28:32 +08:00`
-- Command:
+- Current equivalent command:
 
 ```bash
 /tmp/robert-final-smoke/bin/python \
-  -m robert_agent.live_worktree_acceptance \
+  -m robert_agent.acceptance.worktree \
   --config /tmp/robert-acceptance-config.yml \
   --workspace-dir /tmp/robert-acceptance-worktree
 ```
@@ -356,11 +380,11 @@ Result: every command exited successfully.
 ### Real Configured Worker Without GitHub Writes
 
 - Timestamp: `2026-07-23 11:33:24 +08:00`
-- Command:
+- Current equivalent command:
 
 ```bash
 /tmp/robert-final-smoke/bin/python \
-  -m robert_agent.live_worker_acceptance \
+  -m robert_agent.acceptance.worker \
   --config /tmp/robert-acceptance-config.yml \
   --workspace-dir /tmp/robert-acceptance-live-worker \
   --timeout-seconds 600 \
@@ -383,11 +407,11 @@ a regression test was added, and the acceptance passed on rerun.
 ### Publication Deduplication
 
 - Timestamp: `2026-07-23 11:28:32 +08:00`
-- Command:
+- Current equivalent command:
 
 ```bash
 /tmp/robert-final-smoke/bin/python \
-  -m robert_agent.publish_dedupe_acceptance \
+  -m robert_agent.acceptance.publish_dedupe \
   --workspace-dir /tmp/robert-acceptance-dedupe
 ```
 
@@ -401,12 +425,12 @@ a regression test was added, and the acceptance passed on rerun.
 ### Daemon Poll-Starvation
 
 - Timestamp: `2026-07-23 11:37:48 +08:00`
-- Command:
+- Current equivalent command:
 
 ```bash
 /tmp/robert-dev-check/bin/python -B -m unittest \
-  tests.test_daemon.DaemonSchedulingTests.test_run_once_decision_startup_live_poll_runs_at_full_capacity \
-  tests.test_daemon.DaemonSchedulingTests.test_run_once_decision_due_live_poll_is_not_starved_by_running_attempt
+  tests.runtime.test_daemon_scheduling.DaemonSchedulingTests.test_run_once_decision_startup_live_poll_runs_at_full_capacity \
+  tests.runtime.test_daemon_scheduling.DaemonSchedulingTests.test_run_once_decision_due_live_poll_is_not_starved_by_running_attempt
 ```
 
 - Result: `2` tests passed
@@ -519,9 +543,10 @@ Result: `robert 0.1.0b1`.
 
 ### 源码边界检查
 
-`tests/test_architecture_boundaries.py` 随完整 unittest 门禁运行。它检查函数内的静态
-import，禁止源码循环依赖，并约束领域底层、应用用例、组合入口和读模型的依赖方向，检查根入口只转发 main、
-runtime/HTTP 不执行业务 SQL。新增依赖应先确认职责归属，不能通过局部 import 绕过检查。
+`tests/architecture/test_architecture_boundaries.py` 随完整 unittest 门禁运行。它检查函数内的静态
+import，禁止源码循环依赖，并约束领域底层、应用用例、组合入口和读模型的依赖方向。
+包根目录只允许 `__init__.py`、`paths.py` 和 `resource_files.py`，runtime/HTTP 不执行业务 SQL。
+新增依赖应先确认职责归属，不能通过局部 import 绕过检查。
 
 最终目录与领域内部层次见 [源码分层](architecture.md#源码分层)。运行测试使用项目虚拟环境。受控端到端验收会通过当前 `sys.executable` 启动独立 Worker，
 直接调用虚拟环境解释器时也不会错误选择 PATH 中的另一个 Python。

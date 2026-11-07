@@ -220,12 +220,12 @@ def _prepare(db_path, envelope):
                             "violations": ["uncommitted_worktree"],
                             "safe_error": "Push results require a clean worktree with all task-owned changes committed.",
                         })
-                        result_validation._record_diagnostic(db_path, envelope, response["reason_code"])
+                        result_validation.record_diagnostic(db_path, envelope, response["reason_code"])
                         return None, response
                     normalized["submission_head_sha"] = action_scope.observe_head(settings["action_scope"])
                 return normalized, None
             response = result_validation.failure(checked)
-    result_validation._record_diagnostic(db_path, envelope, response["reason_code"])
+    result_validation.record_diagnostic(db_path, envelope, response["reason_code"])
     return None, response
 
 

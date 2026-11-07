@@ -89,7 +89,7 @@ def build_run_once_command(config_path, workflow_path=None, *, dry_run=False):
     command = [
         sys.executable,
         "-B",
-        _script_path("run_once.py"),
+        _script_path("runtime/cycle.py"),
         "--config",
         str(config_path),
         *_workflow_args(workflow_path),
@@ -111,7 +111,7 @@ def build_loop_command(
     command = [
         sys.executable,
         "-B",
-        _script_path("loop_engine.py"),
+        _script_path("runtime/loop.py"),
         "--config",
         str(config_path),
         "--skip-external",
@@ -917,7 +917,7 @@ def _background_decision(context, *, now, child_runner=run_child_json):
     due = context.startup_live_poll_pending or (context.next_live_poll_at is not None and _parse_time(now) >= _parse_time(context.next_live_poll_at))
     if context.next_live_poll_at is None and not due:
         context.next_live_poll_at = _iso_after(now, context.daemon_config['github_poll_seconds'])
-    command = [sys.executable, '-B', _script_path('github_scan.py'), '--config', context.config_path]
+    command = [sys.executable, '-B', _script_path('runtime/scan.py'), '--config', context.config_path]
     refresh_due = refresh_pending and time.monotonic() >= context.context_refresh_retry_at
     if (due or refresh_due) and lanes['scan'].process is None and not _control_blocked(context, 'scan'):
         context.scan_context_refresh = not due

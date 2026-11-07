@@ -18,7 +18,7 @@ from robert_agent.supervision import diagnosis as supervision_diagnose
 from robert_agent.workflows.maintenance import repair as supervision_repair
 from robert_agent.supervision import store as supervision_store
 from robert_agent.work.application import commands as work_items
-from tests.test_supervision_repair_worker import BrokerFixture, broker_result, stop_fixture, submission_source
+from tests.support.supervision_repair_worker import BrokerFixture, broker_result, stop_fixture, submission_source
 from robert_agent.delivery.application import result_audit
 from robert_agent.execution.application import evidence
 

@@ -10,19 +10,19 @@ import sys
 
 
 def _worker_result_script():
-    return Path(__file__).resolve().parents[1] / "worker_result.py"
+    return Path(__file__).resolve().parents[1] / "worker/result.py"
 
 
 def _worker_snapshot_script():
-    return Path(__file__).resolve().parents[1] / "worker_snapshot.py"
+    return Path(__file__).resolve().parents[1] / "worker/snapshot.py"
 
 
 def _worker_heartbeat_script():
-    return Path(__file__).resolve().parents[1] / "worker_heartbeat.py"
+    return Path(__file__).resolve().parents[1] / "worker/heartbeat.py"
 
 
 def _agent_status_script():
-    return Path(__file__).resolve().parents[1] / "status.py"
+    return Path(__file__).resolve().parents[1] / "readmodels/status.py"
 
 
 def prompt_path_for_task(conn, data_dir, task_id):

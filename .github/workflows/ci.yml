@@ -42,6 +42,7 @@ jobs:
           from robert_agent.workflows.maintenance.repair import _fingerprint_file
           _fingerprint_file(executable)
       - run: python -m ruff check src tests
+      - run: lint-imports --config pyproject.toml --no-cache
       - run: >-
           python -m mypy
           src/robert_agent/cli
@@ -104,11 +105,11 @@ jobs:
                   parts = parts[:-1]
               if parts:
                   importlib.import_module('robert_agent.' + '.'.join(parts))
-          for name, owner in json.loads(resource('entrypoints.json').read_text()).items():
-              assert callable(importlib.import_module(owner).main), name
+          for name in json.loads(resource('entrypoints.json').read_text()):
+              assert callable(importlib.import_module(name).main), name
           assert resource('workflow.yml').is_file()
           assert resource('routes.yml').is_file()
-          for name in ('github_scan', 'control_lane'):
+          for name in ('runtime.scan', 'runtime.control'):
               subprocess.run([sys.executable, '-I', '-m', 'robert_agent.' + name, '--help'], check=True)
           PYTHON
 

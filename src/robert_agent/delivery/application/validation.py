@@ -99,7 +99,7 @@ def failure(audit):
             "required_action": "Correct the indicated field and submit again in this attempt."}
 
 
-def _record_diagnostic(db_path, payload, reason_code):
+def record_diagnostic(db_path, payload, reason_code):
     """Best-effort counts only; no submitted text or final-slot side effects."""
     try:
         with closing(sqlite3.connect(db_path, timeout=0.05)) as conn, conn:

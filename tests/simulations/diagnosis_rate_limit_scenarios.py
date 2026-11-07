@@ -13,7 +13,7 @@ import time
 from robert_agent.adapters.sqlite import database as storage
 from robert_agent.supervision import diagnosis as supervision_diagnose
 from robert_agent.supervision import store as supervision_store
-from tests.support_model_http import model_http
+from tests.support.model_http import model_http
 
 
 WRAPPER = '''import json,sys,urllib.request,urllib.error

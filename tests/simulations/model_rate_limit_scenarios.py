@@ -17,7 +17,7 @@ from robert_agent.adapters.processes import worker as dispatch
 from robert_agent.runtime import cycle as run_once
 from robert_agent.work.application import commands as work_items
 from tests.simulations.supervision_scenarios import query, wait_for
-from tests.support_model_http import model_http
+from tests.support.model_http import model_http
 from robert_agent.delivery.application import result_audit
 from robert_agent.execution.application import dispatch as dispatch_queue
 from robert_agent.execution.application import monitor

@@ -11,9 +11,9 @@ Robert is a local Python control plane with five boundaries:
 5. durable SQLite state under `~/.local/share/robert/`.
 
 The installed `robert` command reads `~/.config/robert/config.yml`.
-`run_once.py` orchestrates bounded cycles, `daemon.py` schedules them,
-`storage.py` owns schema setup, and route, worktree, dispatch, audit, and
-publish modules enforce separate policies.
+`runtime.cycle` composes bounded cycles, `runtime.daemon` schedules them,
+`adapters.sqlite.database` owns schema setup, and route, worktree, dispatch,
+audit, and publication modules enforce separate policies.
 
 Robert uses polling in the first beta. It does not include a webhook receiver
 or GitHub App authentication.

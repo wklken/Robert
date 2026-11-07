@@ -62,8 +62,8 @@ attempt. A saved request is audit evidence, not a permanent execution grant.
 List batch state without printing event bodies; after resolving the underlying access, configuration, or local failure, explicitly retry a batch:
 
 ```bash
-python3 -m robert_agent.github_scan --config ~/.config/robert/config.yml --list-batches
-python3 -m robert_agent.github_scan --config ~/.config/robert/config.yml --retry-batch BATCH_ID
+python3 -m robert_agent.runtime.scan --config ~/.config/robert/config.yml --list-batches
+python3 -m robert_agent.runtime.scan --config ~/.config/robert/config.yml --retry-batch BATCH_ID
 ```
 
 Retry is limited to repositories in that configuration. It resets the retry budget, preserves the original events, and wakes the daemon. A mismatched context still waits for the next permitted remote scan. A batch returning HTTP 410 is retained for inspection rather than silently discarded or retried forever. The retry columns are added compatibly when opening a database from an earlier version of this PR.
@@ -73,8 +73,8 @@ Control children now record a Linux boot ID/PID namespace or macOS boot-session 
 For that fallback, first stop the service and verify that its old scanner/publisher execution context and descendants have stopped. Then inspect the saved records and explicitly acknowledge only the relevant child:
 
 ```bash
-python3 -m robert_agent.control_lane --db /path/to/robert.db --list
-python3 -m robert_agent.control_lane --db /path/to/robert.db --acknowledge-stopped --id CHILD_ID
+python3 -m robert_agent.runtime.control --db /path/to/robert.db --list
+python3 -m robert_agent.runtime.control --db /path/to/robert.db --acknowledge-stopped --id CHILD_ID
 ```
 
 Acknowledgment never signals a process. It records the operator assertion and UID in `control_child_retired` audit evidence, refuses a live owner's unexpired daemon lease, and lets a subsequent startup recover. It must not be used merely because a PID looks unfamiliar.

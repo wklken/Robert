@@ -18,7 +18,7 @@ from robert_agent.delivery.application import publish
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-WORKER_RESULT_SCRIPT = PACKAGE_ROOT / "worker_result.py"
+WORKER_RESULT_SCRIPT = PACKAGE_ROOT / "worker/result.py"
 DEFAULT_WORKFLOW = resource("workflow.yml")
 
 

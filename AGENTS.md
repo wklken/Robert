@@ -14,6 +14,8 @@ These rules apply to the entire Robert repository.
   and current dependencies are insufficient.
 - Do not store GitHub or OpenClaw credentials in configuration or fixtures.
 - Run `python3 -B -m unittest discover -s tests` for code changes.
+- Run `python3 -m ruff check src tests` and
+  `lint-imports --config pyproject.toml --no-cache` for Python or dependency changes.
 - Run `python3 -m build` for packaging or resource changes.
 - Run `git diff --check` before committing.
 - Documentation-only changes do not require the Python test suite.
@@ -22,8 +24,9 @@ These rules apply to the entire Robert repository.
 
 The source is a modular monolith organized by domain, with smaller responsibility
 and layer modules inside each domain. See [the architecture map](docs/architecture.md)
-and [the complete execution plan](docs/superpowers/plans/2026-11-07-final-source-architecture.md).
-A unit of that plan is a verification checkpoint, not a partial delivery boundary.
+for the published source contract. Execution plans and review records under
+`docs/superpowers/` and `docs/reviews/` stay local and are ignored by Git.
+A plan unit is a verification checkpoint, not a partial delivery boundary.
 Do not describe the reorganization as complete while planned ownership or
 integration checks remain unfinished.
 
@@ -89,8 +92,8 @@ Paths below are relative to `src/robert_agent/`.
   a shared public owner rather than importing a caller's underscore helper.
   Configuration may depend on resource access and Worker adapter capabilities,
   not application execution. Pure policies must not gain I/O.
-- [Architecture tests](tests/test_architecture_boundaries.py) enforce dependency
-  direction, import acyclicity, thin root entrypoints and the runtime/HTTP SQL
+- [Architecture tests](tests/architecture/test_architecture_boundaries.py) enforce dependency
+  direction, import acyclicity, the package root allowlist and the runtime/HTTP SQL
   boundary. Do not add broad package exceptions to make a failing check pass.
   Document and test the actual dependency contract when introducing a capability.
 
@@ -130,15 +133,16 @@ Paths below are relative to `src/robert_agent/`.
 
 ## Entry points, migration and verification
 
-- The root package contains only package primitives and the finite CLI contracts
-  in [entrypoints.json](src/robert_agent/resources/entrypoints.json). These scripts
-  contain a main import and execution guard, not business code or private exports.
-  Keep each entry only for a documented script, persisted command or module-launch
-  consumer. Production modules import the real owner, never a compatibility entry.
-- Preserve `robert_agent.cli.main:main`, Worker result/snapshot/heartbeat commands,
-  status paths in persisted prompts, and daemon/subprocess launch contracts.
-  Internal private import paths are migrated directly. Do not keep them merely
-  because old tests patched or imported them.
+- The package root contains only `__init__.py`, `paths.py`, and
+  `resource_files.py`. Executable modules live with their owning domain or
+  interface. [entrypoints.json](src/robert_agent/resources/entrypoints.json)
+  lists canonical executable modules for packaging checks.
+- Preserve the installed `robert` CLI contract at `robert_agent.cli.main:main`.
+  Call Worker, status and daemon subprocess entrypoints at their current paths.
+  When an entrypoint moves, update every caller directly and delete the old
+  module. Do not add forwarding scripts or aliases for the old paths.
+- Follow the [source layout upgrade guide](docs/source-layout-upgrade.md) when
+  replacing an installation whose generated Worker prompts contain old paths.
 - Inventory source callers, tests, registrations, dynamic/module commands,
   persisted prompt paths, resources and service targets before moving a symbol.
   Update mocks where production actually looks up the collaborator. Static search
@@ -146,7 +150,8 @@ Paths below are relative to `src/robert_agent/`.
 - Check old/new references and dead/forwarding residue after moves. Retain useful
   contract tests and compare discovered test IDs before/after; moving a test must
   not silently stop unittest discovery. Avoid wholesale test directory churn.
-- Follow [development commands](docs/development.md) and [CI](.github/workflows/ci.yml).
+- Follow [test ownership rules](tests/AGENTS.md),
+  [development commands](docs/development.md) and [CI](.github/workflows/ci.yml).
   Structural changes require focused boundaries plus the full code-change gates.
   Controlled subprocess tests use the intended interpreter (`sys.executable`),
   not an unrelated `python3` selected by PATH.

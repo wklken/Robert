@@ -331,7 +331,7 @@ def render_prompt(
     # These scripts import Robert modules; an override may load an older package.
     python_bin = sys.executable or "python3"
     result_script = runtime_context.get("result_script", "")
-    status_script = runtime_context.get("status_script", "status.py")
+    status_script = runtime_context.get("status_script", "readmodels/status.py")
     identity = {
         "task_id": task["task_id"], "attempt_id": task["attempt_id"],
         "workstream_id": task["workstream_id"], "task_kind": task_kind,

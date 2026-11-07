@@ -70,14 +70,16 @@ robert_agent/
   结果提交在 `delivery.application.submission`。SQLite adapter 不反向依赖领域或用例。
 - `readmodels.dashboard` 负责只读查询与聚合；`interfaces.web.server` 负责 HTTP，
   工作项/知识写入调用相应领域的应用用例。
-- 根目录仅保留包元信息/路径定位和有限的兼容脚本。清单见
-  [entrypoints.json](../src/robert_agent/resources/entrypoints.json)。这些脚本只导入并运行 main，
-  不保留业务函数、旧私有 import 或供内部使用的别名。
+- 包根目录只保留 `__init__.py`、`paths.py` 和 `resource_files.py`。可执行入口位于所属模块，
+  例如 `robert_agent.runtime.scan` 和 `robert_agent.worker.result`。安装检查使用
+  [入口清单](../src/robert_agent/resources/entrypoints.json)。旧根路径已移除，升级步骤见
+  [源码布局升级说明](source-layout-upgrade.md)。
 
-[架构门禁](../tests/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和
-runtime/HTTP 的 SQL 边界。该门禁不能证明任意运行时调用或外部部署都正确；
+[架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和
+runtime/HTTP 的 SQL 边界。 [pyproject.toml](../pyproject.toml) 统一配置 Ruff 和 import-linter，
+后者约束入口/用例分层、稳定能力、适配器、配置和共享执行阶段；CI 必须通过这些合同。该门禁不能证明任意运行时调用或外部部署都正确；
 真实子进程、暂停/恢复、回执/重复发布和已安装 wheel 另由行为场景验证。
-完整步骤与交付条件见 [完整重构计划](superpowers/plans/2026-11-07-final-source-architecture.md)。
+目录约束、变更和验收规则见 [AGENTS.md](../AGENTS.md)。执行计划与审查记录只在本地保存，不发布到仓库。
 
 ## 整体架构
 
@@ -137,7 +139,7 @@ worktree 和文件 hash 校验不提供操作系统沙箱。Worker 按协议只�
 ## 模块关系
 
 箭头表示主要调用关系，节点按责任分组，不表示全部 Python import。
-`run_once.py` 编排业务，政策、资源和外部动作由各模块分别负责。
+`runtime/cycle.py` 组合单次运行，政策、资源和外部动作由各领域模块负责。
 
 ```mermaid
 flowchart LR
@@ -158,17 +160,17 @@ flowchart LR
 
 | 责任 | 主要模块 | 关键契约 |
 | --- | --- | --- |
-| 外部发现 | [github_scan.py](../src/robert_agent/runtime/scan.py)、[github_read.py](../src/robert_agent/adapters/github/read.py)、[discover.py](../src/robert_agent/adapters/github/discovery.py) | 完整观察批次先落盘；缓存命中仍需本地授权 |
-| 授权与协作线程 | [authorize.py](../src/robert_agent/security/authorization.py)、[workstream.py](../src/robert_agent/work/streams.py) | 正文不能扩大权限；Issue 与 PR 保留各自主线 |
-| 路由与准备 | [route.py](../src/robert_agent/workflows/routes.py)、[configuration/routes.py](../src/robert_agent/configuration/routes.py)、[skills.py](../src/robert_agent/context/skills.py)、[worktree.py](../src/robert_agent/adapters/git/workspace.py)、[render_prompt.py](../src/robert_agent/context/prompts.py) | 固定输出、动作权限与 workspace 策略；缺必需 Skill 时不启动 |
-| 执行与监督 | [dispatch.py](../src/robert_agent/adapters/processes/worker.py)、[worker_adapters/](../src/robert_agent/worker_adapters/)、[supervise.py](../src/robert_agent/execution/inspection.py)、[worker_identity.py](../src/robert_agent/adapters/processes/identity.py) | 环境白名单、进程身份、心跳、超时与退出证明 |
-| Worker 交接 | [worker/](../src/robert_agent/worker/)、[result_contract.py](../src/robert_agent/delivery/contract.py)、[result_spool.py](../src/robert_agent/execution/spool.py) | 绑定任务与 Attempt；规范化计划动作；持久提交与冲突拒绝 |
-| 审计与发布 | [audit_result.py](../src/robert_agent/delivery/application/audit.py)、[action_scope.py](../src/robert_agent/delivery/application/scope.py)、[redaction.py](../src/robert_agent/security/redaction.py)、[publish.py](../src/robert_agent/delivery/application/publish.py)、[publication_reconcile.py](../src/robert_agent/delivery/application/reconcile.py) | 校验证据、权限与文本；发布锁、远端确认、去重与有限重试 |
-| 状态与内部调度 | [storage.py](../src/robert_agent/adapters/sqlite/database.py)、[execution_store.py](../src/robert_agent/adapters/sqlite/execution_control.py)、[execution_operations.py](../src/robert_agent/execution/operations.py)、[wakeup.py](../src/robert_agent/work/wakeup.py)、[wakeup_notifier.py](../src/robert_agent/adapters/notifications/wakeup.py) | SQLite 事务与事实回执；通知只是提示；恢复受主体状态约束 |
-| 内建多模型流程 | [review_coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、[vote_coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[execution/stages.py](../src/robert_agent/execution/stages.py)、[model_pool.py](../src/robert_agent/adapters/sqlite/model_pool.py) | 冻结输入、共享额度、封存输出、复用已校验阶段 |
-| PR 自修复 | [pr_health.py](../src/robert_agent/workflows/pr_health.py)、[remediation.py](../src/robert_agent/workflows/pr_remediation.py) | 仓库显式开启；证据、版本、次数与预算限制 |
-| 操作与可观测性 | [web.py](../src/robert_agent/interfaces/web/server.py)、[work_item_control.py](../src/robert_agent/work/application/control.py)、[status.py](../src/robert_agent/readmodels/status.py)、[diagnostics.py](../src/robert_agent/operations/diagnostics.py)、[notify.py](../src/robert_agent/delivery/application/notifications.py) | 默认只读；写入需身份、CSRF 与状态校验；诊断导出脱敏 |
-| 可选知识与查询 | [project_memory.py](../src/robert_agent/context/project.py)、[runtime_knowledge.py](../src/robert_agent/context/knowledge.py)、[integrations/openclaw.py](../src/robert_agent/integrations/openclaw.py) | 项目记忆与运行知识可复用；OpenClaw 提供查询 |
+| 外部发现 | [runtime/scan.py](../src/robert_agent/runtime/scan.py)、[adapters/github/read.py](../src/robert_agent/adapters/github/read.py)、[adapters/github/discovery.py](../src/robert_agent/adapters/github/discovery.py) | 完整观察批次先落盘；缓存命中仍需本地授权 |
+| 授权与协作线程 | [security/authorization.py](../src/robert_agent/security/authorization.py)、[work/streams.py](../src/robert_agent/work/streams.py) | 正文不能扩大权限；Issue 与 PR 保留各自主线 |
+| 路由与准备 | [workflows/routes.py](../src/robert_agent/workflows/routes.py)、[configuration/routes.py](../src/robert_agent/configuration/routes.py)、[context/skills.py](../src/robert_agent/context/skills.py)、[adapters/git/workspace.py](../src/robert_agent/adapters/git/workspace.py)、[context/prompts.py](../src/robert_agent/context/prompts.py) | 固定输出、动作权限与 workspace 策略；缺必需 Skill 时不启动 |
+| 执行与监督 | [adapters/processes/worker.py](../src/robert_agent/adapters/processes/worker.py)、[worker_adapters/](../src/robert_agent/worker_adapters/)、[execution/inspection.py](../src/robert_agent/execution/inspection.py)、[adapters/processes/identity.py](../src/robert_agent/adapters/processes/identity.py) | 环境白名单、进程身份、心跳、超时与退出证明 |
+| Worker 交接 | [worker/](../src/robert_agent/worker/)、[delivery/contract.py](../src/robert_agent/delivery/contract.py)、[execution/spool.py](../src/robert_agent/execution/spool.py) | 绑定任务与 Attempt；规范化计划动作；持久提交与冲突拒绝 |
+| 审计与发布 | [delivery/application/audit.py](../src/robert_agent/delivery/application/audit.py)、[delivery/application/scope.py](../src/robert_agent/delivery/application/scope.py)、[security/redaction.py](../src/robert_agent/security/redaction.py)、[delivery/application/publish.py](../src/robert_agent/delivery/application/publish.py)、[delivery/application/reconcile.py](../src/robert_agent/delivery/application/reconcile.py) | 校验证据、权限与文本；发布锁、远端确认、去重与有限重试 |
+| 状态与内部调度 | [adapters/sqlite/database.py](../src/robert_agent/adapters/sqlite/database.py)、[adapters/sqlite/execution_control.py](../src/robert_agent/adapters/sqlite/execution_control.py)、[execution/operations.py](../src/robert_agent/execution/operations.py)、[work/wakeup.py](../src/robert_agent/work/wakeup.py)、[adapters/notifications/wakeup.py](../src/robert_agent/adapters/notifications/wakeup.py) | SQLite 事务与事实回执；通知只是提示；恢复受主体状态约束 |
+| 内建多模型流程 | [workflows/review/coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、[workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[execution/stages.py](../src/robert_agent/execution/stages.py)、[adapters/sqlite/model_pool.py](../src/robert_agent/adapters/sqlite/model_pool.py) | 冻结输入、共享额度、封存输出、复用已校验阶段 |
+| PR 自修复 | [workflows/pr_health.py](../src/robert_agent/workflows/pr_health.py)、[workflows/pr_remediation.py](../src/robert_agent/workflows/pr_remediation.py) | 仓库显式开启；证据、版本、次数与预算限制 |
+| 操作与可观测性 | [interfaces/web/server.py](../src/robert_agent/interfaces/web/server.py)、[work/application/control.py](../src/robert_agent/work/application/control.py)、[readmodels/status.py](../src/robert_agent/readmodels/status.py)、[operations/diagnostics.py](../src/robert_agent/operations/diagnostics.py)、[delivery/application/notifications.py](../src/robert_agent/delivery/application/notifications.py) | 默认只读；写入需身份、CSRF 与状态校验；诊断导出脱敏 |
+| 可选知识与查询 | [context/project.py](../src/robert_agent/context/project.py)、[context/knowledge.py](../src/robert_agent/context/knowledge.py)、[integrations/openclaw.py](../src/robert_agent/integrations/openclaw.py) | 项目记忆与运行知识可复用；OpenClaw 提供查询 |
 
 ## 事件授权、串行协作与路由
 
@@ -210,8 +212,8 @@ flowchart TD
 源码：[authorize_event](../src/robert_agent/security/authorization.py)、[plan_event](../src/robert_agent/work/streams.py)、
 [route_task](../src/robert_agent/workflows/routes.py)、[事件编排](../src/robert_agent/runtime/cycle.py)
 （`_run_repo_pipeline`、`_mark_consumed_events`、`_create_child_task_for_pending_events`）。
-行为见 [test_workstreams.py](../tests/test_workstreams.py) 和
-[test_discovery_authorization.py](../tests/test_discovery_authorization.py)。
+行为见 [test_workstreams.py](../tests/work/test_workstreams.py) 和
+[test_discovery_authorization.py](../tests/adapters/github/test_discovery.py)。
 
 ## Issue 到 PR 的时序
 
@@ -298,8 +300,8 @@ sequenceDiagram
 
 源码：[record_result 与重放](../src/robert_agent/delivery/application/submission.py)、[原子 spool](../src/robert_agent/execution/spool.py)、
 [本地通知](../src/robert_agent/adapters/notifications/wakeup.py)、[有界循环](../src/robert_agent/runtime/loop.py)。
-行为见 [test_compact_result.py](../tests/test_compact_result.py)、
-[test_worker_protocol.py](../tests/test_worker_protocol.py) 和 [test_wakeup.py](../tests/test_wakeup.py)。
+行为见 [test_compact_result.py](../tests/delivery/test_compact_result.py)、
+[test_submission.py](../tests/delivery/test_submission.py) 和 [test_wakeup.py](../tests/work/test_wakeup.py)。
 
 ## 发布去重与崩溃恢复
 
@@ -338,8 +340,8 @@ flowchart TD
 源码：[publish_ready_actions](../src/robert_agent/delivery/application/publish.py)、
 [classify_remote_state](../src/robert_agent/delivery/application/reconcile.py)、
 [publication intent](../src/robert_agent/adapters/sqlite/execution_control.py)、[发布锁](../src/robert_agent/delivery/lock.py)、
-[retry_policy.py](../src/robert_agent/execution/retry.py)。
-崩溃与重复写入行为见 [test_publication_reconcile.py](../tests/test_publication_reconcile.py)。
+[execution/retry.py](../src/robert_agent/execution/retry.py)。
+崩溃与重复写入行为见 [test_publication_reconcile.py](../tests/delivery/test_publication_reconcile.py)。
 
 ## Worker 监督与失败恢复
 
@@ -384,8 +386,8 @@ effort 保持不变；恢复路径也可能使用已保存的模型恢复信息�
 [监督、恢复与模型选择](../src/robert_agent/runtime/cycle.py)
 （`_supervise_running_attempts`、`_recover_failed_timeout_attempts`、`_model_for_dispatch`）、
 [主体控制](../src/robert_agent/execution/operations.py)、[契约切换](../src/robert_agent/execution/application/cutover.py)。
-边界见 [test_agent_lease_safety.py](../tests/test_agent_lease_safety.py) 和
-[test_cutover_recovery.py](../tests/test_cutover_recovery.py)。
+边界见 [test_agent_lease_safety.py](../tests/execution/test_agent_lease_safety.py) 和
+[test_cutover_recovery.py](../tests/execution/test_cutover_recovery.py)。
 
 ## 多模型评审与投票
 
@@ -441,9 +443,9 @@ sequenceDiagram
 Worker 的运行超时，父任务期限仍有效。未知启动保留额度。封存是应用层交接校验，
 同账户进程仍可能访问其他目录。
 
-源码：[review_coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、
-[vote_coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[StageCoordinator](../src/robert_agent/execution/stages.py)、
-[model_pool.py](../src/robert_agent/adapters/sqlite/model_pool.py)、[vote_tally.py](../src/robert_agent/workflows/vote/tally.py)。
+源码：[workflows/review/coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、
+[workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[StageCoordinator](../src/robert_agent/execution/stages.py)、
+[adapters/sqlite/model_pool.py](../src/robert_agent/adapters/sqlite/model_pool.py)、[workflows/vote/tally.py](../src/robert_agent/workflows/vote/tally.py)。
 配置与恢复见 [multi-model-review.md](multi-model-review.md) 和 [multi-agent-vote.md](multi-agent-vote.md)。
 
 ## PR 自修复
@@ -474,10 +476,10 @@ push 成功不等于 CI 转绿。后续观察确认修复结果、继续等待�
 CI 等待、未知 mergeability、不可读取日志与真实失败保持区分；版本变化使旧证据失效。
 Episode 的 `resolved`、`exhausted`、`superseded` 与 `canceled` 记录不同终结原因。
 
-源码：[pr_health.py](../src/robert_agent/workflows/pr_health.py)、[Episode 与预算](../src/robert_agent/workflows/pr_remediation.py)
+源码：[workflows/pr_health.py](../src/robert_agent/workflows/pr_health.py)、[Episode 与预算](../src/robert_agent/workflows/pr_remediation.py)
 （`upsert_health_episodes`、`budget_status`、`next_system_decisions`）、
-[修复发布校验](../src/robert_agent/delivery/application/publish.py)。行为见 [test_pr_health.py](../tests/test_pr_health.py)
-和 [test_pr_remediation_integration.py](../tests/test_pr_remediation_integration.py)。
+[修复发布校验](../src/robert_agent/delivery/application/publish.py)。行为见 [test_pr_health.py](../tests/workflows/test_pr_health.py)
+和 [test_pr_remediation_integration.py](../tests/integration/test_pr_remediation_integration.py)。
 
 ## 核心数据关系
 
@@ -513,8 +515,8 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 与历史读取，当前执行主体由 `execution_*` 管理。
 
 源码：[主 schema](../src/robert_agent/resources/db/schema.sql)、[存储初始化](../src/robert_agent/adapters/sqlite/database.py)、
-[执行主体与事实回执](../src/robert_agent/adapters/sqlite/execution_control.py)、[review_store.py](../src/robert_agent/adapters/sqlite/review_rounds.py)、
-[vote_store.py](../src/robert_agent/adapters/sqlite/vote_rounds.py)。基础概念见 [concepts.md](concepts.md)，
+[执行主体与事实回执](../src/robert_agent/adapters/sqlite/execution_control.py)、[adapters/sqlite/review_rounds.py](../src/robert_agent/adapters/sqlite/review_rounds.py)、
+[adapters/sqlite/vote_rounds.py](../src/robert_agent/adapters/sqlite/vote_rounds.py)。基础概念见 [concepts.md](concepts.md)，
 配置见 [reference.md](reference.md)。
 
 ## 维护图示

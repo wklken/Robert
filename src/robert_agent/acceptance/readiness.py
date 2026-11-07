@@ -54,7 +54,7 @@ def _command_path(command_exists, command):
 
 def _config_next_action(config_path, safe_error):
     if "No such file or directory" in safe_error:
-        script_path = AGENT_ROOT / "init_config.py"
+        script_path = AGENT_ROOT / "operations/initialize.py"
         config_path = Path(config_path).expanduser().resolve()
         return (
             f"{shlex.quote(sys.executable)} -B "
@@ -134,7 +134,7 @@ def _control_plane_state_gate(db_path):
             f"{'s' if prepared_attempts != 1 else ''} will be eligible for dispatch "
             "on the next non-dry-run cycle"
         )
-        summarize_path = AGENT_ROOT / "summarize.py"
+        summarize_path = AGENT_ROOT / "readmodels/summarize.py"
         return _gate(
             "control_plane_state",
             "passed",
