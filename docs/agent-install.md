@@ -1,5 +1,7 @@
 # Install Robert with a Coding Agent
 
+[文档目录](README.md)
+
 This guide is written for terminal coding agents such as Codex or Claude Code.
 Read the entire guide before executing commands.
 
@@ -150,8 +152,7 @@ with the [configuration reference](reference.md#configuration):
 - `routes` selects workers, skills and ordinary automatic model/effort overrides.
   Set the required `default_worker` name explicitly; native model participants
   use their own worker settings.
-- Only `version: 2` is accepted. Use the [configuration upgrade guide](config-v2-upgrade.md)
-  for older files. SQLite is the only execution engine; no engine block exists.
+- Only `version: 2` is accepted. SQLite is the only execution engine; no engine block exists.
 - Keep GitHub polling in `github`, capacity in `scheduler`, timeouts in
   `supervision`, and retention in `maintenance`. Enable repository PR automation
   only when requested; CI requires a nonempty check_allowlist.
@@ -160,7 +161,7 @@ with the [configuration reference](reference.md#configuration):
   into the public configuration.
 
 For an existing file, propose any necessary edits and obtain approval before
-applying them. Do not use `robert init --force` as an automatic migration.
+applying them. `robert init --force` replaces the file; it does not preserve custom settings.
 
 ### 7. Validate Readiness
 
@@ -211,9 +212,10 @@ Do **not** start `supervisord` during preparation: the example uses
 
 `robert service install` does not universally install Supervisor. It selects
 systemd on Linux with a usable user bus, Supervisor on other Linux hosts, and
-launchd on macOS. Only the Supervisor backend includes Web; its generated Web
-command defaults to read-only access on `127.0.0.1:8765`. Existing generated
-configurations must be inspected separately; upgrades do not rewrite them. If the user chooses the automatic service path,
+launchd on macOS. The default target `all` installs daemon and independent task
+supervision. Only the Supervisor backend includes Web; its generated Web command
+defaults to read-only access on `127.0.0.1:8765`. Reinstallation overwrites the
+selected definitions. If the user chooses the automatic service path,
 preview with `robert service install --dry-run --output json`, inspect the
 backend and content, then follow the backend-specific guide before starting.
 

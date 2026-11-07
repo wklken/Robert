@@ -1,5 +1,7 @@
 # 多 Agent 投票
 
+[文档目录](README.md)
+
 在 Issue 或 PR 中明确 `@` Robert 请求投票或表决。主 Agent 整理问题和选项，多个模型独立投票，再汇总回帖到触发请求所在的 GitHub 线程。投票提供决策建议，不会自动改代码、push、合并或关闭 Issue。
 
 ## 配置
@@ -34,7 +36,7 @@ routes:
 
 repository 可以覆盖整个 `routes.vote.multi_agent_vote` 设置对象。只接受配置的 `trusted_actors` 明确提及机器人的请求；已有讨论参与者权限不扩大。PR review 的作者白名单继续只控制 review，不应用于投票。未开启时会解释缺少的配置，不把多模型请求变成一次单模型投票。
 
-全局 `scheduler.model_max_concurrency` 默认 4，控制 review 和 vote 两种内建多模型流程的实际模型子进程总数。只接受严格正整数，不提供旧别名，不允许 repository/route 覆盖。一轮投票仍占原有一个任务并发槽；准备、各 voter 和汇总分别申请一个模型额度，额度等待不消耗模型执行 timeout，父任务总时限仍生效。旧单模型路径保持原有并发规则。
+全局 `scheduler.model_max_concurrency` 默认 4，控制 review 和 vote 两种内建多模型流程的实际模型子进程总数。只接受严格正整数，不允许 repository/route 覆盖。一轮投票仍占原有一个任务并发槽；准备、各 voter 和汇总分别申请一个模型额度，额度等待不消耗模型执行 timeout，父任务总时限仍生效。单模型路径使用任务并发额度。
 
 ## 触发与澄清
 
@@ -57,7 +59,7 @@ Issue 纯讨论使用独立 context 目录，不要求源码 worktree。准备�
 
 每个 voter 原子写入 `ballot.json`，包含 round、snapshot、spec hash、`choice_id`、非空 `reason_summary`、主要取舍、证据引用和未知项。`choice_id: null` 是弃权，必须说明 `abstain_reason`；该字段只要出现，都必须是有长度上限的非空文本。输出必须通过身份、选项、来源和文件校验，stdout/stderr 仅作诊断。已登记的进程组退出后，Robert 把普通交接文件复制到独立的封存目录，汇总读取封存副本并核对 hash；该交接校验不限制同账户进程访问封存目录。
 
-第一版采用单选、等权、一参与者一票。重试和 fallback 不增加票数，准备和汇总本身也不产生选票。所有参与者都必须返回有效选票，包括明确弃权；技术失败不算弃权，缺票时不能发布完整结论。
+采用单选、等权、一参与者一票。重试和 fallback 不增加票数，准备和汇总本身也不产生选票。所有参与者都必须返回有效选票，包括明确弃权；技术失败不算弃权，缺票时不能发布完整结论。
 
 票数由程序计算：获得全体参与者 `> N/2` 票才达到严格多数，弃权不缩小门槛；唯一最高票但未过半显示“唯一领先”；最高票并列显示平票；全弃权时没有胜出项。不自动加权或发起复投。
 
@@ -75,6 +77,6 @@ PR 和 Issue 都发布一条普通 Conversation comment，经原有审计、reda
 - 发布用 repository/source/number/round 稳定去重，保留 `robert-comment` 并添加 `robert-vote` marker。响应丢失后分页查询评论，核对账号、marker 和完整正文，再决定是否重试；未知状态不重复 POST。
 - CLI status 与 Board 执行历史显示投票轮次、各阶段/模型、失败原因和共享额度。历史产物保留在 `data_dir/artifacts/votes`，源码 worktree 位于仓库配置的 worktrees 目录。
 
-macOS 和 Linux 均直接启动配置的模型 CLI，无需 `sandbox-exec`、`bubblewrap` 或 namespace 权限；此模式取代历史设计文档中的 OS 沙箱要求。CLI 使用运行 Robert 的账户已有的登录、配置及文件权限，`CLAUDE_CONFIG_DIR` 可选。各轮 context、worktree、输出和阶段 `.tmp` 目录仍分开建立；应用层保留输入完整性、身份、封存副本和 hash 校验，但不以 OS 策略阻止 CLI 读写宿主机或其他轮次结果。沿用 [多模型 review 的直接执行与配置要求](multi-model-review.md#多轮恢复和运行约束)，保留并发、心跳、超时、重试、取消及恢复机制。监督覆盖已登记进程组，脱离该组的后代不能靠 namespace 保证退出；未知归属继续进入需处理状态。不增加 Python runtime 依赖，也不把模型/GitHub 凭据写入配置或产物。
+macOS 和 Linux 均直接启动配置的模型 CLI，无需 `sandbox-exec`、`bubblewrap` 或 namespace 权限。CLI 使用运行 Robert 的账户已有的登录、配置及文件权限，`CLAUDE_CONFIG_DIR` 可选。各轮 context、worktree、输出和阶段 `.tmp` 目录仍分开建立；应用层保留输入完整性、身份、封存副本和 hash 校验，但不以 OS 策略阻止 CLI 读写宿主机或其他轮次结果。沿用 [多模型 review 的直接执行与配置要求](multi-model-review.md#多轮恢复和运行约束)，保留并发、心跳、超时、重试、取消及恢复机制。监督覆盖已登记进程组，脱离该组的后代不能靠 namespace 保证退出；未知归属继续进入需处理状态。不把模型/GitHub 凭据写入配置或产物。
 
-关闭开关阻止新轮次，已登记轮次按冻结配置继续，或由操作者显式取消。回退旧二进制前必须确认 vote 协调器与模型已停止；旧版本不识别 vote 的运行额度，不能与其并行运行。保留数据库新表和产物，不在回退时删除历史。
+关闭开关阻止新轮次；尚未启动的轮次在派发前重新校验授权与开关。运行中的轮次保留冻结输入，操作者可显式取消。未知进程仍占用额度，必须确认其停止后才能释放。

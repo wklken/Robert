@@ -13,13 +13,13 @@ Use the interpreter from the Robert installation for `python -m` commands.
 | `python -m robert_agent.acceptance.worker` | Run an isolated fixture-backed live worker dispatch, then audit and dry-run publication without writing GitHub content. |
 | `python -m robert_agent.acceptance.worktree` | Run real git worktree preparation in an isolated local checkout without touching the operator repository or GitHub. |
 | `python -m robert_agent.acceptance.write_canary` | Plan or, with explicit `--confirm-github-write`, publish one marker-protected canary comment to a specified GitHub issue or PR through the normal audited publisher path. |
-| `python -m robert_agent.operations.initialize` | Create a missing runtime config from the packaged `config.example.yml` without overwriting an existing config. |
-| `python -m robert_agent.runtime.cycle` | Execute one agent cycle from `workflow.yml`. |
+| `python -m robert_agent.operations.initialize` | Create a minimal v2 config from required repository, worker and actor inputs; refuse to overwrite without `--force`. |
+| `python -m robert_agent.runtime.cycle` | Execute one configured agent cycle; an optional workflow path is checked for existence. |
 | `python -m robert_agent.runtime.loop` | Execute bounded repeated `runtime.cycle` runs while durable local work remains, then stop with a structured reason. |
 | `robert maintenance prune --output json` | Preview a bounded batch of expired diagnostic rows; `--apply` deletes eligible history while preserving task, audit, dedupe and recovery state. No automatic VACUUM. |
 | `python -m robert_agent.runtime.scan` | Scan GitHub, run publication with `--publish`, or list and retry stored scan batches. |
 | `python -m robert_agent.runtime.control` | List control children and acknowledge a verified stopped child. |
-| `python -m robert_agent.runtime.daemon` | Run the foreground resident Robert daemon. It owns a daemon lease, drains local runnable work through `runtime.loop --skip-external`, and runs conservative rate-limit-aware live `runtime.cycle` polls. Use the native user-service commands for unattended operation. |
+| `python -m robert_agent.runtime.daemon` | Run the foreground resident Robert daemon. It owns a daemon lease and supervises scanner, local-drain and publisher lanes. `--once` uses a synchronous diagnostic cycle. Use the native user-service commands for unattended operation. |
 | `python -m robert_agent.readmodels.status` | Print compact read-only JSON for global status, recent/latest runs, a task, attempt, workstream, event/comment lookup, event search, source task view, or artifact tail so agents do not need ad hoc SQLite queries. |
 | `python -m robert_agent.readmodels.chat` | Format the read-only dashboard payload as chat-ready Markdown inside a JSON envelope for OpenClaw slash commands or keyword triggers. |
 | `python -m robert_agent.configuration.command` | Validate config, repo entries, skill index, and local command availability. |
@@ -40,4 +40,4 @@ Use the interpreter from the Robert installation for `python -m` commands.
 | `python -m robert_agent.delivery.application.notifications` | Record and send local notifications. |
 | `python -m robert_agent.acceptance.publish_dedupe` | Verify comment and PR idempotency marker dedupe with an isolated database and simulated GitHub lookup responses. |
 | `python -m robert_agent.readmodels.summarize` | Summarize one cycle and recent workstreams. |
-| `python -m robert_agent.interfaces.web.server` | Serve the read-only HTML dashboard from `dd.sqlite3`; `/data.json`, `/history`, and `--json` expose the raw status payload, and `/artifact.txt` previews registered text artifacts. |
+| `python -m robert_agent.interfaces.web.server` | Serve the board at `/` and `/board`, workbench at `/work`, and operations at `/operations`. Read-only by default; `--writable` enables guarded local controls. `/data.json` and `--json` expose JSON, while `/history` is an HTML view and `/artifact.txt` previews registered text artifacts. |

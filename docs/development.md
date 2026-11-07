@@ -1,5 +1,7 @@
 # Development
 
+[文档目录](README.md)
+
 ## Setup
 
 Use an upstream-maintained stable Python release. As of 2026-11-07, Robert
@@ -49,10 +51,14 @@ formatting drift without modifying files.
 python3 -B -m unittest tests.interfaces.cli.test_cli
 python3 -m ruff check src tests
 python3 -m ruff format --check src tests
+python3 -m mypy src/robert_agent/cli src/robert_agent/paths.py \
+  src/robert_agent/configuration src/robert_agent/execution/stages.py \
+  src/robert_agent/context/skills.py src/robert_agent/adapters/services/native.py
 lint-imports --config pyproject.toml --no-cache
 python3 -B -m unittest discover -s tests
 python3 -B -m compileall -q src
 python3 -m build
+node --test tests/browser/*.test.cjs
 git diff --check
 ```
 
@@ -76,11 +82,11 @@ fixtures live in `tests/support/` and do not contain test methods. Each test
 module should focus on one target or one integration behavior.
 
 See [test rules](../tests/AGENTS.md) before adding fixtures or changing discovery.
-Plans and review notes under `docs/superpowers/` and `docs/reviews/` are local
-archives ignored by Git; durable usage and architecture rules belong in the
-published guides.
+Plans, reviews and remediation records under `docs/superpowers/`, `docs/reviews/`
+and `docs/remediation/` are local archives ignored by Git; durable usage and
+architecture rules belong in the published guides.
 
-## Architecture Decisions
+## Architecture contracts
 
 ### Local and self-hosted
 
@@ -104,8 +110,9 @@ actions, verification rules, output contracts, or workspace policy.
 
 ### Native user services
 
-Unattended execution uses systemd user services or launchd. Shell PID
-supervisors are not part of the standalone package.
+Unattended execution supports Supervisor, systemd user services and launchd.
+Daemon and independent task supervision have separate service targets. The
+Supervisor daemon target also includes Web. See [service setup](guides.md#daemon-service).
 
 ### Read-only integrations
 
@@ -142,429 +149,3 @@ PyPI Trusted Publishing using repository `wklken/Robert`, workflow
 
 Never tag or publish until release evidence, secret scans, TestPyPI rehearsal,
 and explicit publication approval are complete.
-
-## Robert 0.1.0b2 Local Release Evidence
-
-## Status
-
-- Version: `0.1.0b2`
-- Evidence date: `2026-07-24`
-- Repository root: sanitized local checkout
-- Publication status: local release commit and tag preparation only; no push,
-  GitHub release, or PyPI publication was authorized in this pass
-
-## Release Summary
-
-- Added Supervisor fallback support for Linux hosts without user systemd.
-- Improved OpenClaw plugin installation diagnostics and command exposure checks.
-- Nested daemon settings in generated configuration and schema.
-- Fixed GitHub Actions release, DCO, gitleaks, documentation-link, and worker
-  dispatch checks.
-- Refreshed README and installation documentation with Web UI and OpenClaw
-  screenshots.
-
-## Full Local Gate
-
-Commands:
-
-```bash
-python3 -B -m unittest discover -s tests
-python3 -B -m compileall -q src
-python3 -m build
-/tmp/robert-release-tools-b2/bin/python -m twine check dist/*
-/tmp/robert-release-smoke-b2/bin/pip install dist/*.whl
-/tmp/robert-release-smoke-b2/bin/robert --version
-/tmp/robert-release-smoke-b2/bin/robert --help
-git diff --check
-```
-
-Results:
-
-- Unit and controlled integration tests: `553` passed
-- Compileall: passed
-- Wheel and source distribution build: passed
-- Twine package metadata check: passed
-- Clean wheel install smoke: passed
-- CLI version smoke: `robert 0.1.0b2`
-- CLI help smoke: passed
-- Diff whitespace check: passed
-
-## Dependency Audit and Secret Scan
-
-Commands:
-
-```bash
-/tmp/robert-release-smoke-b2/bin/pip install --upgrade setuptools
-python3 -m pip_audit \
-  --path /tmp/robert-release-smoke-b2/lib/python3.10/site-packages \
-  --progress-spinner off
-git grep -I -n -E \
-  '(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' \
-  -- .
-```
-
-Results:
-
-- Dependency audit: no known vulnerabilities found after upgrading the smoke
-  venv bootstrap `setuptools`; local unpublished package
-  `robert-github-agent 0.1.0b2` was skipped because it is not yet on PyPI.
-- Secret scan: no matches.
-
-## Distribution Artifacts
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `robert_github_agent-0.1.0b2-py3-none-any.whl` | `fd29696b3440df5de2f55ed9cb1a900543a4fff9fd552bdbced97ff7e8ae07b7` |
-
-The source distribution was built and passed `twine check`. Its hash is not
-committed in this evidence block because `docs/development.md` is included in
-the source distribution, so embedding the source distribution hash here would
-make the committed source distribution hash self-referential. Compute the final
-source distribution hash from the immutable tag or release workflow artifact.
-
-## Publication Notes
-
-TestPyPI rehearsal was intentionally skipped by operator choice for `0.1.0b2`.
-The operator explicitly approved publishing after local release evidence, secret
-scan, dependency audit, package build, metadata check, and wheel smoke testing.
-
-Pushing `v0.1.0b2` triggers the GitHub release workflow, which publishes through
-PyPI Trusted Publishing and creates the GitHub release.
-
-## Robert 0.1.0b1 Release Evidence
-
-## Status
-
-- Version: `0.1.0b1`
-- Evidence date: `2026-07-23`
-- Repository root: sanitized local checkout
-- Public history policy: one sanitized release root plus evidence updates
-- Publication status: completed
-- GitHub writes performed by these gates: dedicated canary issue/comment,
-  sanitized repository publication, release tag, and release evidence
-
-## Environment
-
-- Python: `3.10.16`
-- Installed Codex CLI used by live worker acceptance: `0.145.0`
-- GitHub CLI authentication: active account `wklken`
-- OpenClaw CLI: not installed locally
-- CI-equivalent Python environment: `/tmp/robert-dev-check`
-
-The shared host Python installation has unrelated legacy `kube-shell`
-dependency conflicts. All Robert release checks, including `pip check`, were
-run in the isolated release environment, where they passed.
-
-## Full Local Gate
-
-Commands:
-
-```bash
-/tmp/robert-dev-check/bin/pip install -e '.[dev]'
-/tmp/robert-dev-check/bin/python -m ruff check src tests
-/tmp/robert-dev-check/bin/python -m mypy \
-  src/robert_agent/cli \
-  src/robert_agent/paths.py \
-  src/robert_agent/configuration \
-  src/robert_agent/execution/stages.py \
-  src/robert_agent/context/skills.py \
-  src/robert_agent/adapters/services/native.py
-/tmp/robert-dev-check/bin/python -B -m unittest discover -s tests
-/tmp/robert-dev-check/bin/python -B -m compileall -q src
-/tmp/robert-dev-check/bin/python -m build
-/tmp/robert-dev-check/bin/python -m pip_audit
-git diff --check
-```
-
-Results:
-
-- Ruff: passed
-- Mypy: passed for 9 configured source targets
-- Unit and controlled integration tests: `538` passed
-- Compileall: passed
-- Wheel and source distribution build: passed
-- Dependency audit: no known vulnerabilities
-- Diff whitespace check: passed
-
-## Private-Reference and Secret Scan
-
-The current tree and every reachable Git blob were scanned for private
-organization names, personal paths, internal domains, credential headers,
-private-key markers, token formats, and environment-specific checkout paths.
-
-Result: no disallowed matches.
-
-Legacy `dd-github-agent` strings remain only in migration commands, migration
-documentation, migration implementation, and migration tests.
-
-## Distribution Artifacts
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `robert_github_agent-0.1.0b1-py3-none-any.whl` | `1f502103f682b3430be7d66fc3a8c1883456cb9c511226dc62f65888958bffce` |
-| `robert_github_agent-0.1.0b1.tar.gz` | `c4286a8211a8335d69e2133408a312778ad30af78f6ce10ee77dc44cf3dbd631` |
-
-These hashes match the files published by the release workflow.
-
-Packaging acceptance:
-
-```bash
-python3 -m venv /tmp/robert-final-smoke
-/tmp/robert-final-smoke/bin/pip install \
-  dist/robert_github_agent-0.1.0b1-py3-none-any.whl
-/tmp/robert-final-smoke/bin/robert --help
-/tmp/robert-final-smoke/bin/robert init --help
-/tmp/robert-final-smoke/bin/robert doctor --help
-/tmp/robert-final-smoke/bin/robert daemon run --help
-/tmp/robert-final-smoke/bin/robert service install --dry-run
-/tmp/robert-final-smoke/bin/robert web run --help
-ROBERT_DATA_DIR=/tmp/robert-final-data \
-  /tmp/robert-final-smoke/bin/robert openclaw install --dry-run
-```
-
-Result: every command exited successfully.
-
-## Controlled Acceptance Evidence
-
-The timestamps, results and evidence hashes below describe the historical release
-environment. Command blocks show the current equivalent entrypoints; they are
-not a claim that the new commands were executed at those historical timestamps.
-See the [source layout upgrade guide](source-layout-upgrade.md) before rerunning them.
-
-### Controlled Issue-to-PR
-
-- Timestamp: `2026-07-23 11:27:37 +08:00`
-- Current equivalent command:
-
-```bash
-/tmp/robert-final-smoke/bin/python \
-  -m robert_agent.acceptance.controlled_e2e \
-  --config /tmp/robert-acceptance-config.yml \
-  --workspace-dir /tmp/robert-acceptance-controlled \
-  --timeout-seconds 60 \
-  --poll-interval-seconds 0.2
-```
-
-- Result: passed
-- Route: `new-pr`
-- Task lifecycle: `completed`
-- Planned actions were accepted and marked published by the controlled fake
-  publisher. No real GitHub command was executed.
-- Evidence SHA-256:
-  `98549cf670133a2983fbc4b586cf769186782b0479ebcf7231c1180051a6ba1a`
-
-### Live Read-Only Discovery
-
-- Timestamp: `2026-07-23 11:28:31 +08:00`
-- Current equivalent command:
-
-```bash
-/tmp/robert-final-smoke/bin/python \
-  -m robert_agent.acceptance.discovery \
-  --config /tmp/robert-acceptance-config.yml \
-  --limit 10
-```
-
-- Result: passed
-- Repository: `wklken/Robert`
-- Read-only: `true`
-- Raw events: `0`
-- Normalized events: `0`
-- Evidence SHA-256:
-  `168554b1897d40419e4fae3eafe30341454e4281b51db4f9068c08f8572b0fe5`
-
-### Isolated Worktree
-
-- Timestamp: `2026-07-23 11:28:32 +08:00`
-- Current equivalent command:
-
-```bash
-/tmp/robert-final-smoke/bin/python \
-  -m robert_agent.acceptance.worktree \
-  --config /tmp/robert-acceptance-config.yml \
-  --workspace-dir /tmp/robert-acceptance-worktree
-```
-
-- Result: passed
-- Route: `new-pr`
-- Worker attempt reached `running`
-- Git branch:
-  `codex/dd-77-fix-worktree-acceptance`
-- Git worktree registration: verified
-- Worker process cleanup: completed
-- Evidence SHA-256:
-  `a2b24846bb336060cd130c8a05ca0122a021abda485480489d79d0f98c9cb64b`
-
-### Real Configured Worker Without GitHub Writes
-
-- Timestamp: `2026-07-23 11:33:24 +08:00`
-- Current equivalent command:
-
-```bash
-/tmp/robert-final-smoke/bin/python \
-  -m robert_agent.acceptance.worker \
-  --config /tmp/robert-acceptance-config.yml \
-  --workspace-dir /tmp/robert-acceptance-live-worker \
-  --timeout-seconds 600 \
-  --poll-interval-seconds 2
-```
-
-- Result: passed
-- Worker: installed Codex CLI
-- Route: `comment-analysis`
-- Worker result: accepted
-- Planned comment actions: `1`
-- Published actions: `0`
-- Publication mode: `dry_run`
-- Evidence SHA-256:
-  `ad7178b5b8c261bbc78e5546005103242e603db0b2bfa4cb556359f89d72cf41`
-
-The first attempt exposed an unsupported Codex flag. The adapter was corrected,
-a regression test was added, and the acceptance passed on rerun.
-
-### Publication Deduplication
-
-- Timestamp: `2026-07-23 11:28:32 +08:00`
-- Current equivalent command:
-
-```bash
-/tmp/robert-final-smoke/bin/python \
-  -m robert_agent.acceptance.publish_dedupe \
-  --workspace-dir /tmp/robert-acceptance-dedupe
-```
-
-- Result: passed
-- Existing actions recognized: `2`
-- Deduplicated actions: `2`
-- Create commands issued: `0`
-- Evidence SHA-256:
-  `bc4b450dfc0b07fbdc7f0a3b68c7481809d76625c4b310ab5a02a10a9ae4b0c4`
-
-### Daemon Poll-Starvation
-
-- Timestamp: `2026-07-23 11:37:48 +08:00`
-- Current equivalent command:
-
-```bash
-/tmp/robert-dev-check/bin/python -B -m unittest \
-  tests.runtime.test_daemon_scheduling.DaemonSchedulingTests.test_run_once_decision_startup_live_poll_runs_at_full_capacity \
-  tests.runtime.test_daemon_scheduling.DaemonSchedulingTests.test_run_once_decision_due_live_poll_is_not_starved_by_running_attempt
-```
-
-- Result: `2` tests passed
-- Evidence SHA-256:
-  `a9fd3e4dfe661f02441e983076c3cd7cb2d889504e28b5a39da9b391abe63d2e`
-
-## Asset and License Review
-
-Bundled non-Python web assets:
-
-- `board.css`
-- `board.html`
-- `board.js`
-- `github-shell.css`
-- `index.html`
-- `operations.css`
-- `robert-logo.svg`
-- `workbench.css`
-- `workbench.js`
-
-These files are Robert project source, contain no vendored JavaScript or CSS
-library, and are distributed under the repository's Apache-2.0 license. The
-favicon uses the same project-authored SVG logo as the README.
-
-Runtime dependency:
-
-| Dependency | Reviewed version | Source | License |
-| --- | --- | --- | --- |
-| PyYAML | `6.0.3` | `pyyaml.org` / `github.com/yaml/pyyaml` | MIT |
-
-PyYAML is installed as a dependency and is not copied into Robert's wheel.
-
-`NOTICE` is not required. No reviewed bundled asset or runtime dependency adds
-an Apache NOTICE obligation.
-
-## Public Tree and Dead-Code Review
-
-Commands:
-
-```bash
-git status --short
-git log --oneline --decorate --reverse
-rg -n \
-  'daemon_supervisor|start_daemon\.sh|start_web\.sh|dd_status|dd_agent|dd-github-worker' \
-  src tests docs README.md README_EN.md
-/tmp/robert-dev-check/bin/pip check
-```
-
-Results:
-
-- No shell supervisor or legacy start script remains.
-- No deleted worker package or old status module remains.
-- Moved OpenClaw and status symbols have production CLI call sites.
-- No proxy-only compatibility module remains.
-- Isolated `pip check`: passed.
-- Shared host `pip check`: unrelated pre-existing `kube-shell` conflicts only.
-- Repository diff contains no unrelated feature work identified by the audit.
-
-The dead-code and proxy-only scan was completed.
-
-## OpenClaw Verification Limitation
-
-OpenClaw is not installed on this host, so real plugin installation, runtime
-inspection, and gateway restart were not executed. Current official OpenClaw
-documentation was checked for:
-
-- local-directory `plugins install`;
-- `plugins inspect <id> --runtime --json`;
-- `plugins uninstall <id> --force`;
-- `gateway restart`.
-
-Generated plugin tests, dry-run command generation, scheduler-content scans,
-and `node --check` passed.
-
-## Published Release
-
-- Public repository:
-  [wklken/Robert](https://github.com/wklken/Robert)
-- Release:
-  [v0.1.0b1](https://github.com/wklken/Robert/releases/tag/v0.1.0b1)
-- PyPI:
-  [robert-github-agent 0.1.0b1](https://pypi.org/project/robert-github-agent/0.1.0b1/)
-- Release workflow:
-  [GitHub Actions run 29985280105](https://github.com/wklken/Robert/actions/runs/29985280105)
-- Production canary:
-  [issue 6](https://github.com/wklken/Robert/issues/6)
-
-The release workflow completed through PyPI Trusted Publishing, generated
-provenance attestations for the wheel and source distribution, and created the
-GitHub release.
-
-The production canary published one marker-protected comment. A second run
-deduplicated the action, and the issue contains exactly one canary marker.
-
-TestPyPI was intentionally skipped by operator choice.
-
-Public install verification:
-
-```bash
-python3 -m venv /tmp/robert-pypi-smoke
-/tmp/robert-pypi-smoke/bin/pip install --upgrade pip
-/tmp/robert-pypi-smoke/bin/pip install \
-  --index-url https://pypi.org/simple/ \
-  robert-github-agent==0.1.0b1
-/tmp/robert-pypi-smoke/bin/robert --version
-/tmp/robert-pypi-smoke/bin/robert --help
-```
-
-Result: `robert 0.1.0b1`.
-
-### 源码边界检查
-
-`tests/architecture/test_architecture_boundaries.py` 随完整 unittest 门禁运行。它检查函数内的静态
-import，禁止源码循环依赖，并约束领域底层、应用用例、组合入口和读模型的依赖方向。
-包根目录只允许 `__init__.py`、`paths.py` 和 `resource_files.py`，runtime/HTTP 不执行业务 SQL。
-新增依赖应先确认职责归属，不能通过局部 import 绕过检查。
-
-最终目录与领域内部层次见 [源码分层](architecture.md#源码分层)。运行测试使用项目虚拟环境。受控端到端验收会通过当前 `sys.executable` 启动独立 Worker，
-直接调用虚拟环境解释器时也不会错误选择 PATH 中的另一个 Python。
