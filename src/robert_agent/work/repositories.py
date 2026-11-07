@@ -28,3 +28,12 @@ def upsert_repo(conn, repo):
         ),
     )
     return repo_id
+
+
+def lookup_id(conn, full_name, *, fallback=None):
+    row = conn.execute("SELECT repo_id FROM repos WHERE full_name = ?", (full_name,)).fetchone()
+    return row[0] if row else fallback
+
+
+def list_ids(conn):
+    return [row[0] for row in conn.execute("SELECT repo_id FROM repos")]

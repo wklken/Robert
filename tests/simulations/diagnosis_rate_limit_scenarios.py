@@ -10,8 +10,10 @@ import subprocess
 import sys
 import time
 
-from robert_agent import storage, supervision_diagnose, supervision_store
-from tests.support_model_http import model_http
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import diagnosis as supervision_diagnose
+from robert_agent.supervision import store as supervision_store
+from tests.support.model_http import model_http
 
 
 WRAPPER = '''import json,sys,urllib.request,urllib.error
@@ -68,7 +70,7 @@ def wait(config, expected, *, timeout=8):
 
 def restart_poll(config, *, now=None):
     result = subprocess.run([sys.executable, '-I', '-c',
-        'import json,sys; from robert_agent import supervision_diagnose; '
+        'import json,sys; from robert_agent.supervision import diagnosis as supervision_diagnose; '
         'print(json.dumps(supervision_diagnose.poll(json.loads(sys.argv[1]),now=json.loads(sys.argv[2]))))',
         json.dumps(config), json.dumps(now)],
         capture_output=True, text=True, timeout=5, check=True)

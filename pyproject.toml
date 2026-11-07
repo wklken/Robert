@@ -41,6 +41,8 @@ Issues = "https://github.com/wklken/robert/issues"
 [project.optional-dependencies]
 dev = [
   "build",
+  # 2.16 drops Python 3.10. Keep the same contract engine across the CI matrix.
+  "import-linter>=2.15,<2.16",
   "mypy",
   # Audit tooling uses Python 3.11+; CI still audits the resolved 3.10 environment.
   "pip-audit; python_version >= '3.11'",
@@ -50,8 +52,95 @@ dev = [
   "types-PyYAML",
 ]
 
+[tool.ruff]
+target-version = "py310"
+
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F"]
+select = ["E4", "E7", "E9", "F", "PGH004"]
+
+[tool.importlinter]
+root_package = "robert_agent"
+exclude_type_checking_imports = false
+
+# Colons permit calls between peers. The architecture tests check that the
+# full module graph remains acyclic, including calls across domain use cases.
+[[tool.importlinter.contracts]]
+name = "Entrypoints call composition and use cases in one direction"
+type = "layers"
+layers = [
+  "robert_agent.cli : robert_agent.interfaces : robert_agent.runtime : robert_agent.operations : robert_agent.acceptance : robert_agent.worker : robert_agent.integrations",
+  "robert_agent.application",
+  "robert_agent.work.application : robert_agent.execution.application : robert_agent.delivery.application : robert_agent.supervision.application : robert_agent.context.application : robert_agent.workflows",
+]
+
+[[tool.importlinter.contracts]]
+name = "Stable capabilities cannot import use cases or entrypoints"
+type = "protected"
+protected_modules = [
+  "robert_agent.application",
+  "robert_agent.*.application",
+  "robert_agent.workflows",
+  "robert_agent.cli",
+  "robert_agent.interfaces",
+  "robert_agent.runtime",
+  "robert_agent.operations",
+  "robert_agent.acceptance",
+  "robert_agent.worker",
+  "robert_agent.integrations",
+]
+allowed_importers = [
+  "robert_agent.application",
+  "robert_agent.work.application",
+  "robert_agent.execution.application",
+  "robert_agent.delivery.application",
+  "robert_agent.supervision.application",
+  "robert_agent.context.application",
+  "robert_agent.workflows",
+  "robert_agent.cli",
+  "robert_agent.interfaces",
+  "robert_agent.runtime",
+  "robert_agent.operations",
+  "robert_agent.acceptance",
+  "robert_agent.worker",
+  "robert_agent.integrations",
+]
+
+[[tool.importlinter.contracts]]
+name = "Adapters do not depend on domain capabilities or their callers"
+type = "forbidden"
+source_modules = ["robert_agent.adapters", "robert_agent.worker_adapters"]
+forbidden_modules = [
+  "robert_agent.work",
+  "robert_agent.execution",
+  "robert_agent.delivery",
+  "robert_agent.supervision",
+  "robert_agent.context",
+  "robert_agent.readmodels",
+]
+
+[[tool.importlinter.contracts]]
+name = "Configuration loads schemas, routes and worker settings without business code"
+type = "forbidden"
+source_modules = ["robert_agent.configuration"]
+forbidden_modules = [
+  "robert_agent.adapters",
+  "robert_agent.work",
+  "robert_agent.execution",
+  "robert_agent.delivery",
+  "robert_agent.supervision",
+  "robert_agent.context",
+  "robert_agent.readmodels",
+  "robert_agent.security",
+  "robert_agent.foundation.errors",
+  "robert_agent.foundation.values",
+  "robert_agent.paths",
+]
+
+[[tool.importlinter.contracts]]
+name = "Shared execution stages do not know concrete workflows"
+type = "forbidden"
+source_modules = ["robert_agent.execution.stages"]
+forbidden_modules = ["robert_agent.workflows"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/robert_agent"]

@@ -1,4 +1,5 @@
 """Offline acceptance of independently supervised runtime programs."""
+from robert_agent.supervision import health as supervision_health
 
 import json
 import os
@@ -10,7 +11,9 @@ import sys
 import tempfile
 import time
 
-from robert_agent import service, storage, supervisor, worker_identity
+from robert_agent.adapters.services import native as service
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.adapters.processes import identity as worker_identity
 
 
 _FIXTURE = '''
@@ -18,7 +21,7 @@ import json, sys, time
 from pathlib import Path
 
 if sys.argv[1:3] == ['supervisor', 'run']:
-    from robert_agent import supervisor
+    from robert_agent.runtime import supervisor
     config = Path(sys.argv[sys.argv.index('--config') + 1])
     result = supervisor.run(json.loads(config.read_text()))
     raise SystemExit(0 if result['ok'] else 1)
@@ -106,7 +109,7 @@ def run(root):
     config = {'config_path': str(config_path), 'data_dir': str(data), 'db_path': str(db), 'repos': [],
               'supervision': {'mode': 'observe', 'poll_seconds': 1, 'batch_size': 5, 'stall_seconds': 2}}
     config_path.write_text(json.dumps(config), encoding='utf-8')
-    health = supervisor.health_path(config)
+    health = supervision_health.health_path(config)
     # macOS Unix sockets also append the manager PID while binding. Keep their
     # private namespace short even when the caller's temp directory is long.
     with tempfile.TemporaryDirectory(dir='/tmp', prefix='rs-svc-') as directory:

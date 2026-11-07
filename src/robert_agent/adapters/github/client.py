@@ -1,7 +1,7 @@
 """GitHub CLI JSON reads with the control-plane command deadline."""
 import json
 import subprocess
-from robert_agent.common import run_command
+from robert_agent.foundation.commands import run_command
 
 
 def read_json(args, runner=subprocess.run):

@@ -12,8 +12,13 @@ import sys
 import tempfile
 import time
 
-from robert_agent import execution_store, result_contract, result_spool, storage, supervision_actions, work_items
-from robert_agent.worker import result
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.delivery import contract as result_contract
+from robert_agent.execution import spool as result_spool
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import actions as supervision_actions
+from robert_agent.work.application import commands as work_items
+from robert_agent.delivery.application import submission as result
 
 
 def _now():

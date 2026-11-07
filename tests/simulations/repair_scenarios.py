@@ -1,4 +1,5 @@
 """Offline repair acceptance with real Git, processes, and optional OS isolation."""
+from robert_agent.delivery.application import effects as publication_effects
 
 from contextlib import closing
 import json
@@ -11,9 +12,15 @@ import sys
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from robert_agent import (publication_reconcile, publish, run_once, runtime_identity, supervision_diagnose,
-                          supervision_repair, supervision_store, work_items)
-from tests.test_supervision_repair_worker import BrokerFixture, broker_result, stop_fixture, submission_source
+from robert_agent.delivery.application import reconcile as publication_reconcile
+from robert_agent.adapters.processes import runtime_identity
+from robert_agent.supervision import diagnosis as supervision_diagnose
+from robert_agent.workflows.maintenance import repair as supervision_repair
+from robert_agent.supervision import store as supervision_store
+from robert_agent.work.application import commands as work_items
+from tests.support.supervision_repair_worker import BrokerFixture, broker_result, stop_fixture, submission_source
+from robert_agent.delivery.application import result_audit
+from robert_agent.execution.application import evidence
 
 
 def _diagnose(fixture, scope_type, scope_id):
@@ -178,7 +185,7 @@ def _audit_and_push(fixture, escape_marker):
 
     with closing(sqlite3.connect(fixture.db)) as conn, conn:
         conn.row_factory = sqlite3.Row
-        assert run_once._audit_completed_results(conn, 'repo', fixture.data, fixture.db,
+        assert result_audit.audit_completed_results(conn, 'repo', fixture.data, fixture.db,
             fixture.config['repos'][0], 'fixture-run', fixture.now, False, [], 0) == 1
         metadata = json.loads(conn.execute('SELECT metadata_json FROM worker_results').fetchone()[0])
         audit = metadata['audit']
@@ -186,7 +193,7 @@ def _audit_and_push(fixture, escape_marker):
         scope = audit['action_scope']
         assert scope['repair_git'] == fixture.git_binding
         assert scope['worktree_status'] == 'clean'
-        recovery = run_once._inspect_attempt_recovery(conn, fixture.attempt, fixture.task, str(fixture.tree))
+        recovery = evidence.inspect_attempt_recovery(conn, fixture.attempt, fixture.task, str(fixture.tree))
         assert recovery['git'] == {}, recovery
         action = dict(conn.execute("SELECT * FROM github_actions WHERE action_type='push_existing_pr'").fetchone())
         before = publication_reconcile.classify_remote_state(action, scope, run_git_locally)
@@ -202,10 +209,10 @@ def _audit_and_push(fixture, escape_marker):
                 fixture.config['supervision']['repair']['mode'] = 'backlog'
             return response
 
-        rejected = publish._publish_action(action, revoke_after_fsck, conn=conn, recovery_guard=authorized)
+        rejected = publication_effects.publish_action(action, revoke_after_fsck, conn=conn, recovery_guard=authorized)
         assert rejected['status'] == 'supervision_fence_rejected' and seen == ['ls-remote'], rejected
         fixture.config['supervision']['repair']['mode'] = 'auto'
-        result = publish._publish_action(action, run_git_locally, conn=conn, recovery_guard=authorized)
+        result = publication_effects.publish_action(action, run_git_locally, conn=conn, recovery_guard=authorized)
         assert result['status'] == 'published', result
         after = publication_reconcile.classify_remote_state(action, scope, run_git_locally)
         assert after['status'] == 'confirmed_effect', after

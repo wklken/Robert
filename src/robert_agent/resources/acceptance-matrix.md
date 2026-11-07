@@ -13,24 +13,24 @@ before claiming production readiness.
 
 | Scenario ID | Human workflow | Expected agent behavior | Proof |
 | --- | --- | --- | --- |
-| issue-assignment-analysis | A trusted user assigns an issue or mentions the DD account for analysis. | Create an issue workstream, route to `comment-analysis`, avoid a worktree, and render the accepted event into the worker prompt. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_issue_assignment_for_analysis_creates_comment_workflow` |
-| issue-assignment-new-pr | A trusted user asks the DD account to fix an issue. | Create a `new-pr` task, accept worker results with `push_existing_pr` then `open_pr` only after audit, publish-gated completion, and materialize a DD PR workstream linked back to the issue. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_issue_assignment_bugfix_result_materializes_dd_pr_workflow` |
-| issue-active-followup-context | A repository member comments with extra context while an issue task is active. | Do not start a second active task; attach the event as context on the existing workstream. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_issue_followup_comment_stays_on_existing_workflow_context` |
-| dd-created-pr-review-followup | A reviewer comments on a DD-created PR and asks for follow-up fixes. | Route to `update-existing-pr`, keep the PR on its own mainline, reuse the existing PR branch, include the review event in the prompt, and require a response comment for the review report. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_dd_pr_followup_routes_to_existing_pr_workflow` |
-| multi-repo-account-cycle | One GitHub account receives actionable events from two configured repos with different trusted actors. | One `run_once` attributes notifications by `repository.full_name`, applies each repo's trust policy, prepares work in the matching local checkout, and reports repo-level partial failures without blocking other repos. | `tests/dd_github_agent/test_run_once.py::RunOnceDryRunTests.test_run_once_processes_two_repos_with_repo_specific_trust` |
-| pr-reviewer-assignment | A trusted user requests DD review on a PR through GitHub reviewer assignment. | Resolve the notification through the PR timeline, route to `review-pr`, create a PR source review worktree from `pull/<number>/head`, require `fast-review-github-pr`, and allow only a planned comment action. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_review_request_creates_source_review_worktree` |
-| third-party-pr-question | A trusted user asks the DD account a question on someone else's PR. | Route to `review-comment`, allow comments only, and avoid opening or updating a DD PR. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_third_party_pr_question_routes_to_review_comment_workflow` |
-| third-party-pr-fix-request | A trusted user asks the DD account to fix someone else's PR. | Route to `review-comment`, allow comments only, avoid preparing a worktree, and avoid opening or updating a DD PR. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_third_party_pr_fix_request_stays_comment_only` |
-| trusted-waiting-user-resume | The agent asks a clarifying question, members add context, then a trusted actor confirms implementation. | Keep the original task waiting only after the question is published, collect member context without resuming, then create a child implementation task when a trusted actor replies. | `tests/dd_github_agent/test_workflow_matrix.py::WorkflowMatrixTests.test_trusted_reply_resumes_waiting_for_user_workflow` |
-| dd-pr-ci-remediation | A configured check fails on the current head of a Robert-created PR. | Aggregate failures for the exact head/base snapshot, create one trusted system task, require matching evidence and host attestation, then compare-and-swap before a non-force push. | `tests/test_pr_remediation_integration.py`, `tests/test_operational_commands.py` |
-| dd-pr-conflict-remediation | A Robert-created PR conflicts with its current base. | Prioritize conflict repair, prepare exact head/base refs, merge the base without rebase or force-push, and require both commits in the final merge graph. | `tests/test_live_worktree_acceptance.py::LiveWorktreeAcceptanceTests.test_conflict_remediation_real_merge_graph_passes_attestation` |
-| pr-remediation-operator-stop | CI evidence is unavailable, a budget is exhausted, the same failure repeats, or the worktree is unsafe. | Stop automation, retain durable episode/audit evidence, notify locally, and show the workstream in the Workbench attention bucket. | `tests/test_remediation.py`, `tests/test_workbench.py` |
+| issue-assignment-analysis | A trusted user assigns an issue or mentions the DD account for analysis. | Create an issue workstream, route to `comment-analysis`, avoid a worktree, and render the accepted event into the worker prompt. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_issue_assignment_for_analysis_creates_comment_workflow` |
+| issue-assignment-new-pr | A trusted user asks the DD account to fix an issue. | Create a `new-pr` task, accept worker results with `push_existing_pr` then `open_pr` only after audit, publish-gated completion, and materialize a DD PR workstream linked back to the issue. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_issue_assignment_bugfix_result_materializes_dd_pr_workflow` |
+| issue-active-followup-context | A repository member comments with extra context while an issue task is active. | Do not start a second active task; attach the event as context on the existing workstream. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_issue_followup_comment_stays_on_existing_workflow_context` |
+| dd-created-pr-review-followup | A reviewer comments on a DD-created PR and asks for follow-up fixes. | Route to `update-existing-pr`, keep the PR on its own mainline, reuse the existing PR branch, include the review event in the prompt, and require a response comment for the review report. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_dd_pr_followup_routes_to_existing_pr_workflow` |
+| multi-repo-account-cycle | One GitHub account receives actionable events from two configured repos with different trusted actors. | One `run_once` attributes notifications by `repository.full_name`, applies each repo's trust policy, prepares work in the matching local checkout, and reports repo-level partial failures without blocking other repos. | `tests/integration/repository_cycle/test_repository_isolation.py::RepositoryIsolationTests.test_run_once_processes_two_repos_with_repo_specific_trust` |
+| pr-reviewer-assignment | A trusted user requests DD review on a PR through GitHub reviewer assignment. | Resolve the notification through the PR timeline, route to `review-pr`, create a PR source review worktree from `pull/<number>/head`, require `fast-review-github-pr`, and allow only a planned comment action. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_review_request_creates_source_review_worktree` |
+| third-party-pr-question | A trusted user asks the DD account a question on someone else's PR. | Route to `review-comment`, allow comments only, and avoid opening or updating a DD PR. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_third_party_pr_question_routes_to_review_comment_workflow` |
+| third-party-pr-fix-request | A trusted user asks the DD account to fix someone else's PR. | Route to `review-comment`, allow comments only, avoid preparing a worktree, and avoid opening or updating a DD PR. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_third_party_pr_fix_request_stays_comment_only` |
+| trusted-waiting-user-resume | The agent asks a clarifying question, members add context, then a trusted actor confirms implementation. | Keep the original task waiting only after the question is published, collect member context without resuming, then create a child implementation task when a trusted actor replies. | `tests/integration/test_workflow_matrix.py::WorkflowMatrixTests.test_trusted_reply_resumes_waiting_for_user_workflow` |
+| dd-pr-ci-remediation | A configured check fails on the current head of a Robert-created PR. | Aggregate failures for the exact head/base snapshot, create one trusted system task, require matching evidence and host attestation, then compare-and-swap before a non-force push. | `tests/integration/test_pr_remediation_integration.py`, `tests/delivery/test_publish_remediation.py` |
+| dd-pr-conflict-remediation | A Robert-created PR conflicts with its current base. | Prioritize conflict repair, prepare exact head/base refs, merge the base without rebase or force-push, and require both commits in the final merge graph. | `tests/acceptance/test_live_worktree_acceptance.py::LiveWorktreeAcceptanceTests.test_conflict_remediation_real_merge_graph_passes_attestation` |
+| pr-remediation-operator-stop | CI evidence is unavailable, a budget is exhausted, the same failure repeats, or the worktree is unsafe. | Stop automation, retain durable episode/audit evidence, notify locally, and show the workstream in the Workbench attention bucket. | `tests/workflows/test_remediation.py`, `tests/readmodels/test_workbench.py` |
 
 ## Operator Evidence
 
 The workflow matrix proves behavior; operator evidence proves a stuck run can be
 followed without manual SQLite archaeology. These checks live mostly in
-`tests/dd_github_agent/test_operational_commands.py` and cover:
+`tests/delivery/test_publish_remediation.py` and cover:
 
 - `operator_alerts` and `operator_next_steps` for attention tasks, stale workers,
   publish waits, publish failures, skipped publication, pending actor permission,
@@ -57,13 +57,13 @@ live acceptance pass that covers at least:
 5. Retry/dedupe behavior against existing `robert-comment` and `robert-workstream`
    markers.
 
-Use `scripts/acceptance.py --config <config>` as the first live-readiness
+Use `python -m robert_agent.acceptance.readiness --config <config>` as the first live-readiness
 preflight. It is read-only: it checks the config, repo checkout, worktree root,
 current control-plane dispatch state, `gh` availability/authentication, and the
 configured worker command without publishing GitHub content or launching a
 worker. A passing preflight only proves the local prerequisites are ready.
 
-Use `scripts/acceptance_suite.py --config <config>` as the operator-facing
+Use `python -m robert_agent.acceptance.suite --config <config>` as the operator-facing
 summary. It runs the safe acceptance checks, aggregates their evidence, and
 keeps the overall status `incomplete` until an explicitly approved production
 GitHub write canary has been run. Add `--include-live-worker` when the configured
@@ -76,7 +76,7 @@ After an approved canary has published a comment, add
 `--production-canary-marker-id` to verify the live comment by read-only `gh api`
 lookup and let the suite report `completed`.
 
-Use `scripts/controlled_e2e_acceptance.py --config <config>` to prove a
+Use `python -m robert_agent.acceptance.controlled_e2e --config <config>` to prove a
 controlled issue-to-PR workflow can complete through the real `run_once`
 orchestrator. It uses an isolated local checkout, fixture discovery, real git
 worktree creation, a mock worker that records a structured `open_pr` result,
@@ -84,13 +84,13 @@ normal audit, fake GitHub PR publication, and final task/workstream
 finalization. It does not write production GitHub content, but it is the closest
 safe end-to-end acceptance pass for the full local control plane.
 
-Use `scripts/live_discovery_acceptance.py --config <config>` to prove real
+Use `python -m robert_agent.acceptance.discovery --config <config>` to prove real
 GitHub discovery can run through `gh` without mutating the control-plane
 database. It runs the live assigned issue search, mention search, notification
 lookup, and event normalization path, then reports counts and sample normalized
 events without authorizing, routing, or dispatching work.
 
-Use `python -m robert_agent.live_worker_acceptance --config <config>` after preflight to
+Use `python -m robert_agent.acceptance.worker --config <config>` after preflight to
 prove the configured worker command can run against an isolated control-plane
 database. It also clones committed source repositories into independent local
 checkouts and uses separate worktree directories; uncommitted source edits are
@@ -103,7 +103,7 @@ worker launch plus dry-run-safe publication evidence without modifying the
 operator's production `dd.sqlite3` or writing GitHub content. It still does not
 replace a real GitHub discovery/worktree/publication pass for rows 1, 2, and 5.
 
-Use `scripts/live_worktree_acceptance.py --config <config>` to prove the
+Use `python -m robert_agent.acceptance.worktree --config <config>` to prove the
 worktree path with real git commands. The script creates an isolated bare
 upstream and local checkout, routes a safe `new-pr` fixture, runs
 `git fetch upstream <base>` and `git worktree add`, verifies the resulting
@@ -111,17 +111,17 @@ branch/worktree, and terminates its mock worker. It does not touch the
 operator's production checkout or write GitHub content, so it proves row 2 as a
 controlled local-git acceptance pass.
 
-Use `scripts/publish_dedupe_acceptance.py` to prove retry-safe publication
+Use `python -m robert_agent.acceptance.publish_dedupe` to prove retry-safe publication
 dedupe without writing GitHub content. It creates an isolated control-plane
 database with accepted comment and open-PR actions, simulates GitHub lookup
 responses that already contain matching `robert-comment` and `robert-workstream`
 markers, and verifies the publisher marks both actions published/deduplicated
 without issuing create-comment or create-PR commands.
 
-Use `scripts/production_write_canary.py --target-url <github-issue-or-pr-url>`
+Use `python -m robert_agent.acceptance.write_canary --target-url <github-issue-or-pr-url>`
 to prepare an isolated canary database and dry-run publication plan. It exits
 without calling `gh` unless `--confirm-github-write` is present. With explicit
 confirmation, it publishes exactly one `robert-comment` marker-protected comment, or
 deduplicates an existing comment with the same marker, through the normal
-`publish.py` audited action path. Run this only against an explicitly approved
+`delivery.application.publish` audited action path. Run this only against an explicitly approved
 target issue or PR.

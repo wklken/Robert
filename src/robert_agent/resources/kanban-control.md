@@ -148,7 +148,7 @@ trust model and requires an operator-provided authenticated reverse proxy.
 
 The board retains its last successful data during refresh failures. Startup,
 execution, and publication failures remain unresolved attention until an
-operator command resolves them. Restarting `web.py` is safe because command
+operator command resolves them. Restarting the `robert web run` server is safe because command
 idempotency and item versions live in SQLite; the CSRF token intentionally
 changes with the server process.
 

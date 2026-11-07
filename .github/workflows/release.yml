@@ -37,7 +37,7 @@ jobs:
                   subprocess.run(['sudo', '-n', 'chmod', 'go-w', str(executable)], check=True)
               else:
                   executable.chmod(stat.S_IMODE(info.st_mode) & ~0o022)
-          from robert_agent.supervision_repair import _fingerprint_file
+          from robert_agent.workflows.maintenance.repair import _fingerprint_file
           _fingerprint_file(executable)
       - run: python -B -m unittest discover -s tests
       - run: python -m build

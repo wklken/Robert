@@ -68,8 +68,8 @@ directory is also unavailable. No business recovery runs from a stale snapshot.
 A same-host process cannot detect a complete host power loss; external liveness
 monitoring is a separate deployment responsibility.
 
-The design and phased acceptance matrix are in
-[the implementation plan](superpowers/plans/2026-11-06-task-supervision-design.md).
+The published supervision boundaries are described in the
+[architecture guide](architecture.md#worker-监督与失败恢复).
 
 ## Optional semantic diagnosis
 

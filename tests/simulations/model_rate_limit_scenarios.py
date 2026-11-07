@@ -3,6 +3,7 @@
 The fixture HTTP client implements its own bounded per-attempt retries. Robert
 still owns dispatch, process supervision, fallback, result ingestion and audit.
 """
+from robert_agent.supervision.application import checks as supervision_checks
 
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -11,9 +12,17 @@ from pathlib import Path
 import sqlite3
 import sys
 
-from robert_agent import daemon_state, dispatch, run_once, supervisor, work_items
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.runtime import cycle as run_once
+from robert_agent.work.application import commands as work_items
 from tests.simulations.supervision_scenarios import query, wait_for
-from tests.support_model_http import model_http
+from tests.support.model_http import model_http
+from robert_agent.delivery.application import result_audit
+from robert_agent.execution.application import dispatch as dispatch_queue
+from robert_agent.execution.application import monitor
+from robert_agent.configuration import command
+from robert_agent.work.application import preparation
 
 
 PRIMARY = 'model-primary'
@@ -32,8 +41,8 @@ import time
 from urllib.error import HTTPError
 from urllib.request import build_opener, ProxyHandler
 
-from robert_agent.worker.result import build_result, record_result
-from robert_agent.worker.snapshot import record_snapshot
+from robert_agent.delivery.application.submission import build_result, record_result
+from robert_agent.execution.progress import record_snapshot
 
 db, endpoint, tries = sys.argv[1:4]
 task = Path(sys.argv[sys.argv.index('--add-dir') + 1]).name
@@ -109,7 +118,7 @@ class WorkerRuntime:
                        'worktrees': str(repo_root / '.worktrees')}],
         }
         config_path.write_text(json.dumps(document))
-        self.config = run_once.validate_config.validate_config(config_path, skip_external=True)
+        self.config = command.validate_config(config_path, skip_external=True)
         assert self.config['ok'], self.config
         discovery = root / 'discovery.json'
         discovery.write_text(json.dumps({'events': [
@@ -152,11 +161,11 @@ class WorkerRuntime:
         with closing(sqlite3.connect(self.db)) as conn:
             queue = []
             for attempt_id, in conn.execute("SELECT attempt_id FROM attempts WHERE status='prepared'"):
-                current = run_once._current_dispatch_target(conn, attempt_id)
+                current = dispatch_queue.current_dispatch_target(conn, attempt_id)
                 if current:
                     task, tree = current
                     queue.append({'task_info': task, 'worktree_result': tree, 'repo_id': REPO_ID, 'repo': self.repo})
-        launches = run_once._dispatch_queued(self.db, [REPO_ID], queue, False, self.config['max_concurrency'],
+        launches = dispatch_queue.dispatch_queued(self.db, [REPO_ID], queue, False, self.config['max_concurrency'],
                                              workers=[self.worker])
         for item in launches:
             proc = dispatch._BACKGROUND_PROCESSES.get(item.get('pid'))
@@ -167,11 +176,11 @@ class WorkerRuntime:
 
     def supervise(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            run_once._supervise_running_attempts(conn, REPO_ID, self.config, _now().isoformat(),
-                                                data_dir=self.data, db_path=self.db, repo=self.repo)
+            monitor.supervise_running_attempts(conn, REPO_ID, self.config, _now().isoformat(),
+                                                data_dir=self.data, db_path=self.db, repo=self.repo, resume_attempt=preparation.create_resume_attempt_and_prompt)
 
     def observe(self, now=None):
-        observed = supervisor.check(self.config, record=True, now=(now or _now()).isoformat())
+        observed = supervision_checks.check(self.config, record=True, now=(now or _now()).isoformat())
         assert observed['ok'], observed
         return observed['observations']
 
@@ -180,7 +189,7 @@ class WorkerRuntime:
             proc.wait(timeout=12)
         self.supervise()
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            run_once._audit_completed_results(conn, REPO_ID, self.data, self.db, self.repo, 'model-fixture',
+            result_audit.audit_completed_results(conn, REPO_ID, self.data, self.db, self.repo, 'model-fixture',
                                               _now().isoformat(), False, [], 0, self.config)
 
 
@@ -264,7 +273,7 @@ def _exhausted(root):
                 runtime.supervise()
                 runtime.observe()
                 assert runtime.dispatch() == []
-            status = supervisor.status(runtime.config)
+            status = supervision_checks.status(runtime.config)
             failures = [item for item in status['incidents'] if item['rule_id'] == 'execution_failed']
             assert len(failures) == 1, status
             assert query(runtime.db, 'SELECT recovery_attempts FROM execution_subjects') == [(1,)]

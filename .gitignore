@@ -14,3 +14,7 @@ htmlcov/
 *.log
 *.pid
 .DS_Store
+
+# Local analysis and execution records; never publish these archives.
+/docs/reviews/
+/docs/superpowers/

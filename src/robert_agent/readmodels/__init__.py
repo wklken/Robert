@@ -1,0 +1,1 @@
+"""readmodels capabilities."""

@@ -70,7 +70,7 @@ skipped checks require `skipped_reason` and have no exit code. Sources are
 Code creation/push requires passing command evidence under the trusted route
 policy. Empty verification is permitted only where policy allows it.
 
-`worker_heartbeat.py --db <db> --task-id <task> --attempt-id <attempt>
+`python -m robert_agent.worker.heartbeat --db <db> --task-id <task> --attempt-id <attempt>
 --phase verify [--cwd <directory>] [--output-mode tee] -- <command...>`
 stores `<attempt>.<phase>.<unique>.command.json` under the task's runtime
 `artifacts/<task>` directory, including command argv, resolved cwd, start/end,
