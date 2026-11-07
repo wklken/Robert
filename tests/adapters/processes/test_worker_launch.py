@@ -4,18 +4,18 @@ from tests.support.temp_workspace import TemporaryWorkspace
 
 class WorkerLaunchTests(TemporaryWorkspace):
     def test_dispatch_builds_worker_command_with_prompt_and_worktree(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "- prompt that starts like an option\nquotes: ' \" ` $() ; | --"
         prompt_path.write_text(prompt, encoding="utf-8")
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             worktree_path=Path("/tmp/repo/.worktrees/dd-123"),
             model="gpt-5.4",
             reasoning_effort="high",
-        )
+        ).command
 
         self.assertEqual(command[:2], ["cbc", "-p"])
         self.assertNotIn("/bin/zsh", command)
@@ -58,16 +58,16 @@ class WorkerLaunchTests(TemporaryWorkspace):
                 )
 
     def test_dispatch_builds_worker_command_with_configured_launcher(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
 
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             worker_command="custom-cbc",
-        )
+        ).command
 
         self.assertEqual(command[0], "custom-cbc")
         self.assertIn("--input-format", command)
@@ -75,21 +75,21 @@ class WorkerLaunchTests(TemporaryWorkspace):
         self.assertNotIn("hello", command)
 
     def test_dispatch_builds_codex_worker_command_with_stdin_prompt(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "codex prompt"
         prompt_path.write_text(prompt, encoding="utf-8")
 
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             worktree_path=Path("/tmp/repo/.worktrees/dd-123"),
             model="gpt-5.4",
             reasoning_effort="high",
             worker_command="/opt/homebrew/bin/codex",
             worker_agent="codex",
-        )
+        ).command
 
         self.assertEqual(command[0], "/opt/homebrew/bin/codex")
         self.assertIn("--model", command)
@@ -117,19 +117,19 @@ class WorkerLaunchTests(TemporaryWorkspace):
         self.assertNotIn(prompt, command)
 
     def test_dispatch_builds_tcodex_worker_command_with_reasoning_effort(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("tcodex prompt", encoding="utf-8")
 
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             model="gpt-5.6-sol",
             reasoning_effort="high",
             worker_command="tcodex",
             worker_agent="tcodex",
-        )
+        ).command
 
         self.assertEqual(command[0], "tcodex")
         self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-sol")
@@ -140,7 +140,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
         self.assertLess(command.index("--config"), command.index("exec"))
 
     def test_dispatch_builds_claude_family_worker_commands(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
         from robert_agent.worker_adapters.cbc import (
             DEFAULT_DISALLOWED_WORKER_TOOLS,
         )
@@ -153,14 +153,14 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
         for agent in ["claude", "tclaude"]:
             with self.subTest(agent=agent):
-                command = dispatch.build_worker_command(
+                command = worker_adapters.build_worker_launch(
                     prompt_path=prompt_path,
                     worktree_path=worktree,
                     model="claude-sonnet-4-6",
                     reasoning_effort="high",
                     worker_command=agent,
                     worker_agent=agent,
-                )
+                ).command
 
                 self.assertEqual(command[:2], [agent, "-p"])
                 self.assertEqual(
@@ -192,7 +192,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
                 self.assertNotIn(prompt, command)
 
     def test_dispatch_builds_opencode_worker_command_with_stdin_prompt(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
@@ -200,14 +200,14 @@ class WorkerLaunchTests(TemporaryWorkspace):
         prompt_path.write_text(prompt, encoding="utf-8")
         worktree = Path("/tmp/repo/.worktrees/dd-123")
 
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             worktree_path=worktree,
             model="openai/gpt-5.4",
             reasoning_effort="high",
             worker_command="opencode",
             worker_agent="opencode",
-        )
+        ).command
 
         self.assertEqual(
             command,
@@ -228,33 +228,33 @@ class WorkerLaunchTests(TemporaryWorkspace):
         self.assertNotIn(prompt, command)
 
     def test_dispatch_splits_configured_launcher_command(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
 
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             worker_command="/opt/bin/codex --profile dd-worker",
             worker_agent="codex",
-        )
+        ).command
 
         self.assertEqual(command[:3], ["/opt/bin/codex", "--profile", "dd-worker"])
         self.assertLess(command.index("--config"), command.index("exec"))
 
     def test_dispatch_expands_user_in_configured_launcher_path(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
 
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             worker_command="~/bin/codex --profile dd-worker",
             worker_agent="codex",
-        )
+        ).command
 
         self.assertEqual(
             command[:3],
@@ -263,20 +263,20 @@ class WorkerLaunchTests(TemporaryWorkspace):
         self.assertLess(command.index("--config"), command.index("exec"))
 
     def test_dispatch_accepts_normalized_worker_agent_config(self):
-        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent import worker_adapters
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
 
-        command = dispatch.build_worker_command(
+        command = worker_adapters.build_worker_launch(
             prompt_path=prompt_path,
             worker_agent_config={
                 "agent": "codex",
                 "command": "/opt/homebrew/bin/codex",
                 "command_argv": ["/opt/homebrew/bin/codex"],
             },
-        )
+        ).command
 
         self.assertEqual(command[0], "/opt/homebrew/bin/codex")
         self.assertLess(command.index("--config"), command.index("exec"))

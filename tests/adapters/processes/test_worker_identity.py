@@ -276,62 +276,6 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(len(signals), 1)
         self.assertGreaterEqual(elapsed[0], 0.1)
 
-    def test_db_backed_identity_operations_load_only_attempt_dispatch_metadata(self):
-        from robert_agent.adapters.sqlite import database as storage
-        from robert_agent.execution import operations as execution_operations
-
-        with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "robert.sqlite3"
-            storage.init_database(db_path)
-            now = "2026-08-02T00:00:00+00:00"
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute(
-                    "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES (?, ?, ?, ?, ?, ?)",
-                    ("repo:test", "example/test", "bot", "main", tmp, tmp),
-                )
-                conn.execute(
-                    "INSERT INTO workstreams(workstream_id, repo_id, lifecycle, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)",
-                    ("ws:test", "repo:test", now, now),
-                )
-                conn.execute(
-                    "INSERT INTO tasks(task_id, workstream_id, task_kind, lifecycle, created_at, updated_at) VALUES (?, ?, 'human_request', 'running', ?, ?)",
-                    ("task:test", "ws:test", now, now),
-                )
-                conn.execute(
-                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, metadata_json) VALUES (?, ?, 1, 'running', ?)",
-                    (
-                        "attempt:test",
-                        "task:test",
-                        json.dumps(
-                            {
-                                "dispatch": {
-                                    "pid": 7,
-                                    "process_group_id": 7,
-                                    "process_start_token": "start",
-                                    "command_fingerprint": "f" * 64,
-                                    "identity_source": "proc",
-                                }
-                            }
-                        ),
-                    ),
-                )
-
-            original = execution_operations.worker_identity.inspect_recorded_identity
-            execution_operations.worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
-            try:
-                self.assertEqual(
-                    execution_operations.inspect_worker_identity(
-                        db_path, "attempt:test"
-                    ),
-                    "alive_same",
-                )
-            finally:
-                execution_operations.worker_identity.inspect_recorded_identity = (
-                    original
-                )
-
     def test_terminate_worker_persists_redacted_result_once_and_marks_attention(self):
         from robert_agent.adapters.sqlite import database as storage
         from robert_agent.execution import operations as execution_operations

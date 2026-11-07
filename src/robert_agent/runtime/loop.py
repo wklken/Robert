@@ -20,11 +20,6 @@ from robert_agent.configuration import command as validate_config
 from robert_agent.foundation import values
 
 
-def load_config_db_path(config_path, skip_external=False):
-    db_path, _repo_ids = load_config_scope(config_path, skip_external=skip_external)
-    return db_path
-
-
 def load_config_scope(config_path, skip_external=False, *, include_config=False):
     config = validate_config.validate_config(config_path, skip_external=skip_external)
     if not config.get("ok"):

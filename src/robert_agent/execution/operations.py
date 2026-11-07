@@ -58,27 +58,6 @@ def _safe_metadata(value):
     return value
 
 
-def _safe_row(row):
-    if row is None:
-        return None
-    result = {}
-    for key in row.keys():
-        if key == "metadata_json":
-            result["metadata"] = _safe_metadata(_json_object(row[key]))
-            continue
-        result[key] = row[key]
-    return result
-
-
-def _safe_binding(binding):
-    if not binding:
-        return binding
-    safe = dict(binding)
-    metadata_json = safe.pop("metadata_json", None)
-    safe["metadata"] = _safe_metadata(_json_object(metadata_json))
-    return safe
-
-
 def _row(conn, query, params=()):
     return conn.execute(query, params).fetchone()
 
@@ -86,13 +65,6 @@ def _row(conn, query, params=()):
 def _validate_subject_type(subject_type):
     if subject_type not in {"task", "remediation_episode"}:
         raise ValueError("invalid workflow subject type")
-
-
-def _load_task(conn, task_id):
-    row = _row(conn, "SELECT * FROM tasks WHERE task_id = ?", (task_id,))
-    if row is None:
-        raise ValueError("workflow task subject does not exist")
-    return row
 
 
 def _load_episode(conn, episode_id):
@@ -104,167 +76,6 @@ def _load_episode(conn, episode_id):
     if row is None:
         raise ValueError("workflow remediation episode subject does not exist")
     return row
-
-
-def _task_relations(conn, task_id):
-    attempts = conn.execute(
-        """
-        SELECT attempt_id, attempt_no, status, worktree_path, branch_name,
-               started_at, heartbeat_at, finished_at
-        FROM attempts
-        WHERE task_id = ?
-        ORDER BY attempt_no, attempt_id
-        """,
-        (task_id,),
-    ).fetchall()
-    results = conn.execute(
-        """
-        SELECT result_id, attempt_id, output_type, created_at
-        FROM worker_results
-        WHERE task_id = ?
-        ORDER BY created_at, result_id
-        """,
-        (task_id,),
-    ).fetchall()
-    actions = conn.execute(
-        """
-        SELECT action_id, result_id, action_type, target_url, external_id,
-               audit_status, publish_status, created_at
-        FROM github_actions
-        WHERE task_id = ?
-        ORDER BY created_at, action_id
-        """,
-        (task_id,),
-    ).fetchall()
-    return {
-        "attempt_ids": [row[0] for row in attempts],
-        "attempts": [dict(row) for row in attempts],
-        "result_ids": [row[0] for row in results],
-        "results": [dict(row) for row in results],
-        "action_ids": [row[0] for row in actions],
-        "actions": [dict(row) for row in actions],
-    }
-
-
-def _episode_task_relations(conn, episode):
-    rows = conn.execute(
-        """
-        SELECT task_id, task_kind, lifecycle, metadata_json
-        FROM tasks
-        WHERE workstream_id = ?
-        ORDER BY created_at, task_id
-        """,
-        (episode["workstream_id"],),
-    ).fetchall()
-    task_ids = []
-    task_rows = []
-    for row in rows:
-        metadata = _json_object(row[3])
-        if (
-            row[0] == episode["last_task_id"]
-            or metadata.get("remediation_episode_id") == episode["episode_id"]
-        ):
-            task_ids.append(row[0])
-            task_rows.append(
-                {
-                    "task_id": row[0],
-                    "task_kind": row[1],
-                    "lifecycle": row[2],
-                }
-            )
-    attempt_ids = []
-    result_ids = []
-    action_ids = []
-    for task_id in task_ids:
-        relations = _task_relations(conn, task_id)
-        attempt_ids.extend(relations["attempt_ids"])
-        result_ids.extend(relations["result_ids"])
-        action_ids.extend(relations["action_ids"])
-    return {
-        "task_ids": task_ids,
-        "tasks": task_rows,
-        "attempt_ids": attempt_ids,
-        "result_ids": result_ids,
-        "action_ids": action_ids,
-    }
-
-
-def load_subject_snapshot(db_path, subject_type, subject_id):
-    """Read authoritative Robert state for one workflow subject.
-
-    The operation intentionally opens its own read-only connection and never
-    mutates or commits domain state. Callers that are already in a transaction
-    should use the execution-state helpers below instead.
-    """
-
-    _validate_subject_type(subject_type)
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        if subject_type == "task":
-            task = _load_task(conn, subject_id)
-            workstream = _row(
-                conn,
-                "SELECT * FROM workstreams WHERE workstream_id = ?",
-                (task["workstream_id"],),
-            )
-            binding = _safe_binding(
-                execution_store.get_binding(conn, "task", subject_id)
-            )
-            metadata = _json_object(task["metadata_json"])
-            episode_id = metadata.get("remediation_episode_id")
-            episode = _load_episode(conn, episode_id) if episode_id else None
-            snapshot = {
-                "subject_type": "task",
-                "subject_id": subject_id,
-                "task": _safe_row(task),
-                "episode": _safe_row(episode),
-                "binding": binding,
-                "episode_binding": (
-                    _safe_binding(
-                        execution_store.get_binding(
-                            conn, "remediation_episode", episode_id
-                        )
-                    )
-                    if episode_id
-                    else None
-                ),
-                "workstream": _safe_row(workstream),
-                "lifecycle": {
-                    "workstream_id": task["workstream_id"],
-                    "active_task_id": workstream["active_task_id"]
-                    if workstream
-                    else None,
-                    "episode_id": episode_id,
-                    **_task_relations(conn, subject_id),
-                },
-            }
-            return snapshot
-
-        episode = _load_episode(conn, subject_id)
-        binding = _safe_binding(
-            execution_store.get_binding(conn, "remediation_episode", subject_id)
-        )
-        relations = _episode_task_relations(conn, episode)
-        workstream = _row(
-            conn,
-            "SELECT * FROM workstreams WHERE workstream_id = ?",
-            (episode["workstream_id"],),
-        )
-        return {
-            "subject_type": "remediation_episode",
-            "subject_id": subject_id,
-            "task": None,
-            "episode": _safe_row(episode),
-            "binding": binding,
-            "workstream": _safe_row(workstream),
-            "lifecycle": {
-                "workstream_id": episode["workstream_id"],
-                "active_task_id": workstream["active_task_id"] if workstream else None,
-                "last_task_id": episode["last_task_id"],
-                **relations,
-            },
-        }
 
 
 def _existing_active_binding(conn, subject_type, subject_id):
@@ -359,16 +170,6 @@ def _attempt_dispatch_identity(conn, attempt_id):
         "metadata_json": metadata_json,
         "dispatch": dispatch,
     }
-
-
-def inspect_worker_identity(db_path, attempt_id):
-    """Inspect only the recorded dispatch identity for one Attempt."""
-
-    with closing(sqlite3.connect(db_path)) as conn:
-        attempt = _attempt_dispatch_identity(conn, attempt_id)
-    if not attempt:
-        return "unknown"
-    return worker_identity.inspect_recorded_identity(attempt["dispatch"])
 
 
 def terminate_worker(db_path, attempt_id):

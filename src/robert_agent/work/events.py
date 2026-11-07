@@ -42,31 +42,6 @@ _INVALIDATING_REASONS = {
     "authorization_revoked",
 }
 _REVOKED_PERMISSIONS = {"denied", "revoked"}
-_EVIDENCE_KEYS = (
-    "fact_id",
-    "subject_type",
-    "subject_id",
-    "source_type",
-    "source_key",
-    "source_id",
-    "repo",
-    "number",
-    "reason_code",
-    "old_head_sha",
-    "new_head_sha",
-    "old_base_sha",
-    "new_base_sha",
-    "old_base_ref",
-    "new_base_ref",
-    "old_source_state",
-    "new_source_state",
-    "source_state",
-    "source_branch_exists",
-    "old_permission",
-    "new_permission",
-    "permission_decision",
-)
-_IDENTITY_KEYS = {"subject_type", "subject_id", "source_type", "source_key"}
 _MAX_TEXT = 256
 _MAX_EVIDENCE_BYTES = 4096
 
@@ -75,12 +50,6 @@ def _required_id(value, name):
     if not isinstance(value, str) or not value.strip() or len(value) > _MAX_TEXT:
         raise ValueError(f"workflow fact {name} must be a non-empty bounded string")
     return value.strip()
-
-
-def _optional_text(value, name):
-    if value is None:
-        return None
-    return _required_id(value, name)
 
 
 def _snapshot_value(fact, key, *aliases):
@@ -253,8 +222,7 @@ def _validate_claimed_invalidation(fact):
 def classify_subject_fact(fact):
     """Classify an observed subject fact without consulting mutable state."""
 
-    identity = _identity(fact)
-    del identity  # identity validation is the important side effect here.
+    _identity(fact)
     event_type = fact.get("event_type")
     if not isinstance(event_type, str):
         raise ValueError("workflow fact event_type must be a bounded string")

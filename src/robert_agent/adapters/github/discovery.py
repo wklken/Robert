@@ -840,10 +840,6 @@ def _enrich_known_workstream_contexts(raw, repo_config, runner):
     ]
 
 
-def _enrich_known_workstream_context(raw, repo_config, runner):
-    return _enrich_known_workstream_contexts(raw, repo_config, runner)[-1]
-
-
 def _trusted_triggers_from_source(
     raw,
     repo_config,

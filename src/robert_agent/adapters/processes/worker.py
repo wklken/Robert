@@ -36,12 +36,6 @@ def reap_finished_process(pid):
         _BACKGROUND_PROCESSES.pop(pid, None)
 
 
-def _reap_background_processes():
-    for pid, proc in list(_BACKGROUND_PROCESSES.items()):
-        if proc.poll() is not None:
-            _BACKGROUND_PROCESSES.pop(pid, None)
-
-
 def _worker_environment(allowed_names=(), environ=None):
     source = dict(os.environ if environ is None else environ)
     names = (DEFAULT_WORKER_ENV | set(allowed_names)) - {
@@ -54,28 +48,6 @@ def _worker_environment(allowed_names=(), environ=None):
         DEFAULT_WORKER_BASH_DEFAULT_TIMEOUT_MS,
     )
     return result
-
-
-def build_worker_command(
-    prompt_path,
-    worktree_path=None,
-    model="gpt-5.4",
-    reasoning_effort="high",
-    worker_command="cbc",
-    worker_agent="cbc",
-    worker_agent_config=None,
-):
-    _reap_background_processes()
-    launch = worker_adapters.build_worker_launch(
-        prompt_path=prompt_path,
-        worktree_path=worktree_path,
-        model=model,
-        reasoning_effort=reasoning_effort,
-        worker_command=worker_command,
-        worker_agent=worker_agent,
-        worker_agent_config=worker_agent_config,
-    )
-    return launch.command
 
 
 def dispatch_worker(
