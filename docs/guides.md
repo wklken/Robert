@@ -466,7 +466,10 @@ robert openclaw install \
 ```
 
 The plugin exposes `/robert-status`, `/robert-task`, `/robert-run`, and
-`/robert-artifact`. It never schedules or starts Robert.
+`/robert-artifact`. Opt-in messaging adds `/robert-inbox`, `/robert-respond`
+and `/robert-messaging-context`. See [operator messaging](operator-messaging.md)
+for sender/session authorization, worker questions and supervisor notifications.
+The plugin never starts the Robert service or installs a scheduler.
 
 ```bash
 robert openclaw uninstall --dry-run

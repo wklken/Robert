@@ -70,10 +70,8 @@ class StorageInitializationRemediationTests(unittest.TestCase):
                 2,
             )
             self.assertEqual(
-                conn.execute(
-                    "SELECT version FROM schema_migrations WHERE name=?", (storage.WORKFLOW_MIGRATION_NAME,)
-                ).fetchone()[0],
-                3,
+                conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
+                [(1,), (2,), (4,), (5,), (6,)],
             )
             self.assertIsNotNone(
                 conn.execute("SELECT work_item_id FROM work_items WHERE workstream_id='github:example/r#1'").fetchone()

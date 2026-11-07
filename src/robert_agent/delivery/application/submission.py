@@ -198,7 +198,6 @@ def _unavailable():
 
 def _lookup(db_path, envelope, digest):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
-        execution_store.require_migrated(conn)
         _, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"], include_scope=False)
         if rejection:
             return rejection
@@ -355,7 +354,6 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
     result_created_at = created_at.isoformat()
     result_id = f"result-{uuid4().hex[:12]}"
     with closing(db_database.connect(db_path)) as conn, conn:
-        execution_store.require_migrated(conn)
         db_sqlite.configure(conn, foreign_keys=True)
         db_sqlite.configure(conn, busy_timeout_ms=busy_timeout_ms)
         db_transactions.begin(conn, immediate=True)

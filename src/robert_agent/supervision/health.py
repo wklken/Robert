@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
+from robert_agent.adapters.notifications import messaging as message_transport
 from pathlib import Path
 import sys
 import tempfile
@@ -53,7 +54,7 @@ def health(config, result, now):
         "ok": result["ok"],
         "last_successful_check_at": now if result["ok"] else previous.get("last_successful_check_at"),
         "last_complete_check_at": (now if result.get("coverage_complete") else previous.get("last_complete_check_at")),
-        "notification_delivery": "configured" if os.environ.get("ROBERT_NOTIFICATION_COMMAND") else "not_configured",
+        "notification_delivery": "configured" if message_transport.configured(config) else "not_configured",
         "error_class": result.get("error_class"),
         "pid": os.getpid(),
     }

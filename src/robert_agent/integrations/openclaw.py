@@ -12,6 +12,9 @@ REQUIRED_COMMANDS = [
     "robert-task",
     "robert-run",
     "robert-artifact",
+    "robert-inbox",
+    "robert-respond",
+    "robert-messaging-context",
 ]
 DEFAULT_PLUGIN_DIR = default_data_dir() / "openclaw-plugin" / PLUGIN_ID
 
@@ -75,9 +78,13 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-async function runRobert(args) {
+async function runRobert(args, input) {
   try {
-    const { stdout } = await execFileAsync(
+    const serialized = input === undefined ? "" : JSON.stringify(input);
+    if (Buffer.byteLength(serialized, "utf8") > 65536) {
+      return { text: "Message exceeds the input limit.", isError: true };
+    }
+    const pending = execFileAsync(
       "robert",
       args,
       {
@@ -85,6 +92,11 @@ async function runRobert(args) {
         maxBuffer: 1024 * 1024,
       },
     );
+    let inputError;
+    pending.child.stdin.on("error", (error) => { inputError = error; });
+    pending.child.stdin.end(serialized);
+    const { stdout } = await pending;
+    if (inputError) return { text: "Robert could not receive the request.", isError: true };
     const parsed = JSON.parse(stdout);
     if (parsed?.ok === true) {
       return { text: JSON.stringify(parsed, null, 2) };
@@ -94,8 +106,12 @@ async function runRobert(args) {
       isError: true,
     };
   } catch (error) {
+    try {
+      const parsed = JSON.parse(error.stdout);
+      if (typeof parsed?.safe_error === "string") return { text: parsed.safe_error, isError: true };
+    } catch {}
     return {
-      text: `Robert command failed: ${error?.message ?? String(error)}`,
+      text: "Robert command failed; inspect local diagnostics.",
       isError: true,
     };
   }
@@ -108,14 +124,56 @@ function splitArgs(args) {
 export default definePluginEntry({
   id: "robert-openclaw",
   name: "Robert OpenClaw Commands",
-  description: "Read-only Robert status and artifact commands.",
+  description: "Robert queries and opt-in authenticated operator messaging.",
   register(api) {
+    function identity(ctx) {
+      return {
+        protocol: "robert.message.v1", provider: "openclaw",
+        channel: ctx.channelId ?? ctx.channel,
+        account: ctx.accountId ?? "", conversation: ctx.from ?? "",
+        thread: String(ctx.messageThreadId ?? ""), sender_id: ctx.senderId ?? "",
+      };
+    }
+    function runConfigured(args, input) {
+      if (api.pluginConfig?.robertConfig) args.push("--config", api.pluginConfig.robertConfig);
+      return runRobert(args, input);
+    }
+    api.registerCommand({
+      name: "robert-messaging-context",
+      description: "Show your messaging identity for Robert configuration.",
+      acceptsArgs: false, requireAuth: true,
+      handler: async (ctx) => ctx.isAuthorizedSender
+        ? { text: JSON.stringify(identity(ctx), null, 2) }
+        : { text: "Unauthorized sender.", isError: true },
+    });
+    api.registerCommand({
+      name: "robert-inbox",
+      description: "Show Robert questions and failures awaiting your response.",
+      acceptsArgs: false, requireAuth: true,
+      handler: async (ctx) => ctx.isAuthorizedSender
+        ? runConfigured(["messages", "inbox", "--output", "json"], identity(ctx))
+        : { text: "Unauthorized sender.", isError: true },
+    });
+    api.registerCommand({
+      name: "robert-respond",
+      description: "Respond to a specific Robert question or notification.",
+      acceptsArgs: true, requireAuth: true,
+      handler: async (ctx) => {
+        if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
+        const match = String(ctx.args ?? "").trim().match(/^(\\S+)\\s+(\\d+)\\s+(reply|approve|retry|retry_publish|cancel|ack)(?:\\s+([\\s\\S]*))?$/);
+        if (!match) return { text: "Usage: /robert-respond <message-id> <version> <action> [answer]", isError: true };
+        const [, notification_id, rawVersion, action, body = ""] = match;
+        const version = Number(rawVersion);
+        if (!Number.isSafeInteger(version)) return { text: "Invalid version.", isError: true };
+        return runConfigured(["messages", "respond", "--output", "json"], { ...identity(ctx), notification_id, version, action, body });
+      },
+    });
     api.registerCommand({
       name: "robert-status",
       description: "Show Robert status.",
       acceptsArgs: false,
       requireAuth: true,
-      handler: async () => runRobert(["status", "--output", "json"]),
+      handler: async () => runConfigured(["status", "--output", "json"]),
     });
     api.registerCommand({
       name: "robert-task",
@@ -127,7 +185,7 @@ export default definePluginEntry({
         if (!taskId) {
           return { text: "Usage: /robert-task <task-id>", isError: true };
         }
-        return runRobert(["task", "show", taskId, "--output", "json"]);
+        return runConfigured(["task", "show", taskId, "--output", "json"]);
       },
     });
     api.registerCommand({
@@ -140,7 +198,7 @@ export default definePluginEntry({
         if (!runId) {
           return { text: "Usage: /robert-run <run-id>", isError: true };
         }
-        return runRobert(["run", "show", runId, "--output", "json"]);
+        return runConfigured(["run", "show", runId, "--output", "json"]);
       },
     });
     api.registerCommand({
@@ -156,7 +214,7 @@ export default definePluginEntry({
             isError: true,
           };
         }
-        return runRobert([
+        return runConfigured([
           "artifact",
           "show",
           taskId,
@@ -195,11 +253,12 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
     manifest = {
         "id": PLUGIN_ID,
         "name": "Robert OpenClaw Commands",
-        "description": "Read-only Robert status and artifact commands.",
+        "description": "Robert queries and opt-in authenticated operator messaging.",
         "activation": {"onStartup": True},
         "configSchema": {
             "type": "object",
             "additionalProperties": False,
+            "properties": {"robertConfig": {"type": "string", "minLength": 1}},
         },
     }
     files = {

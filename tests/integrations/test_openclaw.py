@@ -66,7 +66,14 @@ class OpenClawTests(unittest.TestCase):
         self.assertEqual(result["status"], "missing_commands")
         self.assertEqual(
             result["missing_commands"],
-            ["robert-task", "robert-run", "robert-artifact"],
+            [
+                "robert-task",
+                "robert-run",
+                "robert-artifact",
+                "robert-inbox",
+                "robert-respond",
+                "robert-messaging-context",
+            ],
         )
         self.assertEqual(
             result["command"],

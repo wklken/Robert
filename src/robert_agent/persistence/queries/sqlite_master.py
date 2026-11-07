@@ -11,15 +11,10 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
-def find_for_read_binding(conn):
-    query1 = (
-        select(column("name"))
-        .select_from(tables["sqlite_master"])
-        .where((column("type") == sql_constant("table")))
-        .correlate_except(tables["sqlite_master"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query1, {})
+def table_names(conn):
+    catalog = tables["sqlite_master"]
+    query = select(catalog.c.name).where(catalog.c.type == sql_constant("table"))
+    return {row[0] for row in statements.read(conn, query)}
 
 
 def find_for_has_schema(conn):

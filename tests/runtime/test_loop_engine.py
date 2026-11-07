@@ -100,26 +100,6 @@ repos:
         self.assertEqual(result["cycles"], 0)
         self.assertEqual(result["stop_reason"], "no_runnable_work")
 
-    def test_archived_workflow_signal_does_not_drive_native_execution(self):
-        from robert_agent.runtime import loop as loop_engine
-
-        db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
-        now = "2026-08-02T00:00:00+00:00"
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO workflow_outbox(
-                  signal_id, workflow_id, topic, dedupe_key, payload_json,
-                  not_before_at, created_at
-                ) VALUES ('signal-1', 'robert:v1:task:task-1', 'worker_result',
-                          'result-1', '{}', ?, ?)
-                """,
-                (now, now),
-            )
-
-        with closing(sqlite3.connect(db_path)) as conn:
-            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=[]))
-
     def test_sqlite_execution_is_scoped_to_configured_repo(self):
         from robert_agent.runtime import loop as loop_engine
         from robert_agent.persistence import execution_control as execution_store
@@ -154,8 +134,8 @@ repos:
             )
             execution_store.ensure_subject(conn, "task", "task-b", "human_request", now)
             conn.execute(
-                "INSERT INTO execution_pending_facts(source_signal_id,subject_type,subject_id,topic,dedupe_key,fact_id,disposition,repo_id,task_id,payload_json,not_before_at) VALUES ('pending-b','task','task-b','subject-events','reply-b','reply-b','github_event','repo-b','task-b','{}',?)",
-                (now,),
+                "INSERT INTO wakeups(wakeup_id,repo_id,reason,dedupe_key,status,not_before_at,created_at,updated_at) VALUES ('pending-b','repo-b','manual_operator_request','reply-b','pending',?,?,?)",
+                (now, now, now),
             )
 
         with closing(sqlite3.connect(db_path)) as conn:

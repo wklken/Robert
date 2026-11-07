@@ -91,6 +91,7 @@ def _normalize(config, path, skip_external):
         "repos": [],
         "skills": {"search_paths": [str(Path(p).expanduser()) for p in config["skills"]["search_paths"]]},
         "maintenance": config["maintenance"],
+        "messaging": config["messaging"],
         "supervision": supervision_policy.normalize(
             {key: value for key, value in supervision.items() if key in supervision_policy.DEFAULTS}
         ),
@@ -165,6 +166,18 @@ def _normalize(config, path, skip_external):
     for repo in result["repos"]:
         for policy in known_routes.values():
             resolve_route_config(result, repo, policy)
+    messaging = result["messaging"]
+    if messaging["enabled"]:
+        for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos"):
+            if not messaging.get(field):
+                raise ValueError(f"messaging.{field} is required when enabled")
+        for field in ("channel", "account", "target", "conversation"):
+            if messaging[field] != messaging[field].strip():
+                raise ValueError(f"messaging.{field} must not contain surrounding whitespace")
+        if any(value != value.strip() for value in messaging["allowed_senders"]):
+            raise ValueError("messaging.allowed_senders must use exact sender IDs")
+        if set(messaging["repos"]) - {repo["full_name"] for repo in result["repos"]}:
+            raise ValueError("messaging.repos must reference configured repositories")
     return result
 
 

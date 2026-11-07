@@ -7,11 +7,10 @@ from robert_agent.persistence.stores import notifications as db_write_notificati
 from contextlib import closing
 import hashlib
 import json
-import os
-import shlex
 import subprocess
 import sys
 from robert_agent.security import redaction
+from robert_agent.adapters.notifications import messaging as message_transport
 from robert_agent.supervision import actions as supervision_actions
 from robert_agent.supervision.application import observation as supervision_observe
 from robert_agent.supervision import store as supervision_store
@@ -43,6 +42,11 @@ def notify_changes(conn, changes, now):
             continue
         item = change["incident"]
         identifier = "supervision-" + item["incident_id"] + "-opened"
+        scope = {}
+        if item["scope_type"] in {"github_event", "work_item_event"}:
+            checkpoint = supervision_store.get_checkpoint(conn, item["scope_type"], item["scope_id"], "admission")
+            # Missing repository evidence must never turn a scoped incident into a global notice.
+            scope = {"repository_scoped": True, "repo_id": (checkpoint or {}).get("metadata", {}).get("repo_id")}
         db_write_notifications.insert_for_notify_changes(
             conn,
             identifier,
@@ -54,6 +58,7 @@ def notify_changes(conn, changes, now):
                     "required_action": "Inspect the supervision incident and its evidence.",
                     "incident_id": item["incident_id"],
                     "retryable": False,
+                    **scope,
                 }
             ),
         )
@@ -136,10 +141,9 @@ def status(config):
         }
 
 
-def deliver_health(db_path, path, *, runner=subprocess.run):
+def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
     """Deliver the one bounded DB-outage notice independently of SQLite."""
-    command = os.environ.get("ROBERT_NOTIFICATION_COMMAND")
-    if not command:
+    if not message_transport.configured(config):
         return
     state_path = path.with_name("health-delivery.json")
     try:
@@ -194,15 +198,7 @@ def deliver_health(db_path, path, *, runner=subprocess.run):
     except OSError:
         return
     payload = {"type": "supervisor_unobservable", "delivery_id": delivery_id, **fields}
-    try:
-        sent = (
-            runner(
-                shlex.split(command), input=json.dumps(payload), text=True, capture_output=True, timeout=5, check=False
-            ).returncode
-            == 0
-        )
-    except (OSError, subprocess.SubprocessError):
-        sent = False
+    sent = message_transport.send(payload, config=config, runner=runner)
     state.update(status="sent" if sent else "failed")
     try:
         supervision_health.atomic_json(state_path, state)

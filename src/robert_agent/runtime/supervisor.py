@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from robert_agent.delivery.application import notifications as notify
+from robert_agent.adapters.notifications import messaging as message_transport
 from robert_agent.supervision import diagnosis as supervision_diagnose
 from robert_agent.configuration import supervision as supervision_config
 
@@ -60,7 +61,7 @@ def run(config, *, once=False, stop=None):
                 if delivery is not None and delivery.poll() is not None:
                     delivery.wait()
                     delivery = None
-                if delivery is None and os.environ.get("ROBERT_NOTIFICATION_COMMAND"):
+                if delivery is None and message_transport.configured(config):
                     delivery = subprocess.Popen(
                         [
                             sys.executable,
@@ -69,6 +70,7 @@ def run(config, *, once=False, stop=None):
                             "--deliver-once",
                             str(config["db_path"]),
                             str(supervision_health.health_path(config)),
+                            str(config["config_path"]),
                         ],
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.DEVNULL,
@@ -150,11 +152,16 @@ def main(argv=None):
     args = [sys.argv[0], *(sys.argv[1:] if argv is None else argv)]
     if len(args) == 3 and args[1] == "--repair-once":
         _repair_once(args[2])
-    elif len(args) == 4 and args[1] == "--deliver-once":
-        supervision_checks.deliver_health(args[2], Path(args[3]))
+    elif len(args) in {4, 5} and args[1] == "--deliver-once":
+        from robert_agent.configuration.command import validate_config
+
+        config = validate_config(args[4], skip_external=True) if len(args) == 5 else None
+        if config is not None and not config.get("ok"):
+            return
+        supervision_checks.deliver_health(args[2], Path(args[3]), config=config)
         try:
             if Path(args[2]).is_file():
-                notify.deliver_pending(args[2], limit=1)
+                notify.deliver_pending(args[2], limit=1, config=config)
         except (OSError, db_errors.Error):
             pass
     else:

@@ -192,7 +192,11 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                             event_type="operator_decision_required",
                             idempotency_key="result-contract-cutover:" + task_id,
                             body="Automatic execution stopped: incompatible worker result. " + RECOVERY,
-                            metadata={"kind": "result_contract_cutover", "task_id": task_id},
+                            metadata={
+                                "kind": "result_contract_cutover",
+                                "task_id": task_id,
+                                "notification_id": "notification-cutover-" + task_id,
+                            },
                             now=now,
                         )
     return {"ok": True, "status": "isolated_processes_observed"} if isolated_only else check(db_path)

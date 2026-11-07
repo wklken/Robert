@@ -384,3 +384,46 @@ def update_failure(conn, kind, key):
         )
     )
     return statements.write(conn, stmt, {"p0": kind, "p1": key})
+
+
+def resolve_attention(conn, event_id):
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .values(status="resolved")
+        .where(
+            (notice.c.notification_id == "attention-" + event_id)
+            | (func.json_extract(notice.c.metadata_json, "$.attention_event_id") == event_id)
+        )
+    )
+    return statements.write(conn, stmt)
+
+
+def record_attention(conn, *, notification_id, task_id, event_type, now, metadata_json):
+    """Attach attention to an existing notice without losing its delivery receipt."""
+    notice = tables["notifications"]
+    stmt = insert(notice).values(
+        notification_id=notification_id,
+        task_id=task_id,
+        notification_type=event_type,
+        channel="local",
+        status="recorded",
+        created_at=now,
+        metadata_json=metadata_json,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["notification_id"],
+        set_={"metadata_json": func.json_patch(notice.c.metadata_json, stmt.excluded.metadata_json)},
+    )
+    return statements.write(conn, stmt)
+
+
+def set_delivery_state(conn, notification_id, delivery_json):
+    """Update only sender-owned metadata so concurrent operator receipts survive."""
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .where(notice.c.notification_id == notification_id)
+        .values(metadata_json=func.json_set(notice.c.metadata_json, "$.delivery", func.json(delivery_json)))
+    )
+    return statements.write(conn, stmt)

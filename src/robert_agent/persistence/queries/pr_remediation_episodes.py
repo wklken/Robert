@@ -22,45 +22,6 @@ def find_status_by_episode_id(conn, subject_id):
     return statements.read(conn, query1, {"p0": subject_id})
 
 
-def find_status_and_attempt_count_by_episode_id(conn, subject_id):
-    query1 = (
-        select(
-            tables["pr_remediation_episodes"].c["status"],
-            tables["pr_remediation_episodes"].c["attempt_count"],
-        )
-        .select_from(tables["pr_remediation_episodes"])
-        .where((tables["pr_remediation_episodes"].c["episode_id"] == bindparam("p0")))
-        .correlate_except(tables["pr_remediation_episodes"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query1, {"p0": subject_id})
-
-
-def find_for_decisions(conn, subject_id):
-    query1 = (
-        select(sql_constant(1))
-        .select_from(tables["pr_remediation_episodes"])
-        .where(
-            and_(
-                (tables["pr_remediation_episodes"].c["episode_id"] == bindparam("p0")),
-                tables["pr_remediation_episodes"]
-                .c["status"]
-                .in_(
-                    [
-                        sql_constant(RemediationStatus.RESOLVED.value),
-                        sql_constant(RemediationStatus.EXHAUSTED.value),
-                        sql_constant(RemediationStatus.SUPERSEDED.value),
-                        sql_constant(RemediationStatus.CANCELED.value),
-                    ]
-                ),
-            )
-        )
-        .correlate_except(tables["pr_remediation_episodes"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query1, {"p0": subject_id})
-
-
 def find_workstream_id_and_last_task_id_by_episode_id(conn, subject_id):
     query1 = (
         select(

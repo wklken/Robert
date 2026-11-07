@@ -32,7 +32,7 @@ class PreOrmCutoverTests(unittest.TestCase):
         with legacy_connect(self.db) as conn:
             conn.executescript(_FIXTURE.read_text(encoding="utf-8"))
 
-    def test_reinitialization_preserves_existing_attention_over_historical_control(
+    def test_reinitialization_preserves_existing_attention_and_schema(
         self,
     ):
         from robert_agent.persistence.schema.database import init_database
@@ -42,12 +42,13 @@ class PreOrmCutoverTests(unittest.TestCase):
                 "UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?",
                 (_TASK,),
             )
-            conn.execute(
-                "INSERT INTO workflow_bindings(subject_type,subject_id,workflow_kind,owner_engine,binding_status,created_at,updated_at) VALUES ('task',?,'human_request','legacy','active',?,?)",
-                (_TASK, _NOW, _NOW),
-            )
+        existing_objects, _, existing_markers = self._schema_and_markers()
         init_database(self.db)
+        initialized = self._schema_and_markers()
+        self.assertLessEqual(set(existing_objects), set(initialized[0]))
+        self.assertEqual(initialized[2], existing_markers)
         init_database(self.db)
+        self.assertEqual(self._schema_and_markers(), initialized)
         with legacy_connect(self.db) as conn:
             rows = conn.execute(
                 "SELECT binding_status FROM execution_subjects WHERE subject_type='task' AND subject_id=?",

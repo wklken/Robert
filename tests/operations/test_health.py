@@ -22,6 +22,9 @@ class HealthTests(PublicationBudgetFixture):
         reliability_health.collect(self.db, now=self.now.isoformat(), repo_ids=["repo"])
         self.assertEqual(first["delayed_tasks_sample"], 1)
         self.assertGreater(first["database_bytes"], 0)
+        self.assertNotIn("pending_outbox", first)
+        self.assertNotIn("oldest_outbox_seconds", first)
+        self.assertNotIn("attention_outbox", first)
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(c.execute("SELECT count(*) FROM notifications").fetchone()[0], 1)
             self.assertEqual(c.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)

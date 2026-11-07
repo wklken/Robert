@@ -496,7 +496,6 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
             "evidence": latest if isinstance(latest, dict) else evidence,
             "duplicate": True,
             "binding_status": binding["binding_status"],
-            "signal_id": None,
             "attempt_id": bound_attempt_for_subject(conn, subject_type, subject_id),
         }
     if isinstance(latest, dict) and latest.get("fact_id") == evidence["fact_id"]:
@@ -508,7 +507,6 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
             "evidence": evidence,
             "duplicate": True,
             "binding_status": binding["binding_status"],
-            "signal_id": None,
             "attempt_id": bound_attempt_for_subject(conn, subject_type, subject_id),
         }
     if binding["binding_status"] != BindingStatus.ACTIVE:
@@ -521,8 +519,6 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
     db_write_execution_subjects.update_for_apply_classified_fact(
         conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), now, subject_type, subject_id
     )
-
-    signal_id = None
 
     if classification == FactClassification.TERMINAL.value:
         execution_store.close_binding(conn, subject_type, subject_id, now)
@@ -541,6 +537,5 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
             if classification == FactClassification.INVALIDATING.value
             else BindingStatus.ACTIVE.value
         ),
-        "signal_id": signal_id,
         "attempt_id": bound_attempt_for_subject(conn, subject_type, subject_id),
     }

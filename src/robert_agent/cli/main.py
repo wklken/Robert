@@ -9,11 +9,11 @@ from pathlib import Path
 import shutil
 import sys
 
+from robert_agent.persistence import errors as db_errors
+
 from robert_agent import __version__
 from robert_agent.runtime import daemon
 from robert_agent.operations import diagnostics
-from robert_agent.operations import migration as sqlite_migration
-from robert_agent.persistence import execution_control as execution_store
 from robert_agent.operations import retention
 from robert_agent.runtime import cycle as run_once
 from robert_agent.readmodels import status
@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"robert {__version__}",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    messaging_parser = subparsers.add_parser("messages", help="Authenticated local messaging bridge.")
+    messaging_parser.add_argument("messages_command", choices=["inbox", "respond"])
+    _add_config_argument(messaging_parser)
+    _add_output_argument(messaging_parser)
 
     init_parser = subparsers.add_parser(
         "init",
@@ -185,23 +190,6 @@ def build_parser() -> argparse.ArgumentParser:
         repair.add_argument("--incident-id", required=True)
         if name == "repair-verify":
             repair.add_argument("--checkout", required=True)
-
-    migrate_parser = subparsers.add_parser(
-        "migrate",
-        help="Migrate legacy Robert state.",
-    )
-    migration_commands = migrate_parser.add_subparsers(
-        dest="migrate_command",
-        required=True,
-    )
-
-    sqlite_command = migration_commands.add_parser("dbos", help="Preview or apply an offline DBOS-to-SQLite handoff.")
-    sqlite_command.add_argument("--db", required=True, help="Existing Robert SQLite database.")
-    sqlite_command.add_argument("--plan-file", help="Create a new plan file in dry-run; read it with --apply.")
-    migration_action = sqlite_command.add_mutually_exclusive_group()
-    migration_action.add_argument("--dry-run", action="store_true", help="Read-only preview (default).")
-    migration_action.add_argument("--apply", action="store_true", help="Apply a validated offline plan.")
-    _add_output_argument(sqlite_command)
 
     service_parser = subparsers.add_parser(
         "service",
@@ -394,6 +382,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "messages":
+            from robert_agent.work.application import messaging
+            from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
+
+            validated = validate_config.validate_config(args.config, skip_external=True)
+            if not validated.get("ok"):
+                return _emit_and_code(validated, args.output)
+            raw = sys.stdin.read(65537)
+            if len(raw) > 65536:
+                raise ValueError("Message exceeds the input limit.")
+            request = json.loads(raw)
+            if not isinstance(request, dict):
+                raise ValueError("Message must be an object.")
+            try:
+                result = (
+                    messaging.inbox(validated, request)
+                    if args.messages_command == "inbox"
+                    else messaging.respond(validated, request)
+                )
+            except (WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError) as exc:
+                result = {"ok": False, "status": "rejected", "safe_error": str(exc)}
+            except db_errors.Error:
+                result = {
+                    "ok": False,
+                    "status": "unavailable",
+                    "safe_error": "Messaging storage is unavailable; inspect Robert locally.",
+                }
+            return _emit_and_code(result, args.output)
         if args.command == "init":
             result = init_config(
                 args.config,
@@ -405,11 +421,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             return _emit_and_code(
                 doctor(args.config, skip_external=args.skip_external),
-                args.output,
-            )
-        if args.command == "migrate" and args.migrate_command == "dbos":
-            return _emit_and_code(
-                sqlite_migration.run(args.db, plan_file=args.plan_file, apply_changes=args.apply),
                 args.output,
             )
         if args.command == "supervisor":
@@ -630,12 +641,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output,
             )
         parser.error(f"command is not wired yet: {args.command}")
-    except execution_store.MigrationRequiredError as exc:
-        emit_result(
-            {"ok": False, "status": "migration_required", "safe_error": str(exc)},
-            output=getattr(args, "output", "text"),
-        )
-        return exit_codes.STATE_FAILURE
     except (OSError, TypeError, ValueError) as exc:
         output = getattr(args, "output", "text")
         emit_result(

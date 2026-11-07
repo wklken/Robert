@@ -5,6 +5,7 @@ from robert_agent.persistence.queries import notifications as db_read_notificati
 from robert_agent.persistence.stores import notifications as db_write_notifications
 
 import json
+from robert_agent.delivery import messages
 from uuid import uuid4
 
 
@@ -39,5 +40,9 @@ def record_control_stop(conn, daemon_run_id, lane, now, attention):
     )
 
 
-def has_pending_local_delivery(conn, repo_ids, now):
-    return bool(db_records.first(db_read_notifications.has_pending_local_delivery_filtered(conn, repo_ids, now)))
+def has_pending_local_delivery(conn, repo_ids, now, config=None):
+    return bool(
+        db_read_notifications.has_pending_local_delivery_filtered(
+            conn, repo_ids, now, messaging_repo_ids=messages.delivery_repo_ids(conn, config)
+        )
+    )

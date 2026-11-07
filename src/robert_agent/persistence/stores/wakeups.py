@@ -12,20 +12,6 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
-def update_for_consume_fact(conn, now, value_2):
-    stmt = (
-        update(tables["wakeups"])
-        .values({"status": sql_constant(WakeupStatus.CONSUMED.value), "updated_at": bindparam("p0")})
-        .where(
-            and_(
-                (tables["wakeups"].c["dedupe_key"] == bindparam("p1")),
-                (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
-            )
-        )
-    )
-    return statements.write(conn, stmt, {"p0": now, "p1": value_2})
-
-
 def update_for_publish_ready_actions(conn, value_1, task_id):
     stmt = (
         update(tables["wakeups"])

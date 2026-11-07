@@ -152,7 +152,6 @@ def _pending_wakeup_statement(include_publication):
             ),
             func.coalesce(kind, sql_constant("")).not_in(
                 (
-                    sql_constant("dbos_handoff"),
                     sql_constant("github_observation_ready"),
                     sql_constant("github_context_refresh"),
                 )

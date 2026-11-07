@@ -212,3 +212,25 @@ def unresolved_event_filtered(conn, items, value_1):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query2, {"p0": value_1, "items": items})
+
+
+def find_attention(conn, event_id, work_item_id):
+    event, item = tables["work_item_events"], tables["work_items"]
+    resolved = event.alias("resolved_attention")
+    stmt = (
+        select(
+            event.c.event_id,
+            event.c.work_item_id,
+            event.c.event_type,
+            event.c.body,
+            event.c.metadata_json,
+            item.c.version,
+            item.c.title,
+            item.c.completed_at,
+            item.c.canceled_at,
+            select(1).where(resolved.c.resolves_event_id == event.c.event_id).exists().label("resolved"),
+        )
+        .select_from(event.join(item, item.c.work_item_id == event.c.work_item_id))
+        .where(event.c.event_id == event_id, event.c.work_item_id == work_item_id)
+    )
+    return statements.read(conn, stmt)

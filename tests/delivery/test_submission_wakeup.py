@@ -49,7 +49,7 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
         self.assertEqual(metadata["recorded_by"], "robert.worker")
         self.assertEqual(metadata["output_type"], "comment_analysis")
 
-    def test_legacy_worker_result_does_not_queue_subject_signal(self):
+    def test_bound_worker_result_records_native_wakeup(self):
         from robert_agent.persistence import execution_control as execution_store
         from robert_agent.delivery.application import submission as result
 
@@ -72,8 +72,8 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0],
-                0,
+                conn.execute("SELECT COUNT(*) FROM wakeups WHERE reason='worker_result_ready'").fetchone()[0],
+                1,
             )
 
     def test_result_notifies_only_after_transaction_commits(self):
