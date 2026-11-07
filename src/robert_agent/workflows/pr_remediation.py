@@ -34,16 +34,12 @@ def _json_object(value):
 
 
 def _episode_id(workstream_id, episode_kind, subject_key):
-    digest = hashlib.sha256(
-        f"{workstream_id}:{episode_kind}:{subject_key}".encode("utf-8")
-    ).hexdigest()[:24]
+    digest = hashlib.sha256(f"{workstream_id}:{episode_kind}:{subject_key}".encode("utf-8")).hexdigest()[:24]
     return f"remediation-{digest}"
 
 
 def _observation_id(source_kind, external_id, attempt_no):
-    digest = hashlib.sha256(
-        f"{source_kind}:{external_id}:{attempt_no}".encode("utf-8")
-    ).hexdigest()[:24]
+    digest = hashlib.sha256(f"{source_kind}:{external_id}:{attempt_no}".encode("utf-8")).hexdigest()[:24]
     return f"ci-observation-{digest}"
 
 
@@ -106,10 +102,7 @@ def attest_remediation_worktree(
     branch_name = action_scope.get("branch_name")
     head_sha = remediation_evidence.get("observed_head_sha")
     base_sha = remediation_evidence.get("observed_base_sha")
-    if not all(
-        isinstance(value, str) and value
-        for value in (worktree_path, branch_name, head_sha, base_sha)
-    ):
+    if not all(isinstance(value, str) and value for value in (worktree_path, branch_name, head_sha, base_sha)):
         return {"status": "failed", "reason": "missing_attestation_context"}
 
     def run_git(*args):
@@ -273,8 +266,7 @@ def _notify_exhausted_episode(conn, episode, reason, now):
                                 "failures",
                                 [],
                             )
-                            if isinstance(failure, dict)
-                            and failure.get("details_url")
+                            if isinstance(failure, dict) and failure.get("details_url")
                         }
                     ),
                     "reason": reason,
@@ -498,15 +490,9 @@ def upsert_health_episodes(
                 and ci_summary.get("failure_signature") == episode["failure_signature"]
             ):
                 suppress_current_ci_episode = True
-        if (
-            episode["status"] != "waiting_for_signal"
-            or episode["result_head_sha"] != snapshot.get("head_sha")
-        ):
+        if episode["status"] != "waiting_for_signal" or episode["result_head_sha"] != snapshot.get("head_sha"):
             continue
-        if (
-            episode["episode_kind"] == "merge_conflict"
-            and snapshot.get("mergeable") is True
-        ):
+        if episode["episode_kind"] == "merge_conflict" and snapshot.get("mergeable") is True:
             transition = _transition(
                 conn,
                 episode,
@@ -514,10 +500,7 @@ def upsert_health_episodes(
                 "merge_conflict_cleared",
                 now,
             )
-        elif (
-            episode["episode_kind"] == "merge_conflict"
-            and snapshot.get("mergeable") is False
-        ):
+        elif episode["episode_kind"] == "merge_conflict" and snapshot.get("mergeable") is False:
             suppress_current_conflict_episode = True
             transition = _transition(
                 conn,
@@ -537,8 +520,7 @@ def upsert_health_episodes(
                 )
             elif (
                 ci_summary.get("status") == "failing"
-                and ci_summary.get("failure_signature")
-                == episode["failure_signature"]
+                and ci_summary.get("failure_signature") == episode["failure_signature"]
             ):
                 suppress_current_ci_episode = True
                 transition = _transition(
@@ -610,15 +592,11 @@ def upsert_health_episodes(
                     conn,
                     workstream["workstream_id"],
                 )
-                if episode["episode_kind"] == "ci"
-                and episode["subject_key"] == subject_key
+                if episode["episode_kind"] == "ci" and episode["subject_key"] == subject_key
             ),
             None,
         )
-        if (
-            ci_summary.get("status") == "failing"
-            and not suppress_current_ci_episode
-        ):
+        if ci_summary.get("status") == "failing" and not suppress_current_ci_episode:
             episode = _create_episode(
                 conn,
                 workstream=workstream,
@@ -635,9 +613,7 @@ def upsert_health_episodes(
             _store_ci_observations(
                 conn,
                 episode["episode_id"],
-                ci_summary.get("observations")
-                or ci_summary.get("failures")
-                or [],
+                ci_summary.get("observations") or ci_summary.get("failures") or [],
             )
         elif ci_summary.get("status") == "manual":
             episode = _create_episode(
@@ -661,9 +637,7 @@ def upsert_health_episodes(
             _store_ci_observations(
                 conn,
                 episode["episode_id"],
-                ci_summary.get("observations")
-                or ci_summary.get("failures")
-                or [],
+                ci_summary.get("observations") or ci_summary.get("failures") or [],
             )
             if episode["status"] == "open":
                 transition = _transition(
@@ -716,9 +690,7 @@ def _episode_usage(conn, episode_id):
         payloads.append(usage.extract_attempt_usage(metadata))
     summary = usage.summarize_usage_payloads(payloads)
     summary["attempt_usage_count"] = len(payloads)
-    summary["measured_attempt_count"] = sum(
-        1 for payload in payloads if payload.get("usage_available")
-    )
+    summary["measured_attempt_count"] = sum(1 for payload in payloads if payload.get("usage_available"))
     return summary
 
 
@@ -734,10 +706,7 @@ def budget_status(conn, *, episode, policy, now):
     first_seen = _parse_time(episode.get("first_seen_at"))
     current = _parse_time(now)
     if first_seen and current:
-        elapsed_minutes = (
-            current.astimezone(timezone.utc)
-            - first_seen.astimezone(timezone.utc)
-        ).total_seconds() / 60
+        elapsed_minutes = (current.astimezone(timezone.utc) - first_seen.astimezone(timezone.utc)).total_seconds() / 60
         result["elapsed_minutes"] = elapsed_minutes
         if elapsed_minutes >= policy["max_wall_minutes"]:
             return {
@@ -930,9 +899,7 @@ def record_task_failure(conn, *, task_id, reason, now):
         "merge_conflict_remediation",
     }:
         return False
-    episode_id = _json_object(row[1]).get(
-        "remediation_episode_id"
-    )
+    episode_id = _json_object(row[1]).get("remediation_episode_id")
     episode = _load_episode(conn, episode_id)
     if not episode or episode["status"] not in {
         "queued",

@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 from contextlib import closing
 
 
@@ -29,15 +28,13 @@ class TransactionBoundaryTests(unittest.TestCase):
         checked = []
 
         def prepare(*args, **kwargs):
-            with closing(
-                sqlite3.connect(fixture.data_dir / "dd.sqlite3", timeout=0.01)
-            ) as conn:
+            with closing(sqlite3.connect(fixture.data_dir / "dd.sqlite3", timeout=0.01)) as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.rollback()
             checked.append(True)
             return original(*args, **kwargs)
 
-        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=prepare):
+        with mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=prepare):
             result = run_once.run_once(
                 fixture.config_path,
                 fixture_path=fixture.fixture_path,

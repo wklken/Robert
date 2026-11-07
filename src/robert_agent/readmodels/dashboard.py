@@ -1,4 +1,5 @@
 """Read-only dashboard and artifact projections, independent of HTTP."""
+
 from collections import Counter
 from contextlib import closing
 import json
@@ -42,7 +43,6 @@ REPO_STEP_ORDER = [
 ]
 
 
-
 def _decode_json(value):
     if not value:
         return None
@@ -71,14 +71,19 @@ def _load_latest_loop(db_path):
 def _is_authorized_unattached_event(event):
     return (
         event["authorization_status"]
-        in {"authorized", "authorized_trigger", "accepted_context", "accepted_review_participant"}
+        in {
+            "authorized",
+            "authorized_trigger",
+            "accepted_context",
+            "accepted_review_participant",
+        }
         and not event["task_id"]
     )
 
 
 def _task_operator_state(task):
-    if task.get('execution_attention'):
-        return 'needs_attention', 'inspect_execution_attention'
+    if task.get("execution_attention"):
+        return "needs_attention", "inspect_execution_attention"
     if task["lifecycle"] in {"failed", "canceled"}:
         notification = task.get("latest_notification") or {}
         if notification.get("notification_type") == "worker_timeout":
@@ -102,12 +107,15 @@ def _task_operator_state(task):
         return "worker_retrying", "inspect_worker_resume"
     if task["lifecycle"] in {"queued", "running"} and task.get("result_pending_audit"):
         return "result_pending_audit", "wait_next_cycle_or_run_once"
-    if (
-        task["lifecycle"] in {"queued", "running"}
-        and task.get("latest_attempt_status") == "running"
-    ):
+    if task["lifecycle"] in {"queued", "running"} and task.get("latest_attempt_status") == "running":
         return "worker_running", "wait_for_worker_completion"
-    if task["lifecycle"] in {"detected", "authorized", "classified", "queued", "running"}:
+    if task["lifecycle"] in {
+        "detected",
+        "authorized",
+        "classified",
+        "queued",
+        "running",
+    }:
         return "waiting_worker", "wait_for_worker_or_supervise"
     if task["lifecycle"] == "completed":
         return "completed", "none"
@@ -284,10 +292,15 @@ def _attach_task_operator_state(conn, recent_tasks):
             },
         )
 
-    attention_by_task = {row['task_id']: (_decode_json(row['metadata_json']) or {}).get('execution_attention')
-        for row in conn.execute(f'SELECT task_id,metadata_json FROM tasks WHERE task_id IN ({placeholders})', task_ids)}
+    attention_by_task = {
+        row["task_id"]: (_decode_json(row["metadata_json"]) or {}).get("execution_attention")
+        for row in conn.execute(
+            f"SELECT task_id,metadata_json FROM tasks WHERE task_id IN ({placeholders})",
+            task_ids,
+        )
+    }
     for task in recent_tasks:
-        task['execution_attention'] = attention_by_task.get(task['task_id'])
+        task["execution_attention"] = attention_by_task.get(task["task_id"])
         task.update(actions_by_task.get(task["task_id"], {}))
         latest_attempt = attempts_by_task.get(task["task_id"]) or {}
         task["latest_attempt_id"] = latest_attempt.get("attempt_id")
@@ -474,9 +487,15 @@ def _build_operator_next_steps(recent_tasks, recent_events, priority_events=None
             step["safe_error"] = (
                 audit.get("safe_error")
                 if isinstance(audit, dict)
-                else metadata.get("safe_error") if isinstance(metadata, dict) else None
+                else metadata.get("safe_error")
+                if isinstance(metadata, dict)
+                else None
             )
-        elif task["next_action"] in {"inspect_worker_heartbeat", "inspect_worker_timeout", "inspect_worker_startup"}:
+        elif task["next_action"] in {
+            "inspect_worker_heartbeat",
+            "inspect_worker_timeout",
+            "inspect_worker_startup",
+        }:
             step["attempt_id"] = task.get("latest_attempt_id")
             step["attempt_status"] = task.get("latest_attempt_status")
             step["heartbeat_at"] = task.get("latest_attempt_heartbeat_at")
@@ -624,10 +643,11 @@ def _build_notification_center(
         task_id = _notification_task_id(notification)
         task = tasks_by_id.get(task_id, {})
         summary = (
-            metadata.get("summary")
-            if isinstance(metadata, dict)
-            else None
-        ) or notification.get("status") or notification.get("channel") or ""
+            (metadata.get("summary") if isinstance(metadata, dict) else None)
+            or notification.get("status")
+            or notification.get("channel")
+            or ""
+        )
         items.append(
             _notification_item(
                 item_id=f"notification:{notification.get('notification_id')}",
@@ -675,7 +695,11 @@ def _build_notification_center(
             _notification_item(
                 item_id=f"github_action:{action.get('action_id')}",
                 kind="github_action",
-                severity=_status_severity(audit_status, publish_status, publish.get("status") if isinstance(publish, dict) else None),
+                severity=_status_severity(
+                    audit_status,
+                    publish_status,
+                    publish.get("status") if isinstance(publish, dict) else None,
+                ),
                 title=action.get("action_type") or "github_action",
                 summary=publish.get("safe_error") if isinstance(publish, dict) else publish_status or audit_status,
                 created_at=action.get("created_at"),
@@ -696,7 +720,9 @@ def _build_notification_center(
                 kind="run",
                 severity="critical",
                 title=f"run {run.get('status')}",
-                summary=(run.get("error") or {}).get("status") if isinstance(run.get("error"), dict) else run.get("status"),
+                summary=(run.get("error") or {}).get("status")
+                if isinstance(run.get("error"), dict)
+                else run.get("status"),
                 created_at=run.get("started_at"),
                 metadata=run,
             )
@@ -750,7 +776,9 @@ def _build_work_items(recent_tasks):
             group["repo_full_name"] = task.get("repo_full_name")
         if not group.get("github_url") and task.get("github_url"):
             group["github_url"] = task.get("github_url")
-        if task.get("updated_at") and (not group.get("latest_task_updated_at") or task["updated_at"] > group["latest_task_updated_at"]):
+        if task.get("updated_at") and (
+            not group.get("latest_task_updated_at") or task["updated_at"] > group["latest_task_updated_at"]
+        ):
             group["latest_task_updated_at"] = task["updated_at"]
         group["task_count"] += 1
         state = task.get("operator_state") or "unknown"
@@ -885,16 +913,10 @@ def build_dashboard_data(db_path, history_limit=20):
             )
         ]
         for task in recent_tasks:
-            task["allowed_github_actions"] = _decode_json(
-                task.pop("allowed_github_actions_json")
-            ) or []
-            task["recommended_skills"] = _decode_json(
-                task.pop("recommended_skills_json")
-            ) or []
+            task["allowed_github_actions"] = _decode_json(task.pop("allowed_github_actions_json")) or []
+            task["recommended_skills"] = _decode_json(task.pop("recommended_skills_json")) or []
         _attach_task_operator_state(conn, recent_tasks)
-        operator_state_counts = dict(
-            sorted(Counter(task["operator_state"] for task in recent_tasks).items())
-        )
+        operator_state_counts = dict(sorted(Counter(task["operator_state"] for task in recent_tasks).items()))
         recent_actions = [
             dict(row)
             for row in conn.execute(
@@ -941,9 +963,7 @@ def build_dashboard_data(db_path, history_limit=20):
         ]
         used_skill_counts = Counter()
         for result in recent_worker_results:
-            result["consumed_event_fingerprints"] = _decode_json(
-                result.pop("consumed_event_fingerprints_json")
-            ) or []
+            result["consumed_event_fingerprints"] = _decode_json(result.pop("consumed_event_fingerprints_json")) or []
             result["verification"] = _decode_json(result.pop("verification_json")) or []
             result["metadata"] = _decode_json(result.pop("metadata_json")) or {}
             used_skill_counts.update(result["metadata"].get("used_skills") or [])
@@ -990,22 +1010,11 @@ def build_dashboard_data(db_path, history_limit=20):
                 sorted(Counter(event["authorization_status"] for event in recent_events).items())
             ),
             "task_relationship": dict(
-                sorted(
-                    Counter(
-                        event["task_relationship"] or "unattached"
-                        for event in recent_events
-                    ).items()
-                )
+                sorted(Counter(event["task_relationship"] or "unattached" for event in recent_events).items())
             ),
-            "authorized_unattached": sum(
-                1
-                for event in recent_events
-                if _is_authorized_unattached_event(event)
-            ),
+            "authorized_unattached": sum(1 for event in recent_events if _is_authorized_unattached_event(event)),
             "ignored_events": sum(
-                1
-                for event in recent_events
-                if (event["authorization_status"] or "").startswith("ignored_")
+                1 for event in recent_events if (event["authorization_status"] or "").startswith("ignored_")
             ),
         }
         summary_counts = summarize.summarize_database(db_path)
@@ -1051,7 +1060,11 @@ def build_dashboard_data(db_path, history_limit=20):
                 [run["run_id"] for run in recent_runs],
             ):
                 step = dict(row)
-                step["output"] = step_output(step["step_key"], _decode_json(step.pop("output_json")), _decode_json(step.pop("referenced_summary_json")))
+                step["output"] = step_output(
+                    step["step_key"],
+                    _decode_json(step.pop("output_json")),
+                    _decode_json(step.pop("referenced_summary_json")),
+                )
                 step["error"] = _decode_json(step.pop("error_json"))
                 steps_by_run[step["run_id"]].append(step)
         repo_steps_by_run = {run["run_id"]: [] for run in recent_runs}
@@ -1080,7 +1093,10 @@ def build_dashboard_data(db_path, history_limit=20):
             run["error"] = _decode_json(run.pop("error_json"))
             run["steps"] = sorted(
                 steps_by_run[run["run_id"]],
-                key=lambda step: (order.get(step["step_key"], len(order)), step["step_key"]),
+                key=lambda step: (
+                    order.get(step["step_key"], len(order)),
+                    step["step_key"],
+                ),
             )
             run["repo_steps"] = sorted(
                 repo_steps_by_run.get(run["run_id"], []),
@@ -1147,9 +1163,7 @@ def _build_knowledge_review_data(conn, history_limit=20):
             """
         )
     }
-    active_count = conn.execute(
-        "SELECT COUNT(*) FROM runtime_knowledge WHERE active = 1"
-    ).fetchone()[0]
+    active_count = conn.execute("SELECT COUNT(*) FROM runtime_knowledge WHERE active = 1").fetchone()[0]
     pending_candidates = [
         runtime_knowledge.show_candidate(conn, row["candidate_id"])
         for row in conn.execute(
@@ -1238,7 +1252,11 @@ def _knowledge_proposal_repos(conn):
 def _knowledge_tables_available(conn):
     return all(
         _table_exists(conn, table_name)
-        for table_name in ["knowledge_candidates", "runtime_knowledge", "project_memory_entries"]
+        for table_name in [
+            "knowledge_candidates",
+            "runtime_knowledge",
+            "project_memory_entries",
+        ]
     )
 
 
@@ -1270,12 +1288,18 @@ def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, a
         directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             for component in relative.parts[:-1]:
-                child_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                   dir_fd=directory_fd)
+                child_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
                 os.close(directory_fd)
                 directory_fd = child_fd
-            file_fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                              dir_fd=directory_fd)
+            file_fd = os.open(
+                relative.name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory_fd,
+            )
         finally:
             os.close(directory_fd)
         with os.fdopen(file_fd, "rb") as fh:
@@ -1319,8 +1343,6 @@ def render_artifact_preview_text(preview):
     else:
         lines.append(preview.get("content") or "")
     return "\n".join(lines).encode("utf-8")
-
-
 
 
 def knowledge_available(db_path):

@@ -1,9 +1,5 @@
 import unittest
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
+import tomllib
 
 
 from tests.support import REPO_ROOT as ROOT
@@ -11,9 +7,7 @@ from tests.support import REPO_ROOT as ROOT
 
 class DistributionTests(unittest.TestCase):
     def test_project_metadata_matches_public_identifiers(self):
-        data = tomllib.loads(
-            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        )
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(data["project"]["name"], "robert-github-agent")
         self.assertEqual(
             data["project"]["scripts"]["robert"],
@@ -26,9 +20,7 @@ class DistributionTests(unittest.TestCase):
         self.assertTrue((ROOT / ".github/workflows/release.yml").is_file())
 
     def test_runtime_dependency_allowlist_is_explicit(self):
-        data = tomllib.loads(
-            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        )
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(
             data["project"]["dependencies"],
             [

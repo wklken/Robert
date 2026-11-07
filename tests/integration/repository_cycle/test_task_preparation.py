@@ -13,6 +13,7 @@ from tests.support.repository_cycle import (
 class TaskPreparationTests(RepositoryCycleFixture):
     def test_dry_run_fixture_creates_control_plane_rows_and_prompt_artifact(self):
         from robert_agent.runtime import cycle as run_once
+
         result = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -42,19 +43,11 @@ class TaskPreparationTests(RepositoryCycleFixture):
                     "agent_runs",
                 ]
             }
-            route = conn.execute(
-                "SELECT expected_output, recommended_skills_json FROM route_decisions"
-            ).fetchone()
+            route = conn.execute("SELECT expected_output, recommended_skills_json FROM route_decisions").fetchone()
 
-            source = conn.execute(
-                "SELECT html_url, state, source_updated_at FROM github_sources"
-            ).fetchone()
-            attempt = conn.execute(
-                "SELECT status, metadata_json, worktree_path, branch_name FROM attempts"
-            ).fetchone()
-            artifacts = dict(
-                conn.execute("SELECT artifact_type, path FROM artifacts").fetchall()
-            )
+            source = conn.execute("SELECT html_url, state, source_updated_at FROM github_sources").fetchone()
+            attempt = conn.execute("SELECT status, metadata_json, worktree_path, branch_name FROM attempts").fetchone()
+            artifacts = dict(conn.execute("SELECT artifact_type, path FROM artifacts").fetchall())
         self.assertEqual(counts["repos"], 1)
         self.assertEqual(counts["github_sources"], 1)
         self.assertEqual(counts["github_events"], 1)
@@ -179,19 +172,20 @@ class TaskPreparationTests(RepositoryCycleFixture):
             counts = {
                 table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in (
-                    "work_items", "workstreams", "tasks", "attempts", "artifacts",
-                    "github_sources", "github_events", "task_events", "worker_results",
+                    "work_items",
+                    "workstreams",
+                    "tasks",
+                    "attempts",
+                    "artifacts",
+                    "github_sources",
+                    "github_events",
+                    "task_events",
+                    "worker_results",
                 )
             }
-            task = conn.execute(
-                "SELECT task_id, route_id, expected_output, lifecycle FROM tasks"
-            ).fetchone()
-            attempt = conn.execute(
-                "SELECT attempt_id, status FROM attempts"
-            ).fetchone()
-            prompt_path = conn.execute(
-                "SELECT path FROM artifacts WHERE artifact_type = 'prompt'"
-            ).fetchone()[0]
+            task = conn.execute("SELECT task_id, route_id, expected_output, lifecycle FROM tasks").fetchone()
+            attempt = conn.execute("SELECT attempt_id, status FROM attempts").fetchone()
+            prompt_path = conn.execute("SELECT path FROM artifacts WHERE artifact_type = 'prompt'").fetchone()[0]
             wakeup_status = conn.execute(
                 "SELECT status FROM wakeups WHERE work_item_id = ?",
                 (created["item"]["work_item_id"],),
@@ -237,7 +231,7 @@ class TaskPreparationTests(RepositoryCycleFixture):
                 (now, now),
             )
             conn.execute(
-                'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, metadata_json) VALUES (\'attempt-1\', \'task-1\', 1, \'prepared\', ?, \'{"result_contract":"compact-v1"}\')',
+                "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, metadata_json) VALUES ('attempt-1', 'task-1', 1, 'prepared', ?, '{\"result_contract\":\"compact-v1\"}')",
                 (now,),
             )
             conn.execute(
@@ -245,17 +239,25 @@ class TaskPreparationTests(RepositoryCycleFixture):
                 (str(prompt_path), now),
             )
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE tasks SET metadata_json=? WHERE task_id=?",
-                         (json.dumps({"trigger_work_item_event_id": "local-request"}), "task-1"))
+            conn.execute(
+                "UPDATE tasks SET metadata_json=? WHERE task_id=?",
+                (json.dumps({"trigger_work_item_event_id": "local-request"}), "task-1"),
+            )
 
         workers = [
             {
-                "name": "default", "agent": "cbc", "command": "cbc",
-                "default_model": "model-default", "default_effort": "medium",
+                "name": "default",
+                "agent": "cbc",
+                "command": "cbc",
+                "default_model": "model-default",
+                "default_effort": "medium",
             },
             {
-                "name": "reviewer", "agent": "codex", "command": "codex",
-                "default_model": "model-review", "default_effort": "high",
+                "name": "reviewer",
+                "agent": "codex",
+                "command": "codex",
+                "default_model": "model-review",
+                "default_effort": "high",
             },
         ]
         calls = []
@@ -273,9 +275,12 @@ class TaskPreparationTests(RepositoryCycleFixture):
                 [
                     {
                         "task_info": {
-                            "task_id": "task-1", "attempt_id": "attempt-1",
-                            "workstream_id": "local:wi-1", "route_id": "local-result",
-                            "prompt_path": prompt_path, "routing_mode": "manual",
+                            "task_id": "task-1",
+                            "attempt_id": "attempt-1",
+                            "workstream_id": "local:wi-1",
+                            "route_id": "local-result",
+                            "prompt_path": prompt_path,
+                            "routing_mode": "manual",
                             "requested_worker": "reviewer",
                         },
                         "worktree_result": None,
@@ -287,7 +292,17 @@ class TaskPreparationTests(RepositoryCycleFixture):
                 1,
                 workers=workers,
                 default_worker=workers[0],
-                config_result={"default_worker": workers[0], "workers": workers, "routes": {"local-result": {"worker": "default", "model": "route-model", "effort": "low"}}},
+                config_result={
+                    "default_worker": workers[0],
+                    "workers": workers,
+                    "routes": {
+                        "local-result": {
+                            "worker": "default",
+                            "model": "route-model",
+                            "effort": "low",
+                        }
+                    },
+                },
             )
         finally:
             cycle_worker.dispatch_worker = original

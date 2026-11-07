@@ -1,4 +1,5 @@
 """Savepoint cleanup after durable external I/O checkpoints."""
+
 import sqlite3
 
 
@@ -18,8 +19,8 @@ def finish_isolation(conn, name, *, rollback=False):
 
 
 def begin_immediate(conn):
-    conn.execute('BEGIN IMMEDIATE')
+    conn.execute("BEGIN IMMEDIATE")
 
 
 def savepoint(conn, name):
-    conn.execute(f'SAVEPOINT {name}')
+    conn.execute(f"SAVEPOINT {name}")

@@ -93,9 +93,23 @@ def plan_worktree(
 
     worktree_root.mkdir(parents=True, exist_ok=True)
     if mode == "new_branch":
-        run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True, text=True, capture_output=True)
         run_command(
-            ["git", "worktree", "add", str(worktree_path), "-b", branch_name, start_point],
+            ["git", "fetch", "upstream", base_branch],
+            cwd=repo_root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        run_command(
+            [
+                "git",
+                "worktree",
+                "add",
+                str(worktree_path),
+                "-b",
+                branch_name,
+                start_point,
+            ],
             cwd=repo_root,
             check=True,
             text=True,
@@ -133,9 +147,7 @@ def prepare_existing_pr_worktree(
         repo_root,
         branch_name,
     )
-    worktree_path = existing_worktree_path or (
-        worktree_root / branch_name.replace("/", "__")
-    )
+    worktree_path = existing_worktree_path or (worktree_root / branch_name.replace("/", "__"))
     command_argvs = [
         [
             "git",
@@ -169,18 +181,11 @@ def prepare_existing_pr_worktree(
                 head_ref,
             ]
         )
-    commands = [
-        " ".join(shlex.quote(part) for part in command)
-        for command in command_argvs
-    ]
+    commands = [" ".join(shlex.quote(part) for part in command) for command in command_argvs]
     result = {
         "ok": True,
         "status": "planned" if dry_run else "created",
-        "mode": (
-            "reuse_existing_worktree"
-            if existing_worktree_path
-            else "existing_pr_snapshot"
-        ),
+        "mode": ("reuse_existing_worktree" if existing_worktree_path else "existing_pr_snapshot"),
         "repo_root": str(repo_root),
         "worktree_root": str(worktree_root),
         "worktree_path": str(worktree_path),
@@ -195,9 +200,7 @@ def prepare_existing_pr_worktree(
     }
     if existing_worktree_path:
         try:
-            existing_worktree_path.resolve().relative_to(
-                worktree_root.resolve()
-            )
+            existing_worktree_path.resolve().relative_to(worktree_root.resolve())
         except ValueError:
             return {
                 **result,
@@ -296,8 +299,11 @@ def _workspace_reuse_error(worktree_path, worktree_root, dry_run):
         return "blocked_unmanaged_worktree"
     if not dry_run:
         status = run_command(
-            ["git", "status", "--porcelain"], cwd=worktree_path,
-            check=True, text=True, capture_output=True,
+            ["git", "status", "--porcelain"],
+            cwd=worktree_path,
+            check=True,
+            text=True,
+            capture_output=True,
         ).stdout
         if status.strip():
             return "blocked_dirty_worktree"
@@ -323,18 +329,12 @@ def plan_review_worktree(
     commands = []
     if mode == "reuse_existing_worktree":
         commands.append(f"git fetch upstream {base_branch}")
-        commands.append(
-            f"git fetch upstream +pull/{source_number}/head:{review_ref}"
-        )
+        commands.append(f"git fetch upstream +pull/{source_number}/head:{review_ref}")
         commands.append(f"git -C {worktree_path} reset --hard {review_ref}")
     else:
         commands.append(f"git fetch upstream {base_branch}")
-        commands.append(
-            f"git fetch upstream +pull/{source_number}/head:{review_ref}"
-        )
-        commands.append(
-            f"git worktree add {worktree_path} -B {branch_name} {review_ref}"
-        )
+        commands.append(f"git fetch upstream +pull/{source_number}/head:{review_ref}")
+        commands.append(f"git worktree add {worktree_path} -B {branch_name} {review_ref}")
 
     result = {
         "ok": True,
@@ -385,7 +385,13 @@ def plan_review_worktree(
         return result
 
     worktree_root.mkdir(parents=True, exist_ok=True)
-    run_command(["git", "fetch", "upstream", base_branch], cwd=repo_root, check=True, text=True, capture_output=True)
+    run_command(
+        ["git", "fetch", "upstream", base_branch],
+        cwd=repo_root,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
     run_command(
         [
             "git",
@@ -429,8 +435,7 @@ def _registered_worktree(repo_root, expected_path):
         return False
     expected_path = Path(expected_path).resolve()
     return any(
-        line.startswith("worktree ")
-        and Path(line.split(" ", 1)[1]).resolve() == expected_path
+        line.startswith("worktree ") and Path(line.split(" ", 1)[1]).resolve() == expected_path
         for line in completed.stdout.splitlines()
     )
 
@@ -460,28 +465,35 @@ def plan_analysis_worktree(
     if reused:
         blocked = _workspace_reuse_error(worktree_path, worktree_root, dry_run)
         if blocked:
-            return {"ok": False, "status": blocked, "mode": "analysis",
-                    "worktree_path": str(worktree_path), "branch_name": None}
-        commands = [commands[0], ["git", "-C", str(worktree_path), "reset", "--hard",
-                                  f"upstream/{base_branch}"]]
+            return {
+                "ok": False,
+                "status": blocked,
+                "mode": "analysis",
+                "worktree_path": str(worktree_path),
+                "branch_name": None,
+            }
+        commands = [
+            commands[0],
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "reset",
+                "--hard",
+                f"upstream/{base_branch}",
+            ],
+        ]
     if not dry_run:
         worktree_root.mkdir(parents=True, exist_ok=True)
         for command in commands:
             run_command(command, cwd=repo_root, check=True, text=True, capture_output=True)
     return {
         "ok": True,
-        "status": (
-            "reused"
-            if reused
-            else ("planned" if dry_run else "prepared")
-        ),
+        "status": ("reused" if reused else ("planned" if dry_run else "prepared")),
         "mode": "analysis",
         "worktree_path": str(worktree_path),
         "branch_name": None,
-        "commands": [
-            " ".join(shlex.quote(part) for part in command)
-            for command in commands
-        ],
+        "commands": [" ".join(shlex.quote(part) for part in command) for command in commands],
     }
 
 

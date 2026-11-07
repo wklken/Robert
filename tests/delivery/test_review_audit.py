@@ -3,7 +3,9 @@ from tests.support.worker_protocol import WorkerProtocolFixture
 
 
 class ReviewAuditTests(WorkerProtocolFixture):
-    def test_update_existing_pr_result_accepts_push_existing_pr_action_with_response_comment(self):
+    def test_update_existing_pr_result_accepts_push_existing_pr_action_with_response_comment(
+        self,
+    ):
         from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
@@ -21,7 +23,7 @@ class ReviewAuditTests(WorkerProtocolFixture):
                     "type": "comment",
                     "target_url": "https://github.com/x/y/pull/1#pullrequestreview-9",
                     "body": self._dd_comment_body("Implemented the valid review point and pushed the branch."),
-                }
+                },
             ],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -96,7 +98,9 @@ class ReviewAuditTests(WorkerProtocolFixture):
         self.assertEqual(audit["status"], "failed")
         self.assertIn("after push_existing_pr", audit["safe_error"])
 
-    def test_push_existing_pr_without_review_point_evaluation_creates_policy_violation(self):
+    def test_push_existing_pr_without_review_point_evaluation_creates_policy_violation(
+        self,
+    ):
         from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
@@ -125,7 +129,9 @@ class ReviewAuditTests(WorkerProtocolFixture):
         self.assertEqual(audit["status"], "policy_violation")
         self.assertEqual(audit["violations"], ["missing_review_point_evaluation"])
 
-    def test_push_existing_pr_with_all_rejected_review_points_creates_policy_violation(self):
+    def test_push_existing_pr_with_all_rejected_review_points_creates_policy_violation(
+        self,
+    ):
         from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
@@ -155,7 +161,9 @@ class ReviewAuditTests(WorkerProtocolFixture):
         self.assertEqual(audit["status"], "policy_violation")
         self.assertEqual(audit["violations"], ["no_implemented_review_points"])
 
-    def test_push_existing_pr_with_invalid_review_point_entry_creates_policy_violation(self):
+    def test_push_existing_pr_with_invalid_review_point_entry_creates_policy_violation(
+        self,
+    ):
         from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
@@ -175,7 +183,11 @@ class ReviewAuditTests(WorkerProtocolFixture):
             handoff="bad review point record",
             used_skills=["fast-verify-review-point"],
             review_point_evaluation=[
-                {"summary": "Fix the branch push", "verdict": "correct", "action": "implement"}
+                {
+                    "summary": "Fix the branch push",
+                    "verdict": "correct",
+                    "action": "implement",
+                }
             ],
         )
 
@@ -280,7 +292,9 @@ class ReviewAuditTests(WorkerProtocolFixture):
 
         self.assertEqual(audit["status"], "accepted")
 
-    def test_update_existing_pr_comment_only_without_review_point_evaluation_fails(self):
+    def test_update_existing_pr_comment_only_without_review_point_evaluation_fails(
+        self,
+    ):
         from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
@@ -495,9 +509,7 @@ class ReviewAuditTests(WorkerProtocolFixture):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
-            planned_github_actions=[
-                {"action": "push_existing_pr", "url": "https://github.com/x/y/pull/1"}
-            ],
+            planned_github_actions=[{"action": "push_existing_pr", "url": "https://github.com/x/y/pull/1"}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="updated existing pr",

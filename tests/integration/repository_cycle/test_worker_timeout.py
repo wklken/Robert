@@ -12,6 +12,7 @@ from tests.support.repository_cycle import (
 class WorkerTimeoutTests(RepositoryCycleFixture):
     def test_worker_timeout_seconds_caps_attempt_runtime(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -23,9 +24,7 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -67,12 +66,11 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
-            worker_identity.terminate_recorded_identity = (
-                lambda _identity: {"status": "terminated", "pid": 12345}
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
+            worker_identity.terminate_recorded_identity = lambda _identity: {
+                "status": "terminated",
+                "pid": 12345,
+            }
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -96,6 +94,7 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
 
     def test_stale_attempt_later_hard_timeout_signals_pid_and_releases_workstream(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -107,9 +106,7 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         old = (datetime.now(timezone.utc) - timedelta(minutes=95)).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
                 (task_id,),
@@ -143,12 +140,11 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
-            worker_identity.terminate_recorded_identity = (
-                lambda _identity: {"status": "terminated", "pid": 12345}
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
+            worker_identity.terminate_recorded_identity = lambda _identity: {
+                "status": "terminated",
+                "pid": 12345,
+            }
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -170,12 +166,8 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
-            notification = conn.execute(
-                "SELECT notification_type, status FROM notifications"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
+            notification = conn.execute("SELECT notification_type, status FROM notifications").fetchone()
         self.assertEqual(attempt_status, "failed")
         self.assertEqual(task_lifecycle, "failed")
         self.assertEqual(workstream, ("failed", None))

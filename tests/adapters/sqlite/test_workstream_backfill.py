@@ -13,7 +13,10 @@ class WorkstreamBackfillTests(RepositoryCycleFixture):
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             # This fixture represents a database that predates the mainline migration.
-            conn.execute("DELETE FROM schema_migrations WHERE name=?", (storage.PR_MAINLINE_MIGRATION_NAME,))
+            conn.execute(
+                "DELETE FROM schema_migrations WHERE name=?",
+                (storage.PR_MAINLINE_MIGRATION_NAME,),
+            )
             conn.execute(
                 """
                 INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root)
@@ -59,7 +62,5 @@ class WorkstreamBackfillTests(RepositoryCycleFixture):
 
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            row = conn.execute(
-                "SELECT workstream_id FROM tasks WHERE task_id = 'task-pr-followup'"
-            ).fetchone()
+            row = conn.execute("SELECT workstream_id FROM tasks WHERE task_id = 'task-pr-followup'").fetchone()
         self.assertEqual(row, ("github:example/backend!456",))

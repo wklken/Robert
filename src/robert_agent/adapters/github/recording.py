@@ -1,8 +1,8 @@
 """adapters github recording responsibilities."""
+
 from robert_agent.adapters.github import client as github_client
 import json
 import subprocess
-
 
 
 class RecordingRunner:
@@ -26,7 +26,6 @@ class RecordingRunner:
         return response
 
 
-
 class ReplayRunner:
     def __init__(self, responses):
         self.responses = dict(responses)
@@ -34,7 +33,7 @@ class ReplayRunner:
     def __call__(self, args, **kwargs):
         key = github_client.command_key(args)
         if key not in self.responses or self.responses[key] is None:
-            if kwargs.get('check'):
-                raise subprocess.CalledProcessError(1, args, '', 'remote observation unavailable')
-            return subprocess.CompletedProcess(args, 1, '', 'remote observation unavailable')
-        return subprocess.CompletedProcess(args, 0, self.responses[key], '')
+            if kwargs.get("check"):
+                raise subprocess.CalledProcessError(1, args, "", "remote observation unavailable")
+            return subprocess.CompletedProcess(args, 1, "", "remote observation unavailable")
+        return subprocess.CompletedProcess(args, 0, self.responses[key], "")

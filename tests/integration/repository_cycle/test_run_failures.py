@@ -13,6 +13,7 @@ from tests.support.repository_cycle import (
 class CycleRunFailureTests(RepositoryCycleFixture):
     def test_run_once_acquires_and_releases_agent_lease(self):
         from robert_agent.runtime import cycle as run_once
+
         result = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -23,9 +24,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
 
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            lease = conn.execute(
-                "SELECT resource_type, resource_key, status FROM leases"
-            ).fetchone()
+            lease = conn.execute("SELECT resource_type, resource_key, status FROM leases").fetchone()
         self.assertEqual(
             lease,
             ("agent_run", "repo:example/backend", "released"),
@@ -33,6 +32,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
 
     def test_worktree_failure_during_route_fails_run_and_releases_lease(self):
         from robert_agent.runtime import cycle as run_once
+
         original_prepare_worktree = assigned_workspace.prepare_worktree
 
         def fake_prepare_worktree(_repo, _event, _route_result, _dry_run):
@@ -54,19 +54,17 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         self.assertEqual(result["status"], "failed_route")
         self.assertIn("git fetch upstream master", result["safe_error"])
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            run_status, error_json = conn.execute(
-                "SELECT status, error_json FROM agent_runs"
-            ).fetchone()
+            run_status, error_json = conn.execute("SELECT status, error_json FROM agent_runs").fetchone()
             lease_status = conn.execute("SELECT status FROM leases").fetchone()[0]
-            route_step = conn.execute(
-                "SELECT status FROM run_steps WHERE step_key = 'route'"
-            ).fetchone()[0]
+            route_step = conn.execute("SELECT status FROM run_steps WHERE step_key = 'route'").fetchone()[0]
         self.assertEqual(run_status, "failed")
         self.assertEqual(json.loads(error_json)["status"], "failed_route")
         self.assertEqual(lease_status, "released")
         self.assertEqual(route_step, "failed")
 
-    def test_route_failure_preserves_related_events_and_prepares_independent_workstream(self):
+    def test_route_failure_preserves_related_events_and_prepares_independent_workstream(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
 
         events = [
@@ -107,9 +105,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         def prepare(repo, event, route_result, dry_run):
             prepared_numbers.append(event["number"])
             if event["number"] == 22:
-                raise subprocess.CalledProcessError(
-                    128, ["git", "fetch", "upstream", "pull/22/head"]
-                )
+                raise subprocess.CalledProcessError(128, ["git", "fetch", "upstream", "pull/22/head"])
             return original_prepare(repo, event, route_result, dry_run)
 
         try:
@@ -130,11 +126,18 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
             stored = {row[0] for row in conn.execute("SELECT event_fingerprint FROM github_events")}
             tasks = conn.execute("SELECT workstream_id, route_id FROM tasks").fetchall()
-            route_error = json.loads(conn.execute(
-                "SELECT error_json FROM run_repo_steps WHERE step_key = 'route'"
-            ).fetchone()[0])
+            route_error = json.loads(
+                conn.execute("SELECT error_json FROM run_repo_steps WHERE step_key = 'route'").fetchone()[0]
+            )
             lease_status = conn.execute("SELECT status FROM leases").fetchone()[0]
-        self.assertEqual(stored, {"review_request:review-22", "comment:followup-22", "review_request:review-23"})
+        self.assertEqual(
+            stored,
+            {
+                "review_request:review-22",
+                "comment:followup-22",
+                "review_request:review-23",
+            },
+        )
         self.assertEqual(tasks, [("github:example/backend!23", "review-pr")])
         self.assertEqual(route_error["failures"][0]["event_fingerprint"], "review_request:review-22")
         self.assertEqual(lease_status, "released")
@@ -147,9 +150,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         )
         self.assertTrue(retry["ok"], retry)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
-            streams = [row[0] for row in conn.execute(
-                "SELECT workstream_id FROM tasks ORDER BY workstream_id"
-            )]
+            streams = [row[0] for row in conn.execute("SELECT workstream_id FROM tasks ORDER BY workstream_id")]
         self.assertEqual(streams, ["github:example/backend!22", "github:example/backend!23"])
 
     def test_blocked_review_worktree_does_not_block_independent_review(self):
@@ -178,7 +179,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
                 return {"ok": False, "status": "blocked_dirty_worktree"}
             return original_prepare(repo, event, route_result, dry_run)
 
-        with patch.object(assigned_workspace, 'prepare_worktree', side_effect=prepare):
+        with patch.object(assigned_workspace, "prepare_worktree", side_effect=prepare):
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -194,10 +195,11 @@ class CycleRunFailureTests(RepositoryCycleFixture):
             tasks = conn.execute(
                 "SELECT workstream_id, lifecycle, route_id FROM tasks ORDER BY workstream_id"
             ).fetchall()
-            notification = json.loads(conn.execute(
-                "SELECT metadata_json FROM notifications "
-                "WHERE notification_type = 'worktree_unavailable'"
-            ).fetchone()[0])
+            notification = json.loads(
+                conn.execute(
+                    "SELECT metadata_json FROM notifications WHERE notification_type = 'worktree_unavailable'"
+                ).fetchone()[0]
+            )
         self.assertEqual(tasks[0], ("github:example/backend!22", "failed", "review-pr"))
         self.assertEqual(tasks[1][0], "github:example/backend!23")
         self.assertNotEqual(tasks[1][1], "failed")
@@ -216,9 +218,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
                 "actor_login": "wklken",
                 "requested_reviewer": "robert-bot",
                 "event_at": f"2026-10-10T03:0{index}:00Z",
-                "origin_workstream_id": (
-                    "github:example/backend#10" if number in {22, 24} else None
-                ),
+                "origin_workstream_id": ("github:example/backend#10" if number in {22, 24} else None),
             }
             for index, number in enumerate([22, 24, 25, 23])
         ]
@@ -229,9 +229,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         def prepare(repo, event, route_result, dry_run):
             prepared_numbers.append(event["number"])
             if event["number"] == 22:
-                raise subprocess.CalledProcessError(
-                    128, ["git", "fetch", "upstream", "pull/22/head"]
-                )
+                raise subprocess.CalledProcessError(128, ["git", "fetch", "upstream", "pull/22/head"])
             if event["number"] == 25:
                 raise FileNotFoundError("git")
             return original_prepare(repo, event, route_result, dry_run)
@@ -252,9 +250,9 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         self.assertEqual(prepared_numbers, [22, 25, 23])
         self.assertEqual(len(result["prompt_paths"]), 1)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
-            error = json.loads(conn.execute(
-                "SELECT error_json FROM run_repo_steps WHERE step_key = 'route'"
-            ).fetchone()[0])
+            error = json.loads(
+                conn.execute("SELECT error_json FROM run_repo_steps WHERE step_key = 'route'").fetchone()[0]
+            )
         self.assertEqual(
             [failure["event_fingerprint"] for failure in error["failures"]],
             ["review_request:review-22", "review_request:review-25"],
@@ -265,16 +263,25 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         from robert_agent.runtime import cycle as run_once
 
         body = "@robert-bot review 下这个 PR"
-        self.fixture_path.write_text(json.dumps({"events": [{
-            "id": "mention-review-23",
-            "number": 23,
-            "source_type": "pull_request",
-            "event_type": "comment",
-            "actor_login": "wklken",
-            "body": body,
-            "title": "feat: monitor subsystem",
-            "intent": discover.infer_intent("feat: monitor subsystem", body, "comment"),
-        }]}), encoding="utf-8")
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "mention-review-23",
+                            "number": 23,
+                            "source_type": "pull_request",
+                            "event_type": "comment",
+                            "actor_login": "wklken",
+                            "body": body,
+                            "title": "feat: monitor subsystem",
+                            "intent": discover.infer_intent("feat: monitor subsystem", body, "comment"),
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         result = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -291,6 +298,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
 
     def test_malformed_discovery_event_fails_run_and_releases_lease(self):
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -320,13 +328,9 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_discovery")
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            run_status, error_json = conn.execute(
-                "SELECT status, error_json FROM agent_runs"
-            ).fetchone()
+            run_status, error_json = conn.execute("SELECT status, error_json FROM agent_runs").fetchone()
             lease_status = conn.execute("SELECT status FROM leases").fetchone()[0]
-            discover_step = conn.execute(
-                "SELECT status FROM run_steps WHERE step_key = 'discover'"
-            ).fetchone()[0]
+            discover_step = conn.execute("SELECT status FROM run_steps WHERE step_key = 'discover'").fetchone()[0]
         self.assertEqual(run_status, "failed")
         self.assertIn("event id", json.loads(error_json)["safe_error"])
         self.assertEqual(lease_status, "released")
@@ -334,6 +338,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
 
     def test_publish_exception_fails_run_and_releases_lease(self):
         from robert_agent.runtime import cycle as run_once
+
         original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None):
@@ -353,13 +358,9 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "publish_failed")
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            run_status, error_json = conn.execute(
-                "SELECT status, error_json FROM agent_runs"
-            ).fetchone()
+            run_status, error_json = conn.execute("SELECT status, error_json FROM agent_runs").fetchone()
             lease_status = conn.execute("SELECT status FROM leases").fetchone()[0]
-            publish_step = conn.execute(
-                "SELECT status FROM run_steps WHERE step_key = 'publish_actions'"
-            ).fetchone()[0]
+            publish_step = conn.execute("SELECT status FROM run_steps WHERE step_key = 'publish_actions'").fetchone()[0]
         self.assertEqual(run_status, "failed")
         self.assertEqual(json.loads(error_json)["status"], "publish_failed")
         self.assertEqual(lease_status, "released")

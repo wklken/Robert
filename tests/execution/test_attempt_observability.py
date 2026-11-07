@@ -49,7 +49,7 @@ class ObservabilityTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     values,
-                    'utc_now',
+                    "utc_now",
                     side_effect=[
                         "2026-10-23T00:00:00+00:00",
                         "2026-10-23T00:01:00+00:00",
@@ -57,17 +57,11 @@ class ObservabilityTests(unittest.TestCase):
                 ),
                 mock.patch.object(time, "monotonic", side_effect=[100, 160]),
             ):
-                run_journal.mark_run_step(
-                    c, "r", "publish", "running", "2026-10-23T00:00:00+00:00"
-                )
-                run_journal.mark_run_step(
-                    c, "r", "publish", "succeeded", "2026-10-23T00:00:00+00:00"
-                )
+                run_journal.mark_run_step(c, "r", "publish", "running", "2026-10-23T00:00:00+00:00")
+                run_journal.mark_run_step(c, "r", "publish", "succeeded", "2026-10-23T00:00:00+00:00")
             row = c.execute("SELECT started_at,finished_at FROM run_steps").fetchone()
             self.assertNotEqual(row[0], row[1])
             self.assertEqual(
-                json.loads(
-                    c.execute("SELECT output_json FROM run_steps").fetchone()[0]
-                )["duration_seconds"],
+                json.loads(c.execute("SELECT output_json FROM run_steps").fetchone()[0])["duration_seconds"],
                 60,
             )

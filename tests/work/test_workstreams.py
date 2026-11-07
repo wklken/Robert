@@ -4,6 +4,7 @@ import unittest
 class WorkstreamTests(unittest.TestCase):
     def test_issue_event_creates_workstream_from_source_key(self):
         from robert_agent.work import streams as workstream
+
         event = {
             "source_key": "github:example/backend#123",
             "source_type": "issue",
@@ -18,17 +19,14 @@ class WorkstreamTests(unittest.TestCase):
 
     def test_dd_pr_metadata_tracks_origin_but_stays_on_pr_workstream(self):
         from robert_agent.work import streams as workstream
+
         event = {
             "source_key": "github:example/backend!456",
             "source_type": "pull_request",
             "event_fingerprint": "review:1",
             "workstream_id": "github:example/backend!456",
             "origin_workstream_id": "github:example/backend#123",
-            "metadata": {
-                "dd_workstream": {
-                    "workstream_id": "github:example/backend#123"
-                }
-            },
+            "metadata": {"dd_workstream": {"workstream_id": "github:example/backend#123"}},
         }
 
         decision = workstream.plan_event(event, active_workstreams=set())
@@ -38,6 +36,7 @@ class WorkstreamTests(unittest.TestCase):
 
     def test_dd_pr_mainline_stays_on_pr_source_key(self):
         from robert_agent.work import streams as workstream
+
         event = {
             "source_key": "github:example/backend!456",
             "source_type": "pull_request",
@@ -57,6 +56,7 @@ class WorkstreamTests(unittest.TestCase):
 
     def test_active_workstream_gets_pending_event_instead_of_new_task(self):
         from robert_agent.work import streams as workstream
+
         event = {
             "source_key": "github:example/backend#123",
             "source_type": "issue",

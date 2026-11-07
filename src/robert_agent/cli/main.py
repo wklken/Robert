@@ -58,8 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    messaging_parser = subparsers.add_parser('messages', help='Authenticated local messaging bridge.')
-    messaging_parser.add_argument('messages_command', choices=['inbox', 'respond'])
+    messaging_parser = subparsers.add_parser("messages", help="Authenticated local messaging bridge.")
+    messaging_parser.add_argument("messages_command", choices=["inbox", "respond"])
     _add_config_argument(messaging_parser)
     _add_output_argument(messaging_parser)
 
@@ -201,22 +201,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
 
-    sqlite_command = migration_commands.add_parser(
-        "dbos", help="Preview or apply an offline DBOS-to-SQLite handoff."
-    )
-    sqlite_command.add_argument(
-        "--db", required=True, help="Existing Robert SQLite database."
-    )
-    sqlite_command.add_argument(
-        "--plan-file", help="Create a new plan file in dry-run; read it with --apply."
-    )
+    sqlite_command = migration_commands.add_parser("dbos", help="Preview or apply an offline DBOS-to-SQLite handoff.")
+    sqlite_command.add_argument("--db", required=True, help="Existing Robert SQLite database.")
+    sqlite_command.add_argument("--plan-file", help="Create a new plan file in dry-run; read it with --apply.")
     migration_action = sqlite_command.add_mutually_exclusive_group()
-    migration_action.add_argument(
-        "--dry-run", action="store_true", help="Read-only preview (default)."
-    )
-    migration_action.add_argument(
-        "--apply", action="store_true", help="Apply a validated offline plan."
-    )
+    migration_action.add_argument("--dry-run", action="store_true", help="Read-only preview (default).")
+    migration_action.add_argument("--apply", action="store_true", help="Apply a validated offline plan.")
     _add_output_argument(sqlite_command)
 
     service_parser = subparsers.add_parser(
@@ -244,13 +234,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     maintenance_parser = subparsers.add_parser("maintenance", help="Manage diagnostic history.")
     prune_parser = maintenance_parser.add_subparsers(dest="maintenance_command", required=True).add_parser(
-        "prune", help="Preview one retention batch; --apply deletes expired diagnostics.",
+        "prune",
+        help="Preview one retention batch; --apply deletes expired diagnostics.",
     )
     _add_config_argument(prune_parser)
     _add_output_argument(prune_parser)
-    prune_parser.add_argument("--apply", action="store_true", help="Apply retention (default: read-only preview).")
-    prune_parser.add_argument("--batch-size", type=int, help="Runs, events and leases per transaction (1-500).")
-    prune_parser.add_argument("--batches", type=int, default=1, help="Maximum apply transactions (1-1000); preview always shows one batch.")
+    prune_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply retention (default: read-only preview).",
+    )
+    prune_parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Runs, events and leases per transaction (1-500).",
+    )
+    prune_parser.add_argument(
+        "--batches",
+        type=int,
+        default=1,
+        help="Maximum apply transactions (1-1000); preview always shows one batch.",
+    )
 
     diagnostics_parser = subparsers.add_parser(
         "diagnostics",
@@ -377,10 +381,7 @@ def _init_values(args):
         "github_account": "GitHub bot account: ",
         "trusted_actor": "Trusted GitHub actor: ",
     }
-    return {
-        key: value or input(prompts[key]).strip()
-        for key, value in fields.items()
-    }
+    return {key: value or input(prompts[key]).strip() for key, value in fields.items()}
 
 
 def _emit_and_code(result, output):
@@ -410,25 +411,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        if args.command == 'messages':
+        if args.command == "messages":
             from robert_agent.work.application import messaging
             from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
+
             validated = validate_config.validate_config(args.config, skip_external=True)
-            if not validated.get('ok'):
+            if not validated.get("ok"):
                 return _emit_and_code(validated, args.output)
             raw = sys.stdin.read(65537)
             if len(raw) > 65536:
-                raise ValueError('Message exceeds the input limit.')
+                raise ValueError("Message exceeds the input limit.")
             request = json.loads(raw)
             if not isinstance(request, dict):
-                raise ValueError('Message must be an object.')
+                raise ValueError("Message must be an object.")
             try:
-                result = (messaging.inbox(validated, request) if args.messages_command == 'inbox'
-                          else messaging.respond(validated, request))
+                result = (
+                    messaging.inbox(validated, request)
+                    if args.messages_command == "inbox"
+                    else messaging.respond(validated, request)
+                )
             except (WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError) as exc:
-                result = {'ok': False, 'status': 'rejected', 'safe_error': str(exc)}
+                result = {"ok": False, "status": "rejected", "safe_error": str(exc)}
             except sqlite3.Error:
-                result = {'ok': False, 'status': 'unavailable', 'safe_error': 'Messaging storage is unavailable; inspect Robert locally.'}
+                result = {
+                    "ok": False,
+                    "status": "unavailable",
+                    "safe_error": "Messaging storage is unavailable; inspect Robert locally.",
+                }
             return _emit_and_code(result, args.output)
         if args.command == "init":
             result = init_config(
@@ -445,18 +454,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "migrate" and args.migrate_command == "dbos":
             return _emit_and_code(
-                sqlite_migration.run(
-                    args.db, plan_file=args.plan_file, apply_changes=args.apply
-                ),
+                sqlite_migration.run(args.db, plan_file=args.plan_file, apply_changes=args.apply),
                 args.output,
             )
         if args.command == "supervisor":
             from robert_agent.runtime import supervisor
+
             if args.supervisor_command == "build-manifest":
                 from robert_agent.adapters.processes import runtime_identity
+
                 manifest = runtime_identity.build_manifest(args.repo, args.wheel)
                 supervision_health.atomic_json(Path(args.output_file).expanduser(), manifest)
-                return _emit_and_code({"ok": True, "status": "recorded", "manifest": manifest}, args.output)
+                return _emit_and_code(
+                    {"ok": True, "status": "recorded", "manifest": manifest},
+                    args.output,
+                )
             validated = validate_config.validate_config(args.config, skip_external=True)
             if not validated.get("ok"):
                 return _emit_and_code(validated, args.output)
@@ -465,12 +477,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.supervisor_command == "check":
                 result = supervision_checks.check(validated)
             elif args.supervisor_command.startswith("repair-"):
-                from robert_agent.workflows.maintenance import repair as supervision_repair
+                from robert_agent.workflows.maintenance import (
+                    repair as supervision_repair,
+                )
+
                 if args.supervisor_command == "repair-propose":
                     result = supervision_repair.propose(validated, args.incident_id)
                 elif args.supervisor_command == "repair-verify":
-                    result = supervision_repair.verify(validated, args.incident_id, checkout=args.checkout,
-                                                       runtime=supervision_health.runtime_status(validated))
+                    result = supervision_repair.verify(
+                        validated,
+                        args.incident_id,
+                        checkout=args.checkout,
+                        runtime=supervision_health.runtime_status(validated),
+                    )
                 else:
                     result = supervision_repair.status(validated, args.incident_id)
             else:
@@ -483,9 +502,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else ("linux" if sys.platform.startswith("linux") else sys.platform)
             )
             if args.service_command == "install":
-                executable = Path(
-                    shutil.which("robert") or sys.argv[0]
-                ).resolve()
+                executable = Path(shutil.which("robert") or sys.argv[0]).resolve()
                 result = service.install_service(
                     platform_name,
                     executable,
@@ -513,7 +530,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return _emit_and_code(validated, args.output)
             config = validated["maintenance"]
             result = retention.prune_database(
-                validated["db_path"], apply=args.apply,
+                validated["db_path"],
+                apply=args.apply,
                 batch_size=args.batch_size if args.batch_size is not None else config["batch_size"],
                 max_batches=args.batches,
                 run_retention_days=config["retention"]["runs_days"],
@@ -524,20 +542,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if result["ok"]:
                 return exit_codes.SUCCESS
             return exit_codes.RETRYABLE if result["status"] == "busy" else exit_codes.STATE_FAILURE
-        if (
-            args.command == "diagnostics"
-            and args.diagnostics_command == "export"
-        ):
+        if args.command == "diagnostics" and args.diagnostics_command == "export":
             result = diagnostics.export_diagnostics(
                 args.config,
                 args.output_path,
             )
             emit_result(result, output="text")
-            return (
-                exit_codes.SUCCESS
-                if result.get("ok")
-                else exit_codes.STATE_FAILURE
-            )
+            return exit_codes.SUCCESS if result.get("ok") else exit_codes.STATE_FAILURE
         if args.command == "web" and args.web_command == "run":
             web_argv = [
                 "--host",
@@ -592,18 +603,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                     )
                 ok = all(step.get("ok") for step in steps)
-                failed_steps = [
-                    step
-                    for step in steps
-                    if not step.get("ok")
-                ]
+                failed_steps = [step for step in steps if not step.get("ok")]
                 result = {
                     "ok": ok,
-                    "status": (
-                        "planned"
-                        if args.dry_run
-                        else ("installed" if ok else "failed")
-                    ),
+                    "status": ("planned" if args.dry_run else ("installed" if ok else "failed")),
                     "plugin_dir": str(args.plugin_dir),
                     "steps": steps,
                 }
@@ -633,14 +636,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             validated = _validated_config(args)
             if args.config_command == "show":
-                from robert_agent.configuration.routes import load_route_policies, resolve_route_config
+                from robert_agent.configuration.routes import (
+                    load_route_policies,
+                    resolve_route_config,
+                )
+
                 validated["effective_routes"] = {
                     repo["full_name"]: {
-                        policy["id"]: resolve_route_config(validated, repo, policy)
-                        for policy in load_route_policies()
-                    } for repo in validated["repos"]
+                        policy["id"]: resolve_route_config(validated, repo, policy) for policy in load_route_policies()
+                    }
+                    for repo in validated["repos"]
                 }
-                validated["model_scope"] = "Route model/effort apply to ordinary automatic execution only; manual and native multi-model execution use each named worker's own settings."
+                validated["model_scope"] = (
+                    "Route model/effort apply to ordinary automatic execution only; manual and native multi-model execution use each named worker's own settings."
+                )
             return _emit_and_code(validated, args.output)
         if args.command == "run" and args.run_command == "once":
             return run_once.main(_run_once_argv(args))
@@ -675,7 +684,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         parser.error(f"command is not wired yet: {args.command}")
     except execution_store.MigrationRequiredError as exc:
-        emit_result({'ok':False,'status':'migration_required','safe_error':str(exc)},output=getattr(args,'output','text'))
+        emit_result(
+            {"ok": False, "status": "migration_required", "safe_error": str(exc)},
+            output=getattr(args, "output", "text"),
+        )
         return exit_codes.STATE_FAILURE
     except (OSError, TypeError, ValueError) as exc:
         output = getattr(args, "output", "text")

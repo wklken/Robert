@@ -41,7 +41,10 @@ def parse_cbc_stream_json_lines(lines):
             event = json.loads(text)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("type") in {"result", "turn.completed"}:
+        if isinstance(event, dict) and event.get("type") in {
+            "result",
+            "turn.completed",
+        }:
             final_result = event
     if not final_result:
         return {"usage_available": False, "source": "no_result_event"}
@@ -118,9 +121,7 @@ def _result_counts(conn):
 
 
 def _action_counts(conn):
-    published = conn.execute(
-        "SELECT COUNT(*) FROM github_actions WHERE publish_status = 'published'"
-    ).fetchone()[0]
+    published = conn.execute("SELECT COUNT(*) FROM github_actions WHERE publish_status = 'published'").fetchone()[0]
     failed = conn.execute(
         """
         SELECT COUNT(*)
@@ -173,10 +174,7 @@ def summarize_usage_payloads(usage_payloads):
         available = _add_usage_totals(totals, payload) or available
     return {
         "usage_available": available,
-        "total_tokens": (
-            totals["total_input_tokens"]
-            + totals["total_output_tokens"]
-        ),
+        "total_tokens": (totals["total_input_tokens"] + totals["total_output_tokens"]),
         **totals,
     }
 
@@ -202,9 +200,5 @@ def summarize_acceptance_metrics(conn):
         "deduplicated_actions": deduplicated_actions,
         "accepted_result_rate": accepted_results / result_total if result_total else 0.0,
         "publish_success_rate": published_actions / publish_total if publish_total else 0.0,
-        **{
-            key: value
-            for key, value in usage_summary.items()
-            if key != "total_tokens"
-        },
+        **{key: value for key, value in usage_summary.items() if key != "total_tokens"},
     }

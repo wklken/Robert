@@ -4,7 +4,7 @@
   <img src="docs/imgs/robert-logo.svg" alt="Robert 标志：机器人、终端提示符和完成勾" width="432">
 </p>
 
-[English](README_EN.md) | [简体中文](README.md)
+[English](README_EN.md) | [简体中文](README.md) | [文档目录](docs/README.md)
 
 **Your Repo Teammate**
 
@@ -32,6 +32,9 @@ Robert 是一个自托管的 GitHub 队友。它把可信的 Issue、提及、�
   缺少必需 Skill 时，在创建 worktree 和启动 Worker 前阻止任务。
 - **执行监督与恢复**：记录执行阶段、心跳、日志和每次尝试，监督启动、超时与进程清理；
   可配置连续超时后的备用模型，失败后保留原因与恢复入口。
+- **多模型评审与投票**：按 PR 作者白名单启用多模型评审，或响应可信用户的显式投票请求；
+  冻结输入、隔离轮次并共享模型并发额度。
+- **独立任务监督**：观察停滞与交付证据，记录事件；诊断、已知恢复和工程修复按配置启用。
 - **PR 自修复**：按仓库显式开启 CI 失败修复和冲突合并，限制检查名称、重试次数及预算。
   发布前再次核对 PR head/base，只允许普通 push。
 - **任务生命周期看板**：从待整理、排队、执行、需要处理到待评审、完成和取消，
@@ -68,7 +71,7 @@ Robert 使用已认证的 `gh` CLI 轮询 GitHub，规范化事件，应用仓�
 ## 环境要求
 
 - Linux 或 macOS；Windows 通过 WSL 使用。
-- Python 3.10 或更高版本。
+- Python 3.11 或更高的官方仍维护稳定版本（当前为 3.11–3.15）。
 - Git 和已登录的 GitHub CLI。
 - 至少一个本地 Worker 命令。
 - 推荐使用 `pipx` 安装。
@@ -90,9 +93,9 @@ confirmation wherever the guide requires it.
 Robert 只接受 `version: 2` YAML，默认位于 `~/.config/robert/config.yml`。
 `workers` 定义 Agent，`default_worker` 显式选择默认 Agent，`routes` 配置路由和普通执行的模型覆盖。
 `github` 管理扫描，`scheduler` 管理容量与调度，`supervision` 管理监督，`maintenance` 管理保留策略。
-SQLite 是唯一执行引擎，没有引擎选择配置。旧文件必须按[配置升级指南](docs/config-v2-upgrade.md)手动转换；不提供旧格式兼容。
+SQLite 是唯一执行引擎，没有引擎选择配置。
 
-完整结构、字段默认值与旧配置调整见[配置参考](docs/reference.md#configuration)，
+完整示例、字段默认值与覆盖规则见[配置参考](docs/reference.md#configuration)，
 安装与多仓库示例见[操作指引](docs/guides.md)。
 Worker 可配置 `fallback_model`；同一 workstream 连续两次
 `failed_timeout` 后，第三次运行切换到该模型，推理 effort 保持不变。默认硬超时为
@@ -112,12 +115,14 @@ supervisorctl -c ~/.config/robert/supervisord.conf status
 
 两个进程共用同一份 Robert 配置。Web 负责展示与提交操作，后台 daemon 负责调度执行。
 前台调试分别使用 `robert daemon run` 和 `robert web run`。
-`robert service install` 会自动选择 systemd、launchd 或 Linux 的 Supervisor 后端，
-具体差异见操作指引。
+`robert service install` 默认安装 daemon 和独立任务监督服务，并自动选择 systemd、launchd
+或 Linux 的 Supervisor 后端。Web 仅包含在 Supervisor 后端中，具体差异见操作指引。
 
 ## 本地 Web UI
 
 ![Robert Web UI 任务看板](docs/imgs/webui-task-board.png)
+
+当前代码的只读看板，使用隔离演示数据展示各生命周期状态。
 
 ```bash
 robert web run
@@ -135,8 +140,6 @@ robert web run --writable --operator "$USER"
 [任务生命周期看板](docs/web-lifecycle-board.md)。
 
 ## OpenClaw 集成
-
-![OpenClaw 中的 Robert 状态](docs/imgs/openclaw-robert-status.png)
 
 ```bash
 robert openclaw install

@@ -30,17 +30,22 @@ def _journal_argv(command):
     hide_next = False
     for arg in command:
         arg = os.fsdecode(arg)
-        option = arg.split('=', 1)[0].lower().replace('-', '_')
-        sensitive = bool(re.search(r'(?:^|_)(?:token|password|passwd|secret|api_key|credential|authorization|cookie)$', option))
-        sensitive = sensitive or arg in {'-u', '--user', '--proxy-user'}
-        hidden = hide_next or not redact_text(arg)['ok'] or bool(re.search(r'://[^/\s]*@', arg))
-        result.append('<redacted>' if hidden or (sensitive and '=' in arg) else arg)
-        hide_next = sensitive and '=' not in arg
+        option = arg.split("=", 1)[0].lower().replace("-", "_")
+        sensitive = bool(
+            re.search(
+                r"(?:^|_)(?:token|password|passwd|secret|api_key|credential|authorization|cookie)$",
+                option,
+            )
+        )
+        sensitive = sensitive or arg in {"-u", "--user", "--proxy-user"}
+        hidden = hide_next or not redact_text(arg)["ok"] or bool(re.search(r"://[^/\s]*@", arg))
+        result.append("<redacted>" if hidden or (sensitive and "=" in arg) else arg)
+        hide_next = sensitive and "=" not in arg
     return result
 
 
 def _open_private_log(path):
-    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb')
+    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb")
 
 
 def _forward_output(reader, stream):
@@ -52,7 +57,7 @@ def _forward_output(reader, stream):
     try:
         fd = stream.fileno()
     except (AttributeError, OSError):
-        stream.write(data.decode('utf-8', errors='replace'))
+        stream.write(data.decode("utf-8", errors="replace"))
         stream.flush()
     else:
         was_blocking = os.get_blocking(fd)
@@ -125,7 +130,9 @@ def process_identity(pid):
         try:
             result = subprocess.run(
                 ["ps", "-p", str(pid), "-o", "lstart="],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             return result.stdout.strip() if result.returncode == 0 else ""
         except (OSError, subprocess.TimeoutExpired):
@@ -161,7 +168,10 @@ def _kill_command(proc):
     try:
         if os.name == "posix":
             result = subprocess.run(
-                ["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=5,
+                ["ps", "-axo", "pid=,ppid="],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             children = {}
             for line in result.stdout.splitlines():
@@ -218,13 +228,21 @@ def run_command_with_heartbeat(
     record_dir.mkdir(parents=True, exist_ok=True)
     record_path = record_dir / f"{output_prefix}.command.json"
     record = {
-        "task_id": task_id, "attempt_id": attempt_id, "phase": phase,
-        "status": "starting", "wrapper_pid": os.getpid(),
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "phase": phase,
+        "status": "starting",
+        "wrapper_pid": os.getpid(),
         "wrapper_identity": process_identity(os.getpid()),
-        "stdout_path": str(stdout_path), "stderr_path": str(stderr_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "argv": argv, "argv_redacted": argv != command, "cwd": command_cwd,
-        "source": "runtime_recorded", "attested": False, "output_mode": output_mode,
+        "argv": argv,
+        "argv_redacted": argv != command,
+        "cwd": command_cwd,
+        "source": "runtime_recorded",
+        "attested": False,
+        "output_mode": output_mode,
     }
     _write_command_record(record_path, record)
     _record_command_snapshot(
@@ -243,20 +261,30 @@ def run_command_with_heartbeat(
         float(heartbeat_interval_seconds),
         MIN_HEARTBEAT_INTERVAL_SECONDS,
     )
-    with _open_private_log(stdout_path) as stdout_file, _open_private_log(stderr_path) as stderr_file, \
-            stdout_path.open('rb') as stdout_reader, stderr_path.open('rb') as stderr_reader:
+    with (
+        _open_private_log(stdout_path) as stdout_file,
+        _open_private_log(stderr_path) as stderr_file,
+        stdout_path.open("rb") as stdout_reader,
+        stderr_path.open("rb") as stderr_reader,
+    ):
         try:
             proc = subprocess.Popen(command, cwd=command_cwd, stdout=stdout_file, stderr=stderr_file)
         except OSError as exc:
             record.update(
-                status="failed", returncode=None,
+                status="failed",
+                returncode=None,
                 summary=f"Command failed to start: {type(exc).__name__}",
-                finished_at=datetime.now(timezone.utc).isoformat(), snapshot_status="deferred",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                snapshot_status="deferred",
             )
             _write_command_record(record_path, record)
             raise
         try:
-            record.update(status="running", pid=proc.pid, process_identity=process_identity(proc.pid))
+            record.update(
+                status="running",
+                pid=proc.pid,
+                process_identity=process_identity(proc.pid),
+            )
             _write_command_record(record_path, record)
             next_heartbeat = started + heartbeat_interval_seconds
             while True:
@@ -272,7 +300,12 @@ def run_command_with_heartbeat(
                     _kill_command(proc)
                     break
                 try:
-                    proc.wait(timeout=min(.1 if output_mode == "tee" else heartbeat_interval_seconds, remaining))
+                    proc.wait(
+                        timeout=min(
+                            0.1 if output_mode == "tee" else heartbeat_interval_seconds,
+                            remaining,
+                        )
+                    )
                 except subprocess.TimeoutExpired:
                     pass
                 else:
@@ -296,13 +329,15 @@ def run_command_with_heartbeat(
                     tee_incomplete = pending_stdout or pending_stderr
                     if not tee_incomplete or time.monotonic() >= drain_deadline:
                         break
-                    time.sleep(.01)
+                    time.sleep(0.01)
         except BaseException as exc:
             _kill_command(proc)
             record.update(
-                status="failed", returncode=proc.returncode,
+                status="failed",
+                returncode=proc.returncode,
                 summary=f"Command wrapper failed: {type(exc).__name__}",
-                finished_at=datetime.now(timezone.utc).isoformat(), snapshot_status="deferred",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                snapshot_status="deferred",
             )
             _write_command_record(record_path, record)
             raise
@@ -316,9 +351,13 @@ def run_command_with_heartbeat(
         status = "completed" if returncode == 0 else "failed"
         summary = f"Command exited {returncode}"
     record.update(
-        status=status, returncode=returncode, timed_out=timed_out, summary=summary,
+        status=status,
+        returncode=returncode,
+        timed_out=timed_out,
+        summary=summary,
         tee_incomplete=tee_incomplete,
-        finished_at=datetime.now(timezone.utc).isoformat(), snapshot_status="deferred",
+        finished_at=datetime.now(timezone.utc).isoformat(),
+        snapshot_status="deferred",
     )
     _write_command_record(record_path, record)
     snapshot_status = _record_command_snapshot(

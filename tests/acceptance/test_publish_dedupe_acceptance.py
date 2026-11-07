@@ -62,9 +62,7 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
             "_insert_fixture",
             original_insert,
         )
-        result = publish_dedupe_acceptance.publish_dedupe_acceptance(
-            workspace_dir=self.root / "publish-dedupe"
-        )
+        result = publish_dedupe_acceptance.publish_dedupe_acceptance(workspace_dir=self.root / "publish-dedupe")
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["status"], "completed")

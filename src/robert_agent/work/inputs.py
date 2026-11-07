@@ -1,7 +1,7 @@
 """Command input values and validation, independent of persistence and execution."""
+
 from dataclasses import dataclass
 from robert_agent.work.errors import WorkItemValidationError
-
 
 
 MAX_TITLE = 200

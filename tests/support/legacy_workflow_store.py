@@ -53,17 +53,13 @@ def _validate_subject(conn, subject_type, subject_id, workflow_kind):
     if (subject_type, workflow_kind) not in legal_pairs:
         raise ValueError("illegal workflow subject and kind pairing")
     if subject_type == "task":
-        row = conn.execute(
-            "SELECT task_kind, lifecycle FROM tasks WHERE task_id = ?", (subject_id,)
-        ).fetchone()
+        row = conn.execute("SELECT task_kind, lifecycle FROM tasks WHERE task_id = ?", (subject_id,)).fetchone()
         if not row:
             raise ValueError("workflow task subject does not exist")
         if row[0] != "human_request" or row[1] in _TERMINAL_TASK_LIFECYCLES:
             raise ValueError("workflow task subject is not eligible")
         return
-    row = conn.execute(
-        "SELECT status FROM pr_remediation_episodes WHERE episode_id = ?", (subject_id,)
-    ).fetchone()
+    row = conn.execute("SELECT status FROM pr_remediation_episodes WHERE episode_id = ?", (subject_id,)).fetchone()
     if not row:
         raise ValueError("workflow remediation episode subject does not exist")
     if row[0] in _TERMINAL_EPISODE_STATUSES:
@@ -99,9 +95,7 @@ def bind_subject(
     }:
         raise ValueError("illegal workflow subject and kind pairing")
     existing = get_binding(conn, subject_type, subject_id)
-    workflow_id, shadow_workflow_id = _workflow_ids(
-        subject_type, subject_id, owner_engine, definition_version
-    )
+    workflow_id, shadow_workflow_id = _workflow_ids(subject_type, subject_id, owner_engine, definition_version)
     if existing:
         if (
             existing["workflow_kind"] == workflow_kind
@@ -140,11 +134,7 @@ def ensure_legacy_binding(conn, subject_type, subject_id, workflow_kind, now):
 
 def assert_owner(conn, subject_type, subject_id, expected_engine):
     binding = get_binding(conn, subject_type, subject_id)
-    if (
-        not binding
-        or binding["owner_engine"] != expected_engine
-        or binding["binding_status"] != "active"
-    ):
+    if not binding or binding["owner_engine"] != expected_engine or binding["binding_status"] != "active":
         raise ValueError("workflow subject is not owned by the expected engine")
 
 
@@ -184,9 +174,7 @@ def mark_binding_attention(conn, subject_type, subject_id, now):
     return get_binding(conn, subject_type, subject_id)
 
 
-def enqueue_signal(
-    conn, workflow_id, topic, dedupe_key, payload, now, not_before_at=None
-):
+def enqueue_signal(conn, workflow_id, topic, dedupe_key, payload, now, not_before_at=None):
     payload_json = _json(payload)
     existing = _row(
         conn.execute(
@@ -200,9 +188,7 @@ def enqueue_signal(
     if existing:
         if existing["payload_json"] == payload_json:
             return existing
-        raise ValueError(
-            "workflow signal dedupe key conflicts with a different payload"
-        )
+        raise ValueError("workflow signal dedupe key conflicts with a different payload")
     signal_id = signal_id_for(workflow_id, topic, dedupe_key)
     conn.execute(
         """
@@ -221,6 +207,4 @@ def enqueue_signal(
             now,
         ),
     )
-    return _row(
-        conn.execute("SELECT * FROM workflow_outbox WHERE signal_id = ?", (signal_id,))
-    )
+    return _row(conn.execute("SELECT * FROM workflow_outbox WHERE signal_id = ?", (signal_id,)))

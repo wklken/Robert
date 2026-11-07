@@ -35,9 +35,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 FROM knowledge_candidates
                 """
             ).fetchone()
-            runtime_count = conn.execute(
-                "SELECT COUNT(*) FROM runtime_knowledge"
-            ).fetchone()[0]
+            runtime_count = conn.execute("SELECT COUNT(*) FROM runtime_knowledge").fetchone()[0]
 
         self.assertEqual(proposed["status"], "proposed")
         self.assertEqual(proposed["candidate_count"], 1)
@@ -59,9 +57,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 run_now=self.now,
             )
             runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
-            candidate_id = conn.execute(
-                "SELECT candidate_id FROM knowledge_candidates"
-            ).fetchone()[0]
+            candidate_id = conn.execute("SELECT candidate_id FROM knowledge_candidates").fetchone()[0]
             approved = runtime_knowledge.approve_candidate(
                 conn,
                 candidate_id=candidate_id,
@@ -103,9 +99,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 run_now=self.now,
             )
             runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
-            candidate_id = conn.execute(
-                "SELECT candidate_id FROM knowledge_candidates"
-            ).fetchone()[0]
+            candidate_id = conn.execute("SELECT candidate_id FROM knowledge_candidates").fetchone()[0]
             rejected = runtime_knowledge.reject_candidate(
                 conn,
                 candidate_id=candidate_id,
@@ -130,6 +124,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         from robert_agent.context import project as project_memory
         from robert_agent.context import knowledge as runtime_knowledge
         from robert_agent.context import curation as memory_curator
+
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
                 conn,
@@ -139,9 +134,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 run_now=self.now,
             )
             runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
-            candidate_id = conn.execute(
-                "SELECT candidate_id FROM knowledge_candidates"
-            ).fetchone()[0]
+            candidate_id = conn.execute("SELECT candidate_id FROM knowledge_candidates").fetchone()[0]
 
         output = memory_curator.run_command(
             [
@@ -162,9 +155,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertTrue(output["ok"], output)
         self.assertEqual(output["status"], "approved")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            runtime_count = conn.execute(
-                "SELECT COUNT(*) FROM runtime_knowledge"
-            ).fetchone()[0]
+            runtime_count = conn.execute("SELECT COUNT(*) FROM runtime_knowledge").fetchone()[0]
         self.assertEqual(runtime_count, 1)
 
     def _init_db(self):

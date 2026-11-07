@@ -1,4 +1,5 @@
 """Count attempts that still own worker capacity."""
+
 from robert_agent.execution import inspection as supervise
 from robert_agent.adapters.sqlite import execution_control as execution_store
 
@@ -46,8 +47,13 @@ def capacity_full_for_repos(conn, repo_ids, max_concurrency):
 
 
 def has_occupied_runnable_attempt(conn, repo_ids):
-    placeholders = ','.join('?' for _ in repo_ids)
-    return bool(conn.execute(f"""SELECT 1 FROM attempts a JOIN tasks t ON t.task_id=a.task_id
+    placeholders = ",".join("?" for _ in repo_ids)
+    return bool(
+        conn.execute(
+            f"""SELECT 1 FROM attempts a JOIN tasks t ON t.task_id=a.task_id
         JOIN workstreams w ON w.workstream_id=t.workstream_id
         WHERE w.repo_id IN ({placeholders}) AND t.lifecycle IN ('queued','running')
-          AND {supervise.occupied_attempt_sql()} AND {execution_store.runnable_sql()} LIMIT 1""", repo_ids).fetchone())
+          AND {supervise.occupied_attempt_sql()} AND {execution_store.runnable_sql()} LIMIT 1""",
+            repo_ids,
+        ).fetchone()
+    )

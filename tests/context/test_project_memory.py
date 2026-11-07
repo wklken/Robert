@@ -37,14 +37,10 @@ class ProjectMemoryTests(unittest.TestCase):
                 FROM project_memory_entries
                 """
             ).fetchone()
-            revision_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_revisions"
-            ).fetchone()[0]
+            revision_count = conn.execute("SELECT COUNT(*) FROM project_memory_revisions").fetchone()[0]
             terms = {
                 row[0]
-                for row in conn.execute(
-                    "SELECT term_value FROM project_memory_terms WHERE term_type = 'keyword'"
-                )
+                for row in conn.execute("SELECT term_value FROM project_memory_terms WHERE term_type = 'keyword'")
             }
 
         self.assertEqual(status["status"], "recorded")
@@ -90,15 +86,9 @@ class ProjectMemoryTests(unittest.TestCase):
                 repo_id=self.repo_id,
                 run_now=self.now,
             )
-            entry_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_entries"
-            ).fetchone()[0]
-            entry = conn.execute(
-                "SELECT short_summary, revision_count FROM project_memory_entries"
-            ).fetchone()
-            revision_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_revisions"
-            ).fetchone()[0]
+            entry_count = conn.execute("SELECT COUNT(*) FROM project_memory_entries").fetchone()[0]
+            entry = conn.execute("SELECT short_summary, revision_count FROM project_memory_entries").fetchone()
+            revision_count = conn.execute("SELECT COUNT(*) FROM project_memory_revisions").fetchone()[0]
 
         self.assertEqual(entry_count, 1)
         self.assertEqual(entry, ("Updated summary after review.", 2))
@@ -121,9 +111,7 @@ class ProjectMemoryTests(unittest.TestCase):
                 repo_id=self.repo_id,
                 run_now=self.now,
             )
-            entry_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_entries"
-            ).fetchone()[0]
+            entry_count = conn.execute("SELECT COUNT(*) FROM project_memory_entries").fetchone()[0]
 
         self.assertEqual(status["status"], "skipped")
         self.assertIn("entries", status["safe_error"])
@@ -220,13 +208,7 @@ class ProjectMemoryTests(unittest.TestCase):
                         "intent": "analysis",
                     }
                 ],
-                runtime_knowledge=[
-                    {
-                        "retrieval_boost": {
-                            "keywords": ["dd-pr-followup", "update-existing-pr"]
-                        }
-                    }
-                ],
+                runtime_knowledge=[{"retrieval_boost": {"keywords": ["dd-pr-followup", "update-existing-pr"]}}],
             )
 
         self.assertGreaterEqual(len(memories), 1)

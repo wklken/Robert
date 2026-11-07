@@ -1,4 +1,5 @@
 """Shared fixtures for board control integration tests."""
+
 from contextlib import closing
 import json
 import sqlite3
@@ -26,27 +27,39 @@ class BoardControlIntegrationFixture(unittest.TestCase):
         self.config_path = self.root / "config.json"
         self.config_path.write_text(
             json.dumps(
-                {'version': 2,
- 'data_dir': str(self.data_dir),
- 'database': 'dd.sqlite3',
- 'github': {'account': 'robot'},
- 'default_worker': 'default',
- 'workers': {'default': {'adapter': 'cbc',
-                         'command': 'cbc',
-                         'model': 'default-model',
-                         'effort': 'medium'},
-             'reviewer': {'adapter': 'codex',
-                          'command': 'codex',
-                          'model': 'review-model',
-                          'effort': 'high'}},
- 'scheduler': {'max_concurrency': 2},
- 'repos': [{'full_name': 'example/repo',
-            'github_account': 'robot',
-            'trusted_actors': ['owner'],
-            'max_concurrency': 2,
-            'checkout': str(self.repo_root),
-            'worktrees': str(self.worktree_root),
-            'default_branch': 'main'}]}
+                {
+                    "version": 2,
+                    "data_dir": str(self.data_dir),
+                    "database": "dd.sqlite3",
+                    "github": {"account": "robot"},
+                    "default_worker": "default",
+                    "workers": {
+                        "default": {
+                            "adapter": "cbc",
+                            "command": "cbc",
+                            "model": "default-model",
+                            "effort": "medium",
+                        },
+                        "reviewer": {
+                            "adapter": "codex",
+                            "command": "codex",
+                            "model": "review-model",
+                            "effort": "high",
+                        },
+                    },
+                    "scheduler": {"max_concurrency": 2},
+                    "repos": [
+                        {
+                            "full_name": "example/repo",
+                            "github_account": "robot",
+                            "trusted_actors": ["owner"],
+                            "max_concurrency": 2,
+                            "checkout": str(self.repo_root),
+                            "worktrees": str(self.worktree_root),
+                            "default_branch": "main",
+                        }
+                    ],
+                }
             ),
             encoding="utf-8",
         )
@@ -67,6 +80,7 @@ class BoardControlIntegrationFixture(unittest.TestCase):
 
     def _run_local_cycle(self):
         from robert_agent.runtime import cycle as run_once
+
         result = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",

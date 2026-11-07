@@ -1,4 +1,5 @@
 """Shared daemon database and scheduling inputs."""
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,12 +36,21 @@ class DaemonFixture(unittest.TestCase):
     def _write_config(self, overrides=None):
         import yaml
         from robert_agent.operations.initialize import init_config
+
         repo_root = self.root / "repo"
         repo_root.mkdir()
         (repo_root / ".git").mkdir()
         config_path = self.root / "config.yml"
-        init_config(config_path, {"repo": "example/repo", "repo_path": str(repo_root),
-                    "worker": "cbc", "github_account": "robot", "trusted_actor": "wklken"})
+        init_config(
+            config_path,
+            {
+                "repo": "example/repo",
+                "repo_path": str(repo_root),
+                "worker": "cbc",
+                "github_account": "robot",
+                "trusted_actor": "wklken",
+            },
+        )
         config = yaml.safe_load(config_path.read_text())
         config.update(data_dir=str(self.root), database="dd.sqlite3")
         config.update(overrides or {})

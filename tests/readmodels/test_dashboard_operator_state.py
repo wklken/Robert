@@ -84,10 +84,7 @@ class DashboardOperatorStateTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        steps = {
-            (step["target_kind"], step["target_id"]): step
-            for step in data["operator_next_steps"]
-        }
+        steps = {(step["target_kind"], step["target_id"]): step for step in data["operator_next_steps"]}
         self.assertEqual(steps[("task", "task-stale")]["next_action"], "inspect_worker_heartbeat")
         self.assertEqual(steps[("task", "task-stale")]["attempt_id"], "attempt-stale")
         self.assertEqual(steps[("task", "task-stale")]["attempt_status"], "stale")
@@ -104,11 +101,17 @@ class DashboardOperatorStateTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        steps = {
-            (step["target_kind"], step["target_id"]): step
-            for step in data["operator_next_steps"]
-        }
-        self.assertEqual(steps[("task", "task-failed")]["next_action"], "inspect_failure_notification")
-        self.assertEqual(steps[("task", "task-failed")]["notification_type"], "worker_result_rejected")
+        steps = {(step["target_kind"], step["target_id"]): step for step in data["operator_next_steps"]}
+        self.assertEqual(
+            steps[("task", "task-failed")]["next_action"],
+            "inspect_failure_notification",
+        )
+        self.assertEqual(
+            steps[("task", "task-failed")]["notification_type"],
+            "worker_result_rejected",
+        )
         self.assertEqual(steps[("task", "task-failed")]["result_id"], "result-failed")
-        self.assertEqual(steps[("task", "task-failed")]["safe_error"], "open_pr action missing fields: ['base']")
+        self.assertEqual(
+            steps[("task", "task-failed")]["safe_error"],
+            "open_pr action missing fields: ['base']",
+        )

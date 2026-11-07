@@ -12,13 +12,16 @@ from robert_agent.execution.application import monitor
 from robert_agent.work.application import preparation
 from robert_agent.foundation import values
 from tests.support.repository_cycle import (
-    RepositoryCycleFixture, _dd_comment_body, _verification_evidence,
+    RepositoryCycleFixture,
+    _dd_comment_body,
+    _verification_evidence,
 )
 
 
 class FastWorkerIngestionTests(RepositoryCycleFixture):
     def test_live_dispatch_commits_attempt_before_worker_can_record_progress(self):
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -75,6 +78,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
     def test_live_dispatch_does_not_overwrite_fast_worker_result(self):
         from robert_agent.delivery.application import submission as worker_result
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -196,9 +200,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             action_status = conn.execute(
                 "SELECT audit_status, publish_status FROM github_actions WHERE task_id = ?",
                 (task_id,),
@@ -215,6 +217,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
     def test_live_dispatch_accepts_fast_successful_worker_subprocess_result(self):
         import os
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -276,7 +279,7 @@ raise SystemExit(0 if record["ok"] else 1)
         )
         os.chmod(worker_command, 0o755)
         config = yaml.safe_load(self.config_path.read_text())
-        config['workers']['default'].update(adapter='cbc', command=str(worker_command))
+        config["workers"]["default"].update(adapter="cbc", command=str(worker_command))
         self.config_path.write_text(yaml.safe_dump(config))
 
         first = run_once.run_once(
@@ -295,7 +298,13 @@ raise SystemExit(0 if record["ok"] else 1)
                 attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
                 result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
                 if result_count:
-                    monitor.supervise_running_attempts(conn, "repo:example/backend", {}, values.utc_now(), resume_attempt=preparation.create_resume_attempt_and_prompt)
+                    monitor.supervise_running_attempts(
+                        conn,
+                        "repo:example/backend",
+                        {},
+                        values.utc_now(),
+                        resume_attempt=preparation.create_resume_attempt_and_prompt,
+                    )
                     attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
             if attempt_status == "completed" and result_count == 1:
                 break
@@ -303,9 +312,7 @@ raise SystemExit(0 if record["ok"] else 1)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
-            attempt_status, metadata_json = conn.execute(
-                "SELECT status, metadata_json FROM attempts"
-            ).fetchone()
+            attempt_status, metadata_json = conn.execute("SELECT status, metadata_json FROM attempts").fetchone()
             result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
             notification_count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
         metadata = json.loads(metadata_json or "{}")

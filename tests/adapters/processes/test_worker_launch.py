@@ -5,6 +5,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class WorkerLaunchTests(TemporaryWorkspace):
     def test_dispatch_builds_worker_command_with_prompt_and_worktree(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "- prompt that starts like an option\nquotes: ' \" ` $() ; | --"
@@ -58,6 +59,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_builds_worker_command_with_configured_launcher(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -74,6 +76,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_builds_codex_worker_command_with_stdin_prompt(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "codex prompt"
@@ -113,6 +116,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_builds_tcodex_worker_command_with_reasoning_effort(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("tcodex prompt", encoding="utf-8")
@@ -138,6 +142,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
         from robert_agent.worker_adapters.cbc import (
             DEFAULT_DISALLOWED_WORKER_TOOLS,
         )
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "claude prompt that must stay on stdin"
@@ -186,6 +191,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_builds_opencode_worker_command_with_stdin_prompt(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "opencode prompt that must stay on stdin"
@@ -221,6 +227,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_splits_configured_launcher_command(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -236,6 +243,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_expands_user_in_configured_launcher_path(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -254,6 +262,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_accepts_normalized_worker_agent_config(self):
         from robert_agent import worker_adapters
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -272,6 +281,7 @@ class WorkerLaunchTests(TemporaryWorkspace):
 
     def test_dispatch_worker_environment_defaults_bash_timeout(self):
         from robert_agent.adapters.processes import worker as dispatch
+
         env = dispatch._worker_environment(
             environ={"KEEP": "1"},
         )

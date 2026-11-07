@@ -1,4 +1,5 @@
 """Safe error payloads for controller runs."""
+
 import json
 import subprocess
 
@@ -9,10 +10,7 @@ def safe_discovery_error(exc):
         command = [str(part) for part in cmd]
         return {
             "status": "failed_discovery",
-            "safe_error": (
-                f"GitHub discovery command failed with exit {exc.returncode}: "
-                + " ".join(command)
-            ),
+            "safe_error": (f"GitHub discovery command failed with exit {exc.returncode}: " + " ".join(command)),
             "returncode": exc.returncode,
             "command": command,
         }
@@ -60,8 +58,10 @@ def safe_publish_error(exc):
 def safe_route_error(exc):
     if isinstance(exc, subprocess.TimeoutExpired):
         return {
-            'ok': False, 'status': 'failed_route', 'error_type': type(exc).__name__,
-            'safe_error': f'Worktree preparation command timed out after {exc.timeout} seconds.',
+            "ok": False,
+            "status": "failed_route",
+            "error_type": type(exc).__name__,
+            "safe_error": f"Worktree preparation command timed out after {exc.timeout} seconds.",
         }
     if isinstance(exc, subprocess.CalledProcessError):
         cmd = exc.cmd if isinstance(exc.cmd, (list, tuple)) else [exc.cmd]
@@ -69,10 +69,7 @@ def safe_route_error(exc):
         return {
             "ok": False,
             "status": "failed_route",
-            "safe_error": (
-                f"worktree preparation command failed with exit {exc.returncode}: "
-                + " ".join(command)
-            ),
+            "safe_error": (f"worktree preparation command failed with exit {exc.returncode}: " + " ".join(command)),
             "returncode": exc.returncode,
             "command": command,
         }

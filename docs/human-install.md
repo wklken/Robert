@@ -1,13 +1,15 @@
 # Human Install
 
+[文档目录](README.md)
+
 This guide is the manual installation path for operators who are not asking a
 terminal coding agent to install Robert for them. If a coding agent is doing the
-setup, use `docs/agent-install.md` instead.
+setup, use the [coding-agent install guide](agent-install.md) instead.
 
 ## Requirements
 
 - Linux or macOS. Windows is supported through WSL.
-- Python 3.10 or newer.
+- An upstream-maintained stable Python release, currently 3.11–3.15.
 - Git and GitHub CLI (`gh`) with an authenticated session.
 - At least one local worker command such as Codex.
 - `pipx` is recommended for installation.
@@ -47,8 +49,9 @@ Confirm both programs are `RUNNING`, visit `http://127.0.0.1:8765/`, and check
 and keeps it read-only; enable writable mode explicitly when needed.
 
 `robert service install` / `robert service start` are an alternative with an
-automatically selected backend. systemd and launchd manage only the daemon;
-the Linux Supervisor fallback manages both, with different Web defaults.
+automatically selected backend. The default target is `all` (daemon and independent
+task supervisor). systemd and launchd create separate services for those targets;
+the Linux Supervisor backend also includes read-only Web with its daemon target.
 Read the backend table in the Supervisor guide before choosing this path.
 
 ## Safer First Run

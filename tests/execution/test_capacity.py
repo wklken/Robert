@@ -15,7 +15,11 @@ class CapacityTests(RepositoryCycleFixture):
         now = "2026-07-04T00:00:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("PRAGMA foreign_keys = ON")
-            for repo_id, full_name in [("repo:a", "Org/a"), ("repo:b", "Org/b"), ("repo:c", "Org/c")]:
+            for repo_id, full_name in [
+                ("repo:a", "Org/a"),
+                ("repo:b", "Org/b"),
+                ("repo:c", "Org/c"),
+            ]:
                 conn.execute(
                     "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES (?, ?, 'robot', 'main', ?, ?)",
                     (repo_id, full_name, str(self.repo_root), str(self.worktree_root)),
@@ -38,7 +42,7 @@ class CapacityTests(RepositoryCycleFixture):
                     (task_id, workstream_id, lifecycle, now, now),
                 )
                 conn.execute(
-                    'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, metadata_json) VALUES (?, ?, 1, \'running\', \'{"result_contract":"compact-v1"}\')',
+                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, metadata_json) VALUES (?, ?, 1, 'running', '{\"result_contract\":\"compact-v1\"}')",
                     (attempt_id, task_id),
                 )
             count = capacity.running_attempt_count_for_repos(conn, ["repo:a", "repo:b"])

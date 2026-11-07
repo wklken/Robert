@@ -16,11 +16,7 @@ REQUIRED_COMMANDS = [
     "robert-respond",
     "robert-messaging-context",
 ]
-DEFAULT_PLUGIN_DIR = (
-    default_data_dir()
-    / "openclaw-plugin"
-    / PLUGIN_ID
-)
+DEFAULT_PLUGIN_DIR = default_data_dir() / "openclaw-plugin" / PLUGIN_ID
 
 
 def _run(command, timeout=180):
@@ -76,7 +72,7 @@ def preflight_openclaw(dry_run=False):
 
 
 def _plugin_source():
-    return '''import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+    return """import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -223,7 +219,7 @@ export default definePluginEntry({
     });
   },
 });
-'''
+"""
 
 
 def write_plugin(plugin_dir, force=False, dry_run=False):
@@ -306,11 +302,7 @@ def install_plugin(plugin_dir, dry_run=False):
     completed = _run(command)
     return {
         "ok": completed.returncode == 0,
-        "status": (
-            "installed"
-            if completed.returncode == 0
-            else "failed"
-        ),
+        "status": ("installed" if completed.returncode == 0 else "failed"),
         "command": command,
         "stdout": completed.stdout.strip(),
         "safe_error": completed.stderr.strip(),
@@ -328,11 +320,7 @@ def restart_gateway(dry_run=False):
     completed = _run(command, timeout=60)
     return {
         "ok": completed.returncode == 0,
-        "status": (
-            "restarted"
-            if completed.returncode == 0
-            else "failed"
-        ),
+        "status": ("restarted" if completed.returncode == 0 else "failed"),
         "command": command,
         "stdout": completed.stdout.strip(),
         "safe_error": completed.stderr.strip(),
@@ -380,20 +368,11 @@ def verify_gateway_commands(dry_run=False):
             "command": command,
             "stdout": completed.stdout.strip(),
             "safe_error": (
-                "OpenClaw gateway returned invalid command-list JSON. "
-                "Restart the OpenClaw gateway and try again."
+                "OpenClaw gateway returned invalid command-list JSON. Restart the OpenClaw gateway and try again."
             ),
         }
-    command_names = {
-        str(item.get("name"))
-        for item in payload.get("commands", [])
-        if isinstance(item, dict)
-    }
-    missing = [
-        required
-        for required in REQUIRED_COMMANDS
-        if required not in command_names
-    ]
+    command_names = {str(item.get("name")) for item in payload.get("commands", []) if isinstance(item, dict)}
+    missing = [required for required in REQUIRED_COMMANDS if required not in command_names]
     if missing:
         return {
             "ok": False,
@@ -432,11 +411,7 @@ def uninstall_plugin(dry_run=False):
     completed = _run(command)
     return {
         "ok": completed.returncode == 0,
-        "status": (
-            "uninstalled"
-            if completed.returncode == 0
-            else "failed"
-        ),
+        "status": ("uninstalled" if completed.returncode == 0 else "failed"),
         "command": command,
         "stdout": completed.stdout.strip(),
         "safe_error": completed.stderr.strip(),
@@ -461,11 +436,7 @@ def plugin_status(dry_run=False):
     completed = _run(command)
     return {
         "ok": completed.returncode == 0,
-        "status": (
-            "ready"
-            if completed.returncode == 0
-            else "failed"
-        ),
+        "status": ("ready" if completed.returncode == 0 else "failed"),
         "command": command,
         "stdout": completed.stdout.strip(),
         "safe_error": completed.stderr.strip(),

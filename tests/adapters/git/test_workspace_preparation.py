@@ -5,6 +5,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class WorkspacePreparationTests(TemporaryWorkspace):
     def test_worktree_plans_new_branch_from_upstream_base(self):
         from robert_agent.adapters.git import workspace as worktree
+
         result = worktree.plan_worktree(
             repo_root=self.root / "repo",
             worktree_root=self.root / "repo" / ".worktrees",
@@ -22,6 +23,7 @@ class WorkspacePreparationTests(TemporaryWorkspace):
 
     def test_worktree_reuses_existing_pr_head_branch(self):
         from robert_agent.adapters.git import workspace as worktree
+
         result = worktree.plan_worktree(
             repo_root=self.root / "repo",
             worktree_root=self.root / "repo" / ".worktrees",
@@ -37,6 +39,7 @@ class WorkspacePreparationTests(TemporaryWorkspace):
 
     def test_worktree_reuses_existing_worktree_when_branch_already_checked_out(self):
         from robert_agent.adapters.git import workspace as worktree
+
         repo_root = self.root / "repo"
         repo_root.mkdir()
         worktree_root = repo_root / ".worktrees"
@@ -71,10 +74,14 @@ class WorkspacePreparationTests(TemporaryWorkspace):
 
         self.assertEqual(result["mode"], "reuse_existing_worktree")
         self.assertEqual(result["worktree_path"], "/tmp/repo/.worktrees/issue-2878-mcp-proxy")
-        self.assertEqual(result["commands"], ["reuse existing worktree /tmp/repo/.worktrees/issue-2878-mcp-proxy"])
+        self.assertEqual(
+            result["commands"],
+            ["reuse existing worktree /tmp/repo/.worktrees/issue-2878-mcp-proxy"],
+        )
 
     def test_review_worktree_fetches_pr_head(self):
         from robert_agent.adapters.git import workspace as worktree
+
         result = worktree.plan_review_worktree(
             repo_root=Path("/tmp/repo"),
             worktree_root=Path("/tmp/repo/.worktrees"),
@@ -86,7 +93,10 @@ class WorkspacePreparationTests(TemporaryWorkspace):
 
         self.assertEqual(result["mode"], "review_pr")
         self.assertEqual(result["branch_name"], "review/pr-707-review-feature-pr")
-        self.assertEqual(result["worktree_path"], "/tmp/repo/.worktrees/review__pr-707-review-feature-pr")
+        self.assertEqual(
+            result["worktree_path"],
+            "/tmp/repo/.worktrees/review__pr-707-review-feature-pr",
+        )
         self.assertEqual(result["start_point"], "upstream/master")
         self.assertEqual(
             result["commands"],
@@ -99,6 +109,7 @@ class WorkspacePreparationTests(TemporaryWorkspace):
 
     def test_review_worktree_refreshes_reused_branch_to_latest_pr_head(self):
         from robert_agent.adapters.git import workspace as worktree
+
         repo_root = self.root / "repo"
         repo_root.mkdir()
         worktree_root = repo_root / ".worktrees"

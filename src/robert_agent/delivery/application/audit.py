@@ -156,17 +156,13 @@ def _audit_issue_linking(actions, action_scope):
         issue_number = int(source_match.group(1))
         if issue_number not in scoped_issues:
             return f"open_pr source_issue #{issue_number} is outside the workstream"
-        closing_reference = re.compile(
-            rf"(?im)^\s*(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\s+#{issue_number}\b"
-        )
+        closing_reference = re.compile(rf"(?im)^\s*(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\s+#{issue_number}\b")
         resolution = _string_value(action, "issue_resolution")
         if resolution not in {"complete", "partial"}:
             return "issue-sourced open_pr requires issue_resolution complete or partial"
         if resolution == "complete":
             if not closing_reference.search(body):
-                return (
-                    f"complete issue resolution requires a closing keyword for #{issue_number}"
-                )
+                return f"complete issue resolution requires a closing keyword for #{issue_number}"
             continue
         if closing_reference.search(body):
             return "partial issue resolution must not use a closing keyword"
@@ -214,9 +210,7 @@ def action_scope_violation(actions, action_scope):
     if not isinstance(raw_sources, list):
         return "action scope sources must be a list"
     scoped_sources = {
-        (source.get("source_type"), source.get("number"))
-        for source in raw_sources
-        if isinstance(source, dict)
+        (source.get("source_type"), source.get("number")) for source in raw_sources if isinstance(source, dict)
     }
     for action in actions:
         action_type = action.get("type")
@@ -255,7 +249,12 @@ def action_scope_violation(actions, action_scope):
             supplied_owner = raw_head.split(":", 1)[0] if ":" in raw_head else ""
             for owner in [supplied_owner] + [
                 _string_value(action, name)
-                for name in ("head_owner", "fork_owner", "remote_owner", "head_repo_owner")
+                for name in (
+                    "head_owner",
+                    "fork_owner",
+                    "remote_owner",
+                    "head_repo_owner",
+                )
             ]:
                 if owner and expected_owner and owner.lower() != expected_owner.lower():
                     return "open_pr head owner is outside the assigned repository"
@@ -300,26 +299,19 @@ def _audit_expected_actions(output_type, actual_types):
         return None
     if output_type == "update_existing_pr":
         if "comment" not in actual_types:
-            return (
-                f"output_type {output_type} requires planned_github_actions "
-                "to include comment"
-            )
+            return f"output_type {output_type} requires planned_github_actions to include comment"
         if "push_existing_pr" in actual_types:
             last_push = max(
                 index for index, action_type in enumerate(actual_types) if action_type == "push_existing_pr"
             )
             if not any(
-                index > last_push and action_type == "comment"
-                for index, action_type in enumerate(actual_types)
+                index > last_push and action_type == "comment" for index, action_type in enumerate(actual_types)
             ):
                 return f"output_type {output_type} requires comment after push_existing_pr"
         return None
     missing = sorted(expected_types.difference(actual_types))
     if missing:
-        return (
-            f"output_type {output_type} requires planned_github_actions to include "
-            f"{missing}"
-        )
+        return f"output_type {output_type} requires planned_github_actions to include {missing}"
     if output_type == "new_pr" and actual_types.index("push_existing_pr") > actual_types.index("open_pr"):
         return "output_type new_pr requires push_existing_pr before open_pr"
     return None
@@ -372,8 +364,11 @@ def _audit_review_point_evaluation(result, actual_types, input_policy="required"
             return ["invalid_review_point_evaluation"]
         if entry["action"] == "implement" and entry["verdict"] not in policies.IMPLEMENTABLE_VERDICTS:
             return ["invalid_review_point_evaluation"]
-    if (output_type == "update_existing_pr" and "push_existing_pr" in actual_types
-            and not (input_policy == "classify" and result.get("review_input_kind") == "mixed")):
+    if (
+        output_type == "update_existing_pr"
+        and "push_existing_pr" in actual_types
+        and not (input_policy == "classify" and result.get("review_input_kind") == "mixed")
+    ):
         if not any(entry.get("action") == "implement" for entry in evaluation):
             return ["no_implemented_review_points"]
     return None
@@ -395,9 +390,7 @@ def _audit_remediation_evidence(
     context = remediation_context
     if not isinstance(evidence, dict) or not isinstance(context, dict):
         return ["invalid_remediation_evidence"]
-    expected_kind = (
-        "ci" if task_kind == "ci_remediation" else "merge_conflict"
-    )
+    expected_kind = "ci" if task_kind == "ci_remediation" else "merge_conflict"
     required_fields = {
         "kind",
         "episode_id",
@@ -407,11 +400,7 @@ def _audit_remediation_evidence(
     }
     if task_kind == "ci_remediation":
         required_fields.add("failure_signature")
-    if any(
-        not isinstance(evidence.get(field), str)
-        or not evidence[field].strip()
-        for field in required_fields
-    ):
+    if any(not isinstance(evidence.get(field), str) or not evidence[field].strip() for field in required_fields):
         return ["invalid_remediation_evidence"]
     comparisons = {
         "kind": context.get("episode_kind"),
@@ -422,15 +411,12 @@ def _audit_remediation_evidence(
     if task_kind == "ci_remediation":
         comparisons["failure_signature"] = context.get("failure_signature")
     if expected_kind != evidence["kind"] or any(
-        evidence.get(field) != expected
-        for field, expected in comparisons.items()
+        evidence.get(field) != expected for field, expected in comparisons.items()
     ):
         return ["remediation_evidence_mismatch"]
     if not require_attestation:
         return None
-    if not isinstance(remediation_attestation, dict) or (
-        remediation_attestation.get("status") != "accepted"
-    ):
+    if not isinstance(remediation_attestation, dict) or (remediation_attestation.get("status") != "accepted"):
         return ["remediation_attestation_failed"]
     if (
         not isinstance(
@@ -525,8 +511,7 @@ def _audit_verification_contract(result, verification_policy, actual_types):
         return None
     required_statuses = set(verification_policy.get("required_statuses") or ["passed"])
     has_required_pass = any(
-        entry.get("required") is True and entry.get("status") in required_statuses
-        for entry in verification
+        entry.get("required") is True and entry.get("status") in required_statuses for entry in verification
     )
     if not has_required_pass:
         return _verification_policy_error(
@@ -546,12 +531,18 @@ def _audit_public_text(actions):
             field_path = f"planned_github_actions[{index}].{field}"
             if not result["ok"]:
                 finding = result["findings"][0]
-                return {"violations": ["redaction_blocked"], "field_path": field_path,
-                        "findings": result["findings"],
-                        "safe_error": f"redaction_blocked: {finding['rule']} at line {finding['line']}, column {finding['column']}"}
+                return {
+                    "violations": ["redaction_blocked"],
+                    "field_path": field_path,
+                    "findings": result["findings"],
+                    "safe_error": f"redaction_blocked: {finding['rule']} at line {finding['line']}, column {finding['column']}",
+                }
             if result.get("text") != value and needs_redaction is None:
-                needs_redaction = {"violations": ["redaction_required"], "field_path": field_path,
-                                   "safe_error": "Public text requires redaction before submission."}
+                needs_redaction = {
+                    "violations": ["redaction_required"],
+                    "field_path": field_path,
+                    "safe_error": "Public text requires redaction before submission.",
+                }
     return needs_redaction
 
 
@@ -592,8 +583,11 @@ def audit_result(
                 "status": "failed",
                 "safe_error": skill_error,
             }
-        coverage_error = (None if result.get("output_type") == "multi_agent_review_report"
-                          else _audit_required_skills_coverage(used_skills, required_skills))
+        coverage_error = (
+            None
+            if result.get("output_type") == "multi_agent_review_report"
+            else _audit_required_skills_coverage(used_skills, required_skills)
+        )
         if coverage_error:
             return {
                 "ok": False,
@@ -624,9 +618,14 @@ def audit_result(
             "status": "policy_violation",
             "violations": ["web_origin_github_action"],
         }
-    if result.get('output_type') == 'multi_agent_vote_report' and (
-            len(actions) != 1 or not vote_publish.is_vote(actions[0]) or not isinstance(action_scope, dict)):
-        return {'ok': False, 'status': 'policy_violation', 'safe_error': 'vote report requires its registered round and scope'}
+    if result.get("output_type") == "multi_agent_vote_report" and (
+        len(actions) != 1 or not vote_publish.is_vote(actions[0]) or not isinstance(action_scope, dict)
+    ):
+        return {
+            "ok": False,
+            "status": "policy_violation",
+            "safe_error": "vote report requires its registered round and scope",
+        }
     scope_violation = action_scope_violation(actions, action_scope)
     if scope_violation:
         return {
@@ -638,10 +637,10 @@ def audit_result(
 
     output_type = result.get("output_type")
     waiting_alternate = output_type == "waiting_for_user"
-    if (
-        result.get("recommended_route") == "waiting-for-user"
-        and output_type not in {"classification_result", "waiting_for_user"}
-    ):
+    if result.get("recommended_route") == "waiting-for-user" and output_type not in {
+        "classification_result",
+        "waiting_for_user",
+    }:
         return {
             "ok": False,
             "status": "failed",
@@ -724,14 +723,21 @@ def audit_result(
         submitted = result.get("submission_head_sha")
         observed = action_scope.get("result_head_sha")
         if not submitted or not observed or submitted != observed:
-            return {"ok": False, "status": "policy_violation",
-                    "violations": ["submission_head_changed"],
-                    "safe_error": "Final HEAD differs from the submitted commit or cannot be verified."}
+            return {
+                "ok": False,
+                "status": "policy_violation",
+                "violations": ["submission_head_changed"],
+                "safe_error": "Final HEAD differs from the submitted commit or cannot be verified.",
+            }
         worktree_status = action_scope.get("worktree_status")
         if worktree_status != "clean":
             violation = "uncommitted_worktree" if worktree_status == "dirty" else "worktree_status_unavailable"
-            return {"ok": False, "status": "policy_violation", "violations": [violation],
-                    "safe_error": "Final push worktree has uncommitted changes or its clean state cannot be verified."}
+            return {
+                "ok": False,
+                "status": "policy_violation",
+                "violations": [violation],
+                "safe_error": "Final push worktree has uncommitted changes or its clean state cannot be verified.",
+            }
 
     remediation_violation = _audit_remediation_evidence(
         result,
@@ -777,9 +783,7 @@ def audit_result(
     if final and task_kind in REMEDIATION_TASK_KINDS and not waiting_alternate:
         accepted["remediation_attestation"] = remediation_attestation
         if action_scope is not None:
-            accepted["action_scope"]["result_head_sha"] = (
-                remediation_attestation["result_head_sha"]
-            )
+            accepted["action_scope"]["result_head_sha"] = remediation_attestation["result_head_sha"]
     return accepted
 
 

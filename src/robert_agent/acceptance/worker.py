@@ -45,7 +45,10 @@ def _tail(path, limit=4000):
 
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _workspace_dir(workspace_dir):
@@ -71,23 +74,50 @@ def _isolated_config(source_config, workspace_dir):
         try:
             base_branch = repo["default_branch"]
             available = subprocess.run(
-                ["git", "-C", source, "show-ref", "--verify", "--quiet", f"refs/heads/{base_branch}"],
-                capture_output=True, timeout=120,
+                [
+                    "git",
+                    "-C",
+                    source,
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    f"refs/heads/{base_branch}",
+                ],
+                capture_output=True,
+                timeout=120,
             )
             if available.returncode:
-                return {"ok": False, "status": "failed_workspace",
-                        "safe_error": f"Isolated acceptance requires local branch {base_branch} "
-                                      f"in {repo['full_name']}; prepare a committed local snapshot first"}
+                return {
+                    "ok": False,
+                    "status": "failed_workspace",
+                    "safe_error": f"Isolated acceptance requires local branch {base_branch} "
+                    f"in {repo['full_name']}; prepare a committed local snapshot first",
+                }
             # Copy committed objects and refs into independent Git metadata.
             # Upstream is the local source, so fetch reads it without changing
             # its remote refs, worktree registrations or checked-out files.
             subprocess.run(
-                ["git", "clone", "--no-local", "--origin", "upstream", "--", source, str(checkout)],
-                check=True, capture_output=True, text=True, timeout=120,
+                [
+                    "git",
+                    "clone",
+                    "--no-local",
+                    "--origin",
+                    "upstream",
+                    "--",
+                    source,
+                    str(checkout),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
         except (OSError, subprocess.SubprocessError):
-            return {"ok": False, "status": "failed_workspace",
-                    "safe_error": f"Could not clone repository {repo['full_name']} for isolated acceptance"}
+            return {
+                "ok": False,
+                "status": "failed_workspace",
+                "safe_error": f"Could not clone repository {repo['full_name']} for isolated acceptance",
+            }
         repo["checkout"] = str(checkout)
         repo["worktrees"] = str(checkout_root / f"{index}-worktrees")
         repo["max_concurrency"] = 1

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
+
 WORKER_MODULE = PACKAGE_ROOT / "worker"
 
 
@@ -71,18 +72,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertTrue(db_path.exists())
         self.assertFalse((self.data_dir / "dispatcher.sqlite3").exists())
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
-            }
-            indexes = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'index'"
-                )
-            }
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
         self.assertTrue(self.expected_tables.issubset(tables))
         self.assertIn("idx_workstreams_one_active_task", indexes)
         self.assertIn("idx_leases_one_active_resource", indexes)
@@ -96,18 +87,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
         storage.init_database(db_path)
 
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
-            }
-            indexes = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'index'"
-                )
-            }
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
 
         self.assertIn("daemon_runs", tables)
         self.assertIn("daemon_events", tables)
@@ -120,10 +101,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(workstreams)")
-            }
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(workstreams)")}
         self.assertIn("origin_workstream_id", columns)
 
     def test_github_actions_track_publish_status_separately_from_audit(self):
@@ -132,10 +110,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(github_actions)")
-            }
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(github_actions)")}
         self.assertIn("publish_status", columns)
 
     def test_schema_includes_remediation_contracts_and_unique_identities(self):
@@ -144,14 +119,8 @@ class ConfigAndSchemaTests(unittest.TestCase):
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            event_columns = {
-                row[1]: row[4]
-                for row in conn.execute("PRAGMA table_info(github_events)")
-            }
-            task_columns = {
-                row[1]: row[4]
-                for row in conn.execute("PRAGMA table_info(tasks)")
-            }
+            event_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(github_events)")}
+            task_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(tasks)")}
             conn.execute(
                 """
                 INSERT INTO repos(
@@ -243,22 +212,9 @@ class ConfigAndSchemaTests(unittest.TestCase):
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
-            }
-            indexes = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'index'"
-                )
-            }
-            entry_columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(project_memory_entries)")
-            }
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+            entry_columns = {row[1] for row in conn.execute("PRAGMA table_info(project_memory_entries)")}
         self.assertTrue(
             {
                 "project_memory_entries",
@@ -276,26 +232,10 @@ class ConfigAndSchemaTests(unittest.TestCase):
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
-            }
-            indexes = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'index'"
-                )
-            }
-            candidate_columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(knowledge_candidates)")
-            }
-            runtime_columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(runtime_knowledge)")
-            }
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+            candidate_columns = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_candidates)")}
+            runtime_columns = {row[1] for row in conn.execute("PRAGMA table_info(runtime_knowledge)")}
         self.assertTrue({"knowledge_candidates", "runtime_knowledge"}.issubset(tables))
         self.assertIn("idx_knowledge_candidates_status", indexes)
         self.assertIn("idx_runtime_knowledge_lookup", indexes)

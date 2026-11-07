@@ -23,8 +23,7 @@ class ServiceTests(unittest.TestCase):
             Path("/home/test/.config/robert/config.yml"),
         )
         self.assertIn(
-            "ExecStart=/opt/robert/bin/robert daemon run "
-            "--config /home/test/.config/robert/config.yml",
+            "ExecStart=/opt/robert/bin/robert daemon run --config /home/test/.config/robert/config.yml",
             text,
         )
         self.assertIn("Restart=on-failure", text)
@@ -50,8 +49,7 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertIn("[program:robert-daemon]", text)
         self.assertIn(
-            "command=/opt/robert/bin/robert daemon run "
-            "--config /home/test/.config/robert/config.yml",
+            "command=/opt/robert/bin/robert daemon run --config /home/test/.config/robert/config.yml",
             text,
         )
         self.assertIn("autorestart=true", text)
@@ -95,12 +93,15 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn("--allow-remote", text)
 
     def test_linux_install_uses_supervisor_when_systemd_user_bus_unavailable(self):
-        with mock.patch(
-            "robert_agent.adapters.services.native._linux_systemd_user_available",
-            return_value=False,
-        ), mock.patch(
-            "robert_agent.adapters.services.native.Path.home",
-            return_value=Path("/home/test"),
+        with (
+            mock.patch(
+                "robert_agent.adapters.services.native._linux_systemd_user_available",
+                return_value=False,
+            ),
+            mock.patch(
+                "robert_agent.adapters.services.native.Path.home",
+                return_value=Path("/home/test"),
+            ),
         ):
             result = install_service(
                 "linux",
@@ -118,12 +119,15 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("[program:robert-web]", result["content"])
 
     def test_linux_install_keeps_systemd_when_user_bus_available(self):
-        with mock.patch(
-            "robert_agent.adapters.services.native._linux_systemd_user_available",
-            return_value=True,
-        ), mock.patch(
-            "robert_agent.adapters.services.native.Path.home",
-            return_value=Path("/home/test"),
+        with (
+            mock.patch(
+                "robert_agent.adapters.services.native._linux_systemd_user_available",
+                return_value=True,
+            ),
+            mock.patch(
+                "robert_agent.adapters.services.native.Path.home",
+                return_value=Path("/home/test"),
+            ),
         ):
             result = install_service(
                 "linux",
@@ -158,18 +162,23 @@ class ServiceTests(unittest.TestCase):
                 )
             return subprocess.CompletedProcess(command, 0, "", "")
 
-        with mock.patch(
-            "robert_agent.adapters.services.native._linux_systemd_user_available",
-            return_value=False,
-        ), mock.patch(
-            "robert_agent.adapters.services.native.subprocess.run",
-            side_effect=fake_run,
-        ), mock.patch(
-            "robert_agent.adapters.services.native.sys.executable",
-            "/opt/robert/venv/bin/python",
-        ), mock.patch(
-            "robert_agent.adapters.services.native.Path.home",
-            return_value=Path("/home/test"),
+        with (
+            mock.patch(
+                "robert_agent.adapters.services.native._linux_systemd_user_available",
+                return_value=False,
+            ),
+            mock.patch(
+                "robert_agent.adapters.services.native.subprocess.run",
+                side_effect=fake_run,
+            ),
+            mock.patch(
+                "robert_agent.adapters.services.native.sys.executable",
+                "/opt/robert/venv/bin/python",
+            ),
+            mock.patch(
+                "robert_agent.adapters.services.native.Path.home",
+                return_value=Path("/home/test"),
+            ),
         ):
             result = service.control_service("linux", "start")
 
@@ -182,25 +191,48 @@ class ServiceTests(unittest.TestCase):
 
     def test_supervisor_install_uninstall_preserves_daemon_definition(self):
         for platform, systemd in [("linux", True), ("linux", False), ("darwin", False)]:
-            with self.subTest(platform=platform, systemd=systemd), tempfile.TemporaryDirectory() as root:
+            with (
+                self.subTest(platform=platform, systemd=systemd),
+                tempfile.TemporaryDirectory() as root,
+            ):
                 home = Path(root)
                 config_path = home / "config with spaces.yml"
                 executable = home / "bin" / "robert"
-                with mock.patch.object(service.Path, "home", return_value=home), mock.patch.object(
-                    service, "default_data_dir", return_value=home / "data",
-                ), mock.patch.object(service, "_linux_systemd_user_available", return_value=systemd):
+                with (
+                    mock.patch.object(service.Path, "home", return_value=home),
+                    mock.patch.object(
+                        service,
+                        "default_data_dir",
+                        return_value=home / "data",
+                    ),
+                    mock.patch.object(service, "_linux_systemd_user_available", return_value=systemd),
+                ):
                     daemon = install_service(platform, executable, config_path, target="daemon")
                     daemon_path = Path(daemon["path"])
                     daemon_content = daemon_path.read_text(encoding="utf-8")
-                    preview = install_service(platform, executable, config_path, dry_run=True, target="supervisor")
+                    preview = install_service(
+                        platform,
+                        executable,
+                        config_path,
+                        dry_run=True,
+                        target="supervisor",
+                    )
                     self.assertFalse(Path(preview["path"]).exists())
                     installed = install_service(platform, executable, config_path, target="supervisor")
                     path = Path(installed["path"])
                     content = path.read_text(encoding="utf-8")
-                    expected_command = [str(executable), "supervisor", "run", "--config", str(config_path)]
+                    expected_command = [
+                        str(executable),
+                        "supervisor",
+                        "run",
+                        "--config",
+                        str(config_path),
+                    ]
                     if systemd:
                         self.assertEqual(path.name, "robert-supervisor.service")
-                        command = next(line.split("=", 1)[1] for line in content.splitlines() if line.startswith("ExecStart="))
+                        command = next(
+                            line.split("=", 1)[1] for line in content.splitlines() if line.startswith("ExecStart=")
+                        )
                         self.assertEqual(shlex.split(command), expected_command)
                     elif platform == "darwin":
                         definition = plistlib.loads(content.encode("utf-8"))
@@ -211,11 +243,21 @@ class ServiceTests(unittest.TestCase):
                         definition.read_string(content)
                         self.assertNotIn("program:robert-daemon", definition)
                         self.assertNotIn("program:robert-web", definition)
-                        self.assertEqual(shlex.split(definition["program:robert-task-supervisor"]["command"]), expected_command)
+                        self.assertEqual(
+                            shlex.split(definition["program:robert-task-supervisor"]["command"]),
+                            expected_command,
+                        )
                         legacy_definition = configparser.ConfigParser(interpolation=None)
                         legacy_definition.read_string(daemon_content)
-                        for section, option in [("unix_http_server", "file"), ("supervisord", "pidfile"), ("supervisord", "logfile")]:
-                            self.assertNotEqual(definition[section][option], legacy_definition[section][option])
+                        for section, option in [
+                            ("unix_http_server", "file"),
+                            ("supervisord", "pidfile"),
+                            ("supervisord", "logfile"),
+                        ]:
+                            self.assertNotEqual(
+                                definition[section][option],
+                                legacy_definition[section][option],
+                            )
                     service.uninstall_service(platform, target="supervisor", dry_run=True)
                     self.assertTrue(path.exists())
                     service.uninstall_service(platform, target="supervisor")
@@ -224,11 +266,20 @@ class ServiceTests(unittest.TestCase):
 
     def test_daemon_only_stop_and_all_stop_target_correct_services(self):
         for platform, systemd in [("linux", True), ("linux", False), ("darwin", False)]:
-            with self.subTest(platform=platform, systemd=systemd), tempfile.TemporaryDirectory() as root:
+            with (
+                self.subTest(platform=platform, systemd=systemd),
+                tempfile.TemporaryDirectory() as root,
+            ):
                 home = Path(root)
-                with mock.patch.object(service.Path, "home", return_value=home), mock.patch.object(
-                    service, "default_data_dir", return_value=home / "data",
-                ), mock.patch.object(service, "_linux_systemd_user_available", return_value=systemd):
+                with (
+                    mock.patch.object(service.Path, "home", return_value=home),
+                    mock.patch.object(
+                        service,
+                        "default_data_dir",
+                        return_value=home / "data",
+                    ),
+                    mock.patch.object(service, "_linux_systemd_user_available", return_value=systemd),
+                ):
                     install_service(platform, home / "bin" / "robert", home / "config.yml")
                     calls = []
 
@@ -241,7 +292,10 @@ class ServiceTests(unittest.TestCase):
                         self.assertTrue(daemon["ok"])
                         self.assertEqual(calls, [daemon["command"]])
                         if systemd:
-                            self.assertEqual(calls[0], ["systemctl", "--user", "stop", "robert.service"])
+                            self.assertEqual(
+                                calls[0],
+                                ["systemctl", "--user", "stop", "robert.service"],
+                            )
                         elif platform == "darwin":
                             self.assertTrue(calls[0][-1].endswith("/dev.robert.agent"))
                         else:
@@ -251,9 +305,15 @@ class ServiceTests(unittest.TestCase):
                         self.assertTrue(full["ok"])
                         self.assertEqual(len(calls), 2)
                         if systemd:
-                            self.assertEqual({call[-1] for call in calls}, {"robert.service", "robert-supervisor.service"})
+                            self.assertEqual(
+                                {call[-1] for call in calls},
+                                {"robert.service", "robert-supervisor.service"},
+                            )
                         elif platform == "darwin":
-                            self.assertEqual({call[-1].rsplit("/", 1)[1] for call in calls}, {"dev.robert.agent", "dev.robert.supervisor"})
+                            self.assertEqual(
+                                {call[-1].rsplit("/", 1)[1] for call in calls},
+                                {"dev.robert.agent", "dev.robert.supervisor"},
+                            )
                         else:
                             self.assertEqual([call[-1] for call in calls], ["shutdown", "shutdown"])
                             self.assertNotEqual(calls[0][-2], calls[1][-2])
@@ -261,14 +321,24 @@ class ServiceTests(unittest.TestCase):
     def test_all_status_reports_partial_failure_after_checking_both_targets(self):
         with tempfile.TemporaryDirectory() as root:
             home = Path(root)
-            with mock.patch.object(service.Path, "home", return_value=home), mock.patch.object(
-                service, "_linux_systemd_user_available", return_value=True,
+            with (
+                mock.patch.object(service.Path, "home", return_value=home),
+                mock.patch.object(
+                    service,
+                    "_linux_systemd_user_available",
+                    return_value=True,
+                ),
             ):
                 install_service("linux", home / "bin" / "robert", home / "config.yml")
 
                 def run(command, **kwargs):
                     active = command[-1] == "robert-supervisor.service"
-                    return subprocess.CompletedProcess(command, 0 if active else 3, "active" if active else "inactive", "")
+                    return subprocess.CompletedProcess(
+                        command,
+                        0 if active else 3,
+                        "active" if active else "inactive",
+                        "",
+                    )
 
                 with mock.patch.object(service.subprocess, "run", side_effect=run):
                     status = service.control_service("linux", "status")
@@ -281,10 +351,21 @@ class ServiceTests(unittest.TestCase):
         calls = []
         with tempfile.TemporaryDirectory() as root:
             home = Path(root)
-            with mock.patch.object(service.Path, "home", return_value=home), mock.patch.object(
-                service, "default_data_dir", return_value=home / "data",
-            ), mock.patch.object(service, "_linux_systemd_user_available", return_value=False):
-                installed = install_service("linux", home / "bin" / "robert", home / "config.yml", target="supervisor")
+            with (
+                mock.patch.object(service.Path, "home", return_value=home),
+                mock.patch.object(
+                    service,
+                    "default_data_dir",
+                    return_value=home / "data",
+                ),
+                mock.patch.object(service, "_linux_systemd_user_available", return_value=False),
+            ):
+                installed = install_service(
+                    "linux",
+                    home / "bin" / "robert",
+                    home / "config.yml",
+                    target="supervisor",
+                )
 
                 def run(command, **kwargs):
                     calls.append(command)
@@ -313,13 +394,24 @@ class ServiceTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "robert-daemon: started\n", "")
             return subprocess.CompletedProcess(command, 0, "robert-daemon RUNNING pid 42\n", "")
 
-        with mock.patch.object(service, "_linux_systemd_user_available", return_value=False), mock.patch.object(
-            service.Path, "home", return_value=Path("/home/test"),
-        ), mock.patch.object(service.subprocess, "run", side_effect=run):
+        with (
+            mock.patch.object(service, "_linux_systemd_user_available", return_value=False),
+            mock.patch.object(
+                service.Path,
+                "home",
+                return_value=Path("/home/test"),
+            ),
+            mock.patch.object(service.subprocess, "run", side_effect=run),
+        ):
             result = service.control_service("linux", "start", target="daemon")
 
         self.assertTrue(result["ok"])
-        self.assertEqual([command[-2:] for command in calls], [
-            ["status", "robert-daemon"], ["start", "robert-daemon"], ["status", "robert-daemon"],
-        ])
+        self.assertEqual(
+            [command[-2:] for command in calls],
+            [
+                ["status", "robert-daemon"],
+                ["start", "robert-daemon"],
+                ["status", "robert-daemon"],
+            ],
+        )
         self.assertTrue(all("supervisor.supervisorctl" in command for command in calls))

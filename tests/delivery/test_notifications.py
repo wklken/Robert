@@ -6,6 +6,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class NotificationTests(TemporaryWorkspace):
     def test_notify_records_local_notification(self):
         from robert_agent.delivery.application import notifications as notify
+
         db_path = self.root / "dd.sqlite3"
         self._init_notifications_db(db_path)
 
@@ -18,13 +19,12 @@ class NotificationTests(TemporaryWorkspace):
 
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            row = conn.execute(
-                "SELECT notification_type, status, task_id FROM notifications"
-            ).fetchone()
+            row = conn.execute("SELECT notification_type, status, task_id FROM notifications").fetchone()
         self.assertEqual(row, ("worker_stale", "sent", "task-1"))
 
     def test_notify_command_uses_argv_not_shell(self):
         from robert_agent.delivery.application import notifications as notify
+
         db_path = self.root / "dd.sqlite3"
         self._init_notifications_db(db_path)
         calls = []

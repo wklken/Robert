@@ -1,10 +1,10 @@
 # Robert 架构与运行机制
 
+[文档目录](README.md)
+
 Robert 是运行在本机的 Python 控制面。GitHub 和本地操作提供输入，编码 Worker
 完成受限任务，控制面负责授权、调度、监督、审计和发布，SQLite 保存可恢复的事实。
 
-运行机制图基于 **2026-10-31、源码提交 `06fb28b7a22a9615a5781c5a4a82688c086de6fc`**。
-[源码分层](#源码分层)与模块路径于 **2026-11-07** 按 `main@b097248` 上的完整重构更新。
 Mermaid 图可直接在 GitHub 阅读。箭头的含义在各图前说明；省略通用日志和工具函数。
 先看整体架构与模块表，再按问题进入机制图：
 
@@ -14,6 +14,7 @@ Mermaid 图可直接在 GitHub 阅读。箭头的含义在各图前说明；省�
 - [结果提交、唤醒与内部推进](#结果提交唤醒与内部推进)
 - [发布去重与崩溃恢复](#发布去重与崩溃恢复)
 - [Worker 监督与失败恢复](#worker-监督与失败恢复)
+- [独立任务监督](#独立任务监督)
 - [多模型评审与投票](#多模型评审与投票)
 - [PR 自修复](#pr-自修复)
 - [核心数据关系](#核心数据关系)
@@ -21,7 +22,7 @@ Mermaid 图可直接在 GitHub 阅读。箭头的含义在各图前说明；省�
 ## 源码分层
 
 源码以领域聚合，领域内部按稳定能力和应用用例分层，仍使用同一 SQLite 数据库。
-这次完整重构以 `main@b097248` 为基线；下列目录是实际实现，不是下一阶段路线图。
+下列目录与链接对应当前源码中的责任边界。
 
 ```text
 robert_agent/
@@ -49,7 +50,7 @@ robert_agent/
 ```
 
 同一领域的概念在同一个包内复用：例如 `work.inputs`、`work.policies`、
-`work.control_queries` 同时供工作项用例和读模型使用；展示层不再借用命令处理器。
+`work.control_queries` 同时供工作项用例和读模型使用；展示层通过查询能力读取状态。
 `delivery.results` 负责结果事实，`delivery.application.result_audit` 负责审计用例；
 `execution.workspace` 负责工作区能力，监控用例通过组合层传入的恢复函数创建新尝试。
 暂停监督不会隐式取得恢复权限。
@@ -61,7 +62,7 @@ robert_agent/
 
 `runtime.cycle` 只负责循环组合，仓库处理流程调用明确的准入/准备/派发/监督/审计/
 发布用例。runtime 和 HTTP 不直接执行 SQL。事务、savepoint、claim、fence、回执和
-幂等记录由相应能力或应用用例处理；外部 I/O 与回写复核保持原边界。
+幂等记录由相应能力或应用用例处理；外部 I/O 在写事务外执行，回写时重新核对所有权与当前状态。
 
 - `configuration` 不加载执行服务；`resources/routes.yml` 是固定路由的唯一可编辑来源。
 - `execution.stages` 通过 `StageStore`、`StageWorkspace`、`StageArtifacts` 接收能力，
@@ -72,8 +73,7 @@ robert_agent/
   工作项/知识写入调用相应领域的应用用例。
 - 包根目录只保留 `__init__.py`、`paths.py` 和 `resource_files.py`。可执行入口位于所属模块，
   例如 `robert_agent.runtime.scan` 和 `robert_agent.worker.result`。安装检查使用
-  [入口清单](../src/robert_agent/resources/entrypoints.json)。旧根路径已移除，升级步骤见
-  [源码布局升级说明](source-layout-upgrade.md)。
+  [入口清单](../src/robert_agent/resources/entrypoints.json)。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和
 runtime/HTTP 的 SQL 边界。 [pyproject.toml](../pyproject.toml) 统一配置 Ruff 和 import-linter，
@@ -97,6 +97,7 @@ flowchart TB
         Scan["扫描链路<br/>runtime/scan.py · adapters/github/read.py · adapters/github/discovery.py"]
         Local["内部推进链路<br/>runtime/loop.py → runtime/cycle.py"]
         Publisher["发布链路<br/>runtime/scan.py --publish → delivery/application/publish.py"]
+        Supervisor["runtime/supervisor.py<br/>独立观察 · 诊断 · 已知恢复 · 工程修复"]
         UI["interfaces/web/server.py · readmodels/board.py · readmodels/workbench.py<br/>查询与受控操作"]
         Worker["Worker CLI / 内建协调器<br/>独立进程与任务产物"]
         Workspace["adapters/git/workspace.py<br/>仓库专属 Git worktree"]
@@ -108,6 +109,8 @@ flowchart TB
     Config --> UI
     Service --> Daemon
     Service --> UI
+    Service --> Supervisor
+    Supervisor -.-> DB
     Daemon --> Scan
     Daemon --> Local
     Daemon --> Publisher
@@ -139,20 +142,22 @@ worktree 和文件 hash 校验不提供操作系统沙箱。Worker 按协议只�
 ## 模块关系
 
 箭头表示主要调用关系，节点按责任分组，不表示全部 Python import。
-`runtime/cycle.py` 组合单次运行，政策、资源和外部动作由各领域模块负责。
+`runtime/cycle.py` 组合单次运行，`application/repository_cycle.py` 编排每个仓库的用例；
+政策、资源和外部动作由各领域模块负责。
 
 ```mermaid
 flowchart LR
     CLI["cli/main.py · runtime/daemon.py"] --> Loop["runtime/loop.py"]
     CLI --> Run["runtime/cycle.py"]
     Loop --> Run
-    Run --> Intake["adapters/github/discovery.py · security/authorization.py · work/streams.py"]
-    Run --> Routing["workflows/routes.py · configuration/routes.py · context/skills.py"]
-    Run --> Prepare["adapters/git/workspace.py · context/prompts.py"]
+    Run --> Repo["application/repository_cycle.py"]
+    Repo --> Intake["adapters/github/discovery.py · security/authorization.py · work/streams.py"]
+    Repo --> Routing["workflows/routes.py · configuration/routes.py · context/skills.py"]
+    Repo --> Prepare["adapters/git/workspace.py · context/prompts.py"]
     Run --> Launch["adapters/processes/worker.py → worker_adapters/"]
-    Run --> Supervise["execution/inspection.py · adapters/processes/identity.py"]
-    Run --> Audit["delivery/application/audit.py · delivery/application/scope.py · security/redaction.py"]
-    Run --> Publish["delivery/application/publish.py → delivery/application/reconcile.py"]
+    Repo --> Supervise["execution/application/monitor.py → execution/inspection.py · adapters/processes/identity.py"]
+    Repo --> Audit["delivery/application/audit.py · delivery/application/scope.py · security/redaction.py"]
+    Repo --> Publish["delivery/application/publish.py → delivery/application/reconcile.py"]
     Run --> State["adapters/sqlite/database.py · adapters/sqlite/execution_control.py · execution/operations.py"]
     Run --> Rounds["workflows/review/coordinator.py / workflows/vote/coordinator.py"]
     Rounds --> Models["execution/stages.py → adapters/sqlite/model_pool.py"]
@@ -210,10 +215,11 @@ flowchart TD
 `verification_policy` 与 workspace 权限。
 
 源码：[authorize_event](../src/robert_agent/security/authorization.py)、[plan_event](../src/robert_agent/work/streams.py)、
-[route_task](../src/robert_agent/workflows/routes.py)、[事件编排](../src/robert_agent/runtime/cycle.py)
-（`_run_repo_pipeline`、`_mark_consumed_events`、`_create_child_task_for_pending_events`）。
+[route_task](../src/robert_agent/workflows/routes.py)、[仓库用例编排](../src/robert_agent/application/repository_cycle.py)（`run_repo_pipeline`）、
+[事件消费与接续](../src/robert_agent/work/application/completion.py)
+（`_mark_consumed_events`、`_create_child_task_for_pending_events`）。
 行为见 [test_workstreams.py](../tests/work/test_workstreams.py) 和
-[test_discovery_authorization.py](../tests/adapters/github/test_discovery.py)。
+[test_discovery.py](../tests/adapters/github/test_discovery.py)。
 
 ## Issue 到 PR 的时序
 
@@ -251,8 +257,9 @@ sequenceDiagram
 PR workstream。任务执行完成、动作发布成功、远端 PR 合并是三种独立事实。
 
 源码：[工作目录策略](../src/robert_agent/adapters/git/workspace.py)、[启动适配器](../src/robert_agent/adapters/processes/worker.py)、
-[结果入口](../src/robert_agent/delivery/application/submission.py)、[最终完成与派生 PR](../src/robert_agent/runtime/cycle.py)
-（`_audit_completed_results`、`_finalize_accepted_result`、`_materialize_open_pr_workstream`）。
+[结果入口](../src/robert_agent/delivery/application/submission.py)、[结果审计](../src/robert_agent/delivery/application/result_audit.py)（`audit_completed_results`）、
+[最终完成与派生 PR](../src/robert_agent/work/application/completion.py)
+（`finalize_accepted_result`、`_materialize_open_pr_workstream`）。
 看板定义见 [web-lifecycle-board.md](web-lifecycle-board.md)。
 
 ## 结果提交、唤醒与内部推进
@@ -295,7 +302,7 @@ sequenceDiagram
 必须确认进程组停止后才进入可发布的完成态。相同最终提交复用原结果，冲突提交拒绝；
 迟到结果受当前 Attempt、主体及取消状态约束。
 
-`loop_engine.run_loop` 限制轮次、总时间、每轮派发数与累计发布数，无进展时停止。
+`runtime.loop.run_loop` 限制轮次、总时间、每轮派发数与累计发布数，无进展时停止。
 通知只能让 daemon 尽快重查数据库，不能跳过 lease、审计和并发限制。
 
 源码：[record_result 与重放](../src/robert_agent/delivery/application/submission.py)、[原子 spool](../src/robert_agent/execution/spool.py)、
@@ -306,7 +313,7 @@ sequenceDiagram
 ## 发布去重与崩溃恢复
 
 publisher 在任务发布锁内核对已审计 scope，记录 intent 与预算，再调用外部命令。
-SQLite 写事务不跨越远端副作用。三个远端判定是 `publication_reconcile` 的返回值，
+SQLite 写事务不跨越远端副作用。三个远端判定是 `delivery.application.reconcile` 的返回值，
 不表示 Task 状态。
 
 ```mermaid
@@ -339,7 +346,7 @@ flowchart TD
 
 源码：[publish_ready_actions](../src/robert_agent/delivery/application/publish.py)、
 [classify_remote_state](../src/robert_agent/delivery/application/reconcile.py)、
-[publication intent](../src/robert_agent/adapters/sqlite/execution_control.py)、[发布锁](../src/robert_agent/delivery/lock.py)、
+[publication intent](../src/robert_agent/delivery/application/intents.py)、[发布锁](../src/robert_agent/delivery/lock.py)、
 [execution/retry.py](../src/robert_agent/execution/retry.py)。
 崩溃与重复写入行为见 [test_publication_reconcile.py](../tests/delivery/test_publication_reconcile.py)。
 
@@ -379,15 +386,50 @@ effort 保持不变；恢复路径也可能使用已保存的模型恢复信息�
 `execution_subjects` 记录 `active`、`terminal`、`attention` 与主体恢复计数。
 取消或失效主体不能靠迟到结果继续发布。
 
-新旧结果契约切换另有 `result_cutover` 门禁：已识别任务可隔离，未知 spool 或读取
-失败会暂停控制面。隔离不转换旧结果，也不证明旧进程已停；恢复走显式 retrigger。
+结果兼容性门禁由 `execution.application.cutover` 检查：不支持的结果可按任务隔离，
+未知 spool 或读取失败会暂停控制面。隔离不证明进程已停；恢复走显式 retrigger。
 
 源码：[classify_attempt](../src/robert_agent/execution/inspection.py)、[进程身份](../src/robert_agent/adapters/processes/identity.py)、
-[监督、恢复与模型选择](../src/robert_agent/runtime/cycle.py)
-（`_supervise_running_attempts`、`_recover_failed_timeout_attempts`、`_model_for_dispatch`）、
-[主体控制](../src/robert_agent/execution/operations.py)、[契约切换](../src/robert_agent/execution/application/cutover.py)。
+[监督与恢复](../src/robert_agent/execution/application/monitor.py)
+（`supervise_running_attempts`、`recover_failed_timeout_attempts`）、
+[派发](../src/robert_agent/execution/application/dispatch.py)、
+[主体控制](../src/robert_agent/execution/operations.py)、[结果兼容性门禁](../src/robert_agent/execution/application/cutover.py)。
 边界见 [test_agent_lease_safety.py](../tests/execution/test_agent_lease_safety.py) 和
 [test_cutover_recovery.py](../tests/execution/test_cutover_recovery.py)。
+
+## 独立任务监督
+
+`runtime/supervisor.py` 是独立于业务 daemon 的服务入口。默认 `observe` 只记录观察与
+事件；心跳、进程存活或一次恢复函数返回都不能证明业务已取得进展。
+
+```mermaid
+flowchart TD
+    Observe["读取持久事实与运行证据"] --> Rules["确定性规则：覆盖、停滞、发布与接续"]
+    Rules --> Incident["保存 observation / incident"]
+    Incident --> Diagnose{"配置无工具诊断 wrapper？"}
+    Diagnose -->|"是"| Model["有界证据包 · 调用预算 · hash 校验"]
+    Model --> Evidence["保存诊断证据"]
+    Incident --> Policy{"recover_known 且仓库/动作允许？"}
+    Policy -->|"是"| Claim["持久 claim 与 lineage/stage 预算"]
+    Claim --> Consumer["领域消费者重新验证策略、所有权与审计"]
+    Consumer --> Receipt["核对确切领域回执与正向进展"]
+    Receipt --> Closed{"恢复证据满足？"}
+    Closed -->|"是"| Resolve["关闭事件"]
+    Closed -->|"未知 / 逾期"| Attention["保留范围、预算和待处理状态"]
+    Evidence --> Repair{"产品缺陷且 repair 策略允许？"}
+    Repair -->|"backlog"| Proposal["本地维护 WorkItem，等待处理"]
+    Repair -->|"auto + 隔离验证通过"| Implement["受限维护 Worker → 审计 → PR"]
+    Implement --> Verify["代码 · 主线 · 部署 · 原任务进展分别验证"]
+```
+
+已知恢复消费者不扩大原有重试权限，未确认的远端效果必须先对账。自动工程修复需要
+显式命令 Worker、受信 launcher 和实际隔离验证；普通模型 CLI 的 worktree 隔离不满足
+该条件。PR 合并、部署匹配和原任务进展分别留证。
+
+源码：[观察用例](../src/robert_agent/supervision/application/observation.py)、
+[规则](../src/robert_agent/supervision/rules.py)、[恢复事实](../src/robert_agent/supervision/store.py)、
+[维护工作流](../src/robert_agent/workflows/maintenance/repair.py)。
+配置、命令与限制见 [持续任务监督](task-supervision.md)。
 
 ## 多模型评审与投票
 
@@ -434,7 +476,7 @@ sequenceDiagram
 | --- | --- | --- |
 | 开启条件 | `review-pr` 显式启用且 PR 作者命中 allowlist | 配置启用、来源与投票意图满足路由 |
 | 冻结输入 | 当前 head/base、完整 PR diff、源码索引、上下文与 prompt | 当前来源、投票问题、选项与规则；需要时准备源码 |
-| 并行输出 | findings、证据与覆盖范围 | 结构化 ballot；`vote_tally.py` 确定性计票 |
+| 并行输出 | findings、证据与覆盖范围 | 结构化 ballot；`workflows/vote/tally.py` 确定性计票 |
 | 汇总 | 逐项评估来源 finding，不用多数票认定缺陷 | 读取 tally，生成解释与分歧报告 |
 | 发布 | 绑定 PR head 的 Review `COMMENT` | Issue / PR 评论 |
 
@@ -511,8 +553,9 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 
 专用表保留各自边界：`github_scan_batches` / `github_scan_reads` 保存扫描重放输入；
 `leases` / `github_control_children` 保存执行所有权；`review_sessions` / `review_runs`
-和 `vote_sessions` / `vote_runs` 保存内建轮次。历史 `workflow_*` 表留给离线迁移
-与历史读取，当前执行主体由 `execution_*` 管理。
+和 `vote_sessions` / `vote_runs` 保存内建轮次；`execution_*` 管理执行主体。
+`supervision_checkpoints`、`supervision_incidents`、`supervision_recovery_actions`
+保存独立监督的观察、事件和恢复记录。
 
 源码：[主 schema](../src/robert_agent/resources/db/schema.sql)、[存储初始化](../src/robert_agent/adapters/sqlite/database.py)、
 [执行主体与事实回执](../src/robert_agent/adapters/sqlite/execution_control.py)、[adapters/sqlite/review_rounds.py](../src/robert_agent/adapters/sqlite/review_rounds.py)、

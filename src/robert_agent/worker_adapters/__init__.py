@@ -31,9 +31,7 @@ def available_worker_agents():
     package_dir = Path(__file__).parent
     return tuple(
         sorted(
-            path.stem
-            for path in package_dir.glob("*.py")
-            if path.stem != "__init__" and not path.stem.startswith("_")
+            path.stem for path in package_dir.glob("*.py") if path.stem != "__init__" and not path.stem.startswith("_")
         )
     )
 
@@ -65,9 +63,7 @@ def _load_adapter(agent):
     required = ["AGENT_NAME", "DEFAULT_COMMAND", "build_launch"]
     missing = [name for name in required if not hasattr(module, name)]
     if missing:
-        raise ValueError(
-            f"worker_agent {agent} adapter missing required symbols: {', '.join(missing)}"
-        )
+        raise ValueError(f"worker_agent {agent} adapter missing required symbols: {', '.join(missing)}")
     if module.AGENT_NAME != agent:
         raise ValueError(f"worker_agent adapter name mismatch: {agent} != {module.AGENT_NAME}")
     return module
@@ -91,8 +87,7 @@ def normalize_worker_agent_config(config):
         raise ValueError("timeout_seconds must be at least 1")
     environment_allowlist = config.get("environment_allowlist", [])
     if not isinstance(environment_allowlist, list) or any(
-        not isinstance(name, str) or not name.strip()
-        for name in environment_allowlist
+        not isinstance(name, str) or not name.strip() for name in environment_allowlist
     ):
         raise ValueError("environment_allowlist must contain variable names")
     return {
@@ -101,10 +96,7 @@ def normalize_worker_agent_config(config):
         "command_argv": command_argv,
         "prompt_transport": prompt_transport,
         "timeout_seconds": timeout_seconds,
-        "environment_allowlist": [
-            name.strip()
-            for name in environment_allowlist
-        ],
+        "environment_allowlist": [name.strip() for name in environment_allowlist],
     }
 
 

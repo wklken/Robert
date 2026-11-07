@@ -213,9 +213,7 @@ class RemediationTests(unittest.TestCase):
                 ci_summary={"status": "green", "observations": []},
                 now="2026-07-26T00:01:00Z",
             )
-            episode_id = conn.execute(
-                "SELECT episode_id FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             remediation.record_publish_result(
                 conn,
                 episode_id=episode_id,
@@ -246,33 +244,57 @@ class RemediationTests(unittest.TestCase):
             with self.subTest(kind=kind), closing(self.connect()) as conn, conn:
                 conn.execute("DELETE FROM pr_remediation_episodes")
                 snapshot = {**self.snapshot, "mergeable": kind == "ci"}
-                summary = {"status": "failing" if kind == "ci" else "waiting",
-                           "failure_signature": "same", "failures": [], "observations": []}
+                summary = {
+                    "status": "failing" if kind == "ci" else "waiting",
+                    "failure_signature": "same",
+                    "failures": [],
+                    "observations": [],
+                }
                 remediation.upsert_health_episodes(
-                    conn, repo=self.repo, workstream=self.workstream,
-                    snapshot=snapshot, ci_summary=summary, now="2026-07-26T00:01:00Z",
+                    conn,
+                    repo=self.repo,
+                    workstream=self.workstream,
+                    snapshot=snapshot,
+                    ci_summary=summary,
+                    now="2026-07-26T00:01:00Z",
                 )
                 episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
                 remediation.record_publish_result(
-                    conn, episode_id=episode_id, publish_status="published",
-                    result_head_sha="head-2", now="2026-07-26T00:02:00Z",
+                    conn,
+                    episode_id=episode_id,
+                    publish_status="published",
+                    result_head_sha="head-2",
+                    now="2026-07-26T00:02:00Z",
                 )
                 for minute in (3, 4, 5):
                     remediation.upsert_health_episodes(
-                        conn, repo=self.repo, workstream=self.workstream,
-                        snapshot={**snapshot, "head_sha": "head-2"}, ci_summary=summary,
+                        conn,
+                        repo=self.repo,
+                        workstream=self.workstream,
+                        snapshot={**snapshot, "head_sha": "head-2"},
+                        ci_summary=summary,
                         now=f"2026-07-26T00:0{minute}:00Z",
                     )
-                self.assertEqual(remediation.next_system_decisions(
-                    conn, repo=self.repo, now="2026-07-26T00:05:00Z"), [])
-                self.assertEqual(conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0], 1)
+                self.assertEqual(
+                    remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T00:05:00Z"),
+                    [],
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0],
+                    1,
+                )
                 remediation.upsert_health_episodes(
-                    conn, repo=self.repo, workstream=self.workstream,
-                    snapshot={**snapshot, "head_sha": "human-head"}, ci_summary=summary,
+                    conn,
+                    repo=self.repo,
+                    workstream=self.workstream,
+                    snapshot={**snapshot, "head_sha": "human-head"},
+                    ci_summary=summary,
                     now="2026-07-26T00:06:00Z",
                 )
-                self.assertEqual(len(remediation.next_system_decisions(
-                    conn, repo=self.repo, now="2026-07-26T00:06:00Z")), 1)
+                self.assertEqual(
+                    len(remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T00:06:00Z")),
+                    1,
+                )
 
     def test_waiting_conflict_exhausts_when_result_head_is_still_conflicted(self):
         from robert_agent.workflows import pr_remediation as remediation
@@ -286,9 +308,7 @@ class RemediationTests(unittest.TestCase):
                 ci_summary={"status": "green", "observations": []},
                 now="2026-07-26T00:01:00Z",
             )
-            episode_id = conn.execute(
-                "SELECT episode_id FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             remediation.record_publish_result(
                 conn,
                 episode_id=episode_id,
@@ -331,9 +351,7 @@ class RemediationTests(unittest.TestCase):
                 ci_summary=failing,
                 now="2026-07-26T00:01:00Z",
             )
-            episode_id = conn.execute(
-                "SELECT episode_id FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             remediation.record_publish_result(
                 conn,
                 episode_id=episode_id,
@@ -366,9 +384,7 @@ class RemediationTests(unittest.TestCase):
                 ci_summary=failing,
                 now="2026-07-26T00:01:00Z",
             )
-            episode_id = conn.execute(
-                "SELECT episode_id FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             remediation.record_publish_result(
                 conn,
                 episode_id=episode_id,
@@ -402,9 +418,7 @@ class RemediationTests(unittest.TestCase):
                 ci_summary={"status": "green", "observations": []},
                 now="2026-07-26T00:01:00Z",
             )
-            episode_id = conn.execute(
-                "SELECT episode_id FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             conn.execute(
                 """
                 INSERT INTO tasks(
@@ -723,9 +737,7 @@ class RemediationTests(unittest.TestCase):
                 ci_summary={"status": "green", "observations": []},
                 now="2026-07-26T00:01:00Z",
             )
-            episode_id = conn.execute(
-                "SELECT episode_id FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             conn.execute(
                 """
                 UPDATE pr_remediation_episodes
@@ -868,9 +880,7 @@ class RemediationTests(unittest.TestCase):
                 ci_summary=first,
                 now="2026-07-26T00:01:00Z",
             )
-            episode_id = conn.execute(
-                "SELECT episode_id FROM pr_remediation_episodes"
-            ).fetchone()[0]
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             conn.execute(
                 """
                 INSERT INTO tasks(

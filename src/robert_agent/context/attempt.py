@@ -1,4 +1,5 @@
 """Build the context artifacts and entrypoint paths for an attempt."""
+
 from pathlib import Path
 from robert_agent.context import knowledge as runtime_knowledge
 from robert_agent.context import project as project_memory
@@ -103,21 +104,19 @@ def github_context_paths(prompt_dir, attempt_id):
 
 def write_github_context_artifacts(prompt_dir, attempt_id, events):
     paths = github_context_paths(prompt_dir, attempt_id)
-    atomic_replace_files({
-        Path(paths["json_path"]): json.dumps(
-            {"events": events}, ensure_ascii=False, indent=2, sort_keys=True
-        ).encode("utf-8"),
-        Path(paths["md_path"]): _event_context_markdown(events).encode("utf-8"),
-    })
+    atomic_replace_files(
+        {
+            Path(paths["json_path"]): json.dumps(
+                {"events": events}, ensure_ascii=False, indent=2, sort_keys=True
+            ).encode("utf-8"),
+            Path(paths["md_path"]): _event_context_markdown(events).encode("utf-8"),
+        }
+    )
     return {
         **paths,
         "event_count": len(events),
         "current_event_fingerprint": events[0].get("event_fingerprint") if events else None,
-        "event_fingerprints": [
-            event.get("event_fingerprint")
-            for event in events
-            if event.get("event_fingerprint")
-        ],
+        "event_fingerprints": [event.get("event_fingerprint") for event in events if event.get("event_fingerprint")],
     }
 
 

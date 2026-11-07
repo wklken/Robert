@@ -1,7 +1,9 @@
 # 多模型 PR Review
 
+[文档目录](README.md)
+
 Robert 内建多模型审查流程：准备上下文、独立审查、验证汇总、发布 PR Review。
-不需要安装 github-pr-monitor 或额外审查 skill。默认保持现有单模型行为。
+不需要安装 github-pr-monitor 或额外审查 skill。默认使用单模型。
 
 在现有配置中声明两个 worker，再覆盖 `review-pr` 路由：
 
@@ -32,19 +34,19 @@ routes:
 
 `workers[0]` 必须与该路由的 `worker` 相同。也可在单个 repository 的 `routes.review-pr`
 覆盖 `multi_agent_review`；覆盖整个设置对象。作者 login 不区分大小写。
-仅开关开启且 **PR 作者**在白名单时使用多模型；空白名单、未命中或开关关闭均使用原单模型路径。
+仅开关开启且 **PR 作者**在白名单时使用多模型；空白名单、未命中或开关关闭均使用单模型路径。
 触发者、commit author 和 committer 不参与白名单判断；`trusted_actors` 的触发授权继续生效。
 每轮 review 共占用原有一个任务并发槽。准备和汇总使用第一个 worker，各 reviewer 在独立的全局子进程额度内并行执行。
 
 ## 并发额度
 
-`scheduler.model_max_concurrency` 控制共享模型额度，不接受旧别名。
+`scheduler.model_max_concurrency` 控制共享模型额度。
 开启 [多 Agent 投票](multi-agent-vote.md) 后，两种内建流程共享该额度，避免各自启动一个独立池。
 
 `scheduler.max_concurrency` 继续限制任务数，一轮多模型 review 从准备到汇总仍算一个任务。
 `scheduler.model_max_concurrency` 单独限制实际运行的 review 模型子进程，默认 `4`，必须是正整数，
 不支持 repository 或 route 覆盖。同一 Robert 数据库/数据目录下的所有仓库和轮次共享这个上限；
-旧单模型路径继续使用原有任务并发，不进入这个子进程池。
+单模型路径使用任务并发，不进入这个子进程池。
 
 准备、每个 reviewer 和汇总分别占一个子进程额度，协调器本身不占子进程额度。
 准备完成并冻结上下文后，同轮 reviewer 在额度足够时全部并行执行；额度不足的 reviewer 等待，
@@ -147,9 +149,9 @@ mention 不扩大发布或修改权限，各阶段继续使用原有 JSON schema
 - `robert status` 任务详情和 Board 执行历史显示轮次、SHA、各阶段/模型状态及失败原因。
 
 Robert 在 macOS 和 Linux 上直接启动配置的模型 CLI，无需 `sandbox-exec`、`bubblewrap` (`bwrap`)
-或 namespace 权限。此执行模式取代历史设计文档中的 OS 沙箱要求，没有额外 Python runtime 依赖。
+或 namespace 权限。
 CLI 沿用运行 Robert 的账户已有的登录、配置和文件权限，可以按该账户权限访问宿主机文件及其他轮次产物；
-Robert 不再以 OS 策略限制这些读写。每轮 worktree、context、阶段输出和 `.tmp` 目录仍分别建立，
+Robert 不以 OS 策略限制这些读写。每轮 worktree、context、阶段输出和 `.tmp` 目录仍分别建立，
 prompt 约定模型只写本阶段输出，并禁止后台或脱离进程；输入完整性、结果身份和封存 hash 仍由 Robert 校验。
 
 两种平台继续监督已登记的模型进程组，保留并发额度、心跳、超时、重试、取消和恢复机制。
@@ -157,9 +159,9 @@ prompt 约定模型只写本阶段输出，并禁止后台或脱离进程；输�
 仍进入需处理状态，并按上面的人工恢复流程处理。
 
 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR` 在设置时传给模型 CLI；未设置时沿用 CLI 自身的默认配置方式。
-`CLAUDE_CONFIG_DIR` 在两种平台上都可选，Linux 的 `claude`/`tclaude` 不再要求额外配置目录。
+`CLAUDE_CONFIG_DIR` 在两种平台上都可选，Linux 的 `claude`/`tclaude` 不要求额外配置目录。
 若显式设置，必须指向已存在的独立配置目录，不能与 Robert 数据、源码或上下文目录重叠；
-应使用同一目录完成 Claude 登录。Robert 不自动迁移认证文件，也不把模型或 GitHub 凭据写入配置或产物。
+应使用同一目录完成 Claude 登录。Robert 不管理 CLI 认证文件，也不把模型或 GitHub 凭据写入配置或产物。
 
 产物保存在 `data_dir/artifacts/reviews`，代码放在 repository 配置的 worktrees 根目录下。
 历史 worktree 和产物保留用于排查与审计；当前不自动清理。模型二进制与认证应在运行 Robert 的账户下配置好。

@@ -9,12 +9,20 @@ from robert_agent.workflows import routes as route
 class PromptScopeTests(unittest.TestCase):
     def render(self, route_id, **kwargs):
         return render_prompt.render_prompt(
-            {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y!1"},
+            {
+                "task_id": "task-1",
+                "attempt_id": "attempt-1",
+                "workstream_id": "github:x/y!1",
+            },
             route.ROUTES[route_id],
             [{"event_fingerprint": "comment:1", "event_type": "comment"}],
             runtime_context={
-                "github_context": {"md_path": "/context/input.md", "json_path": "/context/input.json"},
-                "result_script": "/runtime/result.py", "status_script": "/runtime/status.py",
+                "github_context": {
+                    "md_path": "/context/input.md",
+                    "json_path": "/context/input.json",
+                },
+                "result_script": "/runtime/result.py",
+                "status_script": "/runtime/status.py",
                 **kwargs.pop("runtime_context", {}),
             },
             **kwargs,
@@ -24,7 +32,10 @@ class PromptScopeTests(unittest.TestCase):
         for route_id in ("new-pr", "update-existing-pr"):
             with self.subTest(route_id=route_id):
                 prompt = self.render(route_id)
-                self.assertIn("Only run mutation testing when explicitly requested by the task or required by applicable repository instructions", prompt)
+                self.assertIn(
+                    "Only run mutation testing when explicitly requested by the task or required by applicable repository instructions",
+                    prompt,
+                )
                 self.assertIn("Otherwise omit mutation testing without a skip explanation", prompt)
                 self.assertNotIn("When feasible, use scoped mutation testing", prompt)
 
@@ -94,11 +105,16 @@ class PromptScopeTests(unittest.TestCase):
                     prompt = self.render(route_id, runtime_context={"origin_type": origin})
                     guidance = prompt.split("Human collaboration:\n", 1)[1].split("\n\n", 1)[0]
                     for requirement in (
-                        "observable acceptance criteria", "do not invent requirements",
-                        "existing authorization", "what changed in your understanding",
-                        "verification is now stale", "no new evidence",
-                        "what it proves", "what it does not prove",
-                        "PR body or outcome comment", "review entry points",
+                        "observable acceptance criteria",
+                        "do not invent requirements",
+                        "existing authorization",
+                        "what changed in your understanding",
+                        "verification is now stale",
+                        "no new evidence",
+                        "what it proves",
+                        "what it does not prove",
+                        "PR body or outcome comment",
+                        "review entry points",
                     ):
                         self.assertIn(requirement, guidance)
                     self.assertIn("could disprove the implementation", prompt)
@@ -118,7 +134,10 @@ class PromptScopeTests(unittest.TestCase):
         self.assertIn("not a defect by itself", prompt)
 
     def test_nonempty_memory_keeps_evidence_requirements(self):
-        prompt = self.render("new-pr", project_memories=[{"memory_id": "m1", "short_summary": "Check callers"}])
+        prompt = self.render(
+            "new-pr",
+            project_memories=[{"memory_id": "m1", "short_summary": "Check callers"}],
+        )
         self.assertIn("Relevant Project Memories", prompt)
         self.assertIn('"memory_id": "m1"', prompt)
         self.assertIn("used_memory_ids", prompt)
@@ -138,7 +157,11 @@ class PromptScopeTests(unittest.TestCase):
 
     def test_review_escalation_has_configured_identity_and_uses_planned_comment(self):
         prompt = render_prompt.render_prompt(
-            {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y!1"},
+            {
+                "task_id": "task-1",
+                "attempt_id": "attempt-1",
+                "workstream_id": "github:x/y!1",
+            },
             route.ROUTES["review-pr"],
             [{"source_type": "pull_request", "pr_author_login": "Robert-Bot"}],
             runtime_context={"github_account": "robert-bot"},
@@ -153,7 +176,10 @@ class PromptScopeTests(unittest.TestCase):
         self.assertIn("Reuse still-valid edits and verification evidence on recovery", prompt)
         self.assertIn("do not reuse a verdict as proof", prompt)
         self.assertIn("The policy below applies only when evaluating review feedback", prompt)
-        self.assertIn("Do not expand supplied-feedback verification into a fresh source review", prompt)
+        self.assertIn(
+            "Do not expand supplied-feedback verification into a fresh source review",
+            prompt,
+        )
         self.assertIn("Do not modify source or plan a push", prompt)
 
 

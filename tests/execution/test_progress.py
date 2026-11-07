@@ -50,11 +50,11 @@ class ProgressTests(WorkerProtocolFixture):
         progress.record_snapshot(db, "task-1", "attempt-1", "verify", "running", "Checking behavior")
 
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(conn.execute("SELECT phase, summary FROM worker_phases").fetchall(),
-                             [("verify", "Checking behavior")])
-            heartbeat, = conn.execute(
-                "SELECT heartbeat_at FROM attempts WHERE attempt_id = 'attempt-1'"
-            ).fetchone()
+            self.assertEqual(
+                conn.execute("SELECT phase, summary FROM worker_phases").fetchall(),
+                [("verify", "Checking behavior")],
+            )
+            (heartbeat,) = conn.execute("SELECT heartbeat_at FROM attempts WHERE attempt_id = 'attempt-1'").fetchone()
         self.assertGreater(heartbeat, "2000-01-01T00:00:00+00:00")
 
     def test_invalid_phase_leaves_progress_and_heartbeat_untouched(self):
@@ -62,7 +62,7 @@ class ProgressTests(WorkerProtocolFixture):
 
         db = self._init_attempt_db()
         with closing(sqlite3.connect(db)) as conn:
-            initial, = conn.execute("SELECT heartbeat_at FROM attempts").fetchone()
+            (initial,) = conn.execute("SELECT heartbeat_at FROM attempts").fetchone()
         with self.assertRaisesRegex(ValueError, "invalid worker phase"):
             progress.record_snapshot(db, "task-1", "attempt-1", "untrusted-phase", "running", "Unknown")
         with closing(sqlite3.connect(db)) as conn:

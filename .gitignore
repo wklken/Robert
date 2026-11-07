@@ -16,5 +16,6 @@ htmlcov/
 .DS_Store
 
 # Local analysis and execution records; never publish these archives.
+/docs/remediation/
 /docs/reviews/
 /docs/superpowers/

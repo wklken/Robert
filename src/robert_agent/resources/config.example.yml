@@ -5,7 +5,7 @@ database: robert.sqlite3
 # 可选高级设置；默认使用运行 Robert 的解释器，通常应省略。
 # python_bin: /srv/robert/.venv/bin/python3
 
-# 必填名称引用，不再隐含使用 workers 第一项。
+# 必填名称引用；显式选择默认 worker。
 default_worker: coder
 
 github:
@@ -102,7 +102,7 @@ routes:
       workers: [coder, reviewer]
 
 # Add a real repository before running config validate or starting Robert.
-# See docs/config-v2-upgrade.md for a complete repository example.
+# See docs/reference.md#configuration for a complete repository example.
 repos: []
 
 # Optional operator chat; disabled unless explicitly configured.

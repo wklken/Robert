@@ -1,8 +1,10 @@
 # Web 任务生命周期看板
 
-首页 `/` 和 `/board` 提供任务看板；原 GitHub 工作列表保留在 `/work`，
-运行与后台服务信息在 `/operations`。Web 默认只读；已有写入开关、仓库权限、
-Origin、CSRF、版本和幂等校验继续生效。
+[文档目录](README.md)
+
+首页 `/` 和 `/board` 提供任务看板；GitHub 工作列表在 `/work`，
+运行与后台服务信息在 `/operations`。Web 默认只读；写入受开关、仓库权限、
+Origin、CSRF、版本和幂等校验约束。
 
 ## 日常操作
 
@@ -49,31 +51,13 @@ Origin、CSRF、版本和幂等校验继续生效。
 源 Issue / PR 的状态来自最近一次后台同步。关闭源不会授权 Web 自动重新打开 GitHub 对象。
 缺少进程标识、权限不足或后台长时间占用时，页面会显示失败原因，不会伪报取消成功。
 
-## 本次检查范围
-
-重构基于 `origin/main` 的 `9e665db`，保留已有终态保护、GitHub 失败任务 retrigger、
-PR 链接及发布去重逻辑。重点修正状态与操作不一致、详情不刷新、手机宽度下阶段入口被挤压、
-错误反馈不明显、发布失败误显示为执行中，以及取消后的历史不可见。
-
-复现和交互验证使用隔离 SQLite 数据库，没有停止真实 Worker、修改真实 Issue / PR 或发布内容。
-Python 生命周期测试覆盖发布重试、关闭来源与派生 PR、停止失败、运行周期冲突、重复请求与恢复。
-前端请求测试执行：
-
-```bash
-node --test tests/browser/*.test.cjs
-```
-
-`tests/browser/closed_pr_actions.js` 是手动 Playwright 场景；取消需要在详情中确认。
-编辑或回复期间若版本或待处理事件发生变化，会保留草稿并要求核对最新内容。
-
-## 与主工作区已有恢复逻辑的集成
+## 恢复边界
 
 daemon 与本地调度共用 SQLite 执行状态。Worker 身份、发布意图、恢复额度和取消
-约束继续生效；已使用 DBOS 的部署须先按[升级指南](sqlite-state-machine-upgrade.md)
-完成离线交接。只读界面可以查看旧记录，写入入口会拒绝未交接的执行状态。
+约束共同控制恢复；只读界面可以查看历史记录，写入入口检查当前执行状态。
 
 - 手动重试创建新的 Task，旧失败任务保留终态与证据。
-- 一次自动恢复额度耗尽后进入“需要处理”，不因升级重置。
+- 普通 Worker 的一次自动恢复额度耗尽后进入“需要处理”，重启不重置额度。
 - 发布结果未知时先核对远端，不能直接重新发布。
 - 取消只有在确认 Worker 停止后才完成，迟到结果不会复活任务。
 
@@ -85,9 +69,8 @@ daemon 与本地调度共用 SQLite 执行状态。Worker 身份、发布意图�
 - 看板执行历史按最近任务、最近尝试排序。每个 Task 先显示 10 次尝试，可继续加载全部记录，自动刷新保留已加载数量和展开状态。
 - GitHub 工作详情按尝试折叠阶段和日志，自动刷新保留展开状态，并提供对应看板入口。已结束且来源关闭的工作流不再因历史失败或已跳过发布而留在当前待办；运行、待发布或修复中的记录仍保留关注。
 - 日志链接使用具体 `artifact_id`，同时校验所属任务和产物类型，避免历史尝试误打开最新日志。文件缺失时明确显示“当前机器没有此文件”，不显示无法打开的预览入口。SQLite 快照仅含日志引用，查看原始 stdout/stderr 需要同时提供对应 artifacts 文件。
-- 兼容历史 DD / Robert 数据库中已经占用的迁移版本号，保留旧记录，以迁移名称和 checksum 识别是否已应用。只读旧工作流详情不要求存在新看板表。
 
-### Real snapshot walkthrough and GitHub-style presentation
+## 展示与交付证据
 
 The board uses a neutral shared shell, compact cards, underlined stage navigation,
 status dots and horizontal Kanban columns above phone widths. Stage navigation
@@ -103,10 +86,3 @@ are observation times; worker completion and successful publication are separate
 facts. Finished tasks fold their latest worker report, retaining per-attempt
 phases and exact artifact links. Missing remote files are described once per
 attempt rather than repeated as unusable links.
-
-Snapshot walkthroughs used `wi-cfff835be757068c8a20` (Issue 3404, two successful
-executions, PR 3405 published and merge recorded) and `wi-af5b769747247343e7a0`
-(Issue 3020, 394 executions including 392 failures, PR 3021 published and merge
-recorded). These are historical walkthroughs, not new worker runs. The supplied
-snapshot lacks the referenced artifact files, so original stdout/stderr contents
-remain unavailable locally. Mutating controls stay disabled in snapshot mode.

@@ -40,10 +40,7 @@ def classify_attempt(
     if hard_timeout_seconds is not None:
         timeout_seconds = min(global_timeout_seconds, hard_timeout_seconds)
 
-    if (
-        runtime_seconds >= timeout_seconds
-        or heartbeat_age_seconds >= global_timeout_seconds
-    ):
+    if runtime_seconds >= timeout_seconds or heartbeat_age_seconds >= global_timeout_seconds:
         return {
             "ok": False,
             "status": "failed_timeout",

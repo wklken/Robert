@@ -1,4 +1,5 @@
 """Shared fixtures for review workspace tests."""
+
 import json
 from pathlib import Path
 import subprocess
@@ -13,39 +14,54 @@ class ReviewWorkspaceFixture(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
-        self.upstream = self.root / 'upstream'
-        self.repo = self.root / 'repo'
+        self.upstream = self.root / "upstream"
+        self.repo = self.root / "repo"
         self.upstream.mkdir()
-        self.git(self.upstream, 'init', '-b', 'main')
-        self.git(self.upstream, 'config', 'user.email', 'test@example.invalid')
-        self.git(self.upstream, 'config', 'user.name', 'Test')
-        (self.upstream / 'source.py').write_text('value = 1\n')
-        self.git(self.upstream, 'add', '.')
-        self.git(self.upstream, 'commit', '-m', 'base')
-        self.base = self.git(self.upstream, 'rev-parse', 'HEAD')
-        self.git(self.upstream, 'checkout', '-b', 'feature')
-        self.commit('value = 2\n')
-        self.git(self.root, 'clone', str(self.upstream), str(self.repo))
-        self.git(self.repo, 'remote', 'rename', 'origin', 'upstream')
+        self.git(self.upstream, "init", "-b", "main")
+        self.git(self.upstream, "config", "user.email", "test@example.invalid")
+        self.git(self.upstream, "config", "user.name", "Test")
+        (self.upstream / "source.py").write_text("value = 1\n")
+        self.git(self.upstream, "add", ".")
+        self.git(self.upstream, "commit", "-m", "base")
+        self.base = self.git(self.upstream, "rev-parse", "HEAD")
+        self.git(self.upstream, "checkout", "-b", "feature")
+        self.commit("value = 2\n")
+        self.git(self.root, "clone", str(self.upstream), str(self.repo))
+        self.git(self.repo, "remote", "rename", "origin", "upstream")
 
     def git(self, cwd, *args):
-        return subprocess.run(['git', *args], cwd=cwd, text=True, capture_output=True, check=True).stdout.strip()
+        return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=True).stdout.strip()
 
     def commit(self, contents):
-        (self.upstream / 'source.py').write_text(contents)
-        self.git(self.upstream, 'commit', '-am', 'update')
-        self.head = self.git(self.upstream, 'rev-parse', 'HEAD')
-        self.git(self.upstream, 'update-ref', 'refs/pull/42/head', 'HEAD')
+        (self.upstream / "source.py").write_text(contents)
+        self.git(self.upstream, "commit", "-am", "update")
+        self.head = self.git(self.upstream, "rev-parse", "HEAD")
+        self.git(self.upstream, "update-ref", "refs/pull/42/head", "HEAD")
 
     def prepare(self, round_id):
         return review_workspace.prepare_snapshot(
-            self.repo, self.root / 'worktrees', self.root / 'artifacts', round_id,
-            {'number': 42, 'head': {'sha': self.head, 'ref': 'feature'},
-             'base': {'sha': self.base, 'ref': 'main'}, 'user': {'login': 'author'}},
-            [{'event_fingerprint': round_id}])
+            self.repo,
+            self.root / "worktrees",
+            self.root / "artifacts",
+            round_id,
+            {
+                "number": 42,
+                "head": {"sha": self.head, "ref": "feature"},
+                "base": {"sha": self.base, "ref": "main"},
+                "user": {"login": "author"},
+            },
+            [{"event_fingerprint": round_id}],
+        )
 
     def freeze(self, manifest):
-        context = Path(manifest['context_dir'])
-        (context / 'context-summary.md').write_text('Read source.py and direct callers. No findings.\n')
-        (context / 'source-index.json').write_text(json.dumps({'files': [{'path': 'source.py', 'reason': 'Changed source'}], 'reading_notes': 'Full source read'}))
+        context = Path(manifest["context_dir"])
+        (context / "context-summary.md").write_text("Read source.py and direct callers. No findings.\n")
+        (context / "source-index.json").write_text(
+            json.dumps(
+                {
+                    "files": [{"path": "source.py", "reason": "Changed source"}],
+                    "reading_notes": "Full source read",
+                }
+            )
+        )
         return review_workspace.freeze_context(manifest)

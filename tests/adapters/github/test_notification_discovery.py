@@ -1,5 +1,6 @@
 import subprocess
 import unittest
+
 REPO_CONFIG = {
     "full_name": "example/backend",
     "github_account": "robert-bot",
@@ -18,6 +19,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
     def normalize_and_authorize(self, raw_events, existing_workstreams=None):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(raw_events, REPO_CONFIG)
         return authorize.authorize_events(
             events,
@@ -61,6 +63,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
 
     def test_account_notifications_bucket_by_repository_full_name(self):
         from robert_agent.adapters.github import discovery as discover
+
         repo_a = {
             "full_name": "Org/repo-a",
             "github_account": "robert-bot",
@@ -118,8 +121,11 @@ class NotificationDiscoveryTests(unittest.TestCase):
         self.assertEqual(buckets["Org/repo-b"][0]["repo_full_name"], "Org/repo-b")
         self.assertEqual(buckets["Org/repo-b"][0]["source_type"], "pull_request")
 
-    def test_repo_live_events_accept_preloaded_notification_hints_without_refetching_notifications(self):
+    def test_repo_live_events_accept_preloaded_notification_hints_without_refetching_notifications(
+        self,
+    ):
         from robert_agent.adapters.github import discovery as discover
+
         calls = []
         repo = {
             "full_name": "Org/repo-a",
@@ -200,6 +206,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
 
     def test_repo_live_events_ignores_mismatched_preloaded_notification_hints(self):
         from robert_agent.adapters.github import discovery as discover
+
         calls = []
         repo = {
             "full_name": "Org/repo-a",
@@ -237,6 +244,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
 
     def test_closed_issue_notification_hint_is_ignored(self):
         from robert_agent.adapters.github import discovery as discover
+
         calls = []
 
         def fake_runner(args, **_kwargs):
@@ -282,7 +290,8 @@ class NotificationDiscoveryTests(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertFalse(
             any(
-                call[:3] == [
+                call[:3]
+                == [
                     "gh",
                     "api",
                     "repos/example/backend/issues/2878/comments",
@@ -293,6 +302,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
 
     def test_notification_assignment_reuses_assignment_fingerprint(self):
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(
@@ -369,6 +379,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
 
     def test_notification_for_known_pr_workstream_uses_latest_non_bot_comment(self):
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args or "--mentions" in args:
                 return _Completed(args, "[]")
@@ -460,6 +471,7 @@ class NotificationDiscoveryTests(unittest.TestCase):
     def test_notification_lookup_failure_stays_pending_authorization(self):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args or "--mentions" in args:
                 return _Completed(args, "[]")

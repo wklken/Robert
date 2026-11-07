@@ -1,4 +1,5 @@
 import unittest
+
 REPO_CONFIG = {
     "full_name": "example/backend",
     "github_account": "robert-bot",
@@ -17,6 +18,7 @@ class EventNormalizationTests(unittest.TestCase):
     def normalize_and_authorize(self, raw_events, existing_workstreams=None):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(raw_events, REPO_CONFIG)
         return authorize.authorize_events(
             events,
@@ -26,6 +28,7 @@ class EventNormalizationTests(unittest.TestCase):
 
     def test_normalize_requires_event_id_without_explicit_fingerprint(self):
         from robert_agent.adapters.github import discovery as discover
+
         with self.assertRaisesRegex(ValueError, "event id"):
             discover.normalize_events(
                 [
@@ -42,6 +45,7 @@ class EventNormalizationTests(unittest.TestCase):
 
     def test_normalize_allows_explicit_fingerprint_without_event_id(self):
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(
             [
                 {
@@ -60,6 +64,7 @@ class EventNormalizationTests(unittest.TestCase):
 
     def test_fixture_pr_body_extracts_dd_origin_workstream_without_live_lookup(self):
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(
             [
                 {
@@ -82,6 +87,7 @@ class EventNormalizationTests(unittest.TestCase):
 
     def test_legacy_dd_workstream_metadata_maps_to_origin_workstream_id(self):
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(
             [
                 {
@@ -102,6 +108,7 @@ class EventNormalizationTests(unittest.TestCase):
 
     def test_dd_pr_event_keeps_pr_workstream_and_tracks_origin_issue(self):
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(
             [
                 {

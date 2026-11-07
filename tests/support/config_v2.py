@@ -1,4 +1,5 @@
 """Shared fixtures for config v2 tests."""
+
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,18 +12,37 @@ class ConfigV2Fixture(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        (self.root / 'repo' / '.git').mkdir(parents=True)
-        self.path = self.root / 'config.yml'
+        (self.root / "repo" / ".git").mkdir(parents=True)
+        self.path = self.root / "config.yml"
         self.config = {
-            'version': 2, 'data_dir': str(self.root / 'data'), 'database': 'robert.sqlite3',
-            'github': {'account': 'bot'}, 'default_worker': 'b',
-            'workers': {
-                'a': {'adapter': 'codex', 'command': 'codex', 'model': 'model-a', 'effort': 'high'},
-                'b': {'adapter': 'claude', 'command': 'claude', 'model': 'model-b', 'effort': 'low'},
+            "version": 2,
+            "data_dir": str(self.root / "data"),
+            "database": "robert.sqlite3",
+            "github": {"account": "bot"},
+            "default_worker": "b",
+            "workers": {
+                "a": {
+                    "adapter": "codex",
+                    "command": "codex",
+                    "model": "model-a",
+                    "effort": "high",
+                },
+                "b": {
+                    "adapter": "claude",
+                    "command": "claude",
+                    "model": "model-b",
+                    "effort": "low",
+                },
             },
-            'repos': [{'full_name': 'example/test', 'checkout': str(self.root / 'repo'),
-                       'worktrees': str(self.root / 'trees'), 'default_branch': 'main',
-                       'trusted_actors': ['maintainer']}],
+            "repos": [
+                {
+                    "full_name": "example/test",
+                    "checkout": str(self.root / "repo"),
+                    "worktrees": str(self.root / "trees"),
+                    "default_branch": "main",
+                    "trusted_actors": ["maintainer"],
+                }
+            ],
         }
 
     def validate(self, config=None):

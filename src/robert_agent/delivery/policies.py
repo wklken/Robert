@@ -12,6 +12,7 @@ VALID_REVIEW_ACTIONS = {"implement", "skip", "comment", "clarify"}
 
 IMPLEMENTABLE_VERDICTS = {"correct", "partially_correct"}
 
+
 def validate_operator_question(result):
     question = result.get("operator_question")
     if not isinstance(question, dict):

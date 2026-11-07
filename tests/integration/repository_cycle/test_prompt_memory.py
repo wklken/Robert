@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
 from tests.support.repository_cycle import (
-    RepositoryCycleFixture, _verification_evidence,
+    RepositoryCycleFixture,
+    _verification_evidence,
 )
 
 
@@ -13,6 +14,7 @@ class PromptMemoryTests(RepositoryCycleFixture):
     def test_project_memory_is_recorded_and_recalled_in_followup_prompt(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -23,9 +25,7 @@ class PromptMemoryTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         record = result.record_result(
             db_path,
@@ -71,9 +71,7 @@ class PromptMemoryTests(RepositoryCycleFixture):
         )
         self.assertTrue(audited["ok"], audited)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            memory_count = conn.execute(
-                "SELECT COUNT(*) FROM project_memory_entries"
-            ).fetchone()[0]
+            memory_count = conn.execute("SELECT COUNT(*) FROM project_memory_entries").fetchone()[0]
             result_metadata = json.loads(
                 conn.execute(
                     "SELECT metadata_json FROM worker_results WHERE result_id = ?",
@@ -120,6 +118,7 @@ class PromptMemoryTests(RepositoryCycleFixture):
 
     def test_approved_runtime_knowledge_is_injected_but_pending_candidate_is_not(self):
         from robert_agent.runtime import cycle as run_once
+
         db_path = self.data_dir / "dd.sqlite3"
         first = run_once.run_once(
             self.config_path,

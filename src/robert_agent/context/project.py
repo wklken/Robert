@@ -60,19 +60,13 @@ def _entry_terms(entry, payload, workstream_id, route_result=None):
         "memory_thread_key": [entry["memory_thread_key"]],
         "workstream_id": [workstream_id],
         "kind": [entry["kind"]],
-        "expected_output": [
-            _text(route_result.get("expected_output")) or _text(payload.get("output_type"))
-        ],
+        "expected_output": [_text(route_result.get("expected_output")) or _text(payload.get("output_type"))],
         "route_id": [_text(route_result.get("route_id"))],
         "path": _lower_list(entry.get("paths")),
         "symbol": _lower_list(entry.get("symbols")),
         "keyword": _lower_list(entry.get("keywords")),
     }
-    return {
-        term_type: [term for term in values if term]
-        for term_type, values in terms.items()
-        if any(values)
-    }
+    return {term_type: [term for term in values if term] for term_type, values in terms.items() if any(values)}
 
 
 def _query_terms(route_result, events):
@@ -155,8 +149,7 @@ def _normalize_entry(raw_entry, payload, workstream_id):
         "keywords": _lower_list(raw_entry.get("keywords")),
         "evidence": _json_list(raw_entry.get("evidence")),
         "confidence": confidence,
-        "memory_thread_key": _text(raw_entry.get("memory_thread_key"))
-        or _thread_key(payload, workstream_id),
+        "memory_thread_key": _text(raw_entry.get("memory_thread_key")) or _thread_key(payload, workstream_id),
     }
     return entry, None
 

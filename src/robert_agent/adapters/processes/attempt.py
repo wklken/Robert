@@ -1,4 +1,5 @@
 """Process evidence for attempts; no task state or scheduling authority."""
+
 from pathlib import Path
 import subprocess
 
@@ -41,14 +42,18 @@ def process_state(pid):
 def dispatch_status(metadata):
     dispatch_metadata = (metadata or {}).get("dispatch") or {}
     pid = dispatch_metadata.get("pid")
-    if dispatch_metadata.get('process_exited') and type(pid) is int and pid > 1:
+    if dispatch_metadata.get("process_exited") and type(pid) is int and pid > 1:
         # This is a persisted Popen outcome from the dispatcher, not a Worker
         # claim. A fast child can exit before an identity snapshot is captured.
         try:
-            status = 'unknown' if worker_identity.live_process_group(pid) else 'dead'
-            return {'status': status, 'pid': pid, 'reason': 'recorded_process_exit'}
+            status = "unknown" if worker_identity.live_process_group(pid) else "dead"
+            return {"status": status, "pid": pid, "reason": "recorded_process_exit"}
         except (OSError, subprocess.TimeoutExpired):
-            return {'status': 'unknown', 'pid': pid, 'reason': 'group_inspection_failed'}
+            return {
+                "status": "unknown",
+                "pid": pid,
+                "reason": "group_inspection_failed",
+            }
     try:
         result = worker_identity.inspect_recorded_identity(dispatch_metadata)
     except Exception:
@@ -58,9 +63,17 @@ def dispatch_status(metadata):
     if result == "dead":
         try:
             if worker_identity.live_process_group(pid):
-                return {"status": "unknown", "pid": pid, "reason": "unverified_descendants_running"}
+                return {
+                    "status": "unknown",
+                    "pid": pid,
+                    "reason": "unverified_descendants_running",
+                }
         except (OSError, subprocess.TimeoutExpired):
-            return {"status": "unknown", "pid": pid, "reason": "group_inspection_failed"}
+            return {
+                "status": "unknown",
+                "pid": pid,
+                "reason": "group_inspection_failed",
+            }
     payload = {
         "status": result,
         "pid": pid,
@@ -75,21 +88,24 @@ def dispatch_status(metadata):
 
 def terminate_attempt(metadata):
     dispatch_metadata = (metadata or {}).get("dispatch") or {}
-    if dispatch_metadata.get('cleanup_pending'):
-        pid = dispatch_metadata.get('pid')
+    if dispatch_metadata.get("cleanup_pending"):
+        pid = dispatch_metadata.get("pid")
         if type(pid) is int and pid > 1:
             try:
                 if not worker_identity.live_process_group(pid):
-                    return {'status': 'already_dead', 'pid': pid}
+                    return {"status": "already_dead", "pid": pid}
             except (OSError, subprocess.TimeoutExpired):
                 pass
         # Without a captured identity, later recovery must never signal this PID.
-        return {'status': 'attention', 'reason': 'startup_cleanup_unconfirmed'}
+        return {"status": "attention", "reason": "startup_cleanup_unconfirmed"}
     outcome = worker_identity.terminate_recorded_identity(dispatch_metadata)
     if outcome.get("status") in {"terminated", "already_dead"}:
         try:
             if worker_identity.live_process_group(dispatch_metadata.get("pid")):
-                return {"status": "attention", "reason": "unverified_descendants_running"}
+                return {
+                    "status": "attention",
+                    "reason": "unverified_descendants_running",
+                }
         except (OSError, subprocess.TimeoutExpired):
             return {"status": "attention", "reason": "group_inspection_failed"}
     return outcome

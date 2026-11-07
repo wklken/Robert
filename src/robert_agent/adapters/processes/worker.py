@@ -38,12 +38,11 @@ def reap_finished_process(pid):
 
 def _worker_environment(allowed_names=(), environ=None):
     source = dict(os.environ if environ is None else environ)
-    names = (DEFAULT_WORKER_ENV | set(allowed_names)) - {'_ROBERT_EXECUTOR_ID', '_ROBERT_CONTROL_DEADLINE'}
-    result = {
-        name: source[name]
-        for name in names
-        if name in source
+    names = (DEFAULT_WORKER_ENV | set(allowed_names)) - {
+        "_ROBERT_EXECUTOR_ID",
+        "_ROBERT_CONTROL_DEADLINE",
     }
+    result = {name: source[name] for name in names if name in source}
     result.setdefault(
         "BASH_DEFAULT_TIMEOUT_MS",
         DEFAULT_WORKER_BASH_DEFAULT_TIMEOUT_MS,
@@ -138,6 +137,7 @@ def dispatch_worker(
             "worker_agent": launch.agent,
             "worker_launch": launch.metadata(),
         }
+
     def exited_result(returncode):
         if returncode == 0:
             return {

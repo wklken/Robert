@@ -93,7 +93,16 @@ class SubmissionTests(WorkerProtocolFixture):
             output_type="comment_analysis",
             planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
+            verification=[
+                {
+                    "command": "python -m unittest",
+                    "status": "passed",
+                    "purpose": "regression",
+                    "required": False,
+                    "exit_code": 0,
+                    "source": "worker_reported",
+                }
+            ],
             handoff="done",
             used_skills=["fast-code-path"],
             review_point_evaluation=[self._review_point("correct", "comment")],
@@ -103,9 +112,7 @@ class SubmissionTests(WorkerProtocolFixture):
 
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            metadata = conn.execute(
-                "SELECT metadata_json FROM worker_results"
-            ).fetchone()[0]
+            metadata = conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
         self.assertEqual(
             json.loads(metadata)["used_skills"],
             ["fast-code-path"],
@@ -120,7 +127,9 @@ class SubmissionTests(WorkerProtocolFixture):
 
         db_path = self._init_attempt_db(output_type="update_existing_pr", route_id="update-existing-pr")
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE tasks SET task_kind='ci_remediation', metadata_json=json_object('remediation_episode_id','episode-ci')")
+            conn.execute(
+                "UPDATE tasks SET task_kind='ci_remediation', metadata_json=json_object('remediation_episode_id','episode-ci')"
+            )
             conn.execute("UPDATE github_sources SET source_type='pull_request',source_key='x/y!1'")
             conn.execute("""INSERT INTO pr_remediation_episodes(episode_id,workstream_id,episode_kind,subject_key,
                 observed_head_sha,observed_base_sha,status,failure_signature,first_seen_at,updated_at)
@@ -149,11 +158,7 @@ class SubmissionTests(WorkerProtocolFixture):
 
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn:
-            metadata = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM worker_results"
-                ).fetchone()[0]
-            )
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
         self.assertEqual(metadata["remediation_evidence"], evidence)
 
     def test_result_records_memory_metadata(self):
@@ -182,7 +187,16 @@ class SubmissionTests(WorkerProtocolFixture):
             output_type="comment_analysis",
             planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
+            verification=[
+                {
+                    "command": "python -m unittest",
+                    "status": "passed",
+                    "purpose": "regression",
+                    "required": False,
+                    "exit_code": 0,
+                    "source": "worker_reported",
+                }
+            ],
             handoff="done",
             used_skills=["fast-code-path"],
             memory_delta=memory_delta,
@@ -193,9 +207,7 @@ class SubmissionTests(WorkerProtocolFixture):
 
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
         self.assertEqual(metadata["memory_delta"], memory_delta)
         self.assertEqual(metadata["used_memory_ids"], ["pmem-existing"])
 
@@ -218,9 +230,7 @@ class SubmissionTests(WorkerProtocolFixture):
 
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
         self.assertEqual(
             metadata["memory_delta"],
             {
@@ -246,7 +256,16 @@ class SubmissionTests(WorkerProtocolFixture):
                 }
             ],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
+            verification=[
+                {
+                    "command": "python -m unittest",
+                    "status": "passed",
+                    "purpose": "regression",
+                    "required": False,
+                    "exit_code": 0,
+                    "source": "worker_reported",
+                }
+            ],
             handoff="ready to comment",
             used_skills=["fast-code-path"],
         )
@@ -261,7 +280,16 @@ class SubmissionTests(WorkerProtocolFixture):
                 FROM github_actions
                 """
             ).fetchone()
-        self.assertEqual(action[:5], ("comment", "https://github.com/x/y/issues/1", None, "pending", "not_published"))
+        self.assertEqual(
+            action[:5],
+            (
+                "comment",
+                "https://github.com/x/y/issues/1",
+                None,
+                "pending",
+                "not_published",
+            ),
+        )
         self.assertTrue(json.loads(action[5])["body"].startswith("Looks good\n\n<!-- robert-comment"))
 
     def test_result_rejects_missing_used_skills(self):
@@ -272,16 +300,18 @@ class SubmissionTests(WorkerProtocolFixture):
             "task_id": "task-1",
             "attempt_id": "attempt-1",
             "output_type": "comment_analysis",
-            "planned_github_actions": [
-                {"type": "comment", "body": "Completed analysis."}
-            ],
+            "planned_github_actions": [{"type": "comment", "body": "Completed analysis."}],
             "consumed_event_fingerprints": ["comment:1"],
             "verification": [],
             "handoff": "missing skill evidence",
         }
 
-        payload = {"task_id": payload.pop("task_id"), "attempt_id": payload.pop("attempt_id"),
-                   "output_type": payload.pop("output_type"), "submission": payload}
+        payload = {
+            "task_id": payload.pop("task_id"),
+            "attempt_id": payload.pop("attempt_id"),
+            "output_type": payload.pop("output_type"),
+            "submission": payload,
+        }
         record = result.record_result(db_path, payload)
 
         self.assertFalse(record["ok"], record)
@@ -301,9 +331,7 @@ class SubmissionTests(WorkerProtocolFixture):
             "task_id": "task-1",
             "attempt_id": "attempt-1",
             "output_type": "comment_analysis",
-            "actual_github_actions": [
-                {"type": "comment", "body": "Completed analysis."}
-            ],
+            "actual_github_actions": [{"type": "comment", "body": "Completed analysis."}],
             "consumed_event_fingerprints": ["comment:1"],
             "used_skills": ["fast-code-path"],
             "verification": [],
@@ -326,17 +354,13 @@ class SubmissionTests(WorkerProtocolFixture):
 
         db_path = self._init_attempt_db()
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE attempts SET status = 'stale' WHERE attempt_id = 'attempt-1'"
-            )
+            conn.execute("UPDATE attempts SET status = 'stale' WHERE attempt_id = 'attempt-1'")
 
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[
-                {"type": "comment", "body": "Completed analysis."}
-            ],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="recovered and completed",
@@ -346,9 +370,7 @@ class SubmissionTests(WorkerProtocolFixture):
 
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            attempt_status = conn.execute(
-                "SELECT status FROM attempts WHERE attempt_id = 'attempt-1'"
-            ).fetchone()[0]
+            attempt_status = conn.execute("SELECT status FROM attempts WHERE attempt_id = 'attempt-1'").fetchone()[0]
             result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
             action_count = conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0]
         self.assertEqual(attempt_status, "completed")
@@ -363,9 +385,7 @@ class SubmissionTests(WorkerProtocolFixture):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="update_existing_pr",
-            planned_github_actions=[
-                {"action": "push_existing_pr", "url": "https://github.com/x/y/pull/1"}
-            ],
+            planned_github_actions=[{"action": "push_existing_pr", "url": "https://github.com/x/y/pull/1"}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="updated existing pr",
@@ -391,9 +411,7 @@ class SubmissionTests(WorkerProtocolFixture):
                 "UPDATE attempts SET status = 'failed', finished_at = ? WHERE attempt_id = 'attempt-1'",
                 (datetime.now(timezone.utc).isoformat(),),
             )
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = 'task-1'"
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = 'task-1'")
             conn.execute(
                 "UPDATE workstreams SET lifecycle = 'failed', active_task_id = NULL WHERE workstream_id = 'ws-1'"
             )
@@ -402,9 +420,7 @@ class SubmissionTests(WorkerProtocolFixture):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[
-                {"type": "comment", "body": "Completed analysis."}
-            ],
+            planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="late result",
@@ -415,9 +431,7 @@ class SubmissionTests(WorkerProtocolFixture):
         self.assertFalse(record["ok"], record)
         self.assertEqual(record["status"], "rejected_by_supervisor")
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            attempt_status = conn.execute(
-                "SELECT status FROM attempts WHERE attempt_id = 'attempt-1'"
-            ).fetchone()[0]
+            attempt_status = conn.execute("SELECT status FROM attempts WHERE attempt_id = 'attempt-1'").fetchone()[0]
             result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
             action_count = conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0]
         self.assertEqual(attempt_status, "failed")

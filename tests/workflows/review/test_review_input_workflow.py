@@ -15,11 +15,23 @@ from tests.support.review_input_workflow import ReviewInputIntegrationFixture
 class ReviewInputWorkflowTests(unittest.TestCase):
     def payload(self, kind=None):
         payload = internal_result(
-            "task-1", "attempt-1", "update_existing_pr", ["comment:1"], [], "Handled request",
+            "task-1",
+            "attempt-1",
+            "update_existing_pr",
+            ["comment:1"],
+            [],
+            "Handled request",
             planned_github_actions=[
-                {"type": "push_existing_pr", "worktree_path": "/worktree", "branch": "codex/fix"},
-                {"type": "comment", "target_url": "https://github.com/x/y/pull/1",
-                 "body": "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\nUpdated."},
+                {
+                    "type": "push_existing_pr",
+                    "worktree_path": "/worktree",
+                    "branch": "codex/fix",
+                },
+                {
+                    "type": "comment",
+                    "target_url": "https://github.com/x/y/pull/1",
+                    "body": "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\nUpdated.",
+                },
             ],
         )
         if kind is not None:
@@ -30,16 +42,29 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         return audit_result.audit_result(payload, ["push_existing_pr", "comment"], **kwargs)
 
     def test_trigger_type_selects_policy_without_reading_body_keywords(self):
-        for event_type, policy in (("review", "required"), ("review_comment", "required"),
-                                   ("comment", "classify"), ("manual_operator_request", "classify"),
-                                   ("unknown", "required")):
+        for event_type, policy in (
+            ("review", "required"),
+            ("review_comment", "required"),
+            ("comment", "classify"),
+            ("manual_operator_request", "classify"),
+            ("unknown", "required"),
+        ):
             with self.subTest(event_type=event_type):
-                self.assertEqual(route.review_input_policy("update_existing_pr", {"event_type": event_type}), policy)
+                self.assertEqual(
+                    route.review_input_policy("update_existing_pr", {"event_type": event_type}),
+                    policy,
+                )
         self.assertEqual(route.review_input_policy("new_pr", {"event_type": "review"}), "none")
-        self.assertEqual(route.review_input_policy("update_existing_pr", {"task_kind": "ci_remediation"}), "none")
+        self.assertEqual(
+            route.review_input_policy("update_existing_pr", {"task_kind": "ci_remediation"}),
+            "none",
+        )
 
     def test_ordinary_request_can_push_without_inventing_review_points(self):
-        self.assertEqual(self.audit(self.payload("request"), review_input_policy="classify")["status"], "accepted")
+        self.assertEqual(
+            self.audit(self.payload("request"), review_input_policy="classify")["status"],
+            "accepted",
+        )
 
     def test_native_review_cannot_opt_out_and_legacy_remains_strict(self):
         payload = self.payload("request")
@@ -56,24 +81,56 @@ class ReviewInputWorkflowTests(unittest.TestCase):
     def test_missing_classification_and_invalid_values_do_not_bypass(self):
         for kind in (None, "", "direct", False):
             with self.subTest(kind=kind):
-                self.assertEqual(self.audit(self.payload(kind), review_input_policy="classify")["status"], "policy_violation")
+                self.assertEqual(
+                    self.audit(self.payload(kind), review_input_policy="classify")["status"],
+                    "policy_violation",
+                )
 
     def test_request_label_does_not_hide_rejected_review_points(self):
         payload = self.payload("request")
-        payload["review_point_evaluation"] = [{"summary": "claim", "verdict": "incorrect", "reasoning": "counterevidence", "action": "skip"}]
-        self.assertIn("no_implemented_review_points", self.audit(payload, review_input_policy="classify")["violations"])
+        payload["review_point_evaluation"] = [
+            {
+                "summary": "claim",
+                "verdict": "incorrect",
+                "reasoning": "counterevidence",
+                "action": "skip",
+            }
+        ]
+        self.assertIn(
+            "no_implemented_review_points",
+            self.audit(payload, review_input_policy="classify")["violations"],
+        )
 
     def test_mixed_request_requires_evaluation_but_can_fix_separate_request(self):
         payload = self.payload("mixed")
-        self.assertIn("missing_review_point_evaluation", self.audit(payload, review_input_policy="classify")["violations"])
-        payload["review_point_evaluation"] = [{"summary": "claim", "verdict": "incorrect", "reasoning": "counterevidence", "action": "skip"}]
+        self.assertIn(
+            "missing_review_point_evaluation",
+            self.audit(payload, review_input_policy="classify")["violations"],
+        )
+        payload["review_point_evaluation"] = [
+            {
+                "summary": "claim",
+                "verdict": "incorrect",
+                "reasoning": "counterevidence",
+                "action": "skip",
+            }
+        ]
         self.assertEqual(self.audit(payload, review_input_policy="classify")["status"], "accepted")
-        self.assertIn("no_implemented_review_points", self.audit(payload, review_input_policy="required")["violations"])
+        self.assertIn(
+            "no_implemented_review_points",
+            self.audit(payload, review_input_policy="required")["violations"],
+        )
 
     def test_conditional_prompt_has_explicit_branch_and_result_classification(self):
         prompt = render_prompt.render_prompt(
-            {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y!1", "review_input_policy": "classify"},
-            route.ROUTES["update-existing-pr"], [{"event_type": "comment", "body": "Add a null check"}],
+            {
+                "task_id": "task-1",
+                "attempt_id": "attempt-1",
+                "workstream_id": "github:x/y!1",
+                "review_input_policy": "classify",
+            },
+            route.ROUTES["update-existing-pr"],
+            [{"event_type": "comment", "body": "Add a null check"}],
         )
         self.assertIn("review_input_kind", prompt)
         self.assertIn("request", prompt)
@@ -83,14 +140,22 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         self.assertIn("The policy below applies only when evaluating review feedback", prompt)
 
     def test_write_routes_require_local_commits_before_result_submission(self):
-        for route_id in ('new-pr', 'update-existing-pr'):
+        for route_id in ("new-pr", "update-existing-pr"):
             with self.subTest(route_id=route_id):
                 prompt = render_prompt.render_prompt(
-                    {'task_id': 'task-1', 'attempt_id': 'attempt-1', 'workstream_id': 'github:x/y!1'},
-                    route.ROUTES[route_id], [{'event_type': 'comment', 'body': 'Update documentation'}],
+                    {
+                        "task_id": "task-1",
+                        "attempt_id": "attempt-1",
+                        "workstream_id": "github:x/y!1",
+                    },
+                    route.ROUTES[route_id],
+                    [{"event_type": "comment", "body": "Update documentation"}],
                 )
-                self.assertIn('Commit all task-owned changes locally before submitting', prompt)
-                self.assertIn('Robert publishes commits; it does not stage or commit working-tree changes', prompt)
+                self.assertIn("Commit all task-owned changes locally before submitting", prompt)
+                self.assertIn(
+                    "Robert publishes commits; it does not stage or commit working-tree changes",
+                    prompt,
+                )
 
 
 class ReviewInputIntegrationTests(ReviewInputIntegrationFixture):
@@ -100,15 +165,32 @@ class ReviewInputIntegrationTests(ReviewInputIntegrationFixture):
         db_path, task_id, attempt_id, metadata, prompt = self.prepare("comment")
         self.assertEqual(metadata["review_input_policy"], "classify")
         self.assertIn('review_input_kind="request"', prompt)
-        payload = result.build_result(task_id, attempt_id, "update_existing_pr", ["comment:request-1"], [], "No change needed",
-            planned_github_actions=[{"type": "comment", "target_url": "https://github.com/example/backend/pull/456",
-                                     "body": "The requested check already exists."}],
-            review_input_kind="request")
+        payload = result.build_result(
+            task_id,
+            attempt_id,
+            "update_existing_pr",
+            ["comment:request-1"],
+            [],
+            "No change needed",
+            planned_github_actions=[
+                {
+                    "type": "comment",
+                    "target_url": "https://github.com/example/backend/pull/456",
+                    "body": "The requested check already exists.",
+                }
+            ],
+            review_input_kind="request",
+        )
         record = result.record_result(db_path, payload)
         self.assertTrue(record["ok"], record)
         run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(db_path)) as conn:
-            saved = json.loads(conn.execute("SELECT metadata_json FROM worker_results WHERE result_id=?", (record["result_id"],)).fetchone()[0])
+            saved = json.loads(
+                conn.execute(
+                    "SELECT metadata_json FROM worker_results WHERE result_id=?",
+                    (record["result_id"],),
+                ).fetchone()[0]
+            )
         self.assertEqual(saved["review_input_kind"], "request")
         self.assertEqual(saved["audit"]["status"], "accepted")
 

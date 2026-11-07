@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 from contextlib import closing
 
 
@@ -28,9 +27,7 @@ class DurableResultTests(DurableResultFixture):
         duplicate = result.record_result(self.db, self.payload)
         self.assertTrue(duplicate["ok"])
         with closing(sqlite3.connect(self.db)) as c:
-            self.assertEqual(
-                c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1
-            )
+            self.assertEqual(c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1)
             self.assertEqual(c.execute("SELECT count(*) FROM wakeups").fetchone()[0], 1)
 
     def test_canceled_attempt_cannot_be_revived_by_result_replay(self):
@@ -48,6 +45,4 @@ class DurableResultTests(DurableResultFixture):
         replay = result.replay_pending_results(self.db)
         self.assertEqual(replay["rejected"], 1)
         with closing(sqlite3.connect(self.db)) as c:
-            self.assertEqual(
-                c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0
-            )
+            self.assertEqual(c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0)

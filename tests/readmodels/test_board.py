@@ -178,10 +178,14 @@ class BoardReadModelTests(BoardReadModelFixture):
             )
 
         detail = board.get_work_item_detail(self.db_path, item["work_item_id"])
-        self.assertEqual(detail["source"], {
-            "type": "issue", "number": 11,
-            "url": "https://github.com/example/repo/issues/11",
-        })
+        self.assertEqual(
+            detail["source"],
+            {
+                "type": "issue",
+                "number": 11,
+                "url": "https://github.com/example/repo/issues/11",
+            },
+        )
         self.assertEqual(detail["pr"]["number"], 12)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'issue-origin'")
@@ -192,9 +196,7 @@ class BoardReadModelTests(BoardReadModelFixture):
 
         items = self._seed_six_columns()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'pr-review'"
-            )
+            conn.execute("UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'pr-review'")
 
         detail = board.get_work_item_detail(
             self.db_path,
@@ -229,7 +231,13 @@ class BoardReadModelTests(BoardReadModelFixture):
         self.assertFalse(first_ids & second_ids)
         self.assertTrue(all(item["priority"] == "P1" for item in first["items"]))
         self.assertIn("edit", detail["valid_commands"])
-        for forbidden in ("metadata_json", "payload_json", "failure_json", "error_json", "csrf_token"):
+        for forbidden in (
+            "metadata_json",
+            "payload_json",
+            "failure_json",
+            "error_json",
+            "csrf_token",
+        ):
             self.assertNotIn(forbidden, serialized)
         with self.assertRaises(board.BoardQueryError):
             board.list_board(self.db_path, cursor="not-a-cursor")

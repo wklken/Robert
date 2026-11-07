@@ -24,10 +24,7 @@ def authorize_event(event, repo_config, existing_workstreams=None, known_workstr
     actor = event.get("actor_login")
     event_type = event.get("event_type")
 
-    if (
-        event.get("actor_kind") == "github_system"
-        or event.get("authorization_status") == "authorized_system_trigger"
-    ):
+    if event.get("actor_kind") == "github_system" or event.get("authorization_status") == "authorized_system_trigger":
         return _decision(
             event,
             "ignored_untrusted_system_event",

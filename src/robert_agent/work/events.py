@@ -80,11 +80,7 @@ def _identity(fact):
         raise ValueError("workflow fact must be a mapping")
     fact_id = fact.get("fact_id") or fact.get("event_fingerprint")
     _required_id(fact_id, "fact_id")
-    if (
-        fact.get("fact_id")
-        and fact.get("event_fingerprint")
-        and fact["fact_id"] != fact["event_fingerprint"]
-    ):
+    if fact.get("fact_id") and fact.get("event_fingerprint") and fact["fact_id"] != fact["event_fingerprint"]:
         raise ValueError("workflow fact_id conflicts with event_fingerprint")
     subject_type = _required_id(fact.get("subject_type"), "subject_type")
     subject_id = _required_id(fact.get("subject_id"), "subject_id")
@@ -191,9 +187,7 @@ def _validate_claimed_invalidation(fact):
         ("old_base_ref", "new_base_ref", (), ()),
     )
     for old_key, new_key, old_aliases, new_aliases in pairs:
-        _old, _new, pair_changed = _changed_pair(
-            fact, old_key, new_key, old_aliases, new_aliases
-        )
+        _old, _new, pair_changed = _changed_pair(fact, old_key, new_key, old_aliases, new_aliases)
         changed = changed or pair_changed
 
     branch_exists = _snapshot_value(fact, "source_branch_exists", "branch_exists")
@@ -203,9 +197,7 @@ def _validate_claimed_invalidation(fact):
         changed = changed or branch_exists is False
 
     _old_permission, new_permission, permission_changed = _permission_change(fact)
-    changed = changed or (
-        permission_changed and new_permission in _REVOKED_PERMISSIONS
-    )
+    changed = changed or (permission_changed and new_permission in _REVOKED_PERMISSIONS)
     if reason in _INVALIDATING_REASONS and not changed:
         raise ValueError("workflow invalidation claim lacks proven evidence")
     return changed
@@ -225,10 +217,11 @@ def classify_subject_fact(fact):
     source_state = _state(fact)
     new_source_state = fact.get("new_source_state")
     merged = fact.get("merged") is True or bool(fact.get("merged_at"))
-    if source_state in _TERMINAL_STATES or (
-        isinstance(new_source_state, str)
-        and new_source_state.strip().lower() in _TERMINAL_STATES
-    ) or merged:
+    if (
+        source_state in _TERMINAL_STATES
+        or (isinstance(new_source_state, str) and new_source_state.strip().lower() in _TERMINAL_STATES)
+        or merged
+    ):
         return TERMINAL
 
     claimed_invalidation = _has_invalidation_claim(fact)
@@ -280,9 +273,7 @@ def normalize_fact_evidence(fact, classification=None):
     }
     reason = _reason(fact)
     if classification == TERMINAL and not reason:
-        reason = "source_merged" if (
-            fact.get("merged") is True or fact.get("merged_at")
-        ) else "source_closed"
+        reason = "source_merged" if (fact.get("merged") is True or fact.get("merged_at")) else "source_closed"
     if classification == INVALIDATING and not reason:
         for old_key, new_key, derived in (
             ("old_head_sha", "new_head_sha", "head_changed"),

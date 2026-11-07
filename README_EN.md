@@ -4,7 +4,7 @@
   <img src="docs/imgs/robert-logo.svg" alt="Robert logo: a robot, terminal prompt, and completion check" width="432">
 </p>
 
-[English](README_EN.md) | [简体中文](README.md)
+[English](README_EN.md) | [简体中文](README.md) | [Documentation](docs/README.md)
 
 **Your Repo Teammate**
 
@@ -41,6 +41,10 @@ Robert provides those controls without requiring a GitHub App or hosted service.
 - **Execution supervision and recovery:** retain phases, heartbeats, logs, and
   attempt history; supervise startup, timeouts, and process cleanup; optionally
   select a fallback model after consecutive timeouts.
+- **Multi-model review and voting:** opt-in author-gated PR review and explicit
+  trusted voting requests use frozen inputs, separate rounds and shared model capacity.
+- **Independent task supervision:** observe stalls and delivery evidence; enable
+  diagnosis, known recovery and engineering repairs through explicit policy.
 - **Opt-in PR self-healing:** repair allowlisted CI failures and merge exact base
   snapshots into conflicting PRs within configured attempt and budget limits.
   Publication rechecks the PR head/base before an ordinary non-force push.
@@ -90,7 +94,7 @@ gates. The web UI binds to `127.0.0.1` by default.
 ## Requirements
 
 - Linux or macOS. Windows is supported through WSL.
-- Python 3.10 or newer.
+- An upstream-maintained stable Python release, currently 3.11–3.15.
 - Git and GitHub CLI (`gh`) with an authenticated session.
 - At least one local worker command such as Codex.
 - `pipx` is recommended for installation.
@@ -130,8 +134,7 @@ Robert accepts only `version: 2` YAML at `~/.config/robert/config.yml`.
 Named workers and an explicit default_worker define execution; routes select
 workers and ordinary model/effort overrides. GitHub scanning, scheduling,
 supervision and maintenance have separate sections. SQLite is the only engine.
-Follow the [configuration upgrade guide](docs/config-v2-upgrade.md); old formats
-and aliases are rejected. See the [reference](docs/reference.md#configuration)
+See the [reference](docs/reference.md#configuration)
 for defaults and [guides](docs/guides.md) for setup.
 Workers may define `fallback_model`. After two consecutive `failed_timeout`
 attempts in the same workstream, the third run uses that model without changing
@@ -141,8 +144,8 @@ the reasoning effort. The default hard timeout is 45 minutes.
 
 Built-in adapters support `codex`, `tcodex`, `claude`, `tclaude`, `opencode`,
 `cbc`, and a generic `command` adapter. A worker definition chooses its
-adapter, executable, default and fallback models, effort, timeout, prompt transport, and
-environment-variable allowlist.
+adapter, executable, default and fallback models, effort, timeout, and
+environment-variable allowlist. Prompts use standard input.
 
 ## Route Skills
 
@@ -169,12 +172,15 @@ supervisorctl -c ~/.config/robert/supervisord.conf status
 Both processes must report `RUNNING` and use the same Robert configuration.
 The web process displays state and submits requests; the daemon schedules work.
 For foreground debugging, use `robert daemon run` and `robert web run`.
-`robert service install` automatically selects systemd, launchd, or the Linux
-Supervisor fallback; see the guide for backend differences.
+`robert service install` installs daemon and independent task supervision by
+default, using systemd, launchd, or the Linux Supervisor fallback. Only the
+Supervisor backend includes Web; see the guide for backend differences.
 
 ## Local Web UI
 
 ![Robert Web UI task board](docs/imgs/webui-task-board.png)
+
+Read-only board from the current code, showing isolated demonstration data.
 
 ```bash
 robert web run
@@ -192,8 +198,6 @@ execution history, cancellation, and recovery controls.
 
 ## OpenClaw
 
-![Robert status in OpenClaw](docs/imgs/openclaw-robert-status.png)
-
 ```bash
 robert openclaw install
 robert openclaw status
@@ -201,11 +205,6 @@ robert openclaw status
 
 The optional plugin exposes read-only Robert status, task, run, and artifact
 commands. It never schedules or starts Robert.
-
-## Migration
-
-Convert configuration manually using the [v2 upgrade guide](docs/config-v2-upgrade.md).
-There is no legacy configuration import command.
 
 ## Troubleshooting
 

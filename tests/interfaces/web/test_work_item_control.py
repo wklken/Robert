@@ -59,7 +59,8 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(
                 conn.execute(
-                    "SELECT status FROM wakeups WHERE task_id = ?", (payload["task_id"],)
+                    "SELECT status FROM wakeups WHERE task_id = ?",
+                    (payload["task_id"],),
                 ).fetchone()[0],
                 "pending",
             )
@@ -182,9 +183,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
             writes_enabled=False,
             write_error="Start with --config to enable writes.",
         )
-        status, _headers, _body = web.build_http_response(
-            "/api/board?column=unknown", db_path, control_context=context
-        )
+        status, _headers, _body = web.build_http_response("/api/board?column=unknown", db_path, control_context=context)
         self.assertEqual(status, 422)
         write_status, _headers, _body = web.handle_dashboard_post(
             "/api/work-items",
@@ -220,11 +219,15 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         from robert_agent.interfaces.web import server as web
 
         context = web.build_control_context_from_config(
-            self._write_acceptance_config(), host="0.0.0.0", port=8765,
-            operator_identity="local-owner", public_origin="https://robert.example.com",
+            self._write_acceptance_config(),
+            host="0.0.0.0",
+            port=8765,
+            operator_identity="local-owner",
+            public_origin="https://robert.example.com",
         )
         server = web.ThreadingHTTPServer(
-            ("127.0.0.1", 0), web.make_handler(context.db_path, context),
+            ("127.0.0.1", 0),
+            web.make_handler(context.db_path, context),
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -237,21 +240,40 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         session = json.loads(response.read())
         self.assertEqual(response.status, 200)
         headers = {
-            "Host": "robert.example.com", "Origin": "https://robert.example.com",
-            "Content-Type": "application/json", "X-Robert-CSRF-Token": session["csrf_token"],
+            "Host": "robert.example.com",
+            "Origin": "https://robert.example.com",
+            "Content-Type": "application/json",
+            "X-Robert-CSRF-Token": session["csrf_token"],
             "X-Idempotency-Key": "proxy-create",
         }
-        connection.request("POST", "/api/work-items", json.dumps({
-            "repo_id": "repo:x/y", "title": "Proxy control", "mode": "backlog",
-        }), headers)
+        connection.request(
+            "POST",
+            "/api/work-items",
+            json.dumps(
+                {
+                    "repo_id": "repo:x/y",
+                    "title": "Proxy control",
+                    "mode": "backlog",
+                }
+            ),
+            headers,
+        )
         response = connection.getresponse()
         detail = json.loads(response.read())
         self.assertEqual(response.status, 201, detail)
         path = f"/api/work-items/{detail['work_item_id']}/commands"
         headers["X-Idempotency-Key"] = "proxy-cancel"
-        connection.request("POST", path, json.dumps({
-            "command": "cancel", "expected_version": detail["version"],
-        }), headers)
+        connection.request(
+            "POST",
+            path,
+            json.dumps(
+                {
+                    "command": "cancel",
+                    "expected_version": detail["version"],
+                }
+            ),
+            headers,
+        )
         response = connection.getresponse()
         canceled = json.loads(response.read())
         self.assertEqual(response.status, 200, canceled)
@@ -260,6 +282,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
 
     def test_web_config_mode_initializes_control_context_and_repos(self):
         from robert_agent.interfaces.web import server as web
+
         config_path = self._write_acceptance_config()
         context = web.build_control_context_from_config(
             config_path,
@@ -275,9 +298,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         self.assertEqual(context.allowed_workers, frozenset({"default"}))
         self.assertEqual(context.allowed_origins, frozenset({"http://127.0.0.1:9876"}))
         with closing(sqlite3.connect(context.db_path)) as conn:
-            repo = conn.execute(
-                "SELECT repo_id, full_name FROM repos WHERE repo_id = 'repo:x/y'"
-            ).fetchone()
+            repo = conn.execute("SELECT repo_id, full_name FROM repos WHERE repo_id = 'repo:x/y'").fetchone()
         self.assertEqual(repo, ("repo:x/y", "x/y"))
 
     def test_web_http_handler_passes_control_context_and_limits_body(self):

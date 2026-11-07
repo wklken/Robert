@@ -51,9 +51,7 @@ def _digest(value):
 
 def _connect(path, write=False):
     path = Path(path).expanduser().resolve(strict=True)
-    conn = sqlite3.connect(
-        path.as_uri() + ("?mode=rw" if write else "?mode=ro"), uri=True, timeout=0.1
-    )
+    conn = sqlite3.connect(path.as_uri() + ("?mode=rw" if write else "?mode=ro"), uri=True, timeout=0.1)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     if not write:
@@ -62,23 +60,17 @@ def _connect(path, write=False):
 
 
 def _rows(conn, table):
-    exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-    ).fetchone()
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
     if not exists:
         return []
-    return sorted(
-        (dict(row) for row in conn.execute("SELECT * FROM " + table)), key=_json
-    )
+    return sorted((dict(row) for row in conn.execute("SELECT * FROM " + table)), key=_json)
 
 
 def _inventory(conn, path):
     snapshot = {name: _rows(conn, name) for name in _TABLES}
     spool = []
     for file in sorted(path.parent.joinpath(path.name + ".results").glob("*.json")):
-        spool.append(
-            {"name": file.name, "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
-        )
+        spool.append({"name": file.name, "sha256": hashlib.sha256(file.read_bytes()).hexdigest()})
     fingerprint = _digest({"tables": snapshot, "spool": spool})
     blockers = []
     subjects = []
@@ -87,8 +79,7 @@ def _inventory(conn, path):
     bindings = {
         b["workflow_id"]: b
         for b in snapshot["workflow_bindings"]
-        if b["owner_engine"] == "dbos"
-        and (b["subject_type"], b["subject_id"]) not in covered_subjects
+        if b["owner_engine"] == "dbos" and (b["subject_type"], b["subject_id"]) not in covered_subjects
     }
     for b in bindings.values():
         item = {
@@ -105,41 +96,26 @@ def _inventory(conn, path):
         if b["definition_version"] != "v2" and b["binding_status"] != "terminal":
             blockers.append({"subject_id": b["subject_id"], "reason": "unsupported_v1"})
         if any(
-            row["subject_type"] == b["subject_type"]
-            and row["subject_id"] == b["subject_id"]
+            row["subject_type"] == b["subject_type"] and row["subject_id"] == b["subject_id"]
             for row in snapshot["execution_subjects"]
         ):
-            blockers.append(
-                {"subject_id": b["subject_id"], "reason": "execution_control_conflict"}
-            )
+            blockers.append({"subject_id": b["subject_id"], "reason": "execution_control_conflict"})
         metadata = json.loads(b["metadata_json"])
         if metadata.get("dispatch_inflight"):
-            blockers.append(
-                {"subject_id": b["subject_id"], "reason": "dispatch_outcome_unknown"}
-            )
+            blockers.append({"subject_id": b["subject_id"], "reason": "dispatch_outcome_unknown"})
     for binding in bindings.values():
         if binding["subject_type"] == "task":
             domain = next(
                 (t for t in snapshot["tasks"] if t["task_id"] == binding["subject_id"]),
                 None,
             )
-            terminal = (
-                domain
-                and domain["lifecycle"] in execution_store._TERMINAL_TASK_LIFECYCLES
-            )
+            terminal = domain and domain["lifecycle"] in execution_store._TERMINAL_TASK_LIFECYCLES
         else:
             domain = next(
-                (
-                    e
-                    for e in snapshot["pr_remediation_episodes"]
-                    if e["episode_id"] == binding["subject_id"]
-                ),
+                (e for e in snapshot["pr_remediation_episodes"] if e["episode_id"] == binding["subject_id"]),
                 None,
             )
-            terminal = (
-                domain
-                and domain["status"] in execution_store._TERMINAL_EPISODE_STATUSES
-            )
+            terminal = domain and domain["status"] in execution_store._TERMINAL_EPISODE_STATUSES
         if not domain:
             blockers.append(
                 {
@@ -166,9 +142,7 @@ def _inventory(conn, path):
                     }
                 )
         if attempt["status"] in {"running", "stale"}:
-            blockers.append(
-                {"attempt_id": attempt["attempt_id"], "reason": "worker_must_drain"}
-            )
+            blockers.append({"attempt_id": attempt["attempt_id"], "reason": "worker_must_drain"})
     for intent in snapshot["publication_intents"]:
         if intent["status"] == "executing":
             blockers.append(
@@ -177,26 +151,20 @@ def _inventory(conn, path):
                     "reason": "publication_outcome_unknown",
                 }
             )
-    for run in snapshot['agent_runs']:
-        if run['status']=='running':
-            blockers.append({'run_id':run['run_id'],'reason':'agent_run_must_stop'})
+    for run in snapshot["agent_runs"]:
+        if run["status"] == "running":
+            blockers.append({"run_id": run["run_id"], "reason": "agent_run_must_stop"})
     # An expired lease is not evidence that its old process has stopped.
     for lease in snapshot["leases"]:
         if lease["status"] == "active":
-            blockers.append(
-                {"lease_id": lease["lease_id"], "reason": "active_execution_lease"}
-            )
+            blockers.append({"lease_id": lease["lease_id"], "reason": "active_execution_lease"})
     for daemon in snapshot["daemon_runs"]:
         if daemon["status"] == "running":
-            blockers.append(
-                {"daemon_run_id": daemon["daemon_run_id"], "reason": "daemon_must_stop"}
-            )
+            blockers.append({"daemon_run_id": daemon["daemon_run_id"], "reason": "daemon_must_stop"})
     for file in sorted(path.parent.joinpath(path.name + ".results").glob("*.json")):
         try:
             if json.loads(file.read_text()).get("status") == "pending":
-                blockers.append(
-                    {"reason": "result_spool_must_drain", "file": file.name}
-                )
+                blockers.append({"reason": "result_spool_must_drain", "file": file.name})
         except (ValueError, TypeError, AttributeError):
             blockers.append({"reason": "invalid_result_spool", "file": file.name})
     receipts = {r["signal_id"]: r for r in snapshot["workflow_signal_receipts"]}
@@ -214,9 +182,7 @@ def _inventory(conn, path):
                 signal["workflow_id"],
                 signal["topic"],
             ):
-                blockers.append(
-                    {"signal_id": signal["signal_id"], "reason": "conflicting_receipt"}
-                )
+                blockers.append({"signal_id": signal["signal_id"], "reason": "conflicting_receipt"})
             else:
                 mappings.append(
                     {
@@ -227,9 +193,7 @@ def _inventory(conn, path):
             continue
         binding = bindings.get(signal["workflow_id"])
         if not binding:
-            blockers.append(
-                {"signal_id": signal["signal_id"], "reason": "signal_binding_missing"}
-            )
+            blockers.append({"signal_id": signal["signal_id"], "reason": "signal_binding_missing"})
             continue
         try:
             payload = json.loads(signal["payload_json"])
@@ -247,9 +211,7 @@ def _inventory(conn, path):
             valid = False
             fact = None
         if not valid:
-            blockers.append(
-                {"signal_id": signal["signal_id"], "reason": "invalid_signal"}
-            )
+            blockers.append({"signal_id": signal["signal_id"], "reason": "invalid_signal"})
             continue
         common = {
             "signal_id": signal["signal_id"],
@@ -279,8 +241,7 @@ def _inventory(conn, path):
         elif (
             fact in events
             and stream
-            and json.loads(events[fact]["payload_json"]).get("workstream_id")
-            == stream["workstream_id"]
+            and json.loads(events[fact]["payload_json"]).get("workstream_id") == stream["workstream_id"]
         ):
             # Existing event ingestion remains responsible for trust, snapshot and
             # remediation budgets. A wakeup cannot authorize an action itself.
@@ -296,9 +257,7 @@ def _inventory(conn, path):
                 }
             )
         else:
-            blockers.append(
-                {"signal_id": signal["signal_id"], "reason": "unresolved_signal"}
-            )
+            blockers.append({"signal_id": signal["signal_id"], "reason": "unresolved_signal"})
     return {
         "format_version": 1,
         "database": str(path),
@@ -321,20 +280,14 @@ def preview(db_path):
 
 def apply(db_path, plan):
     path = Path(db_path).expanduser().resolve(strict=True)
-    if (
-        not isinstance(plan, dict)
-        or plan.get("database") != str(path)
-        or plan.get("format_version") != 1
-    ):
+    if not isinstance(plan, dict) or plan.get("database") != str(path) or plan.get("format_version") != 1:
         return {"ok": False, "status": "invalid_plan"}
     with closing(_connect(path, write=True)) as conn, conn, ExitStack() as locks:
         try:
             conn.execute("BEGIN EXCLUSIVE")
         except sqlite3.OperationalError:
             return {"ok": False, "status": "database_busy"}
-        if conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='execution_migrations'"
-        ).fetchone():
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='execution_migrations'").fetchone():
             done = conn.execute(
                 "SELECT 1 FROM execution_migrations WHERE source_fingerprint=?",
                 (plan.get("fingerprint"),),
@@ -346,8 +299,8 @@ def apply(db_path, plan):
             return {"ok": False, "status": "stale_plan"}
         if not current["ok"]:
             return current
-        if not locks.enter_context(task_publication_lock(path,'dispatch-admission')):
-            return {'ok':False,'status':'dispatch_in_progress'}
+        if not locks.enter_context(task_publication_lock(path, "dispatch-admission")):
+            return {"ok": False, "status": "dispatch_in_progress"}
         for task in snapshot["tasks"]:
             if not locks.enter_context(task_publication_lock(path, task["task_id"])):
                 return {"ok": False, "status": "publication_in_progress"}
@@ -358,9 +311,7 @@ def apply(db_path, plan):
                 "status": "already_migrated" if covered_subjects else "not_needed",
             }
         for notice in snapshot["notifications"]:
-            if not locks.enter_context(
-                task_publication_lock(path, "notify-" + notice["notification_id"])
-            ):
+            if not locks.enter_context(task_publication_lock(path, "notify-" + notice["notification_id"])):
                 return {"ok": False, "status": "notification_in_progress"}
         execution_store.initialize(conn)
         execution_store.import_legacy_controls(conn)
@@ -390,9 +341,7 @@ def apply(db_path, plan):
                     )
                 ),
             )
-            execution_store.record_historical_facts(
-                conn, binding, snapshot["workflow_outbox"]
-            )
+            execution_store.record_historical_facts(conn, binding, snapshot["workflow_outbox"])
             # Original binding is archived in the journal, then fenced from old
             # controllers. This does not change Task/Episode lifecycle.
             conn.execute(
@@ -427,9 +376,7 @@ def apply(db_path, plan):
                 reason="manual_operator_request",
                 dedupe_key="dbos-migration:" + mapping["signal_id"],
                 task_id=mapping["task_id"],
-                result_id=mapping["fact_id"]
-                if mapping["disposition"] == "worker_result"
-                else None,
+                result_id=mapping["fact_id"] if mapping["disposition"] == "worker_result" else None,
                 metadata={
                     "kind": "dbos_handoff",
                     "signal_id": mapping["signal_id"],

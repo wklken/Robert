@@ -15,7 +15,7 @@ class LiveWorkerAcceptanceTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.repo_root = self.root / "repo"
         self.repo_root.mkdir()
-        init_test_checkout(self.repo_root, 'main')
+        init_test_checkout(self.repo_root, "main")
         self.worktree_root = self.repo_root / ".worktrees"
         self.worktree_root.mkdir()
         self.source_data_dir = self.root / "source-data"
@@ -101,6 +101,7 @@ repos:
 
     def test_live_worker_acceptance_uses_isolated_state_and_dry_run_publication(self):
         from robert_agent.acceptance import worker as live_worker_acceptance
+
         workspace_dir = (self.root / "acceptance-workspace").resolve()
 
         result = live_worker_acceptance.live_worker_acceptance(
@@ -124,9 +125,7 @@ repos:
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
             attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
+            action_status = conn.execute("SELECT audit_status, publish_status FROM github_actions").fetchone()
         self.assertEqual(task_lifecycle, "running")
         self.assertEqual(attempt_status, "completed")
         self.assertEqual(action_status, ("accepted", "not_published"))
@@ -134,15 +133,23 @@ repos:
     def test_remote_only_base_reports_local_snapshot_prerequisite(self):
         import subprocess
         from robert_agent.acceptance import worker as live_worker_acceptance
-        for args in (['update-ref', 'refs/remotes/upstream/main', 'HEAD'],
-                     ['checkout', '--detach'], ['branch', '-D', 'main']):
-            subprocess.run(['git', '-C', str(self.repo_root), *args], check=True, capture_output=True)
-        workspace = self.root / 'remote-only'
+
+        for args in (
+            ["update-ref", "refs/remotes/upstream/main", "HEAD"],
+            ["checkout", "--detach"],
+            ["branch", "-D", "main"],
+        ):
+            subprocess.run(
+                ["git", "-C", str(self.repo_root), *args],
+                check=True,
+                capture_output=True,
+            )
+        workspace = self.root / "remote-only"
         workspace.mkdir()
         result = live_worker_acceptance._isolated_config(self.config_path, workspace)
-        self.assertFalse(result['ok'], result)
-        self.assertEqual(result['status'], 'failed_workspace')
-        self.assertIn('local branch main', result['safe_error'])
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status"], "failed_workspace")
+        self.assertIn("local branch main", result["safe_error"])
 
     def test_isolated_workspace_does_not_reset_source_analysis_worktree(self):
         import subprocess
@@ -151,39 +158,60 @@ repos:
         from robert_agent.adapters.git import workspace as worktree
 
         def git(*args):
-            return subprocess.run(['git', '-C', str(self.repo_root), *args], check=True,
-                                  capture_output=True, text=True).stdout.strip()
+            return subprocess.run(
+                ["git", "-C", str(self.repo_root), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
 
-        source_tree = self.worktree_root / 'analysis-77'
-        git('worktree', 'add', '--detach', str(source_tree), 'HEAD')
-        old_head = git('-C', str(source_tree), 'rev-parse', 'HEAD')
-        git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
-            'commit', '--allow-empty', '-m', 'Advance source')
-        before = git('worktree', 'list', '--porcelain')
-        workspace = self.root / 'isolated'
+        source_tree = self.worktree_root / "analysis-77"
+        git("worktree", "add", "--detach", str(source_tree), "HEAD")
+        old_head = git("-C", str(source_tree), "rev-parse", "HEAD")
+        git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Advance source",
+        )
+        before = git("worktree", "list", "--porcelain")
+        workspace = self.root / "isolated"
         workspace.mkdir()
         prepared = live_worker_acceptance._isolated_config(self.config_path, workspace)
-        self.assertTrue(prepared['ok'], prepared)
-        config = validate_config.validate_config(prepared['config_path'], skip_external=True)
-        self.assertTrue(config['ok'], config)
-        repo = config['repos'][0]
+        self.assertTrue(prepared["ok"], prepared)
+        config = validate_config.validate_config(prepared["config_path"], skip_external=True)
+        self.assertTrue(config["ok"], config)
+        repo = config["repos"][0]
         result = worktree.plan_analysis_worktree(
-            repo_root=repo['repo_root'], worktree_root=repo['worktree_root'],
-            source_number=77, base_branch='main', dry_run=False)
-        self.assertTrue(result['ok'], result)
-        self.assertEqual(git('-C', str(source_tree), 'rev-parse', 'HEAD'), old_head)
-        self.assertEqual(git('worktree', 'list', '--porcelain'), before)
-        self.assertTrue(Path(repo['repo_root']).is_relative_to(workspace))
-        self.assertTrue(Path(result['worktree_path']).is_relative_to(workspace))
+            repo_root=repo["repo_root"],
+            worktree_root=repo["worktree_root"],
+            source_number=77,
+            base_branch="main",
+            dry_run=False,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(git("-C", str(source_tree), "rev-parse", "HEAD"), old_head)
+        self.assertEqual(git("worktree", "list", "--porcelain"), before)
+        self.assertTrue(Path(repo["repo_root"]).is_relative_to(workspace))
+        self.assertTrue(Path(result["worktree_path"]).is_relative_to(workspace))
 
     def test_isolated_config_preserves_named_workers_and_route_selection(self):
         from robert_agent.acceptance import worker as live_worker_acceptance
         import yaml
+
         document = yaml.safe_load(self.config_path.read_text())
-        document['workers']['default']['fallback_model'] = 'gpt-5.6-sol'
-        document['workers']['reviewer'] = {'adapter': 'codex', 'command': '/opt/bin/review-codex',
-                                            'model': 'gpt-5.6-sol', 'effort': 'xhigh'}
-        document['routes'] = {'review-pr': {'worker': 'reviewer', 'effort': 'high'}}
+        document["workers"]["default"]["fallback_model"] = "gpt-5.6-sol"
+        document["workers"]["reviewer"] = {
+            "adapter": "codex",
+            "command": "/opt/bin/review-codex",
+            "model": "gpt-5.6-sol",
+            "effort": "xhigh",
+        }
+        document["routes"] = {"review-pr": {"worker": "reviewer", "effort": "high"}}
         self.config_path.write_text(yaml.safe_dump(document))
         workspace_dir = (self.root / "isolated-config").resolve()
         workspace_dir.mkdir()

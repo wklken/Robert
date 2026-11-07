@@ -37,20 +37,13 @@ def init_config(
             "ok": False,
             "status": "failed_input",
             "safe_error": (
-                "missing "
-                + ("non-interactive " if non_interactive else "")
-                + "values: "
-                + ", ".join(missing)
+                "missing " + ("non-interactive " if non_interactive else "") + "values: " + ", ".join(missing)
             ),
         }
 
     repo_path = Path(values["repo_path"]).expanduser()
     worker_name = str(values["worker"])
-    adapter = (
-        worker_name
-        if worker_name in {"cbc", "codex", "tcodex"}
-        else "codex"
-    )
+    adapter = worker_name if worker_name in {"cbc", "codex", "tcodex"} else "codex"
     config = {
         "version": 2,
         "data_dir": str(default_data_dir()),

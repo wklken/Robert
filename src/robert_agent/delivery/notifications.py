@@ -9,9 +9,20 @@ def notification_metadata(action, result):
         "action_type": action["action_type"],
         "safe_error": result.get("safe_error", ""),
         "command": result.get("command", []),
-        **{key: result.get(key) for key in ("reason_code", "error_class", "attempt_count", "max_attempts", "next_retry_at", "required_action", "retryable") if key in result},
+        **{
+            key: result.get(key)
+            for key in (
+                "reason_code",
+                "error_class",
+                "attempt_count",
+                "max_attempts",
+                "next_retry_at",
+                "required_action",
+                "retryable",
+            )
+            if key in result
+        },
     }
-
 
 
 def existing_action_notification(conn, action, notification_type):
@@ -32,15 +43,20 @@ def existing_action_notification(conn, action, notification_type):
     return None
 
 
-
 def insert_notification(conn, action, notification_type, result, now):
     metadata = notification_metadata(action, result)
     notification_id = existing_action_notification(conn, action, notification_type)
     if notification_id:
-        existing_metadata = conn.execute("SELECT metadata_json FROM notifications WHERE notification_id=?", (notification_id,)).fetchone()
+        existing_metadata = conn.execute(
+            "SELECT metadata_json FROM notifications WHERE notification_id=?",
+            (notification_id,),
+        ).fetchone()
         previous = publication_values.decode_json(existing_metadata[0])
-        if previous.get('delivery') and all(previous.get(key) == metadata.get(key) for key in ('reason_code', 'error_class', 'required_action', 'retryable')):
-            metadata['delivery'] = previous['delivery']
+        if previous.get("delivery") and all(
+            previous.get(key) == metadata.get(key)
+            for key in ("reason_code", "error_class", "required_action", "retryable")
+        ):
+            metadata["delivery"] = previous["delivery"]
         conn.execute(
             """
             UPDATE notifications
@@ -67,7 +83,6 @@ def insert_notification(conn, action, notification_type, result, now):
             publication_values.encode_json(metadata),
         ),
     )
-
 
 
 def resolve_action_notification(conn, action, notification_type, result, now):

@@ -2,6 +2,7 @@ import unittest
 
 
 from tests.support import REPO_ROOT as ROOT
+
 SEARCH_ROOTS = [ROOT / "src", ROOT / "tests"]
 FORBIDDEN = [
     "dd-" + "github-agent",
@@ -51,10 +52,7 @@ class PublicSurfaceTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8", errors="ignore")
                 for token in FORBIDDEN:
                     relative = str(path.relative_to(ROOT))
-                    if (
-                        token in text
-                        and relative not in ALLOWED_LEGACY_PATHS.get(token, set())
-                    ):
+                    if token in text and relative not in ALLOWED_LEGACY_PATHS.get(token, set()):
                         failures.append(f"{relative}: {token}")
         self.assertEqual(failures, [])
 
