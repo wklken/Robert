@@ -239,31 +239,6 @@ def find_workstream_id_by_task_id(conn, task_id):
     return statements.read(conn, query1, {"p0": task_id})
 
 
-def find_for_decisions(conn, subject_id):
-    query1 = (
-        select(sql_constant(1))
-        .select_from(tables["tasks"])
-        .where(
-            and_(
-                (tables["tasks"].c["task_id"] == bindparam("p0")),
-                tables["tasks"]
-                .c["lifecycle"]
-                .in_(
-                    [
-                        sql_constant("completed"),
-                        sql_constant("failed"),
-                        sql_constant("canceled"),
-                        sql_constant("ignored"),
-                    ]
-                ),
-            )
-        )
-        .correlate_except(tables["tasks"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query1, {"p0": subject_id})
-
-
 def find_metadata_json_and_workstream_id_by_task_id(conn, task_id):
     query1 = (
         select(tables["tasks"].c["metadata_json"], tables["tasks"].c["workstream_id"])

@@ -879,7 +879,6 @@ def execute_command(
         try:
             from robert_agent.persistence import execution_control as execution_store
 
-            execution_store.require_migrated(conn)
             item = _load_item(conn, work_item_id)
             if item["repo_id"] not in context.allowed_repo_ids:
                 raise WorkItemNotFoundError("work item not found")

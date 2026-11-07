@@ -15,21 +15,6 @@ CREATE TABLE IF NOT EXISTS execution_subjects (
   metadata_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY(subject_type,subject_id)
 );
-CREATE TABLE IF NOT EXISTS execution_pending_facts (
-  source_signal_id TEXT PRIMARY KEY,
-  subject_type TEXT NOT NULL,
-  subject_id TEXT NOT NULL,
-  topic TEXT NOT NULL,
-  dedupe_key TEXT NOT NULL,
-  fact_id TEXT NOT NULL,
-  disposition TEXT NOT NULL,
-  repo_id TEXT NOT NULL,
-  task_id TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
-  not_before_at TEXT NOT NULL,
-  consumed_at TEXT,
-  resolution_json TEXT NOT NULL DEFAULT '{}'
-);
 CREATE TABLE IF NOT EXISTS execution_fact_receipts (
   subject_type TEXT NOT NULL,
   subject_id TEXT NOT NULL,
@@ -37,12 +22,23 @@ CREATE TABLE IF NOT EXISTS execution_fact_receipts (
   evidence_json TEXT,
   PRIMARY KEY(subject_type,subject_id,fact_id)
 );
-CREATE TABLE IF NOT EXISTS execution_migrations (
-  migration_id TEXT PRIMARY KEY,
-  source_fingerprint TEXT NOT NULL UNIQUE,
-  applied_at TEXT NOT NULL,
-  snapshot_json TEXT NOT NULL,
-  mappings_json TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS publication_intents (
+  publication_id TEXT PRIMARY KEY,
+  action_id TEXT NOT NULL UNIQUE
+    REFERENCES github_actions(action_id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  request_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL
+    CHECK (status IN (
+      'prepared', 'executing', 'published', 'confirmed_absent',
+      'failed', 'attention'
+    )),
+  started_at TEXT,
+  finished_at TEXT,
+  remote_evidence_json TEXT NOT NULL DEFAULT '{}',
+  error_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 """
 

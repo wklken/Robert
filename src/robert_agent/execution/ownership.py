@@ -109,7 +109,7 @@ def parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
     binding = execution_store.get_binding(conn, "task", parent_task_id)
     if retrigger_wakeup_id is not None:
         # An audited operator request starts a new subject. It never reopens
-        # the failed parent or transfers a DBOS-owned subject to legacy.
+        # the failed parent or changes its recorded ownership.
         requested = db_records.first(
             db_read_wakeups.find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id)
         )

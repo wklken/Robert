@@ -94,7 +94,7 @@ class WorkflowOperationsTests(unittest.TestCase):
                 ),
             )
 
-    def test_claim_subject_is_idempotent_and_does_not_transfer_dbos_or_terminal(self):
+    def test_claim_subject_is_idempotent_and_preserves_attention(self):
         from robert_agent.execution import operations as execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:

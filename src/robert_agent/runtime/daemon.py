@@ -23,7 +23,6 @@ from robert_agent.execution import journal as run_journal
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.work import repositories as work_repositories
 from robert_agent.delivery import queries as delivery_queries
-from robert_agent.persistence import execution_control as execution_store
 from robert_agent.security import redaction
 from robert_agent.operations import retention
 from robert_agent.persistence.schema import database as storage
@@ -435,11 +434,6 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
         return None, config_result
     db_path = Path(config_result["db_path"])
     storage.init_database(db_path)
-    try:
-        with closing(daemon_state.connect(db_path)) as conn:
-            execution_store.require_migrated(conn)
-    except execution_store.MigrationRequiredError as exc:
-        return None, {"ok": False, "status": "migration_required", "safe_error": str(exc)}
     if not config_result["daemon"]["enabled"]:
         return None, {
             "ok": True,

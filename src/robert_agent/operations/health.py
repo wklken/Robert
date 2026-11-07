@@ -11,7 +11,6 @@ from robert_agent.persistence.queries import agent_runs as db_read_agent_runs
 from robert_agent.persistence.queries import daemon_events as db_read_daemon_events
 from robert_agent.persistence.queries import notifications as db_read_notifications
 from robert_agent.persistence.queries import projections as db_read_projections
-from robert_agent.persistence.queries import workflow_outbox as db_read_workflow_outbox
 from robert_agent.persistence.stores import notifications as db_write_notifications
 
 import json
@@ -84,8 +83,6 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
         unsent = db_records.first(db_read_projections.find_for_collect_2(conn, limit))[0]
         failed_notifications = db_records.first(db_read_notifications.find_for_collect(conn))[0]
         oldest_notification = db_records.first(db_read_notifications.find_for_collect_2(conn, now))[0]
-        outbox = db_records.first(db_read_workflow_outbox.find_for_collect(conn, now))
-        outbox_attention = db_records.first(db_read_workflow_outbox.find_for_collect_2(conn))[0]
     alerts_persisted = True
     try:
         with closing(db_database.connect(db_path, timeout=0.1)) as conn, conn:
@@ -123,8 +120,5 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
         "delivery_scope": "database",
         "failed_notifications": failed_notifications,
         "oldest_notification_seconds": oldest_notification,
-        "pending_outbox": outbox[0],
-        "oldest_outbox_seconds": outbox[1],
-        "attention_outbox": outbox_attention,
         "notification_delivery_configured": bool(os.environ.get("ROBERT_NOTIFICATION_COMMAND")),
     }

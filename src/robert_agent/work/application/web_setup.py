@@ -5,7 +5,6 @@ from robert_agent.persistence import database as db_database
 from robert_agent.persistence.stores import repos as db_write_repos
 from contextlib import closing
 from robert_agent.persistence.schema import database as storage
-from robert_agent.persistence import execution_control as execution_store
 
 
 def _upsert_control_repo(conn, repo):
@@ -26,5 +25,4 @@ def prepare_repositories(config):
     db_path = config["db_path"]
     storage.init_database(db_path)
     with closing(db_database.connect(db_path)) as conn, conn:
-        execution_store.require_migrated(conn)
         return frozenset(_upsert_control_repo(conn, repo) for repo in config["repos"])

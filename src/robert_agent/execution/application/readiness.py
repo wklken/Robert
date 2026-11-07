@@ -8,9 +8,6 @@ from robert_agent.execution.application import evidence
 from robert_agent.foundation import values
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
-from robert_agent.persistence.queries import (
-    execution_pending_facts as db_read_execution_pending_facts,
-)
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import scheduling
 from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
@@ -106,9 +103,6 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     ):
         return True
     if scheduling.has_queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
-        return True
-    fact = db_records.first(db_read_execution_pending_facts.has_local_work_filtered(conn, repo_ids, now))
-    if fact:
         return True
     if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
         return True

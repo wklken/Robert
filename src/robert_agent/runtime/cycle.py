@@ -16,7 +16,6 @@ from robert_agent.execution import journal as run_journal
 from robert_agent.execution.application import cutover as result_cutover
 from robert_agent.configuration import command as validate_config
 from robert_agent.execution import capacity
-from robert_agent.persistence import execution_control as execution_store
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.foundation.commands import emit
@@ -62,8 +61,6 @@ def run_once(
         return cutover
     with closing(db_database.connect(db_path)) as pool_conn, pool_conn:
         review_store.configure_process_pool(pool_conn, config_result["model_max_concurrency"])
-    with closing(db_database.connect(db_path)) as guard:
-        execution_store.require_migrated(guard)
     from robert_agent.delivery.application.submission import replay_pending_results
 
     if not dry_run:

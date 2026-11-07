@@ -39,6 +39,7 @@ REQUIRED_TABLES = {
     "artifacts",
     "notifications",
     "wakeups",
+    "execution_subjects",
 }
 
 
@@ -57,7 +58,7 @@ def _decode_json(value, default=None):
 
 def _connect(db_path):
     conn = db_database.connect(db_path)
-    tables = {row[0] for row in db_read_sqlite_master.find_for_read_binding(conn)}
+    tables = db_read_sqlite_master.table_names(conn)
     missing = REQUIRED_TABLES - tables
     if missing:
         conn.close()

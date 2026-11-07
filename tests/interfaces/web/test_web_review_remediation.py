@@ -146,13 +146,10 @@ class WebReviewRemediationTests(unittest.TestCase):
         self.assertEqual(result["counts"]["todo"], 1)
         self.assertEqual(project.call_count, 1)
 
-    def test_scoped_controls_preserve_neutral_precedence_and_exclude_other_subjects(self):
+    def test_scoped_controls_preserve_status_and_exclude_other_subjects(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at) VALUES ('task','included','human_request','terminal','2026-10-29','2026-10-29')"
-            )
-            conn.execute(
-                "INSERT INTO workflow_bindings(subject_type,subject_id,workflow_kind,owner_engine,binding_status,created_at,updated_at) VALUES ('task','included','human_request','legacy','attention','2026-10-29','2026-10-29')"
             )
             conn.execute(
                 "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at) VALUES ('task','unrelated','human_request','attention','2026-10-29','2026-10-29')"
