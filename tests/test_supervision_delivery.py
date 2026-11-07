@@ -1,3 +1,4 @@
+from robert_agent.delivery.application import receipts as publication_receipts
 import json
 import sqlite3
 import tempfile
@@ -5,7 +6,9 @@ import unittest
 from pathlib import Path
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import execution_store, publish, publish_dedupe_acceptance, storage
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.acceptance import publish_dedupe as publish_dedupe_acceptance
+from robert_agent.adapters.sqlite import database as storage
 
 
 class DeliveryReceiptTests(unittest.TestCase):
@@ -24,7 +27,7 @@ class DeliveryReceiptTests(unittest.TestCase):
                     'executing', '2026-11-06T10:00:00+00:00', remote_evidence={'source_sha': 'a' * 40})
                 evidence = {'external_id': '987', 'target_url': 'https://github.com/x/y/issues/1#issuecomment-987',
                             'marker': 'verified-comment-marker'}
-                publish._mark_published(conn, action, {'deduplicated': True, 'external_id': '987',
+                publication_receipts.mark_published(conn, action, {'deduplicated': True, 'external_id': '987',
                     'response': {'reconciliation': evidence}}, '2026-11-06T10:01:00+00:00', intent=intent)
                 persisted = json.loads(conn.execute('SELECT remote_evidence_json FROM publication_intents').fetchone()[0])
                 self.assertEqual(persisted['source_sha'], 'a' * 40)

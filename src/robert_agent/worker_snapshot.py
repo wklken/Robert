@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Compatibility CLI entrypoint; implementation lives in robert_agent.worker.snapshot."""
 from robert_agent.worker.snapshot import main
 
 

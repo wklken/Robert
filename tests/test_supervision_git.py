@@ -6,7 +6,8 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import action_scope, supervision_git
+from robert_agent.delivery.application import scope as action_scope
+from robert_agent.supervision import git as supervision_git
 
 
 def git(path, *args):

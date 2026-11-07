@@ -5,16 +5,17 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from robert_agent import (
-    execution_store,
-    execution_replay,
-    loop_engine,
-    run_once,
-    sqlite_migration,
-)
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.execution.application import replay as execution_replay
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.runtime import cycle as run_once
+from robert_agent.operations import migration as sqlite_migration
 from tests import legacy_workflow_signals as workflow_signals
 from tests import legacy_workflow_store as workflow_store
 from tests import test_run_once
+from robert_agent.delivery.application import result_audit
+from robert_agent.delivery.application import scope
+from robert_agent.work.application import source_events
 
 
 class ExecutionReplayTests(unittest.TestCase):
@@ -65,7 +66,7 @@ class ExecutionReplayTests(unittest.TestCase):
                     "drives_execution": index != 1,
                     "body": f"Reply {index}",
                 }
-                run_once._insert_source_and_event(
+                source_events.insert_source_and_event(
                     conn, "repo:example/backend", event, "2026-10-24T00:00:00+00:00"
                 )
                 workflow_signals.record_subject_signal(
@@ -123,7 +124,7 @@ class ExecutionReplayTests(unittest.TestCase):
             )
 
     def test_migrated_facts_wait_after_audit_retry_exhaustion(self):
-        from robert_agent.worker import result as worker_result
+        from robert_agent.delivery.application import submission as worker_result
 
         self.migrate_replies()
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -145,9 +146,9 @@ class ExecutionReplayTests(unittest.TestCase):
             # Exhaust the real audit budget; only the external Git observation fails.
             for now in ('2026-11-06T00:00:00+00:00', '2026-11-06T00:00:10+00:00',
                         '2026-11-06T00:00:30+00:00'):
-                with patch.object(run_once.result_scope, 'for_result',
+                with patch.object(scope, 'for_result',
                                   side_effect=subprocess.TimeoutExpired(['git', 'status'], 1)):
-                    run_once._audit_completed_results(
+                    result_audit.audit_completed_results(
                         conn, 'repo:example/backend', self.fixture.data_dir, self.db,
                         {}, 'audit-replay-test', now, True, [], {},
                     )

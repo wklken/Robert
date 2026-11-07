@@ -1,12 +1,20 @@
 """Acceptance gaps left by the first reliability delivery."""
+from robert_agent.delivery import queries as publication_queries
 from contextlib import closing
 import sqlite3
 import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import retry_policy, run_once
+from robert_agent.execution import retry as retry_policy
+from robert_agent.runtime import cycle as run_once
 from robert_agent.execution import leases as execution_leases
+from robert_agent.adapters.github import discovery
+from robert_agent.execution.application import dispatch as dispatch_queue
+from robert_agent.execution.application import evidence as cycle_evidence
+from robert_agent.execution.application import monitor
+from robert_agent.foundation import values
+from robert_agent.work.application import preparation
 
 
 class RetryClassificationTests(unittest.TestCase):
@@ -52,11 +60,11 @@ class RetryClassificationTests(unittest.TestCase):
         self.assertEqual(retry_policy.worker_error({"worker_stdout": {"tail": failed + '\n' + json.dumps({"type": "turn.completed"})}}), "")
 
     def test_error_only_logs_are_not_progress(self):
-        with patch.object(run_once, '_attempt_command_records', return_value=[]), \
-             patch.object(run_once, '_latest_worker_phases', return_value=[]), \
-             patch.object(run_once, '_attempt_log_tails', return_value={'worker_stderr': {'tail':'HTTP 503 service unavailable'}}), \
-             patch.object(run_once, '_git_recovery_summary', return_value={}):
-            evidence = run_once._inspect_attempt_recovery(None, 'a', 't', None)
+        with patch.object(cycle_evidence, 'attempt_command_records', return_value=[]), \
+             patch.object(cycle_evidence, '_latest_worker_phases', return_value=[]), \
+             patch.object(cycle_evidence, '_attempt_log_tails', return_value={'worker_stderr': {'tail':'HTTP 503 service unavailable'}}), \
+             patch.object(cycle_evidence, 'git_recovery_summary', return_value={}):
+            evidence = cycle_evidence.inspect_attempt_recovery(None, 'a', 't', None)
         self.assertEqual(evidence['status'], 'no_progress')
         self.assertEqual(evidence['progress_signals'], [])
 
@@ -64,8 +72,8 @@ class RetryClassificationTests(unittest.TestCase):
 class TimingTests(unittest.TestCase):
     def test_timings_keep_queue_execution_and_ingestion_separate(self):
         from tests.test_reliability import DurableResultTests
-        from robert_agent.worker import result
-        from robert_agent import execution_metrics
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.readmodels import execution_metrics
         fixture = DurableResultTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -93,7 +101,7 @@ class IsolatedDaemonTests(unittest.TestCase):
         import sys
         import time
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
         fixture = PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -187,7 +195,6 @@ repos:
 class DeliveryAndRecoveryTests(unittest.TestCase):
     def test_old_stopped_actions_cannot_starve_later_ready_result(self):
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import publish
         fixture = PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -199,7 +206,7 @@ class DeliveryAndRecoveryTests(unittest.TestCase):
             conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a2','t',2,'completed')")
             conn.execute("INSERT INTO worker_results SELECT 'r2',task_id,'a2',output_type,consumed_event_fingerprints_json,verification_json,handoff,created_at,metadata_json FROM worker_results WHERE result_id='r'")
             conn.execute("INSERT INTO github_actions SELECT 'healthy','r2',task_id,action_type,target_url,external_id,audit_status,publish_status,'zzz',json_remove(metadata_json,'$.publish') FROM github_actions WHERE action_id='push'")
-            ready = publish._ready_actions(conn,20)
+            ready = publication_queries.ready_actions(conn,20)
             self.assertEqual([row['action_id'] for row in ready],['healthy'])
 
     def test_commit_then_process_death_replays_without_duplicate_actions(self):
@@ -208,15 +215,15 @@ class DeliveryAndRecoveryTests(unittest.TestCase):
         import sys
         from pathlib import Path
         from tests.test_reliability import DurableResultTests
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
         fixture=DurableResultTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         payload=Path(fixture.db).with_suffix('.payload.json')
         payload.write_text(json.dumps(fixture.payload))
         program='''import json,os,sys
-from robert_agent import result_spool
-from robert_agent.worker import result
+from robert_agent.execution import spool as result_spool
+from robert_agent.delivery.application import submission as result
 p=json.load(open(sys.argv[2]))
 def writer(db,payload,notifier=None):
  response=result._record_result_db(db,payload,notifier=notifier)
@@ -238,14 +245,14 @@ result_spool.submit(sys.argv[1],p,writer,prepare=result._prepare,lookup=result._
         import sys
         import time
         from tests.test_reliability import DurableResultTests
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
         fixture=DurableResultTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         payload=Path(fixture.db).with_suffix('.payload.json')
         payload.write_text(json.dumps(fixture.payload))
         program='''import json,sys
-from robert_agent.worker import result
+from robert_agent.delivery.application import submission as result
 print(json.dumps(result.record_result(sys.argv[1],json.load(open(sys.argv[2])))))
 '''
         with closing(sqlite3.connect(fixture.db)) as blocker:
@@ -260,21 +267,21 @@ print(json.dumps(result.record_result(sys.argv[1],json.load(open(sys.argv[2]))))
         self.assertEqual(result.replay_pending_results(fixture.db)['recorded'],0)
         with closing(sqlite3.connect(fixture.db)) as conn:
             timing=json.loads(conn.execute('SELECT metadata_json FROM worker_results').fetchone()[0])
-            from robert_agent.execution_metrics import _seconds
+            from robert_agent.readmodels.execution_metrics import _seconds
             self.assertGreaterEqual(_seconds(timing['result_saved_at'],timing['result_ingested_at']),29)
 
 
 class WaitingEvidenceTests(unittest.TestCase):
     def test_repository_lease_wait_is_visible_preserved_then_cleared(self):
         from tests.test_run_once import RunOnceDryRunTests
-        from robert_agent import execution_metrics
+        from robert_agent.readmodels import execution_metrics
         fixture=RunOnceDryRunTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         first=run_once.run_once(fixture.config_path,fixture_path=fixture.fixture_path,dry_run=True,skip_external=True)
         self.assertTrue(first['ok'],first)
         db=fixture.data_dir/'dd.sqlite3'
-        now=run_once._now()
+        now=values.utc_now()
         with closing(sqlite3.connect(db)) as conn,conn:
             task=conn.execute('SELECT task_id FROM tasks').fetchone()[0]
             lease=execution_leases.acquire(conn,'repo:example/backend','other-run',now,9)
@@ -289,7 +296,7 @@ class WaitingEvidenceTests(unittest.TestCase):
                     self.assertEqual(timing['waiting_since'],saved)
                 saved=timing['waiting_since']
         with closing(sqlite3.connect(db)) as conn,conn:
-            execution_leases.release(conn,lease['lease_id'],run_once._now())
+            execution_leases.release(conn,lease['lease_id'],values.utc_now())
         run_once.run_once(fixture.config_path,dry_run=True,skip_external=True,skip_publish=True)
         with closing(sqlite3.connect(db)) as conn:
             self.assertNotEqual(execution_metrics.task_timing(conn,task)['waiting_reason'],'repository_busy')
@@ -308,7 +315,7 @@ class DiscoveryLockTests(unittest.TestCase):
                 other.rollback()
             calls.append('unlocked')
             return []
-        with patch.object(run_once.discover,'collect_account_notifications',return_value={}), patch.object(run_once.discover,'collect_live_events',side_effect=discover):
+        with patch.object(discovery,'collect_account_notifications',return_value={}), patch.object(discovery,'collect_live_events',side_effect=discover):
             response=run_once.run_once(fixture.config_path,dry_run=True,skip_external=False)
         self.assertTrue(response['ok'],response)
         self.assertEqual(calls,['unlocked'])
@@ -318,7 +325,7 @@ class ReviewRegressionTests(unittest.TestCase):
     def test_status_expands_home_for_all_database_reads(self):
         import os
         from tests.test_reliability import DurableResultTests
-        from robert_agent import status
+        from robert_agent.readmodels import status
         fixture=DurableResultTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -327,7 +334,7 @@ class ReviewRegressionTests(unittest.TestCase):
 
     def test_prepared_and_failed_spawn_are_not_worker_execution(self):
         from tests.test_reliability import DurableResultTests
-        from robert_agent import execution_metrics
+        from robert_agent.readmodels import execution_metrics
         fixture=DurableResultTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -335,12 +342,12 @@ class ReviewRegressionTests(unittest.TestCase):
             conn.execute("UPDATE tasks SET created_at='2026-10-24T00:00:00Z'")
             conn.execute("UPDATE attempts SET status='prepared',started_at='2026-10-24T00:00:00Z'")
             self.assertIsNone(execution_metrics.task_timing(conn,'task-1')['queue_seconds'])
-            run_once._record_dispatch_result(conn,'attempt-1',{'ok':False,'status':'failed_dispatch','safe_error':'cannot spawn'})
+            dispatch_queue._record_dispatch_result(conn,'attempt-1',{'ok':False,'status':'failed_dispatch','safe_error':'cannot spawn'})
             self.assertIsNone(execution_metrics.task_timing(conn,'task-1')['worker_seconds'])
 
     def test_terminal_tasks_hide_stale_wait_metadata(self):
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import execution_metrics
+        from robert_agent.readmodels import execution_metrics
         fixture=PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -357,8 +364,8 @@ class ReviewRegressionTests(unittest.TestCase):
         import sys
         from datetime import datetime, timezone
         from tests.test_worker_protocol import WorkerProtocolTests
-        from robert_agent import worker_identity
-        from robert_agent.worker import result
+        from robert_agent.adapters.processes import identity as worker_identity
+        from robert_agent.delivery.application import submission as result
         fixture = WorkerProtocolTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -392,5 +399,5 @@ class ReviewRegressionTests(unittest.TestCase):
         child.terminate()
         child.wait(timeout=10)
         with closing(sqlite3.connect(db)) as conn, conn:
-            run_once._supervise_running_attempts(conn, 'repo-1', {}, now)
+            monitor.supervise_running_attempts(conn, 'repo-1', {}, now, resume_attempt=preparation.create_resume_attempt_and_prompt)
             self.assertEqual(conn.execute('SELECT status FROM attempts').fetchone()[0], 'completed')

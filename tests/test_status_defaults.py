@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from robert_agent import status
+from robert_agent.readmodels import status
 
 
 class StatusDefaultsTests(unittest.TestCase):

@@ -15,7 +15,7 @@ class WakeupNotifierTests(unittest.TestCase):
         self.db_path = Path(self.tmp.name) / "data" / "robert.sqlite3"
 
     def test_listener_receives_and_coalesces_datagrams(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         with wakeup_notifier.WakeupListener(self.db_path) as listener:
             first = wakeup_notifier.notify(self.db_path)
@@ -27,7 +27,7 @@ class WakeupNotifierTests(unittest.TestCase):
             self.assertFalse(listener.wait(0))
 
     def test_missing_listener_is_a_best_effort_noop(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         result = wakeup_notifier.notify(self.db_path)
 
@@ -35,7 +35,7 @@ class WakeupNotifierTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_notification_send_is_nonblocking(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         class Sender:
             blocking = True
@@ -63,7 +63,7 @@ class WakeupNotifierTests(unittest.TestCase):
         self.assertEqual(result["status"], "notified")
 
     def test_listener_replaces_a_stale_socket(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         path = wakeup_notifier.socket_path_for_db(self.db_path)
         path.parent.mkdir(parents=True)
@@ -76,7 +76,7 @@ class WakeupNotifierTests(unittest.TestCase):
             self.assertEqual(wakeup_notifier.notify(self.db_path)["status"], "notified")
 
     def test_listener_does_not_unlink_a_replacement_socket(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         listener = wakeup_notifier.WakeupListener(self.db_path)
         path = listener.path
@@ -90,7 +90,7 @@ class WakeupNotifierTests(unittest.TestCase):
         self.assertTrue(path.exists())
 
     def test_listener_restricts_directory_and_socket_permissions(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         path = wakeup_notifier.socket_path_for_db(self.db_path)
         path.parent.mkdir(parents=True, mode=0o755)
@@ -101,7 +101,7 @@ class WakeupNotifierTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
     def test_databases_in_one_directory_have_independent_sockets(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         other_db_path = self.db_path.with_name("other.sqlite3")
         with (
@@ -114,7 +114,7 @@ class WakeupNotifierTests(unittest.TestCase):
             self.assertFalse(second.wait(0))
 
     def test_failed_socket_setup_removes_the_bound_path(self):
-        from robert_agent import wakeup_notifier
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         path = wakeup_notifier.socket_path_for_db(self.db_path)
         real_chmod = wakeup_notifier.os.chmod

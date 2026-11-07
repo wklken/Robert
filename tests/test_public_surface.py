@@ -26,13 +26,13 @@ ALLOWED_LEGACY_PATHS = {
         "tests/test_migration.py",
     },
     FORBIDDEN[4]: {
-        "src/robert_agent/audit_result.py",
-        "src/robert_agent/publish.py",
+        "src/robert_agent/delivery/application/audit.py",
+        "src/robert_agent/delivery/application/publish.py",
         "tests/test_migration.py",
     },
     FORBIDDEN[5]: {
-        "src/robert_agent/audit_result.py",
-        "src/robert_agent/publish.py",
+        "src/robert_agent/delivery/application/audit.py",
+        "src/robert_agent/delivery/application/publish.py",
         "tests/test_migration.py",
     },
     FORBIDDEN[10]: {

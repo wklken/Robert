@@ -12,7 +12,11 @@ import time
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, supervision_git, supervision_repair, work_items, worker_identity
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import git as supervision_git
+from robert_agent.workflows.maintenance import repair as supervision_repair
+from robert_agent.work.application import commands as work_items
+from robert_agent.adapters.processes import identity as worker_identity
 
 
 SUBMISSION = {
@@ -32,7 +36,9 @@ def submission_source():
 _BROKER = '''
 import json,sys
 from pathlib import Path
-from robert_agent import supervision_repair,supervision_repair_worker,validate_config
+from robert_agent.workflows.maintenance import repair as supervision_repair
+from robert_agent.workflows.maintenance import worker as supervision_repair_worker
+from robert_agent.configuration import command as validate_config
 config_file, task, attempt, real_probe = sys.argv[1:]
 def read_config(path, **kwargs):
     return {'ok': True, **json.loads(Path(path).read_text())}
@@ -187,7 +193,8 @@ class BrokerProcessTests(unittest.TestCase):
         return process
 
     def test_trusted_broker_ignores_repository_python_package(self):
-        from robert_agent import dispatch, supervision_repair_worker
+        from robert_agent.adapters.processes import worker as dispatch
+        from robert_agent.workflows.maintenance import worker as supervision_repair_worker
         fixture = self.fixture('raise AssertionError("model must not start")')
         package = fixture.tree / 'robert_agent'
         package.mkdir()
@@ -202,7 +209,7 @@ class BrokerProcessTests(unittest.TestCase):
         self.assertFalse(marker.exists(), launched)
         self.assertEqual(launched.get('returncode'), 1, launched)
         stderr = Path(launched['stderr_path']).read_text()
-        self.assertNotIn('No module named robert_agent.supervision_repair_worker', stderr)
+        self.assertNotIn('No module named robert_agent.workflows.maintenance.worker', stderr)
 
     def test_valid_output_uses_existing_result_submission(self):
         fixture = self.fixture('import json,sys\nrequest = json.load(sys.stdin)\n'

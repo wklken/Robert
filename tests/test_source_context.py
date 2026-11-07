@@ -1,4 +1,6 @@
 """Complete source bodies survive caches, duplicate observations and routing."""
+from robert_agent.work.application import synchronization as synchronization
+from robert_agent.work import scan_batches as scan_batches
 from contextlib import closing
 import hashlib
 import json
@@ -9,9 +11,13 @@ import tempfile
 import unittest
 
 from tests import support  # noqa: F401
-from robert_agent import discover, github_scan, run_once, storage
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.runtime import cycle as run_once
+from robert_agent.adapters.sqlite import database as storage
 from robert_agent.work import repositories as work_repositories
-from robert_agent.github_read import GitHubReadSession, _digest
+from robert_agent.adapters.github.read import GitHubReadSession, _digest
+from robert_agent.work.application import source_events
+from robert_agent.foundation import values
 
 
 REPO = {'full_name': 'example/backend', 'github_account': 'robot', 'trusted_actors': ['human'],
@@ -43,7 +49,7 @@ class SourceContextTests(unittest.TestCase):
     def persist(self, *events):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             for event in events:
-                run_once._insert_source_and_event(conn, run_once._repo_id(REPO['full_name']), event, NEW)
+                source_events.insert_source_and_event(conn, values.repository_id(REPO['full_name']), event, NEW)
             return json.loads(conn.execute("SELECT payload_json FROM github_events WHERE event_fingerprint='assigned:70'").fetchone()[0])
 
     def test_pre_upgrade_source_cache_is_refetched_even_before_expiry(self):
@@ -64,10 +70,10 @@ class SourceContextTests(unittest.TestCase):
     def test_pre_upgrade_scan_batch_is_not_admitted_to_current_context(self):
         legacy_values = [REPO['full_name'], 'robot', ['human'], [], [], 'github.com']
         legacy_digest = hashlib.sha256(json.dumps(legacy_values, sort_keys=True).encode()).hexdigest()
-        repo_id = run_once._repo_id(REPO['full_name'])
-        github_scan.save_batch(self.db, repo_id, legacy_digest, [self.event(body='')], {}, now=100)
-        current = github_scan.context_digest(REPO, [])
-        self.assertIsNone(github_scan.next_batch(self.db, repo_id, context=current, now=101))
+        repo_id = values.repository_id(REPO['full_name'])
+        scan_batches.save_batch(self.db, repo_id, legacy_digest, [self.event(body='')], {}, now=100)
+        current = synchronization.context_digest(REPO, [])
+        self.assertIsNone(scan_batches.next_batch(self.db, repo_id, context=current, now=101))
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertIsNone(conn.execute('SELECT completed_at FROM github_scan_batches').fetchone()[0])
 
@@ -155,7 +161,7 @@ class SourceContextTests(unittest.TestCase):
         storage.init_database(db)
         with closing(sqlite3.connect(db)) as conn, conn:
             repo_id = work_repositories.upsert_repo(conn, {**REPO, 'github_account': 'robert-bot'})
-            run_once._insert_source_and_event(conn, repo_id, assignment, NEW)
+            source_events.insert_source_and_event(conn, repo_id, assignment, NEW)
         incomplete = dict(assignment)
         incomplete.pop('body')
         fixture.fixture_path.write_text(json.dumps({'events': [incomplete]}))

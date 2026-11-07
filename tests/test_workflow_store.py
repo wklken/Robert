@@ -3,7 +3,8 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent import storage, execution_store
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.adapters.sqlite import execution_control as execution_store
 from tests import legacy_workflow_store as workflow_store
 
 

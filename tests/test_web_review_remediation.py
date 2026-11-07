@@ -7,7 +7,11 @@ import unittest
 from unittest import mock
 
 from tests import support  # noqa: F401
-from robert_agent import board, execution_store, storage, workbench, work_items
+from robert_agent.readmodels import board
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.readmodels import workbench
+from robert_agent.work.application import commands as work_items
 
 
 class WebReviewRemediationTests(unittest.TestCase):

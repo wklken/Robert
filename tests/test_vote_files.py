@@ -4,7 +4,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from robert_agent import vote_files, vote_workspace, vote_coordinator, vote_store, model_pool, review_store
+from robert_agent.workflows.vote import files as vote_files
+from robert_agent.workflows.vote import workspace as vote_workspace
+from robert_agent.workflows.vote import coordinator as vote_coordinator
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.adapters.sqlite import model_pool
+from robert_agent.adapters.sqlite import review_rounds as review_store
 from tests import test_vote_coordinator as fixture_module
 
 

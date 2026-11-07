@@ -53,64 +53,88 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             remaining.difference_update(ready)
 
     def test_configuration_imports_only_configuration_and_boundary_capabilities(self):
-        allowed = {'robert_agent', 'robert_agent.configuration', 'robert_agent.resource_files',
-                   'robert_agent.worker_adapters'}
-        allowed.update(name for name in self.graph if name.startswith('robert_agent.configuration.'))
-        for name in sorted(self.graph):
+        allowed = ('robert_agent.configuration', 'robert_agent.resource_files',
+                   'robert_agent.worker_adapters', 'robert_agent.foundation.commands')
+        for name, dependencies in self.graph.items():
             if name.startswith('robert_agent.configuration.'):
-                with self.subTest(module=name):
-                    self.assert_dependencies(name, allowed)
+                for dependency in dependencies:
+                    self.assertTrue(dependency == 'robert_agent' or any(
+                        dependency == prefix or dependency.startswith(prefix + '.')
+                        for prefix in allowed), (name, dependency))
 
     def test_pure_policies_have_no_application_dependencies(self):
         for name in ('work.policies', 'delivery.policies'):
-            with self.subTest(module=name):
-                self.assert_dependencies('robert_agent.' + name, ())
+            self.assert_dependencies('robert_agent.' + name, ())
+        self.assert_dependencies('robert_agent.work.inputs', {'robert_agent.work.errors'})
 
     def test_leaf_capabilities_do_not_import_their_callers(self):
-        allowed = {
-            'adapters.processes.attempt': {'robert_agent', 'robert_agent.worker_identity'},
-            'adapters.git.remotes': set(),
-            'adapters.github.client': {'robert_agent.common'},
-            'adapters.github.sources': {'robert_agent.adapters.github', 'robert_agent.adapters.github.client'},
-            'adapters.github.pull_requests': set(),
-            'security.text': {'robert_agent.redaction'},
-            'work.queries': set(),
-            'work.repositories': set(),
-            'execution.leases': {'robert_agent', 'robert_agent.worker_identity'},
-            'execution.notifications': set(),
-            'execution.ownership': {'robert_agent', 'robert_agent.execution',
-                'robert_agent.execution.notifications', 'robert_agent.execution_store',
-                'robert_agent.execution_operations'},
-        }
-        for name, dependencies in allowed.items():
-            with self.subTest(module=name):
-                self.assert_dependencies('robert_agent.' + name, dependencies)
+        lower = ('foundation', 'configuration', 'work', 'execution', 'delivery',
+                 'supervision', 'adapters', 'context', 'readmodels', 'security')
+        upper = ('application', 'runtime', 'interfaces', 'cli', 'operations',
+                 'acceptance', 'workflows', 'worker')
+        for name, dependencies in self.graph.items():
+            if '.application.' in name or name.endswith('.application'):
+                continue
+            if not any(name.startswith('robert_agent.' + owner + '.') for owner in lower):
+                continue
+            for dependency in dependencies:
+                self.assertFalse('.application.' in dependency or dependency.endswith('.application') or any(dependency == 'robert_agent.' + owner or
+                    dependency.startswith('robert_agent.' + owner + '.') for owner in upper),
+                    (name, dependency))
+
+    def test_adapters_do_not_import_domain_or_use_case_callers(self):
+        allowed = {'adapters', 'foundation', 'security', 'configuration',
+                   'worker_adapters', 'resource_files', 'paths'}
+        for name, dependencies in self.graph.items():
+            if name.startswith('robert_agent.adapters.'):
+                for dependency in dependencies - {'robert_agent'}:
+                    self.assertIn(dependency.split('.')[1], allowed, (name, dependency))
 
     def test_submission_and_stages_do_not_load_workflow_implementations(self):
-        self.assert_dependencies('robert_agent.result_contract',
-                                 {'robert_agent.delivery', 'robert_agent.delivery.policies'})
-        self.assert_dependencies('robert_agent.execution.stages', {
-            'robert_agent', 'robert_agent.dispatch', 'robert_agent.execution_store',
-            'robert_agent.model_environment', 'robert_agent.retry_policy',
-            'robert_agent.worker_identity', 'robert_agent.publication_lock',
-            'robert_agent.worker', 'robert_agent.worker.snapshot',
-        })
+        self.assert_dependencies('robert_agent.delivery.contract',
+            {'robert_agent.delivery', 'robert_agent.delivery.policies'})
+        for dependency in self.graph['robert_agent.execution.stages']:
+            self.assertFalse(dependency.startswith(('robert_agent.workflows.',
+                'robert_agent.application.', 'robert_agent.runtime.')), dependency)
 
     def test_migrated_consumers_do_not_borrow_runtime_or_view_functions(self):
-        # The paused monitor still shares run_once's monitor; moving the whole
-        # recovery use case is a later unit, not a permissive package-wide waiver.
-        consumers = ('work_items', 'work_item_control', 'execution_replay', 'github_scan',
-                     'publish', 'supervision_publication', 'control_lane', 'result_cutover')
-        forbidden = {'robert_agent.run_once', 'robert_agent.daemon', 'robert_agent.board_execution'}
-        for name in consumers:
-            with self.subTest(module=name):
-                self.assertEqual(self.graph['robert_agent.' + name] & forbidden, set())
+        import json
+        entries = json.loads((PACKAGE / 'resources/entrypoints.json').read_text())
+        legacy = {'robert_agent.' + name for name in entries if name != 'acceptance'}
         for name, dependencies in self.graph.items():
-            if name.startswith(('robert_agent.work.', 'robert_agent.execution.',
-                                'robert_agent.configuration.', 'robert_agent.delivery.',
-                                'robert_agent.adapters.', 'robert_agent.security.')):
-                with self.subTest(module=name):
-                    self.assertEqual(dependencies & forbidden, set())
+            if name not in legacy:
+                self.assertFalse(dependencies & legacy, (name, dependencies & legacy))
+
+    def test_root_contains_only_declared_entrypoints_and_package_primitives(self):
+        import json
+        entries = json.loads((PACKAGE / 'resources/entrypoints.json').read_text())
+        allowed = {'__init__', 'paths', 'resource_files', *entries}
+        self.assertEqual({path.stem for path in PACKAGE.glob('*.py')}, allowed)
+        for name, implementation in entries.items():
+            tree = ast.parse((PACKAGE / (name + '.py')).read_text())
+            imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)]
+            self.assertEqual([(node.module, [alias.name for alias in node.names])
+                              for node in imports], [(implementation, ['main'])], name)
+            self.assertFalse(any(isinstance(node, (ast.FunctionDef, ast.ClassDef,
+                ast.Assign, ast.AnnAssign)) for node in tree.body), name)
+
+    def test_use_cases_and_workflows_do_not_import_runtime_or_interfaces(self):
+        forbidden = ('robert_agent.runtime', 'robert_agent.interfaces',
+                     'robert_agent.cli', 'robert_agent.acceptance', 'robert_agent.worker')
+        for name, dependencies in self.graph.items():
+            if '.application.' in name or name.startswith('robert_agent.workflows.'):
+                for dependency in dependencies:
+                    self.assertFalse(any(dependency == item or dependency.startswith(item + '.')
+                                         for item in forbidden), (name, dependency))
+
+    def test_runtime_and_http_do_not_execute_business_sql(self):
+        paths = [*PACKAGE.joinpath('runtime').rglob('*.py'),
+                 *PACKAGE.joinpath('interfaces/web').rglob('*.py')]
+        for path in paths:
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    self.assertNotIn(node.func.attr, {'execute', 'executemany', 'executescript'},
+                                     (str(path.relative_to(PACKAGE)), node.lineno))
 
 
 if __name__ == '__main__':

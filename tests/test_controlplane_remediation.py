@@ -14,8 +14,18 @@ from unittest import mock
 from tests import test_daemon as daemon_fixture
 from tests import test_retention as retention_fixture
 from tests import test_operational_commands as publication_fixture
-from robert_agent import daemon, daemon_state, discover, notify, publish, result_spool, route, run_once, storage
+from robert_agent.runtime import daemon
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.delivery.application import notifications as notify
+from robert_agent.delivery.application import publish
+from robert_agent.execution import spool as result_spool
+from robert_agent.workflows import routes as route
+from robert_agent.adapters.sqlite import database as storage
 from tests.support import DAEMON_DEFAULTS
+from robert_agent.delivery.application import scope
+from robert_agent.execution.application import evidence
+from robert_agent.foundation import commands as control_commands
 
 
 class ControlplaneRemediationTests(unittest.TestCase):
@@ -28,7 +38,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {'_ROBERT_CONTROL_DEADLINE': '0'}):
             with closing(sqlite3.connect(db)) as conn:
                 with self.assertRaises(subprocess.TimeoutExpired):
-                    run_once.result_scope.for_result(conn, 'task-1', 'attempt-1', 'ws-1', command_runner=run_once.run_command)
+                    scope.for_result(conn, 'task-1', 'attempt-1', 'ws-1', command_runner=control_commands.run_command)
                 self.assertEqual(conn.execute('SELECT audit_status FROM github_actions').fetchone()[0], 'accepted')
 
     def test_expired_control_deadline_prevents_audit_and_recovery_git_calls(self):
@@ -38,12 +48,12 @@ class ControlplaneRemediationTests(unittest.TestCase):
         db = fixture.root / 'dd.sqlite3'
         fixture._init_summary_db(db)
         with mock.patch.dict(os.environ, {'_ROBERT_CONTROL_DEADLINE': '0'}):
-            with mock.patch.object(run_once.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as runner:
+            with mock.patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as runner:
                 with self.assertRaises(subprocess.TimeoutExpired):
-                    run_once._run_inspection_command(['git', 'status', '--short'], fixture.root)
+                    evidence.run_inspection_command(['git', 'status', '--short'], fixture.root)
                 with closing(sqlite3.connect(db)) as conn:
                     with self.assertRaises(subprocess.TimeoutExpired):
-                        run_once.result_scope.for_result(conn, 'task-1', 'attempt-1', 'ws-1', command_runner=run_once.run_command)
+                        scope.for_result(conn, 'task-1', 'attempt-1', 'ws-1', command_runner=control_commands.run_command)
                 runner.assert_not_called()
 
     def test_publication_requires_recorded_worker_process_stop(self):

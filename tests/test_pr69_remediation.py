@@ -8,8 +8,11 @@ from unittest.mock import patch
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from tests import test_compact_result as compact_tests
 from tests import test_attempt_context as context_tests
-from robert_agent import result_contract, result_spool, run_once
-from robert_agent.worker import result
+from robert_agent.delivery import contract as result_contract
+from robert_agent.execution import spool as result_spool
+from robert_agent.delivery.application import submission as result
+from robert_agent.work.application import preparation
+from robert_agent.foundation import values
 
 
 class SubmissionRemediationTests(unittest.TestCase):
@@ -110,14 +113,14 @@ class TargetPromptTests(unittest.TestCase):
     def test_initial_refresh_and_resume_prompts_expose_bound_targets(self):
         self.assertEqual(self.targets(self.prompt.read_text()), ['https://github.com/example/backend/issues/1'])
         event = self.add_event()
-        source_id = run_once._source_id(event['source_key'])
+        source_id = values.github_source_id(event['source_key'])
         self.conn.execute('INSERT INTO workstream_sources VALUES (?,?,?,?)',
-                          (self.stream, source_id, 'related', run_once._now()))
+                          (self.stream, source_id, 'related', values.utc_now()))
         self.conn.commit()
         self.refresh(event)
         expected = ['https://github.com/example/backend/issues/1', 'https://github.com/example/backend/pull/2']
         self.assertEqual(self.targets(self.prompt.read_text()), expected)
-        resumed = run_once._create_resume_attempt_and_prompt(self.conn, self.data, self.db,
-            self.repo, run_once._repo_id('example/backend'), self.task_id, self.stream,
-            self.attempt_id, run_once._now(), {'summary': 'retry'})
+        resumed = preparation.create_resume_attempt_and_prompt(self.conn, self.data, self.db,
+            self.repo, values.repository_id('example/backend'), self.task_id, self.stream,
+            self.attempt_id, values.utc_now(), {'summary': 'retry'})
         self.assertEqual(self.targets(Path(resumed['prompt_path']).read_text()), expected)

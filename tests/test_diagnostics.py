@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import zipfile
 
-from robert_agent.diagnostics import export_diagnostics
+from robert_agent.operations.diagnostics import export_diagnostics
 
 
 class DiagnosticsTests(unittest.TestCase):

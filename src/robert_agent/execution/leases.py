@@ -1,7 +1,7 @@
 """Acquire repository run leases only after proving prior owner exit."""
 from datetime import datetime, timedelta
 from uuid import uuid4
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 import json
 
 

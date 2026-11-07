@@ -12,7 +12,9 @@ import unittest
 from unittest import mock
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, supervision_store, worker_identity
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import store as supervision_store
+from robert_agent.adapters.processes import identity as worker_identity
 
 
 VALID_WRAPPER = '''
@@ -39,7 +41,7 @@ json.dump({'bundle_id': bundle['bundle_id'], 'bundle_sha256': digest,
 
 class DiagnosisTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import supervision_diagnose
+        from robert_agent.supervision import diagnosis as supervision_diagnose
 
         self.diagnose = supervision_diagnose
         temporary = tempfile.TemporaryDirectory()
@@ -170,7 +172,7 @@ class DiagnosisTests(unittest.TestCase):
                         raise sqlite3.OperationalError('database is locked')
                     return original(*args, **kwargs)
                 when = self.when + timedelta(seconds=index * 10)
-                with mock.patch('robert_agent.supervision_diagnose.' + target, side_effect=OSError('fixture unavailable')), \
+                with mock.patch('robert_agent.supervision.diagnosis.' + target, side_effect=OSError('fixture unavailable')), \
                         mock.patch.object(self.diagnose, '_complete', side_effect=complete):
                     result = self.poll('completion_pending', 'unavailable', now=when)
                     self.assertEqual(result['status'], 'completion_pending')
@@ -211,7 +213,7 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
             }], (self.when + timedelta(seconds=1)).isoformat())[0]['incident']['incident_id']
         restarted = subprocess.run([sys.executable, '-c', '''
 import json,sys,time
-from robert_agent import supervision_diagnose
+from robert_agent.supervision import diagnosis as supervision_diagnose
 config = json.loads(sys.argv[1])
 while True:
     result = supervision_diagnose.poll(config, now=sys.argv[2])
@@ -279,7 +281,7 @@ sys.exit(75)
         later = self.when + timedelta(seconds=5)
         self.assertEqual(self.diagnose.poll(self.config, now=later)['status'], 'provider_cooldown')
         restarted = subprocess.run([sys.executable, '-c',
-            'import json,sys; from robert_agent import supervision_diagnose; '
+            'import json,sys; from robert_agent.supervision import diagnosis as supervision_diagnose; '
             'print(json.dumps(supervision_diagnose.poll(json.loads(sys.argv[1]),now=sys.argv[2])))',
             json.dumps(self.config), later.isoformat()], text=True, capture_output=True, check=True, timeout=5)
         self.assertEqual(json.loads(restarted.stdout)['status'], 'provider_cooldown')
@@ -338,7 +340,7 @@ sys.exit(75)
         # wrapper is its only child, and the new caller must honor its claim.
         launcher = '''
 import json, os, sqlite3, sys, time
-from robert_agent import supervision_diagnose, supervision_store
+from robert_agent.supervision import diagnosis as supervision_diagnose; from robert_agent.supervision import store as supervision_store
 cfg = json.loads(sys.argv[1])
 assert supervision_diagnose.poll(cfg, now=sys.argv[2])['status'] == 'launched'
 deadline = time.monotonic() + 5

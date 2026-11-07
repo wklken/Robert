@@ -6,7 +6,7 @@ import unittest
 
 import yaml
 
-from robert_agent import validate_config
+from robert_agent.configuration import command as validate_config
 from robert_agent.resource_files import resource
 from robert_agent.configuration.routes import resolve_route_config, review_workers_for_author
 

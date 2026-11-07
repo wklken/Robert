@@ -10,7 +10,12 @@ from unittest import mock
 
 from tests import test_reliability
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import execution_store, publish, storage, supervision_actions, supervision_publication
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.delivery import values as publication_values
+from robert_agent.delivery.application import publish
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import actions as supervision_actions
+from robert_agent.supervision.application import publication as supervision_publication
 
 
 class SupervisedPublicationTests(unittest.TestCase):
@@ -41,7 +46,7 @@ class SupervisedPublicationTests(unittest.TestCase):
 
     def cycle(self, seconds=0, config=None):
         self.now += timedelta(seconds=seconds)
-        with mock.patch.object(publish, '_now', return_value=self.now.isoformat()):
+        with mock.patch.object(publication_values, 'now', return_value=self.now.isoformat()):
             kwargs = {'config': config} if config is not None else {}
             return publish.publish_ready_actions(self.db, run_command=self.runner, **kwargs)
 

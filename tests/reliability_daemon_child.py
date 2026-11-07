@@ -5,6 +5,8 @@ inject its local Git runner and crash the owning daemon immediately after a push
 Background process isolation is covered separately by test_github_scan. All domain,
 scheduling, audit, publication and notification code is the production implementation.
 """
+from robert_agent.delivery.application import lane as delivery_lane
+from robert_agent.adapters.github import budget as github_budget
 from contextlib import redirect_stdout
 import io
 import json
@@ -14,7 +16,10 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from robert_agent import daemon, loop_engine, publish, github_scan, control_lane
+from robert_agent.runtime import daemon
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.delivery.application import publish
+from robert_agent.runtime import control as control_lane
 
 root = Path(sys.argv[1])
 crash_after_push = sys.argv[2] == 'crash'
@@ -62,8 +67,8 @@ def drain(value, **kwargs):
 def inline_publisher_start(self, command, **kwargs):
     if '--publish' not in command:
         return lane_start(self, command, **kwargs)
-    with patch.object(github_scan, '_budget', return_value=True):
-        self.test_result = github_scan.publish(root / 'daemon.yml')
+    with patch.object(github_budget, 'budget', return_value=True):
+        self.test_result = delivery_lane.publish(root / 'daemon.yml')
     return True
 
 

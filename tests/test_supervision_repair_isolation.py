@@ -10,7 +10,9 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import dispatch, supervision_repair, supervision_repair_worker
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.workflows.maintenance import repair as supervision_repair
+from robert_agent.workflows.maintenance import worker as supervision_repair_worker
 
 
 # Portable process fixture for the existing Robert DB/config/Git denials. Any

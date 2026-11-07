@@ -6,8 +6,9 @@ import unittest
 from unittest import mock
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import result_spool, audit_result
-from robert_agent.worker import result
+from robert_agent.execution import spool as result_spool
+from robert_agent.delivery.application import audit as audit_result
+from robert_agent.delivery.application import submission as result
 from tests import test_review_input_workflow as integration_tests
 
 

@@ -15,18 +15,26 @@ from tests import test_lifecycle_remediation as lifecycle_fixture
 from tests import test_paused_worker_supervision as paused_fixture
 from tests import test_pending_handoff_recovery as handoff_fixture
 from tests import test_run_once as run_fixture
-from robert_agent import (
-    board,
-    daemon,
-    daemon_state,
-    loop_engine,
-    result_spool,
-    run_once,
-    validate_config,
-    work_items,
-    worker_supervision,
-)
-from robert_agent.worker import result as worker_result
+from robert_agent.readmodels import board
+from robert_agent.runtime import daemon
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.execution import spool as result_spool
+from robert_agent.runtime import cycle as run_once
+from robert_agent.configuration import command as validate_config
+from robert_agent.work.application import commands as work_items
+from robert_agent.runtime import paused_monitor as worker_supervision
+from robert_agent.delivery.application import submission as worker_result
+from robert_agent.adapters.processes import worker
+from robert_agent.delivery.application import result_audit
+from robert_agent.delivery.application import scope
+from robert_agent.execution.application import dispatch as dispatch_queue
+from robert_agent.execution.application import evidence
+from robert_agent.execution.application import monitor
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.execution import capacity
+from robert_agent.foundation import values
+from robert_agent.work.application import preparation
 
 
 class LifecycleFollowupTests(unittest.TestCase):
@@ -128,12 +136,12 @@ class LifecycleFollowupTests(unittest.TestCase):
                 (tasks[f.repo_id][0],),
             )
         with (
-            mock.patch.object(run_once, "_supervise_running_attempts", return_value=0),
+            mock.patch.object(monitor, 'supervise_running_attempts', return_value=0),
             mock.patch.object(
-                run_once, "_ensure_dispatch_worktree", side_effect=lambda d, r, t, w: w
+                dispatch_queue, 'ensure_dispatch_worktree', side_effect=lambda d, r, t, w: w
             ),
             mock.patch.object(
-                run_once.dispatch,
+                worker,
                 "dispatch_worker",
                 return_value={"ok": True, "status": "running"},
             ) as launch,
@@ -165,9 +173,9 @@ class LifecycleFollowupTests(unittest.TestCase):
         )
         with (
             mock.patch.object(
-                run_once, "_ensure_dispatch_worktree", side_effect=lambda d, r, t, w: w
+                dispatch_queue, 'ensure_dispatch_worktree', side_effect=lambda d, r, t, w: w
             ),
-            mock.patch.object(run_once.dispatch, "dispatch_worker") as launch,
+            mock.patch.object(worker, "dispatch_worker") as launch,
         ):
             run_once.run_once(
                 f.config_path,
@@ -198,9 +206,9 @@ class LifecycleFollowupTests(unittest.TestCase):
         config = validate_config.validate_config(f.config_path, skip_external=True)
         with (
             mock.patch.object(
-                run_once, "_ensure_dispatch_worktree", side_effect=lambda d, r, t, w: w
+                dispatch_queue, 'ensure_dispatch_worktree', side_effect=lambda d, r, t, w: w
             ),
-            mock.patch.object(run_once.dispatch, "dispatch_worker") as launch,
+            mock.patch.object(worker, "dispatch_worker") as launch,
         ):
             run_once.run_once(
                 f.config_path, dry_run=False, skip_external=True, skip_publish=True
@@ -240,7 +248,7 @@ class LifecycleFollowupTests(unittest.TestCase):
 
     def test_paused_supervision_resolves_persisted_repository_id(self):
         f = self.fixture(board_fixture.BoardControlIntegrationTests)
-        now = run_once._now()
+        now = values.utc_now()
         with closing(sqlite3.connect(f.db_path)) as conn, conn:
             conn.execute("UPDATE repos SET repo_id='historic-id'")
             conn.execute(
@@ -252,7 +260,7 @@ class LifecycleFollowupTests(unittest.TestCase):
                 (now, now),
             )
         with mock.patch.object(
-            run_once, "_supervise_running_attempts", return_value=1
+            monitor, 'supervise_running_attempts', return_value=1
         ) as supervise:
             result = worker_supervision.run(f.config_path)
         self.assertTrue(result["ok"])
@@ -264,8 +272,8 @@ class LifecycleFollowupTests(unittest.TestCase):
         f, process, repo, now = life.running_fixture()
         life.stop_process(process)
         with mock.patch.object(
-            run_once,
-            "_inspect_attempt_recovery_with_metadata",
+            evidence,
+            'inspect_attempt_recovery_with_metadata',
             side_effect=subprocess.TimeoutExpired(["git", "status"], 5),
         ) as inspect:
             for i in range(3):
@@ -273,7 +281,7 @@ class LifecycleFollowupTests(unittest.TestCase):
                     datetime.fromisoformat(now) + timedelta(seconds=20 * i)
                 ).isoformat()
                 with closing(sqlite3.connect(f.db)) as conn, conn:
-                    run_once._supervise_running_attempts(conn, repo, {}, when)
+                    monitor.supervise_running_attempts(conn, repo, {}, when, resume_attempt=preparation.create_resume_attempt_and_prompt)
                     if i < 2:
                         self.assertFalse(
                             loop_engine.has_runnable_local_work(
@@ -281,16 +289,17 @@ class LifecycleFollowupTests(unittest.TestCase):
                             )
                         )
             with closing(sqlite3.connect(f.db)) as conn, conn:
-                run_once._supervise_running_attempts(
+                monitor.supervise_running_attempts(
                     conn,
                     repo,
                     {},
                     (datetime.fromisoformat(now) + timedelta(hours=5)).isoformat(),
+                    resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
                 self.assertFalse(
                     loop_engine.has_runnable_local_work(conn, repo_ids=[repo])
                 )
-                self.assertEqual(run_once._running_attempt_count(conn, repo), 0)
+                self.assertEqual(capacity.running_attempt_count(conn, repo), 0)
                 self.assertGreater(
                     conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 0
                 )
@@ -300,13 +309,13 @@ class LifecycleFollowupTests(unittest.TestCase):
         f = self.fixture(handoff_fixture.PendingHandoffRecoveryTests)
         now = datetime.now(timezone.utc)
         with mock.patch.object(
-            run_once.result_scope,
+            scope,
             "for_result",
             side_effect=subprocess.TimeoutExpired(["git", "rev-parse"], 5),
         ) as inspect:
             for i in range(3):
                 when = (now + timedelta(seconds=20 * i)).isoformat()
-                with mock.patch.object(run_once, "_now", return_value=when):
+                with mock.patch.object(values, 'utc_now', return_value=when):
                     f.cycle(f.empty)
             f.cycle(f.empty)
         self.assertEqual(inspect.call_count, 3)
@@ -424,7 +433,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             with closing(sqlite3.connect(f.db_path)) as conn, conn:
                 repo_id = work_repositories.upsert_repo(conn, repo)
             self.create(f, repo_id=repo_id, key=repo_id)
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         failures = []
 
         def prepare(repo, *args, **kwargs):
@@ -435,7 +444,7 @@ class LifecycleFollowupTests(unittest.TestCase):
                 )
             return original(repo, *args, **kwargs)
 
-        with mock.patch.object(run_once, "_prepare_worktree", side_effect=prepare):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=prepare):
             for _ in range(3):
                 cycle = run_once.run_once(
                     f.config_path, dry_run=True, skip_external=True, skip_publish=True
@@ -464,8 +473,9 @@ class LifecycleFollowupTests(unittest.TestCase):
             attempt = conn.execute("SELECT attempt_id FROM attempts").fetchone()[0]
         with result_spool.locked_record(f.db, attempt):
             with closing(sqlite3.connect(f.db)) as conn, conn:
-                run_once._supervise_running_attempts(
-                    conn, f.fixture.fixture.repo_id, f.config, f.now.isoformat()
+                monitor.supervise_running_attempts(
+                    conn, f.fixture.fixture.repo_id, f.config, f.now.isoformat(),
+                                                               resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
             self.assertIsNone(process.poll())
         f.stop(process)
@@ -495,7 +505,7 @@ class LifecycleFollowupTests(unittest.TestCase):
             owner = daemon_state.start_daemon_run(conn, config_path=str(f.config_path), owner_id='exception')['daemon_run_id']
         context = daemon.DaemonContext(str(f.config_path), None, f.db_path, f.repo_id, 2,
             dict(DAEMON_DEFAULTS), owner, 'lease')
-        with mock.patch.object(run_once, '_audit_completed_results', side_effect=TypeError('controller invariant')):
+        with mock.patch.object(result_audit, 'audit_completed_results', side_effect=TypeError('controller invariant')):
             for _ in range(3):
                 failed = run_once.run_once(f.config_path, fixture_path=f.empty_fixture,
                     dry_run=True, skip_external=True, skip_publish=True)

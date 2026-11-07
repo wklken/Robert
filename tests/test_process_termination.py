@@ -1,5 +1,5 @@
 from robert_agent.adapters.processes import attempt as attempt_process
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 import os
 from pathlib import Path
 import signal

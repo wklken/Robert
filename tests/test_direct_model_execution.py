@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from tests import test_review_coordinator as review_fixture
 from tests import test_vote_coordinator as vote_fixture
-from robert_agent import review_coordinator, vote_coordinator
+from robert_agent.workflows.review import coordinator as review_coordinator
+from robert_agent.workflows.vote import coordinator as vote_coordinator
 
 
 class DirectModelExecutionTests(unittest.TestCase):
@@ -86,7 +87,7 @@ assert not loaded, f'stage executor loaded workflows: {sorted(loaded)}'
         self.assertEqual(len(calls), 4)
 
     def test_optional_claude_config_supports_atomic_updates_with_direct_cli(self):
-        from robert_agent.model_environment import stage_environment
+        from robert_agent.adapters.processes.environment import stage_environment
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             output, config = root / 'output', root / 'claude'
@@ -115,7 +116,7 @@ Path(os.environ['TMPDIR'],'scratch').write_text('temporary')
             self.assertEqual(Path(env['TMPDIR'], 'scratch').read_text(), 'temporary')
 
     def test_optional_claude_config_cannot_overlap_inputs_or_robert_data(self):
-        from robert_agent.model_environment import stage_environment
+        from robert_agent.adapters.processes.environment import stage_environment
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             output = root / 'output'

@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess
 
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 
 
 def _proc_process_state(pid):

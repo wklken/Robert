@@ -12,9 +12,13 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import review_files, review_store, storage, vote_store
+from robert_agent.workflows.review import files as review_files
+from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
 from robert_agent.execution import stages as model_execution
-from robert_agent.worker import heartbeat, snapshot
+from robert_agent.execution import command as heartbeat
+from robert_agent.execution import progress as snapshot
 from tests import test_review_coordinator as coordinator_fixture
 
 

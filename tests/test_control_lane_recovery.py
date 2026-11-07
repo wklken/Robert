@@ -11,7 +11,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from robert_agent import control_lane, daemon_state, storage, worker_identity
+from robert_agent.runtime import control as control_lane
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.adapters.processes import identity as worker_identity
 
 
 OLD_BOOT = {'platform': 'linux', 'boot_source': 'linux_boot_id', 'boot_id': 'old-boot', 'pid_namespace': 'pid:[100]'}

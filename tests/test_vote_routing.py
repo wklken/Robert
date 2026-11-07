@@ -1,6 +1,7 @@
 import unittest
 
-from robert_agent import discover, route
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.workflows import routes as route
 from robert_agent.configuration import routes as route_config
 
 

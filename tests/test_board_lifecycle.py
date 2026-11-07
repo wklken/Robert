@@ -6,7 +6,11 @@ import unittest
 from unittest.mock import patch
 
 from tests import test_board as board_fixtures
-from robert_agent import board, publish, run_once, web, work_items
+from robert_agent.readmodels import board
+from robert_agent.delivery.application import publish
+from robert_agent.interfaces.web import server as web
+from robert_agent.work.application import commands as work_items
+from robert_agent.work.application import source_lifecycle
 
 
 class BoardLifecycleTests(unittest.TestCase):
@@ -100,7 +104,7 @@ class BoardLifecycleTests(unittest.TestCase):
                         conn.execute("INSERT INTO github_actions(action_id,task_id,action_type,audit_status,created_at) VALUES ('pending-publication',?,'comment','accepted',?)", (task_id, now))
                         # Only an uncertain in-flight effect must keep closure pending.
                         conn.execute("INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,status,created_at,updated_at) VALUES('unknown-effect','pending-publication','unknown-effect','fingerprint','executing',?,?)", (now, now))
-                    self.assertTrue(run_once._record_remote_terminal_state(
+                    self.assertTrue(source_lifecycle.record_remote_terminal_state(
                         conn, "repo-1", item["workstream_id"], source_id, source_id,
                         "issue", 16, task_id,
                         {"state": "closed", "state_reason": "completed", "closed_at": now},
@@ -254,7 +258,7 @@ class BoardLifecycleTests(unittest.TestCase):
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertIn("cancel", detail["valid_commands"])
         self.command(item, "cancel")
-        with patch("robert_agent.publish._publish_action") as publisher:
+        with patch("robert_agent.delivery.application.effects.publish_action") as publisher:
             result = publish.publish_ready_actions(self.db)
         publisher.assert_not_called()
         self.assertEqual(result["pending_count"], 0)
@@ -309,7 +313,7 @@ class BoardLifecycleTests(unittest.TestCase):
         item = self.create(start=True)
         self.seed_publication(item)
         self.command(item, "retry_publish")
-        with patch("robert_agent.publish._publish_action", return_value={"status": "publish_failed", "safe_error": "Offline"}):
+        with patch("robert_agent.delivery.application.effects.publish_action", return_value={"status": "publish_failed", "safe_error": "Offline"}):
             publish.publish_ready_actions(self.db)
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertIn("retry_publish", detail["valid_commands"])
@@ -351,14 +355,14 @@ class BoardLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(work_items.WorkItemConflictError, "publication"):
                 self.command(item, "cancel")
             return {"status": "published", "ok": True}
-        with patch("robert_agent.publish._publish_action", side_effect=external_write):
+        with patch("robert_agent.delivery.application.effects.publish_action", side_effect=external_write):
             self.assertTrue(publish.publish_ready_actions(self.db)["ok"])
 
     def test_publication_timeout_is_retryable(self):
         import subprocess
         item = self.create(start=True)
         self.seed_publication(item)
-        with patch("robert_agent.publish._publish_action", side_effect=subprocess.TimeoutExpired("gh", 60)):
+        with patch("robert_agent.delivery.application.effects.publish_action", side_effect=subprocess.TimeoutExpired("gh", 60)):
             result = publish.publish_ready_actions(self.db)
         self.assertEqual(result["failed_count"], 1)
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
@@ -378,7 +382,7 @@ class BoardLifecycleTests(unittest.TestCase):
         from concurrent.futures import ThreadPoolExecutor
         from contextlib import contextmanager
         import threading
-        from robert_agent.publication_lock import task_publication_lock
+        from robert_agent.delivery.lock import task_publication_lock
         item = self.create(start=True)
         self.seed_publication(item)
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -407,7 +411,7 @@ class BoardLifecycleTests(unittest.TestCase):
             finally:
                 if name == "publisher-A":
                     done.set()
-        with patch("robert_agent.publish.task_publication_lock", side_effect=controlled_lock), patch("robert_agent.publish._publish_action", side_effect=external):
+        with patch("robert_agent.delivery.application.publish.task_publication_lock", side_effect=controlled_lock), patch("robert_agent.delivery.application.effects.publish_action", side_effect=external):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 first = pool.submit(runner, "publisher-A")
                 self.assertTrue(started.wait(3))
@@ -432,7 +436,7 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertNotIn('hidden-output', json.dumps(detail))
 
     def test_cancel_accepts_verified_dead_worker_and_closes_its_binding(self):
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
         item = self.fixture._seed_six_columns()["doing"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
@@ -472,7 +476,8 @@ class BoardLifecycleTests(unittest.TestCase):
 
     def test_old_database_readonly_inspection_and_mixed_controls_do_not_write(self):
         from pathlib import Path
-        from robert_agent import execution_store, workbench
+        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.readmodels import workbench
         item=self.create('Historical task')
         with closing(sqlite3.connect(self.db)) as conn,conn:
             conn.execute('DROP TABLE execution_subjects')

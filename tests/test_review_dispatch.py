@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from robert_agent.dispatch import dispatch_worker, _BACKGROUND_PROCESSES
+from robert_agent.adapters.processes.worker import dispatch_worker, _BACKGROUND_PROCESSES
 from robert_agent.worker_adapters import build_worker_launch
 
 

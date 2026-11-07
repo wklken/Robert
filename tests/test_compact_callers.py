@@ -1,4 +1,6 @@
 """Production producers submit only semantic compact fields."""
+from robert_agent.delivery.application import lane as delivery_lane
+from robert_agent.adapters.github import budget as github_budget
 from contextlib import closing
 import json
 from pathlib import Path
@@ -6,7 +8,9 @@ import re
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import audit_result, render_prompt, result_contract
+from robert_agent.delivery.application import audit as audit_result
+from robert_agent.context import prompts as render_prompt
+from robert_agent.delivery import contract as result_contract
 
 
 class CompactCallerTests(unittest.TestCase):
@@ -48,7 +52,7 @@ class CompactCallerTests(unittest.TestCase):
 class CutoverTests(unittest.TestCase):
     def test_cutover_is_read_only_and_ignores_terminal_history(self):
         import sqlite3
-        from robert_agent import result_cutover
+        from robert_agent.execution.application import cutover as result_cutover
         db = sqlite3.connect(':memory:')
         db.executescript('''CREATE TABLE workstreams(active_task_id TEXT,lifecycle TEXT);
             CREATE TABLE tasks(task_id TEXT,lifecycle TEXT);
@@ -74,7 +78,7 @@ class CutoverTests(unittest.TestCase):
         import sqlite3
         from unittest.mock import Mock
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         fixture = PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -93,19 +97,19 @@ class CutoverTests(unittest.TestCase):
         import sqlite3
         from unittest.mock import patch
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import github_scan
+        from robert_agent.configuration import command as validate_config
         fixture = PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.execute("UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.result_contract')")
         config = {'ok': True, 'db_path': fixture.db, 'repos': [{'full_name': 'x/y', 'github_account': 'bot'}]}
-        with patch.object(github_scan.validate_config, 'validate_config', return_value=config), \
-             patch('robert_agent.notify.deliver_pending') as notify, \
-             patch.object(github_scan, '_budget', return_value=True), \
-             patch('robert_agent.publish.publish_ready_actions') as publish:
+        with patch.object(validate_config, 'validate_config', return_value=config), \
+             patch('robert_agent.delivery.application.notifications.deliver_pending') as notify, \
+             patch.object(github_budget, 'budget', return_value=True), \
+             patch('robert_agent.delivery.application.publish.publish_ready_actions') as publish:
             publish.return_value = {'ok': True}
-            response = github_scan.publish('unused')
+            response = delivery_lane.publish('unused')
         self.assertTrue(response['ok'], response)
         notify.assert_called_once()
         publish.assert_called_once()
@@ -113,7 +117,7 @@ class CutoverTests(unittest.TestCase):
     def test_completed_legacy_result_with_active_workstream_is_not_terminal_history(self):
         import sqlite3
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import result_cutover
+        from robert_agent.execution.application import cutover as result_cutover
         fixture = PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -130,7 +134,8 @@ class CutoverTests(unittest.TestCase):
     def test_pending_legacy_spool_is_preserved(self):
         import sqlite3
         import tempfile
-        from robert_agent import result_cutover, result_spool
+        from robert_agent.execution.application import cutover as result_cutover
+        from robert_agent.execution import spool as result_spool
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'db.sqlite'
             db = sqlite3.connect(path)
@@ -157,7 +162,9 @@ class CutoverControlPathTests(unittest.TestCase):
     def test_legacy_prepared_blocks_run_but_cancel_and_replacement_are_available(self):
         import sqlite3
         from contextlib import closing
-        from robert_agent import result_cutover, run_once, work_items
+        from robert_agent.execution.application import cutover as result_cutover
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.work.application import commands as work_items
         db, task, attempt, _, _ = self.prepare('comment')
         with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute("UPDATE attempts SET metadata_json='{}' WHERE attempt_id=?", (attempt,))

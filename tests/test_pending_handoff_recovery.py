@@ -8,8 +8,14 @@ from unittest import mock
 
 from tests import test_run_once as fixtures
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import board, loop_engine, run_once, validate_config, work_items
-from robert_agent.worker import result as worker_result
+from robert_agent.readmodels import board
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.runtime import cycle as run_once
+from robert_agent.configuration import command as validate_config
+from robert_agent.work.application import commands as work_items
+from robert_agent.delivery.application import submission as worker_result
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.foundation import values
 
 
 class PendingHandoffRecoveryTests(unittest.TestCase):
@@ -53,7 +59,7 @@ class PendingHandoffRecoveryTests(unittest.TestCase):
             return task[0], json.loads(task[1]).get('pending_handoff', {})
 
     def test_transient_handoff_backs_off_then_recovers_once(self):
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
             self.cycle(self.empty)
         lifecycle, handoff = self.state()
         self.assertEqual(lifecycle, 'completed')
@@ -61,7 +67,7 @@ class PendingHandoffRecoveryTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=['repo:example/backend'], config_result=self.config, now=handoff['failed_at']))
             self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=['repo:example/backend'], config_result=self.config, now=handoff['next_retry_at']))
-        with mock.patch.object(run_once, '_now', return_value=handoff['next_retry_at']):
+        with mock.patch.object(values, 'utc_now', return_value=handoff['next_retry_at']):
             self.assertTrue(self.cycle(self.empty)['ok'])
             self.assertTrue(self.cycle(self.empty)['ok'])
         with closing(sqlite3.connect(self.db)) as conn:
@@ -72,7 +78,7 @@ class PendingHandoffRecoveryTests(unittest.TestCase):
         self.assertEqual(self.state()[1]['status'], 'completed')
 
     def test_permanent_failure_is_visible_and_operator_can_retry(self):
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=subprocess.CalledProcessError(1, ['git', 'fetch'], stderr='permission denied')):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=subprocess.CalledProcessError(1, ['git', 'fetch'], stderr='permission denied')):
             self.cycle(self.empty)
         lifecycle, handoff = self.state()
         self.assertEqual(lifecycle, 'completed')
@@ -100,9 +106,9 @@ class PendingHandoffRecoveryTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM tasks WHERE parent_task_id=?', (self.task,)).fetchone()[0], 1)
 
     def test_transient_budget_stops_and_explicit_retry_processes_pending_request(self):
-        due = run_once._now()
+        due = values.utc_now()
         for count in range(1, 4):
-            with mock.patch.object(run_once, '_now', return_value=due), mock.patch.object(run_once, '_prepare_worktree',
+            with mock.patch.object(values, 'utc_now', return_value=due), mock.patch.object(assigned_workspace, 'prepare_worktree',
                     side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
                 self.cycle(self.empty)
             state = self.state()[1]
@@ -123,13 +129,13 @@ class PendingHandoffRecoveryTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT lifecycle FROM tasks WHERE task_id=?', (self.task,)).fetchone()[0], 'completed')
 
     def test_cancel_during_worktree_preparation_cannot_create_child(self):
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         def cancel(*args, **kwargs):
             with closing(sqlite3.connect(self.db)) as conn, conn:
-                conn.execute("UPDATE work_items SET canceled_at=?", (run_once._now(),))
+                conn.execute("UPDATE work_items SET canceled_at=?", (values.utc_now(),))
                 conn.execute("UPDATE workstreams SET lifecycle='canceled',active_task_id=NULL")
             return original(*args, **kwargs)
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=cancel):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=cancel):
             self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 1)
@@ -137,13 +143,13 @@ class PendingHandoffRecoveryTests(unittest.TestCase):
 
     def test_revoked_pending_request_settles_without_creating_child(self):
         import yaml
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
             self.cycle(self.empty)
         due = self.state()[1]['next_retry_at']
         config = yaml.safe_load(self.fixture.config_path.read_text())
         config['repos'][0]['trusted_actors'] = ['different-user']
         self.fixture.config_path.write_text(yaml.safe_dump(config))
-        with mock.patch.object(run_once, '_now', return_value=due):
+        with mock.patch.object(values, 'utc_now', return_value=due):
             self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 1)
@@ -151,14 +157,14 @@ class PendingHandoffRecoveryTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT binding_status FROM execution_subjects WHERE subject_id=?", (self.task,)).fetchone()[0], 'terminal')
 
     def test_completed_episode_owned_task_preserves_human_handoff(self):
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE tasks SET task_kind='ci_remediation',lifecycle='completed',metadata_json=json_set(metadata_json,'$.remediation_episode_id','episode')")
             conn.execute("DELETE FROM execution_subjects WHERE subject_type='task'")
             conn.execute("""INSERT INTO pr_remediation_episodes(episode_id,workstream_id,episode_kind,subject_key,
                 observed_head_sha,observed_base_sha,status,first_seen_at,updated_at,last_task_id)
                 SELECT 'episode',workstream_id,'ci','key','head','base','waiting_for_signal',created_at,updated_at,task_id FROM tasks""")
-            execution_store.ensure_subject(conn, 'remediation_episode', 'episode', 'pr_remediation', run_once._now())
+            execution_store.ensure_subject(conn, 'remediation_episode', 'episode', 'pr_remediation', values.utc_now())
             conn.execute("UPDATE github_actions SET audit_status='accepted'")
             conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')")
         with closing(sqlite3.connect(self.db)) as conn:

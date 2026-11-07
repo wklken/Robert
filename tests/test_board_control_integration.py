@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
+from robert_agent.work.application import source_lifecycle
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +14,8 @@ AGENT = PACKAGE_ROOT
 
 class BoardControlIntegrationTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import storage, work_items
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.work.application import commands as work_items
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -68,7 +70,7 @@ class BoardControlIntegrationTests(unittest.TestCase):
         )
 
     def _run_local_cycle(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         result = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -91,8 +93,8 @@ class BoardControlIntegrationTests(unittest.TestCase):
             )
 
     def test_local_backlog_waiting_review_and_merge_lifecycle(self):
-        from robert_agent import run_once
-        from robert_agent import board, work_items
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
 
         created = work_items.create_work_item(
             self.db_path,
@@ -244,7 +246,7 @@ class BoardControlIntegrationTests(unittest.TestCase):
         self._run_local_cycle()
         self._finish_task(changes["task_id"], "2026-07-19T04:20:00+00:00")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            run_once._record_remote_terminal_state(
+            source_lifecycle.record_remote_terminal_state(
                 conn,
                 self.repo_id,
                 pr_workstream_id,
@@ -280,8 +282,8 @@ class BoardControlIntegrationTests(unittest.TestCase):
         self.assertEqual(manual["item"]["requested_worker"], "reviewer")
 
     def test_fake_worker_publish_and_github_dedup_project_one_review_item(self):
-        from robert_agent import controlled_e2e_acceptance
-        from robert_agent import board
+        from robert_agent.acceptance import controlled_e2e as controlled_e2e_acceptance
+        from robert_agent.readmodels import board
 
         workspace = self.root / "controlled"
         result = controlled_e2e_acceptance.controlled_e2e_acceptance(
@@ -305,9 +307,9 @@ class BoardControlIntegrationTests(unittest.TestCase):
             )
 
     def test_no_pr_results_and_existing_operator_routes_remain_available(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
         from tests.result_fixtures import internal_result
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         base = {
             "task_id": "task-local",
             "attempt_id": "attempt-local",

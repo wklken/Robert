@@ -8,7 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from tests import test_supervision_repair
-from robert_agent import supervision_repair, supervision_store
+from robert_agent.workflows.maintenance import repair as supervision_repair
+from robert_agent.supervision import store as supervision_store
 
 
 class RepairFollowupTests(unittest.TestCase):
@@ -38,7 +39,7 @@ class RepairFollowupTests(unittest.TestCase):
                 })))
 
     def test_waits_for_audited_delivery_before_claim(self):
-        from robert_agent import supervision_repair_followup
+        from robert_agent.workflows.maintenance import followup as supervision_repair_followup
         supervision_repair.propose(self.config, self.incident, now=self.now)
         with patch.object(supervision_repair, 'verify', side_effect=AssertionError('no delivery')):
             self.assertEqual(supervision_repair_followup.poll(self.config, now=self.now)['status'], 'idle')
@@ -46,7 +47,7 @@ class RepairFollowupTests(unittest.TestCase):
             self.assertIsNone(supervision_store.get_checkpoint(conn, 'repair', self.incident, 'followup'))
 
     def test_claim_is_durable_before_io_and_complete_stops_polling(self):
-        from robert_agent import supervision_repair_followup
+        from robert_agent.workflows.maintenance import followup as supervision_repair_followup
         self.delivery('a' * 40)
         visits = []
 

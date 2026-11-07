@@ -22,7 +22,7 @@ class ProjectMemoryTests(unittest.TestCase):
         self._init_db()
 
     def test_record_memory_delta_upserts_entry_and_revision(self):
-        from robert_agent import project_memory
+        from robert_agent.context import project as project_memory
 
         result_payload = self._result_payload(
             title="PR review comments update the PR workstream",
@@ -68,7 +68,7 @@ class ProjectMemoryTests(unittest.TestCase):
         self.assertIn("dd-pr-followup", terms)
 
     def test_record_memory_delta_appends_revision_for_same_thread_entry(self):
-        from robert_agent import project_memory
+        from robert_agent.context import project as project_memory
 
         first = self._result_payload(
             result_id="result-1",
@@ -110,7 +110,7 @@ class ProjectMemoryTests(unittest.TestCase):
         self.assertEqual(revision_count, 2)
 
     def test_invalid_memory_delta_is_skipped_without_exception(self):
-        from robert_agent import project_memory
+        from robert_agent.context import project as project_memory
 
         payload = {
             "result_id": "result-1",
@@ -135,7 +135,7 @@ class ProjectMemoryTests(unittest.TestCase):
         self.assertEqual(entry_count, 0)
 
     def test_retrieve_memories_ranks_keyword_and_route_matches(self):
-        from robert_agent import project_memory
+        from robert_agent.context import project as project_memory
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
@@ -184,7 +184,7 @@ class ProjectMemoryTests(unittest.TestCase):
         self.assertEqual(memories[0]["short_summary"], "DD PR follow-up runs on update-existing-pr.")
 
     def test_retrieve_memories_applies_runtime_knowledge_boost_terms(self):
-        from robert_agent import project_memory
+        from robert_agent.context import project as project_memory
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
@@ -238,7 +238,7 @@ class ProjectMemoryTests(unittest.TestCase):
         self.assertEqual(memories[0]["title"], "Use update-existing-pr for DD PR review loops")
 
     def _init_db(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         storage.init_database(self.db_path)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -271,7 +271,7 @@ class ProjectMemoryTests(unittest.TestCase):
                         "title": title,
                         "short_summary": short_summary,
                         "long_summary": "Longer explanation for retrieval and prompt context.",
-                        "paths": ["src/robert_agent/run_once.py"],
+                        "paths": ["src/robert_agent/runtime/cycle.py"],
                         "symbols": ["_create_task_attempt_and_prompt"],
                         "keywords": list(keywords or ["dd-pr-followup", "workstream"]),
                         "confidence": "medium",

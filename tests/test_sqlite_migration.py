@@ -5,10 +5,10 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent import storage
+from robert_agent.adapters.sqlite import database as storage
 from tests import legacy_workflow_store as workflow_store
 from tests import legacy_workflow_signals as workflow_signals
-from robert_agent import sqlite_migration
+from robert_agent.operations import migration as sqlite_migration
 
 
 class SQLiteMigrationTests(unittest.TestCase):
@@ -155,7 +155,7 @@ class SQLiteMigrationTests(unittest.TestCase):
     def test_completed_attempt_with_live_process_blocks_handoff(self):
         import subprocess
         import sys
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         child = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -175,7 +175,7 @@ class SQLiteMigrationTests(unittest.TestCase):
         )
 
     def test_unrelated_control_row_does_not_authorize_dbos_startup(self):
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db)) as conn, conn:
             execution_store.initialize(conn)
@@ -270,7 +270,7 @@ class SQLiteMigrationTests(unittest.TestCase):
             sqlite_migration.run(self.db, plan_file=path)
 
     def test_conflicting_control_is_reported_before_apply(self):
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db)) as conn, conn:
             execution_store.ensure_subject(conn, "task", "t", "human_request", "now")
@@ -287,7 +287,7 @@ class SQLiteMigrationTests(unittest.TestCase):
         self.assertTrue(any(b.get("run_id") == "live" for b in plan["blockers"]), plan)
 
     def test_dispatch_lock_prevents_offline_apply(self):
-        from robert_agent.publication_lock import task_publication_lock
+        from robert_agent.delivery.lock import task_publication_lock
 
         plan = sqlite_migration.preview(self.db)
         with task_publication_lock(self.db, "dispatch-admission") as acquired:
@@ -297,7 +297,7 @@ class SQLiteMigrationTests(unittest.TestCase):
 
     def test_failed_handoff_rolls_back_and_can_retry_same_plan(self):
         from unittest.mock import patch
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         plan = sqlite_migration.preview(self.db)
         with patch.object(execution_store, "record_historical_facts", side_effect=RuntimeError("injected failure")):

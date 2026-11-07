@@ -11,8 +11,9 @@ from unittest.mock import patch
 import yaml
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, supervision_actions as actions
-from robert_agent.validate_config import validate_config
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import actions
+from robert_agent.configuration.command import validate_config
 
 
 NOW = '2026-11-06T10:00:00+00:00'
@@ -116,7 +117,7 @@ class SupervisionActionTests(unittest.TestCase):
     def test_native_retries_preserve_domain_budgets_without_supervisor_request(self):
         self.conn.commit()
         for kind in actions.STAGES:
-            with self.subTest(kind=kind), patch('robert_agent.validate_config.validate_config') as validate:
+            with self.subTest(kind=kind), patch('robert_agent.configuration.command.validate_config') as validate:
                 config = {**self.config, 'config_path': '/fixture/unused.yml'}
                 for _ in range(3):
                     self.assertFalse(actions.blocks_consumer(self.conn, task_id='task', kind=kind,
@@ -131,7 +132,7 @@ class SupervisionActionTests(unittest.TestCase):
         self.plan()
         self.conn.commit()
         config = {**self.config, 'config_path': '/fixture/unavailable.yml'}
-        with patch('robert_agent.validate_config.validate_config', return_value={'ok': False}) as validate:
+        with patch('robert_agent.configuration.command.validate_config', return_value={'ok': False}) as validate:
             for _ in range(3):
                 self.assertFalse(actions.blocks_consumer(self.conn, task_id='task', kind='spool_replay',
                     target_id='attempt-task', now=NOW, config=config, native_retry=True))
@@ -155,7 +156,7 @@ class SupervisionActionTests(unittest.TestCase):
         self.conn.commit()
         child_script = '''
 import json, sqlite3, sys, time
-from robert_agent import supervision_actions as actions
+from robert_agent.supervision import actions
 db, raw_config, now = sys.argv[1:]
 with sqlite3.connect(db) as conn:
     verdict = actions.begin(conn, task_id='task', kind='audit_retry', target_id='result',

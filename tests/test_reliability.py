@@ -1,4 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
+import time
 
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
@@ -11,13 +12,15 @@ import unittest
 from unittest import mock
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import (
-    storage,
-    publish,
-    loop_engine,
-    execution_operations,
-    execution_store,
-)
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.delivery import values as publication_values
+from robert_agent.delivery.application import publish
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.execution import operations as execution_operations
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.execution import journal as run_journal
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.foundation import values
 
 
 class PublicationBudgetTests(unittest.TestCase):
@@ -86,7 +89,7 @@ class PublicationBudgetTests(unittest.TestCase):
 
     def cycle(self, seconds=0):
         self.now += timedelta(seconds=seconds)
-        with mock.patch.object(publish, "_now", return_value=self.now.isoformat()):
+        with mock.patch.object(publication_values, "now", return_value=self.now.isoformat()):
             return publish.publish_ready_actions(self.db, run_command=self.runner)
 
     def test_permanent_rejection_stops_remote_calls_and_scheduler(self):
@@ -171,7 +174,7 @@ class DurableResultTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.db = self.fixture._init_attempt_db(output_type="local_result", route_id="local-result")
-        from robert_agent.worker.result import build_result
+        from robert_agent.delivery.application.submission import build_result
 
         self.payload = build_result(
             task_id="task-1",
@@ -185,7 +188,7 @@ class DurableResultTests(unittest.TestCase):
         )
 
     def test_locked_final_result_replays_once_without_rerunning_worker(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         with closing(sqlite3.connect(self.db)) as blocker:
             blocker.execute("BEGIN IMMEDIATE")
@@ -204,7 +207,7 @@ class DurableResultTests(unittest.TestCase):
             self.assertEqual(c.execute("SELECT count(*) FROM wakeups").fetchone()[0], 1)
 
     def test_canceled_attempt_cannot_be_revived_by_result_replay(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         with mock.patch.object(
             result,
@@ -227,7 +230,7 @@ class DeliveryBudgetTests(unittest.TestCase):
 
     def test_operator_delivery_is_persisted_and_not_repeated(self):
         from tests.test_worker_protocol import WorkerProtocolTests
-        from robert_agent import notify
+        from robert_agent.delivery.application import notifications as notify
 
         fixture = WorkerProtocolTests()
         fixture.setUp()
@@ -252,7 +255,7 @@ class DeliveryBudgetTests(unittest.TestCase):
 
 class ObservabilityTests(unittest.TestCase):
     def test_codex_turn_usage_is_counted(self):
-        from robert_agent import usage
+        from robert_agent.readmodels import usage
 
         parsed = usage.parse_cbc_stream_json(
             json.dumps(
@@ -266,28 +269,27 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(parsed["usage"]["input_tokens"], 100)
 
     def test_phase_records_actual_finish_instead_of_cycle_time(self):
-        from robert_agent import run_once
 
         with closing(sqlite3.connect(":memory:")) as c:
             c.execute(
                 "CREATE TABLE run_steps(step_id TEXT,run_id TEXT,step_key TEXT,status TEXT,started_at TEXT,finished_at TEXT,output_json TEXT,error_json TEXT)"
             )
-            run_once._insert_run_step(c, "r", "publish")
+            run_journal.insert_run_step(c, "r", "publish")
             with (
                 mock.patch.object(
-                    run_once,
-                    "_now",
+                    values,
+                    'utc_now',
                     side_effect=[
                         "2026-10-23T00:00:00+00:00",
                         "2026-10-23T00:01:00+00:00",
                     ],
                 ),
-                mock.patch.object(run_once.time, "monotonic", side_effect=[100, 160]),
+                mock.patch.object(time, "monotonic", side_effect=[100, 160]),
             ):
-                run_once._mark_run_step(
+                run_journal.mark_run_step(
                     c, "r", "publish", "running", "2026-10-23T00:00:00+00:00"
                 )
-                run_once._mark_run_step(
+                run_journal.mark_run_step(
                     c, "r", "publish", "succeeded", "2026-10-23T00:00:00+00:00"
                 )
             row = c.execute("SELECT started_at,finished_at FROM run_steps").fetchone()
@@ -306,7 +308,7 @@ class WaitingResultTests(unittest.TestCase):
     setUp = DurableResultTests.setUp
 
     def test_github_question_without_public_action_is_rejected_before_completion(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         self.payload["output_type"] = "waiting_for_user"
         self.payload["submission"].update(
@@ -336,13 +338,13 @@ class WaitingResultTests(unittest.TestCase):
 
 class TransactionBoundaryTests(unittest.TestCase):
     def test_worktree_preparation_does_not_hold_domain_write_lock(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         from tests.test_run_once import RunOnceDryRunTests
 
         fixture = RunOnceDryRunTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         checked = []
 
         def prepare(*args, **kwargs):
@@ -354,7 +356,7 @@ class TransactionBoundaryTests(unittest.TestCase):
             checked.append(True)
             return original(*args, **kwargs)
 
-        with mock.patch.object(run_once, "_prepare_worktree", side_effect=prepare):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=prepare):
             result = run_once.run_once(
                 fixture.config_path,
                 fixture_path=fixture.fixture_path,
@@ -368,7 +370,7 @@ class TransactionBoundaryTests(unittest.TestCase):
 class RecoveryEntryTests(unittest.TestCase):
     def test_operator_can_start_new_subject_after_attention_and_dead_worker(self):
         from tests.test_work_items import WorkItemCommandTests
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
         from robert_agent.execution import ownership as execution_ownership
 
         fixture = WorkItemCommandTests()
@@ -406,7 +408,7 @@ class RecoveryEntryTests(unittest.TestCase):
 
 class SpoolValidationTests(unittest.TestCase):
     def test_malformed_shape_is_quarantined_without_blocking_replay(self):
-        from robert_agent import result_spool
+        from robert_agent.execution import spool as result_spool
 
         with tempfile.TemporaryDirectory() as directory:
             db = Path(directory) / "db"
@@ -423,7 +425,7 @@ class HealthTests(unittest.TestCase):
     setUp = PublicationBudgetTests.setUp
 
     def test_health_reports_delayed_publication_and_storage_without_deleting(self):
-        from robert_agent import reliability_health
+        from robert_agent.operations import health as reliability_health
 
         with closing(sqlite3.connect(self.db)) as c, c:
             c.execute(
@@ -451,8 +453,9 @@ class ReplayBudgetTests(unittest.TestCase):
 
     def test_busy_replay_stops_after_first_short_wait(self):
         import time
-        from robert_agent import result_spool, result_contract
-        from robert_agent.worker.result import replay_pending_results
+        from robert_agent.execution import spool as result_spool
+        from robert_agent.delivery import contract as result_contract
+        from robert_agent.delivery.application.submission import replay_pending_results
 
         for number in range(2):
             envelope = {**self.payload, "attempt_id": f"pending-{number}"}

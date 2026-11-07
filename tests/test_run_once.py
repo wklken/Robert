@@ -1,5 +1,7 @@
 from robert_agent.adapters.processes import attempt as attempt_process
-from robert_agent import worker_identity
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.delivery.application import publish
+from robert_agent.adapters.processes import identity as worker_identity
 from contextlib import closing
 import json
 import sqlite3
@@ -11,6 +13,19 @@ import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tests.support import PACKAGE_ROOT, init_test_checkout
+from robert_agent.adapters.processes import worker as cycle_worker
+from robert_agent.execution import journal as run_journal
+from robert_agent.execution.application import dispatch as dispatch_queue
+from robert_agent.execution.application import evidence
+from robert_agent.execution.application import monitor
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import completion
+from robert_agent.work.application import preparation
+from robert_agent.work.application import source_events
+from robert_agent.work.application import source_lifecycle
+from robert_agent.execution import capacity
+from robert_agent.foundation import values
+from robert_agent.application import repository_cycle
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -130,8 +145,7 @@ repos:
         fallback_model="model-fallback",
         same_task=False,
     ):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / f"fallback-{len(failures)}.sqlite3"
         storage.init_database(db_path)
@@ -228,15 +242,15 @@ repos:
             "default_effort": "high",
         }
         calls = []
-        original = run_once.dispatch.dispatch_worker
+        original = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
             return {"ok": True, "status": "planned", "command": []}
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
-            run_once._dispatch_queued(
+            cycle_worker.dispatch_worker = fake_dispatch_worker
+            dispatch_queue.dispatch_queued(
                 db_path,
                 ["repo-1"],
                 [
@@ -266,7 +280,7 @@ repos:
                 }},
             )
         finally:
-            run_once.dispatch.dispatch_worker = original
+            cycle_worker.dispatch_worker = original
         return calls[0]
 
     def test_dispatch_uses_fallback_model_after_two_consecutive_timeouts(self):
@@ -388,7 +402,7 @@ repos:
         )
 
     def _seed_active_pr_task(self, pr_number):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -448,7 +462,7 @@ repos:
         return db_path, task_id, attempt_id
 
     def test_dry_run_fixture_creates_control_plane_rows_and_prompt_artifact(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         result = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -549,8 +563,9 @@ repos:
         )
 
     def test_web_work_item_materializes_without_fake_github_rows(self):
-        from robert_agent import run_once
-        from robert_agent import storage, work_items
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.work.application import commands as work_items
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -645,8 +660,7 @@ repos:
         self.assertEqual(wakeup_status, "consumed")
 
     def test_manual_task_worker_overrides_route_and_default_worker(self):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "manual-worker.sqlite3"
         storage.init_database(db_path)
@@ -695,15 +709,15 @@ repos:
             },
         ]
         calls = []
-        original = run_once.dispatch.dispatch_worker
+        original = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
             return {"ok": True, "status": "planned", "command": []}
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
-            run_once._dispatch_queued(
+            cycle_worker.dispatch_worker = fake_dispatch_worker
+            dispatch_queue.dispatch_queued(
                 db_path,
                 ["repo-1"],
                 [
@@ -726,15 +740,14 @@ repos:
                 config_result={"default_worker": workers[0], "workers": workers, "routes": {"local-result": {"worker": "default", "model": "route-model", "effort": "low"}}},
             )
         finally:
-            run_once.dispatch.dispatch_worker = original
+            cycle_worker.dispatch_worker = original
 
         self.assertEqual(calls[0]["worker_command"], "codex")
         self.assertEqual(calls[0]["model"], "model-review")
         self.assertEqual(calls[0]["reasoning_effort"], "high")
 
     def test_repo_run_steps_can_record_same_step_for_different_repos(self):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -753,9 +766,9 @@ repos:
                 ("repo:b", "Org/b", "robot", "main", str(self.repo_root), str(self.worktree_root)),
             )
 
-            run_once._insert_repo_run_step(conn, "run-test", "repo:a", "discover")
-            run_once._insert_repo_run_step(conn, "run-test", "repo:b", "discover")
-            run_once._mark_repo_run_step(
+            run_journal._insert_repo_run_step(conn, "run-test", "repo:a", "discover")
+            run_journal._insert_repo_run_step(conn, "run-test", "repo:b", "discover")
+            run_journal.mark_repo_run_step(
                 conn,
                 "run-test",
                 "repo:a",
@@ -776,7 +789,7 @@ repos:
         self.assertIn("raw_event_count", rows[0][3])
 
     def test_run_once_processes_two_repos_with_repo_specific_trust(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -823,9 +836,9 @@ repos:
                 ]
             raise AssertionError(repo)
 
-        original_collect = run_once.discover.collect_live_events
+        original_collect = discover.collect_live_events
         try:
-            run_once.discover.collect_live_events = fake_collect
+            discover.collect_live_events = fake_collect
             result = run_once.run_once(
                 config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -833,7 +846,7 @@ repos:
                 skip_external=False,
             )
         finally:
-            run_once.discover.collect_live_events = original_collect
+            discover.collect_live_events = original_collect
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["status"], "completed")
@@ -867,7 +880,7 @@ repos:
         self.assertEqual(len(run_summary["repo_summaries"]), 2)
 
     def test_run_once_continues_after_one_repo_discovery_failure(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -901,9 +914,9 @@ repos:
                 }
             ]
 
-        original_collect = run_once.discover.collect_live_events
+        original_collect = discover.collect_live_events
         try:
-            run_once.discover.collect_live_events = fake_collect
+            discover.collect_live_events = fake_collect
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -911,7 +924,7 @@ repos:
                 skip_external=False,
             )
         finally:
-            run_once.discover.collect_live_events = original_collect
+            discover.collect_live_events = original_collect
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "partial_failure")
@@ -929,7 +942,7 @@ repos:
         self.assertEqual(active_leases, 0)
 
     def test_run_once_multi_repo_top_level_notifications_disable_repo_notification_polling(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -998,11 +1011,11 @@ repos:
                 }
             ]
 
-        original_collect_notifications = run_once.discover.collect_account_notifications
-        original_collect_live_events = run_once.discover.collect_live_events
+        original_collect_notifications = discover.collect_account_notifications
+        original_collect_live_events = discover.collect_live_events
         try:
-            run_once.discover.collect_account_notifications = fake_collect_account_notifications
-            run_once.discover.collect_live_events = fake_collect_live_events
+            discover.collect_account_notifications = fake_collect_account_notifications
+            discover.collect_live_events = fake_collect_live_events
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1010,8 +1023,8 @@ repos:
                 skip_external=False,
             )
         finally:
-            run_once.discover.collect_account_notifications = original_collect_notifications
-            run_once.discover.collect_live_events = original_collect_live_events
+            discover.collect_account_notifications = original_collect_notifications
+            discover.collect_live_events = original_collect_live_events
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(
@@ -1041,7 +1054,7 @@ repos:
         )
 
     def test_run_once_single_repo_empty_top_level_notifications_disable_repo_polling(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         discovery_calls = []
 
         def fake_collect_account_notifications(repos, runner=None):
@@ -1068,11 +1081,11 @@ repos:
             )
             return []
 
-        original_collect_notifications = run_once.discover.collect_account_notifications
-        original_collect_live_events = run_once.discover.collect_live_events
+        original_collect_notifications = discover.collect_account_notifications
+        original_collect_live_events = discover.collect_live_events
         try:
-            run_once.discover.collect_account_notifications = fake_collect_account_notifications
-            run_once.discover.collect_live_events = fake_collect_live_events
+            discover.collect_account_notifications = fake_collect_account_notifications
+            discover.collect_live_events = fake_collect_live_events
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1080,8 +1093,8 @@ repos:
                 skip_external=False,
             )
         finally:
-            run_once.discover.collect_account_notifications = original_collect_notifications
-            run_once.discover.collect_live_events = original_collect_live_events
+            discover.collect_account_notifications = original_collect_notifications
+            discover.collect_live_events = original_collect_live_events
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(
@@ -1096,7 +1109,7 @@ repos:
         )
 
     def test_run_once_multi_repo_notification_collection_failure_falls_back_per_repo(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -1149,11 +1162,11 @@ repos:
                 }
             ]
 
-        original_collect_notifications = run_once.discover.collect_account_notifications
-        original_collect_live_events = run_once.discover.collect_live_events
+        original_collect_notifications = discover.collect_account_notifications
+        original_collect_live_events = discover.collect_live_events
         try:
-            run_once.discover.collect_account_notifications = fake_collect_account_notifications
-            run_once.discover.collect_live_events = fake_collect_live_events
+            discover.collect_account_notifications = fake_collect_account_notifications
+            discover.collect_live_events = fake_collect_live_events
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1161,8 +1174,8 @@ repos:
                 skip_external=False,
             )
         finally:
-            run_once.discover.collect_account_notifications = original_collect_notifications
-            run_once.discover.collect_live_events = original_collect_live_events
+            discover.collect_account_notifications = original_collect_notifications
+            discover.collect_live_events = original_collect_live_events
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(
@@ -1182,7 +1195,7 @@ repos:
         )
 
     def test_run_once_notification_command_missing_falls_back_per_repo(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         discovery_calls = []
 
         def fake_collect_account_notifications(_repos, runner=None):
@@ -1204,11 +1217,11 @@ repos:
             )
             return []
 
-        original_collect_notifications = run_once.discover.collect_account_notifications
-        original_collect_live_events = run_once.discover.collect_live_events
+        original_collect_notifications = discover.collect_account_notifications
+        original_collect_live_events = discover.collect_live_events
         try:
-            run_once.discover.collect_account_notifications = fake_collect_account_notifications
-            run_once.discover.collect_live_events = fake_collect_live_events
+            discover.collect_account_notifications = fake_collect_account_notifications
+            discover.collect_live_events = fake_collect_live_events
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1216,8 +1229,8 @@ repos:
                 skip_external=False,
             )
         finally:
-            run_once.discover.collect_account_notifications = original_collect_notifications
-            run_once.discover.collect_live_events = original_collect_live_events
+            discover.collect_account_notifications = original_collect_notifications
+            discover.collect_live_events = original_collect_live_events
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(
@@ -1232,7 +1245,7 @@ repos:
         )
 
     def test_dry_run_respects_max_dispatches(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -1295,7 +1308,7 @@ repos:
         self.assertEqual(dispatched_attempt_count, 1)
 
     def test_second_run_preserves_existing_control_plane_rows(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1337,7 +1350,7 @@ repos:
         self.assertEqual(event_status, "authorized_trigger")
 
     def test_existing_workstream_followup_is_context_not_new_task(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1388,7 +1401,7 @@ repos:
         self.assertEqual(event, ("context_only",))
 
     def test_existing_workstream_followup_without_mention_is_ignored(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1444,7 +1457,7 @@ repos:
         self.assertEqual(event_status, "ignored_context")
 
     def test_active_issue_workstream_does_not_capture_pr_followup_task(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         issue_fixture = self.root / "issue.json"
         issue_fixture.write_text(
             json.dumps(
@@ -1526,7 +1539,7 @@ repos:
         )
 
     def test_member_context_on_known_inactive_pr_workstream_does_not_create_task(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         db_path = self.data_dir / "dd.sqlite3"
         initial = run_once.run_once(
             self.config_path,
@@ -1618,7 +1631,7 @@ repos:
         self.assertEqual(event_row, ("context_only", "reviewer", "comment:pr-member-followup"))
 
     def test_trusted_context_on_known_inactive_pr_workstream_creates_new_task(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         db_path = self.data_dir / "dd.sqlite3"
         initial = run_once.run_once(
             self.config_path,
@@ -1702,8 +1715,8 @@ repos:
         self.assertEqual(rows, [("github:example/backend!456", "queued")])
 
     def test_audited_worker_result_with_unpublished_action_keeps_task_active(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1770,8 +1783,8 @@ repos:
         self.assertEqual(relationship, "trigger")
 
     def test_run_once_rejects_publishable_result_without_required_verification(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1812,8 +1825,8 @@ repos:
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "prepared")
 
     def test_run_once_copies_worker_usage_from_stdout_log(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1908,9 +1921,9 @@ repos:
         self.assertEqual(result_metadata["usage"]["total_cost_usd"], 0.045)
 
     def test_run_once_records_publish_actions_step_after_audit(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         calls = []
-        original_publish = run_once.publish.publish_ready_actions
+        original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
             calls.append((str(db_path), dry_run))
@@ -1923,7 +1936,7 @@ repos:
             }
 
         try:
-            run_once.publish.publish_ready_actions = fake_publish_ready_actions
+            publish.publish_ready_actions = fake_publish_ready_actions
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1931,7 +1944,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.publish.publish_ready_actions = original_publish
+            publish.publish_ready_actions = original_publish
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(calls, [(str(self.data_dir / "dd.sqlite3"), False)])
@@ -1947,9 +1960,9 @@ repos:
         self.assertEqual(json.loads(step[1])["published_count"], 1)
 
     def test_skip_publish_skips_publish_step_and_does_not_invoke_publish(self):
-        from robert_agent import run_once
-        original_publish = run_once.publish.publish_ready_actions
-        original_finalize = run_once._finalize_published_results
+        from robert_agent.runtime import cycle as run_once
+        original_publish = publish.publish_ready_actions
+        original_finalize = completion.finalize_published_results
 
         def unexpected_publish(*_args, **_kwargs):
             raise AssertionError("publish should not run when skip_publish=True")
@@ -1958,8 +1971,8 @@ repos:
             raise AssertionError("finalize should not run when skip_publish=True")
 
         try:
-            run_once.publish.publish_ready_actions = unexpected_publish
-            run_once._finalize_published_results = unexpected_finalize
+            publish.publish_ready_actions = unexpected_publish
+            completion.finalize_published_results = unexpected_finalize
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -1968,8 +1981,8 @@ repos:
                 skip_publish=True,
             )
         finally:
-            run_once.publish.publish_ready_actions = original_publish
-            run_once._finalize_published_results = original_finalize
+            publish.publish_ready_actions = original_publish
+            completion.finalize_published_results = original_finalize
 
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
@@ -1984,8 +1997,8 @@ repos:
         self.assertEqual(json.loads(step[1])["reason"], "skip_publish")
 
     def test_publish_step_finalizes_task_after_action_is_published(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -2045,7 +2058,7 @@ repos:
         )
         self.assertTrue(record["ok"], record)
 
-        original_publish = run_once.publish.publish_ready_actions
+        original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
             with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -2068,7 +2081,7 @@ repos:
             }
 
         try:
-            run_once.publish.publish_ready_actions = fake_publish_ready_actions
+            publish.publish_ready_actions = fake_publish_ready_actions
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -2076,7 +2089,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.publish.publish_ready_actions = original_publish
+            publish.publish_ready_actions = original_publish
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -2101,7 +2114,7 @@ repos:
         self.assertEqual(relationship, "consumed")
         self.assertEqual(publish_step["finalized_task_count"], 1)
 
-        from robert_agent import board
+        from robert_agent.readmodels import board
         with closing(sqlite3.connect(db_path)) as conn:
             item_id, completed_at = conn.execute(
                 "SELECT work_item_id, completed_at FROM work_items"
@@ -2126,8 +2139,8 @@ repos:
         self.assertNotEqual(detail["task_id"], task_id)
 
     def test_audit_rejects_comment_target_outside_task_repository(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -2196,8 +2209,8 @@ repos:
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "prepared")
 
     def test_completed_consumed_trigger_is_not_reprocessed(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -2272,7 +2285,6 @@ repos:
         self.assertEqual(relationship, "consumed")
 
     def test_consumed_comment_is_deduplicated_independently_of_task_lifecycle(self):
-        from robert_agent import run_once
 
         with closing(sqlite3.connect(":memory:")) as conn:
             conn.executescript("""
@@ -2295,14 +2307,15 @@ repos:
                 with self.subTest(lifecycle=lifecycle, relationship=relationship):
                     conn.execute("UPDATE tasks SET lifecycle = ?", (lifecycle,))
                     conn.execute("UPDATE task_events SET relationship = ?", (relationship,))
-                    self.assertEqual(run_once._should_skip_terminal_trigger(conn, event), expected)
+                    self.assertEqual(source_events.should_skip_terminal_trigger(conn, event), expected)
             conn.execute("UPDATE task_events SET relationship = 'consumed'")
-            self.assertFalse(run_once._should_skip_terminal_trigger(
+            self.assertFalse(source_events.should_skip_terminal_trigger(
                 conn, {**event, "actor_kind": "github_system"},
             ))
 
     def test_waiting_task_ignores_consumed_comment_and_resumes_on_new_reply(self):
-        from robert_agent import run_once, workbench
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.readmodels import workbench
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(456)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -2375,8 +2388,8 @@ repos:
             self.assertEqual(fingerprints, [("comment:waiting-reply",)])
 
     def test_classification_handoff_text_does_not_create_child_task(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
 
         self.fixture_path.write_text(
             json.dumps(
@@ -2443,8 +2456,8 @@ repos:
             self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed")
 
     def test_classification_result_child_keeps_canonical_trigger_payload(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -2553,8 +2566,8 @@ repos:
 
 
     def test_classification_recommended_update_existing_pr_reuses_prior_pr_branch(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
 
         self.fixture_path.write_text(
             json.dumps(
@@ -2659,8 +2672,8 @@ repos:
         self.assertIn("codex__issue-2884-fix-operator", row[3])
 
     def test_completed_classification_result_with_consumed_trigger_recovers_child_task(self):
-        from robert_agent import run_once
-        from robert_agent.worker import result
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.delivery.application import submission as result
 
         self.fixture_path.write_text(
             json.dumps(
@@ -2784,8 +2797,8 @@ repos:
 
 
     def test_recovered_classification_result_uses_consumed_trigger_not_older_context(self):
-        from robert_agent import run_once
-        from robert_agent.worker import result
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.delivery.application import submission as result
 
         self.fixture_path.write_text(
             json.dumps(
@@ -2923,8 +2936,8 @@ repos:
         self.assertEqual(branch_name, "codex/dd-16-remove-dco-from-ci")
 
     def test_classification_result_branch_slug_names_child_worktree(self):
-        from robert_agent import run_once
-        from robert_agent.worker import result
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.delivery.application import submission as result
 
         self.fixture_path.write_text(
             json.dumps(
@@ -3004,7 +3017,7 @@ repos:
         self.assertEqual(branch_name, "codex/dd-3022-model-service-connectivity-test")
 
     def test_retry_after_failed_task_includes_original_trigger_as_context(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -3083,7 +3096,7 @@ repos:
         self.assertEqual(len(trigger_row), 1)
 
     def test_retry_after_failed_task_keeps_original_trigger_primary(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -3159,7 +3172,8 @@ repos:
         self.assertIn(("context", "comment:comment-2"), child_events)
 
     def test_manual_retrigger_prepares_child_from_failed_github_task(self):
-        from robert_agent import run_once, work_items
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.work.application import commands as work_items
         from robert_agent.execution import ownership as execution_ownership
 
         first = run_once.run_once(
@@ -3292,8 +3306,8 @@ repos:
         self.assertEqual(wakeup_status, "consumed")
 
     def test_publish_failure_does_not_skip_unrelated_routing(self):
-        from robert_agent import run_once
-        original_publish = run_once.publish.publish_ready_actions
+        from robert_agent.runtime import cycle as run_once
+        original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None):
             return {
@@ -3308,7 +3322,7 @@ repos:
             }
 
         try:
-            run_once.publish.publish_ready_actions = fake_publish_ready_actions
+            publish.publish_ready_actions = fake_publish_ready_actions
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -3317,7 +3331,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.publish.publish_ready_actions = original_publish
+            publish.publish_ready_actions = original_publish
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "publish_failed")
@@ -3336,8 +3350,8 @@ repos:
         self.assertEqual(task_count, 1)
 
     def test_worker_result_missing_recommended_skill_is_accepted(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -3403,8 +3417,8 @@ repos:
         self.assertIsNone(notification)
 
     def test_update_existing_pr_audit_uses_required_skill_and_review_evaluation(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         pr_fixture = self.root / "pr-followup.json"
         pr_fixture.write_text(
             json.dumps(
@@ -3524,8 +3538,8 @@ repos:
         )
 
     def test_worker_result_output_type_must_match_route_expected_output(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -3574,8 +3588,8 @@ repos:
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "prepared")
 
     def test_worker_result_is_not_reaudited_after_audit_metadata_recorded(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -3649,8 +3663,8 @@ repos:
         self.assertEqual(audit_metadata["status"], "accepted")
 
     def test_open_pr_result_materializes_published_pr_target_linked_to_origin_issue(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -3724,8 +3738,8 @@ repos:
         )
 
     def test_issue_to_pr_review_followup_keeps_workstreams_separate(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         def fake_issue_runner(args, **_kwargs):
             if args[:3] == ["gh", "search", "issues"] and "--assignee" in args:
                 return _Completed(args, "[]")
@@ -3981,7 +3995,7 @@ repos:
         )
 
     def test_event_without_state_preserves_a_closed_source(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         self.assertTrue(run_once.run_once(
             self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True,
@@ -3995,14 +4009,16 @@ repos:
                 "event_type": "comment", "actor_login": "wklken",
                 "event_at": "2026-07-31T10:00:00Z",
             }
-            run_once._insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
+            source_events.insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
             self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
             event.update(state="open", event_fingerprint="comment:explicit-reopen")
-            run_once._insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
+            source_events.insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
             self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "open")
 
     def test_remote_close_reconciles_an_unfinished_historical_issue_item(self):
-        from robert_agent import board, run_once, work_items
+        from robert_agent.readmodels import board
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.work.application import commands as work_items
 
         for state_reason in ("completed", "not_planned"):
             with self.subTest(state_reason=state_reason):
@@ -4036,7 +4052,7 @@ repos:
                         self.assertEqual(args, ["gh", "api", "repos/example/backend/issues/123"])
                         return _Completed(args, json.dumps(remote))
 
-                    reconciled = run_once._reconcile_remote_source_states(
+                    reconciled = source_lifecycle.reconcile_remote_source_states(
                         conn, "repo:example/backend", {"full_name": "example/backend"},
                         runner, "2026-10-27T00:00:00+00:00",
                     )
@@ -4050,14 +4066,15 @@ repos:
                 version = detail["version"]
                 with closing(sqlite3.connect(db)) as conn, conn:
                     self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-                    self.assertEqual(run_once._reconcile_remote_source_states(
+                    self.assertEqual(source_lifecycle.reconcile_remote_source_states(
                         conn, "repo:example/backend", {"full_name": "example/backend"},
                         runner, "2026-10-27T00:05:00+00:00",
                     ), 0)
                 self.assertEqual(board.get_work_item_detail(db, item["work_item_id"])["version"], version)
 
     def test_remote_completed_issue_marks_its_item_done(self):
-        from robert_agent import board, run_once
+        from robert_agent.readmodels import board
+        from robert_agent.runtime import cycle as run_once
 
         self.assertTrue(run_once.run_once(
             self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True,
@@ -4068,7 +4085,7 @@ repos:
             item = dict(conn.execute("SELECT * FROM work_items").fetchone())
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             remote = {"state": "closed", "state_reason": "completed", "closed_at": "2026-07-31T09:45:22Z"}
-            self.assertTrue(run_once._record_remote_terminal_state(
+            self.assertTrue(source_lifecycle.record_remote_terminal_state(
                 conn, item["repo_id"], item["workstream_id"], item["origin_source_id"],
                 "github:example/backend#123", "issue", 123, task_id, remote,
                 "completed", "remote_source_closed", "2026-10-27T00:00:00+00:00",
@@ -4079,7 +4096,7 @@ repos:
         self.assertEqual(detail["valid_commands"], [])
 
     def test_active_issue_task_is_canceled_when_remote_issue_closes(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         def fake_open_issue_runner(args, **_kwargs):
             if args[:3] == ["gh", "search", "issues"]:
                 return _Completed(args, "[]")
@@ -4214,7 +4231,7 @@ repos:
         self.assertEqual(json.loads(audit[1])["source_key"], "github:example/backend#123")
 
     def test_active_pr_task_is_canceled_when_remote_pr_is_merged(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         db_path, task_id, attempt_id = self._seed_active_pr_task(456)
 
         def fake_merged_pr_runner(args, **_kwargs):
@@ -4297,8 +4314,9 @@ repos:
         self.assertEqual(json.loads(audit[1])["source_key"], "github:example/backend!456")
 
     def test_completed_pr_workstream_marks_review_item_done_when_remote_pr_is_merged(self):
-        from robert_agent import run_once
-        from robert_agent import board, work_items
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(459)
         now = "2026-06-22T12:00:00+00:00"
@@ -4421,7 +4439,7 @@ repos:
         self.assertIn("pr_merged", [event["event_type"] for event in detail["events"]])
 
     def test_active_pr_task_is_canceled_when_remote_pr_is_closed_unmerged(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         db_path, task_id, attempt_id = self._seed_active_pr_task(457)
 
         def fake_closed_pr_runner(args, **_kwargs):
@@ -4504,7 +4522,7 @@ repos:
         self.assertEqual(json.loads(audit[1])["source_key"], "github:example/backend!457")
 
     def test_closed_issue_source_is_skipped_before_dispatch(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -4584,7 +4602,7 @@ repos:
         self.assertEqual(route_output["current_state_closed_skip_count"], 1)
 
     def test_merged_pr_source_is_skipped_before_dispatch(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -4643,7 +4661,7 @@ repos:
         )
 
     def test_closed_pr_followup_for_active_workstream_is_not_skipped(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         db_path, task_id, _attempt_id = self._seed_active_pr_task(458)
         followup_fixture = self.root / "closed-pr-followup.json"
         followup_fixture.write_text(
@@ -4707,7 +4725,7 @@ repos:
         self.assertEqual(current_state_audits, 0)
 
     def test_storage_backfills_legacy_pr_task_into_pr_workstream(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -4765,8 +4783,8 @@ repos:
         self.assertEqual(row, ("github:example/backend!456",))
 
     def test_unconsumed_pending_event_creates_child_task_after_parent_result(self, legacy_untrusted=False, pending_assignment=False):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -4911,8 +4929,8 @@ repos:
         self.test_unconsumed_pending_event_creates_child_task_after_parent_result(legacy_untrusted=True)
 
     def test_project_memory_is_recorded_and_recalled_in_followup_prompt(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -4951,7 +4969,7 @@ repos:
                                 "title": "DD PR follow-up uses update-existing-pr",
                                 "short_summary": "When dd-pr-followup review comments arrive, update the PR branch rather than reopening the origin issue task.",
                                 "long_summary": "The PR workstream is the active implementation thread for review comments on a DD-created PR.",
-                                "paths": ["src/robert_agent/run_once.py"],
+                                "paths": ["src/robert_agent/runtime/cycle.py"],
                                 "symbols": ["_is_dd_pr_followup_event"],
                                 "keywords": ["dd-pr-followup", "update-existing-pr"],
                                 "confidence": "medium",
@@ -5019,7 +5037,7 @@ repos:
         self.assertIn("dd-pr-followup review comments", prompt)
 
     def test_approved_runtime_knowledge_is_injected_but_pending_candidate_is_not(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         db_path = self.data_dir / "dd.sqlite3"
         first = run_once.run_once(
             self.config_path,
@@ -5099,7 +5117,7 @@ repos:
         self.assertNotIn("PENDING KNOWLEDGE SHOULD NOT BE IN PROMPT", prompt)
 
     def test_run_once_acquires_and_releases_agent_lease(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         result = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5119,14 +5137,14 @@ repos:
         )
 
     def test_worktree_failure_during_route_fails_run_and_releases_lease(self):
-        from robert_agent import run_once
-        original_prepare_worktree = run_once._prepare_worktree
+        from robert_agent.runtime import cycle as run_once
+        original_prepare_worktree = assigned_workspace.prepare_worktree
 
         def fake_prepare_worktree(_repo, _event, _route_result, _dry_run):
             raise subprocess.CalledProcessError(128, ["git", "fetch", "upstream", "master"])
 
         try:
-            run_once._prepare_worktree = fake_prepare_worktree
+            assigned_workspace.prepare_worktree = fake_prepare_worktree
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5135,7 +5153,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once._prepare_worktree = original_prepare_worktree
+            assigned_workspace.prepare_worktree = original_prepare_worktree
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_route")
@@ -5154,7 +5172,7 @@ repos:
         self.assertEqual(route_step, "failed")
 
     def test_route_failure_preserves_related_events_and_prepares_independent_workstream(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         events = [
             {
@@ -5188,7 +5206,7 @@ repos:
             },
         ]
         self.fixture_path.write_text(json.dumps({"events": events}), encoding="utf-8")
-        original_prepare = run_once._prepare_worktree
+        original_prepare = assigned_workspace.prepare_worktree
         prepared_numbers = []
 
         def prepare(repo, event, route_result, dry_run):
@@ -5200,7 +5218,7 @@ repos:
             return original_prepare(repo, event, route_result, dry_run)
 
         try:
-            run_once._prepare_worktree = prepare
+            assigned_workspace.prepare_worktree = prepare
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5209,7 +5227,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once._prepare_worktree = original_prepare
+            assigned_workspace.prepare_worktree = original_prepare
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(prepared_numbers, [22, 23])
@@ -5241,7 +5259,7 @@ repos:
 
     def test_blocked_review_worktree_does_not_block_independent_review(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         events = [
             {
@@ -5256,7 +5274,7 @@ repos:
             for index, number in enumerate([22, 23])
         ]
         self.fixture_path.write_text(json.dumps({"events": events}), encoding="utf-8")
-        original_prepare = run_once._prepare_worktree
+        original_prepare = assigned_workspace.prepare_worktree
         prepared_numbers = []
 
         def prepare(repo, event, route_result, dry_run):
@@ -5265,7 +5283,7 @@ repos:
                 return {"ok": False, "status": "blocked_dirty_worktree"}
             return original_prepare(repo, event, route_result, dry_run)
 
-        with patch.object(run_once, "_prepare_worktree", side_effect=prepare):
+        with patch.object(assigned_workspace, 'prepare_worktree', side_effect=prepare):
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5292,7 +5310,7 @@ repos:
         self.assertEqual(notification["safe_error"], "blocked_dirty_worktree")
 
     def test_route_failures_are_collected_without_blocking_independent_review(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         events = [
             {
@@ -5310,7 +5328,7 @@ repos:
             for index, number in enumerate([22, 24, 25, 23])
         ]
         self.fixture_path.write_text(json.dumps({"events": events}), encoding="utf-8")
-        original_prepare = run_once._prepare_worktree
+        original_prepare = assigned_workspace.prepare_worktree
         prepared_numbers = []
 
         def prepare(repo, event, route_result, dry_run):
@@ -5324,7 +5342,7 @@ repos:
             return original_prepare(repo, event, route_result, dry_run)
 
         try:
-            run_once._prepare_worktree = prepare
+            assigned_workspace.prepare_worktree = prepare
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5333,7 +5351,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once._prepare_worktree = original_prepare
+            assigned_workspace.prepare_worktree = original_prepare
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(prepared_numbers, [22, 25, 23])
@@ -5348,7 +5366,8 @@ repos:
         )
 
     def test_review_mention_creates_upstream_review_task_without_review_request(self):
-        from robert_agent import discover, run_once
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.runtime import cycle as run_once
 
         body = "@robert-bot review 下这个 PR"
         self.fixture_path.write_text(json.dumps({"events": [{
@@ -5376,7 +5395,7 @@ repos:
         self.assertEqual(task, ("review-pr", "review/pr-23-feat-monitor-subsystem"))
 
     def test_malformed_discovery_event_fails_run_and_releases_lease(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -5419,14 +5438,14 @@ repos:
         self.assertEqual(discover_step, "failed")
 
     def test_publish_exception_fails_run_and_releases_lease(self):
-        from robert_agent import run_once
-        original_publish = run_once.publish.publish_ready_actions
+        from robert_agent.runtime import cycle as run_once
+        original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None):
             raise FileNotFoundError("gh")
 
         try:
-            run_once.publish.publish_ready_actions = fake_publish_ready_actions
+            publish.publish_ready_actions = fake_publish_ready_actions
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5434,7 +5453,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.publish.publish_ready_actions = original_publish
+            publish.publish_ready_actions = original_publish
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "publish_failed")
@@ -5464,7 +5483,7 @@ repos:
         self.assertEqual(status["reason"], "identity_unverified")
 
     def test_unknown_worker_identity_marks_binding_attention_without_mutation(self):
-        from robert_agent import run_once, execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(993)
         now = "2026-08-02T01:00:00+00:00"
@@ -5482,10 +5501,10 @@ repos:
                 (now, now, json.dumps({"dispatch": dispatch_metadata}), attempt_id),
             )
             execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
-            original = run_once.worker_identity.inspect_recorded_identity
-            run_once.worker_identity.inspect_recorded_identity = lambda _identity: "unknown"
+            original = worker_identity.inspect_recorded_identity
+            worker_identity.inspect_recorded_identity = lambda _identity: "unknown"
             try:
-                supervised = run_once._supervise_running_attempts(
+                supervised = monitor.supervise_running_attempts(
                     conn,
                     "repo:example/backend",
                     {
@@ -5494,9 +5513,10 @@ repos:
                         "hard_timeout_seconds": 5400,
                     },
                     now,
+                    resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
             finally:
-                run_once.worker_identity.inspect_recorded_identity = original
+                worker_identity.inspect_recorded_identity = original
             binding = execution_store.get_binding(conn, "task", task_id)
             attempt_state = conn.execute(
                 "SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)
@@ -5507,7 +5527,7 @@ repos:
         self.assertEqual(attempt_state, "running")
 
     def test_supervise_marks_stale_running_attempt_and_notifies(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5540,9 +5560,9 @@ repos:
                 (attempt_id, old),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
             second = run_once.run_once(
@@ -5552,7 +5572,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5567,7 +5587,7 @@ repos:
         self.assertEqual(notification, ("worker_stale", "recorded"))
 
     def test_supervise_retains_running_attempt_without_cleanup_pid(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace(
@@ -5599,13 +5619,13 @@ repos:
                 (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
-        original_terminate = run_once.worker_identity.terminate_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
+        original_terminate = worker_identity.terminate_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
-            run_once.worker_identity.terminate_recorded_identity = (
+            worker_identity.terminate_recorded_identity = (
                 lambda _identity: {"status": "attention", "reason": "invalid_identity"}
             )
             second = run_once.run_once(
@@ -5615,8 +5635,8 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
-            run_once.worker_identity.terminate_recorded_identity = original_terminate
+            worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.terminate_recorded_identity = original_terminate
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5641,7 +5661,7 @@ repos:
         self.assertEqual(notification, ("worker_cleanup_pending", "recorded"))
 
     def test_supervise_fails_running_attempt_when_dispatch_pid_is_gone(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5674,9 +5694,9 @@ repos:
                 ),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             second = run_once.run_once(
@@ -5686,7 +5706,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5707,7 +5727,7 @@ repos:
         self.assertEqual(notification, ("worker_process_exited", "recorded"))
 
     def test_supervise_prepares_resume_attempt_when_pid_is_gone_after_progress(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -5770,9 +5790,9 @@ repos:
                 (task_id, attempt_id, str(stdout_path), now),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             second = run_once.run_once(
@@ -5782,7 +5802,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         second_now = datetime.now(timezone.utc).isoformat()
@@ -5801,13 +5821,13 @@ repos:
                     resume_attempt_id,
                 ),
             )
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
-        original_recovery = run_once._inspect_attempt_recovery_with_metadata
+        original_inspect = worker_identity.inspect_recorded_identity
+        original_recovery = evidence.inspect_attempt_recovery_with_metadata
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
-            run_once._inspect_attempt_recovery_with_metadata = (
+            evidence.inspect_attempt_recovery_with_metadata = (
                 lambda *_args, **_kwargs: {
                     "status": "recoverable_progress",
                     "task_id": task_id,
@@ -5822,8 +5842,8 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
-            run_once._inspect_attempt_recovery_with_metadata = original_recovery
+            worker_identity.inspect_recorded_identity = original_inspect
+            evidence.inspect_attempt_recovery_with_metadata = original_recovery
 
         self.assertTrue(third["ok"], third)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5883,7 +5903,7 @@ repos:
         self.assertIn("git_status_short", prompt)
 
     def test_recovery_creation_failure_marks_attempt_and_binding_attention(self):
-        from robert_agent import run_once, execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(987)
         now = "2026-08-02T01:00:00+00:00"
@@ -5904,13 +5924,13 @@ repos:
             execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
             original_group = worker_identity.live_process_group
             worker_identity.live_process_group = lambda _pid: False
-            original_inspect = run_once.worker_identity.inspect_recorded_identity
-            original_recovery = run_once._inspect_attempt_recovery_with_metadata
-            original_create = run_once._create_resume_attempt_and_prompt
-            run_once.worker_identity.inspect_recorded_identity = (
+            original_inspect = worker_identity.inspect_recorded_identity
+            original_recovery = evidence.inspect_attempt_recovery_with_metadata
+            original_create = preparation.create_resume_attempt_and_prompt
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
-            run_once._inspect_attempt_recovery_with_metadata = (
+            evidence.inspect_attempt_recovery_with_metadata = (
                 lambda *_args, **_kwargs: {
                     "status": "recoverable_progress",
                     "task_id": task_id,
@@ -5918,11 +5938,11 @@ repos:
                     "progress_signals": ["dirty_worktree"],
                 }
             )
-            run_once._create_resume_attempt_and_prompt = (
+            preparation.create_resume_attempt_and_prompt = (
                 lambda *_args, **_kwargs: None
             )
             try:
-                supervised = run_once._supervise_running_attempts(
+                supervised = monitor.supervise_running_attempts(
                     conn,
                     "repo:example/backend",
                     {
@@ -5934,12 +5954,13 @@ repos:
                     data_dir=self.data_dir,
                     db_path=db_path,
                     repo={},
+                    resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
             finally:
                 worker_identity.live_process_group = original_group
-                run_once.worker_identity.inspect_recorded_identity = original_inspect
-                run_once._inspect_attempt_recovery_with_metadata = original_recovery
-                run_once._create_resume_attempt_and_prompt = original_create
+                worker_identity.inspect_recorded_identity = original_inspect
+                evidence.inspect_attempt_recovery_with_metadata = original_recovery
+                preparation.create_resume_attempt_and_prompt = original_create
             binding = execution_store.get_binding(conn, "task", task_id)
             attempt_metadata = json.loads(
                 conn.execute(
@@ -5960,7 +5981,7 @@ repos:
         self.assertEqual(notification, ("worker_identity_attention", "recorded"))
 
     def test_failed_timeout_recovery_creation_failure_marks_attention(self):
-        from robert_agent import run_once, execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(988)
         now = "2026-08-02T01:00:00+00:00"
@@ -5987,16 +6008,16 @@ repos:
                     attempt_id,
                 ),
             )
-            original_inspect = run_once.worker_identity.inspect_recorded_identity
+            original_inspect = worker_identity.inspect_recorded_identity
             original_group = worker_identity.live_process_group
-            original_recovery = run_once._inspect_attempt_recovery_with_metadata
-            original_create = run_once._create_resume_attempt_and_prompt
-            run_once.worker_identity.inspect_recorded_identity = (
+            original_recovery = evidence.inspect_attempt_recovery_with_metadata
+            original_create = preparation.create_resume_attempt_and_prompt
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             # The synthetic PID must not observe an unrelated host process.
             worker_identity.live_process_group = lambda _pid: False
-            run_once._inspect_attempt_recovery_with_metadata = (
+            evidence.inspect_attempt_recovery_with_metadata = (
                 lambda *_args, **_kwargs: {
                     "status": "recoverable_progress",
                     "task_id": task_id,
@@ -6004,23 +6025,24 @@ repos:
                     "progress_signals": ["dirty_worktree"],
                 }
             )
-            run_once._create_resume_attempt_and_prompt = (
+            preparation.create_resume_attempt_and_prompt = (
                 lambda *_args, **_kwargs: None
             )
             try:
-                recovered = run_once._recover_failed_timeout_attempts(
+                recovered = monitor.recover_failed_timeout_attempts(
                     conn,
                     "repo:example/backend",
                     now,
                     data_dir=self.data_dir,
                     db_path=db_path,
                     repo={},
+                    resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
             finally:
-                run_once.worker_identity.inspect_recorded_identity = original_inspect
+                worker_identity.inspect_recorded_identity = original_inspect
                 worker_identity.live_process_group = original_group
-                run_once._inspect_attempt_recovery_with_metadata = original_recovery
-                run_once._create_resume_attempt_and_prompt = original_create
+                evidence.inspect_attempt_recovery_with_metadata = original_recovery
+                preparation.create_resume_attempt_and_prompt = original_create
             binding = execution_store.get_binding(conn, "task", task_id)
             metadata = json.loads(
                 conn.execute(
@@ -6037,7 +6059,7 @@ repos:
         )
 
     def test_supervise_prepares_resume_attempt_when_timeout_pid_is_gone_after_progress(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -6102,9 +6124,9 @@ repos:
                 (task_id, attempt_id, str(stdout_path), old),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             second = run_once.run_once(
@@ -6114,7 +6136,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6157,7 +6179,7 @@ repos:
         self.assertEqual(notification, ("worker_resume_prepared", "recorded"))
 
     def test_supervise_recovers_failed_timeout_attempt_when_pid_is_gone_after_progress(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -6244,9 +6266,9 @@ repos:
                 (task_id, attempt_id, str(stdout_path), old),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             second = run_once.run_once(
@@ -6256,7 +6278,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6311,8 +6333,8 @@ repos:
 
     def test_supervise_waits_when_pid_is_gone_but_background_command_is_running(self):
         import sys
-        from robert_agent.worker import heartbeat
-        from robert_agent import run_once
+        from robert_agent.execution import command as heartbeat
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -6354,7 +6376,7 @@ repos:
                 (attempt_id, now),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
@@ -6367,7 +6389,7 @@ repos:
         }))
 
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             second = run_once.run_once(
@@ -6377,7 +6399,7 @@ repos:
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6392,7 +6414,7 @@ repos:
         self.assertEqual(notification_count, 0)
 
     def _interrupted_attempt(self, *, phase=True, transport=False):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         first = run_once.run_once(
             self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True,
@@ -6439,7 +6461,7 @@ repos:
 
     def test_rate_limit_without_progress_automatically_resumes_on_fallback(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._rate_limited_attempt()
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
@@ -6455,14 +6477,14 @@ repos:
             self.assertEqual(fallback["reason_code"], "rate_limited")
             self.assertEqual(json.loads(attempts[0][4])["error_class"], "rate_limited")
             worker = {"name": "default", "default_model": "model-primary", "fallback_model": "model-fallback"}
-            self.assertEqual(run_once._model_for_dispatch(conn, "github:example/backend#123",
+            self.assertEqual(dispatch_queue._model_for_dispatch(conn, "github:example/backend#123",
                              attempts[1][0], worker, "model-primary"), "model-fallback")
             self.assertEqual(conn.execute("SELECT recovery_attempts FROM execution_subjects WHERE subject_id=?",
                                          (task_id,)).fetchone()[0], 1)
 
     def test_rate_limit_without_usable_fallback_does_not_repeat_primary(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         for fallback, model in ((None, "model-primary"), ("model-primary", "model-primary"),
                                 ("model-fallback", "model-fallback")):
@@ -6480,21 +6502,21 @@ repos:
 
     def test_immediate_rate_limit_exit_enters_fallback_recovery(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._rate_limited_attempt()
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET status='prepared'")
-            target, worktree = run_once._current_dispatch_target(conn, attempt_id)
+            target, worktree = dispatch_queue.current_dispatch_target(conn, attempt_id)
         log = self.data_dir / "artifacts" / task_id / f"{attempt_id}.stdout.log"
         worker = {"name": "default", "command": "unused", "agent": "command",
                   "default_model": "model-primary", "fallback_model": "model-fallback", "default_effort": "high"}
-        with patch.object(run_once, "_ensure_dispatch_worktree", return_value=worktree), \
-             patch.object(run_once.dispatch, "dispatch_worker", return_value={
+        with patch.object(dispatch_queue, 'ensure_dispatch_worktree', return_value=worktree), \
+             patch.object(cycle_worker, "dispatch_worker", return_value={
                  "ok": False, "status": "failed_dispatch", "pid": 987654, "returncode": 1,
                  "stdout_path": str(log), "safe_error": "worker exited immediately with code 1",
              }):
-            dispatched = run_once._dispatch_queued(db_path, ["repo:example/backend"],
+            dispatched = dispatch_queue.dispatch_queued(db_path, ["repo:example/backend"],
                 [{"task_info": target, "worktree_result": worktree, "repo_id": "repo:example/backend", "repo": {}}],
                 False, 3, workers=[worker])
         self.assertTrue(dispatched[0]["ok"], dispatched)
@@ -6507,7 +6529,7 @@ repos:
 
     def test_fallback_rate_limit_stops_after_one_automatic_switch(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, _ = self._rate_limited_attempt()
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
@@ -6533,7 +6555,7 @@ repos:
 
     def test_rate_limit_does_not_bypass_recovery_quota_or_task_cancellation(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         for state in ("quota_exhausted", "canceled", "alive"):
             with self.subTest(state=state):
@@ -6555,8 +6577,7 @@ repos:
 
     def test_rate_limit_after_recorded_result_does_not_resume(self):
         from unittest.mock import patch
-        from robert_agent import run_once
-        from robert_agent.worker import result as worker_result
+        from robert_agent.delivery.application import submission as worker_result
 
         db_path, task_id, attempt_id = self._rate_limited_attempt()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6567,15 +6588,14 @@ repos:
         self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
-                run_once._supervise_running_attempts(conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
-                    data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"})
+                monitor.supervise_running_attempts(conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
+                    data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"}, resume_attempt=preparation.create_resume_attempt_and_prompt)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
 
     def test_real_worker_rate_limit_switches_model_and_records_result(self):
         import sys
         from unittest.mock import patch
-        from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6584,7 +6604,7 @@ repos:
         binary = self.root / "limited-worker.py"
         binary.write_text('''import json,sys,time
 from pathlib import Path
-from robert_agent.worker.result import build_result,record_result
+from robert_agent.delivery.application.submission import build_result,record_result
 model=sys.argv[sys.argv.index('--model')+1]
 db,task=sys.argv[1:3]
 prompt=sys.stdin.read()
@@ -6608,18 +6628,18 @@ time.sleep(.3)
         for _ in range(2):
             with closing(sqlite3.connect(db_path)) as conn:
                 current = conn.execute("SELECT attempt_id FROM attempts WHERE status='prepared' ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
-                target, worktree = run_once._current_dispatch_target(conn, current)
+                target, worktree = dispatch_queue.current_dispatch_target(conn, current)
             Path(worktree["worktree_path"]).mkdir(parents=True, exist_ok=True)
-            with patch.object(run_once, "_ensure_dispatch_worktree", return_value=worktree):
-                launched = run_once._dispatch_queued(db_path, ["repo:example/backend"],
+            with patch.object(dispatch_queue, 'ensure_dispatch_worktree', return_value=worktree):
+                launched = dispatch_queue.dispatch_queued(db_path, ["repo:example/backend"],
                     [{"task_info": target, "worktree_result": worktree, "repo_id": "repo:example/backend", "repo": {}}],
                     False, 3, workers=[worker])
             self.assertTrue(launched[0]["ok"], launched)
-            if launched[0].get("pid") in run_once.dispatch._BACKGROUND_PROCESSES:
-                run_once.dispatch._BACKGROUND_PROCESSES[launched[0]["pid"]].wait(timeout=5)
+            if launched[0].get("pid") in cycle_worker._BACKGROUND_PROCESSES:
+                cycle_worker._BACKGROUND_PROCESSES[launched[0]["pid"]].wait(timeout=5)
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                run_once._supervise_running_attempts(conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
-                    data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"})
+                monitor.supervise_running_attempts(conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
+                    data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"}, resume_attempt=preparation.create_resume_attempt_and_prompt)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual([row[0] for row in conn.execute("SELECT status FROM attempts ORDER BY attempt_no")], ["failed", "completed"])
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1)
@@ -6628,7 +6648,7 @@ time.sleep(.3)
 
     def test_supervise_resumes_stale_command_snapshot_without_live_process(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
@@ -6640,7 +6660,6 @@ time.sleep(.3)
         self.assertEqual(attempts[0][1], attempts[1][1])
 
     def test_recovery_replays_deferred_command_completion_exactly_once(self):
-        from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
         command_dir = self.data_dir / "artifacts" / task_id
@@ -6653,7 +6672,7 @@ time.sleep(.3)
         }))
         with closing(sqlite3.connect(db_path)) as conn, conn:
             for _ in range(2):
-                recovery = run_once._inspect_attempt_recovery(conn, attempt_id, task_id, None)
+                recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
                 self.assertEqual(recovery["status"], "recoverable_progress")
                 self.assertEqual(recovery["commands"][0]["returncode"], 0)
             count = conn.execute(
@@ -6663,7 +6682,6 @@ time.sleep(.3)
 
     def test_recovery_does_not_wait_on_reused_command_pid(self):
         import os
-        from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
         command_dir = self.data_dir / "artifacts" / task_id
@@ -6673,12 +6691,12 @@ time.sleep(.3)
             "status": "running", "pid": os.getpid(), "process_identity": "previous-incarnation",
         }))
         with closing(sqlite3.connect(db_path)) as conn:
-            recovery = run_once._inspect_attempt_recovery(conn, attempt_id, task_id, None)
+            recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
         self.assertEqual(recovery["status"], "recoverable_progress")
 
     def test_transport_failure_before_first_snapshot_resumes_with_backoff(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
@@ -6692,11 +6710,11 @@ time.sleep(.3)
             resume = json.loads(metadata)["resume"]
             self.assertEqual(resume["transport_failure_count"], 1)
             self.assertGreater(datetime.fromisoformat(resume["not_before_at"]), datetime.now(timezone.utc))
-            self.assertIsNone(run_once._current_dispatch_target(conn, resume_id))
+            self.assertIsNone(dispatch_queue.current_dispatch_target(conn, resume_id))
 
     def test_transport_retry_exhaustion_reports_failure_without_new_attempt(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6713,7 +6731,6 @@ time.sleep(.3)
             self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
 
     def test_transport_failure_detection_ignores_quoted_errors_and_recovered_turns(self):
-        from robert_agent import run_once
 
         failed = json.dumps({"type": "turn.failed", "error": {"message": "stream disconnected before completion"}})
         quoted = json.dumps({"type": "item.completed", "item": {
@@ -6721,11 +6738,11 @@ time.sleep(.3)
         }})
         for tail in (quoted, failed + "\n" + json.dumps({"type": "turn.completed"}),
                      failed + "\n" + json.dumps({"type": "turn.failed", "error": {"message": "invalid credentials"}})):
-            self.assertIsNone(run_once._terminal_transport_failure({"worker_stdout": {"tail": tail}}))
+            self.assertIsNone(evidence.terminal_transport_failure({"worker_stdout": {"tail": tail}}))
 
     def test_transport_backoff_expires_and_preserves_prompt_and_worktree(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
@@ -6733,20 +6750,20 @@ time.sleep(.3)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             resume_id = conn.execute("SELECT attempt_id FROM attempts ORDER BY attempt_no DESC LIMIT 1").fetchone()[0]
             queue = []
-            self.assertEqual(run_once._queue_prepared_attempts(conn, "repo:example/backend", {}, queue, 3), 0)
+            self.assertEqual(dispatch_queue.queue_prepared_attempts(conn, "repo:example/backend", {}, queue, 3), 0)
             conn.execute(
                 "UPDATE attempts SET metadata_json=json_set(metadata_json,'$.resume.not_before_at',?) WHERE attempt_id=?",
                 ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), resume_id),
             )
-            self.assertEqual(run_once._queue_prepared_attempts(conn, "repo:example/backend", {}, queue, 3), 1)
-            target, worktree = run_once._current_dispatch_target(conn, resume_id)
+            self.assertEqual(dispatch_queue.queue_prepared_attempts(conn, "repo:example/backend", {}, queue, 3), 1)
+            target, worktree = dispatch_queue.current_dispatch_target(conn, resume_id)
             self.assertEqual(target["attempt_id"], resume_id)
             self.assertIn(resume_id, str(target["prompt_path"]))
             self.assertIsNotNone(worktree)
 
     def test_resume_dispatch_uses_attempt_prompt_despite_newer_old_artifact(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
@@ -6756,26 +6773,26 @@ time.sleep(.3)
             conn.execute("UPDATE attempts SET metadata_json = json_set('{}', '$.result_contract', 'compact-v1') WHERE attempt_id=?", (resume_id,))
             conn.execute("UPDATE artifacts SET created_at='2099-01-01T00:00:00+00:00'"
                          " WHERE artifact_type='prompt' AND attempt_id=?", (attempt_id,))
-            target, _ = run_once._current_dispatch_target(conn, resume_id)
+            target, _ = dispatch_queue.current_dispatch_target(conn, resume_id)
             self.assertIn(resume_id, str(target["prompt_path"]))
 
     def test_immediate_transport_exit_enters_supervised_recovery(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET status='prepared'")
-            target, worktree = run_once._current_dispatch_target(conn, attempt_id)
+            target, worktree = dispatch_queue.current_dispatch_target(conn, attempt_id)
         log = self.data_dir / "artifacts" / task_id / f"{attempt_id}.stdout.log"
         worker = {"name": "default", "command": "unused", "agent": "command",
                   "default_model": "default", "default_effort": "high"}
-        with patch.object(run_once, "_ensure_dispatch_worktree", return_value=worktree), \
-             patch.object(run_once.dispatch, "dispatch_worker", return_value={
+        with patch.object(dispatch_queue, 'ensure_dispatch_worktree', return_value=worktree), \
+             patch.object(cycle_worker, "dispatch_worker", return_value={
                  "ok": False, "status": "failed_dispatch", "pid": 987654, "returncode": 1,
                  "stdout_path": str(log), "safe_error": "worker exited immediately with code 1",
              }):
-            dispatched = run_once._dispatch_queued(
+            dispatched = dispatch_queue.dispatch_queued(
                 db_path, ["repo:example/backend"],
                 [{"task_info": target, "worktree_result": worktree,
                   "repo_id": "repo:example/backend", "repo": {}}],
@@ -6794,8 +6811,7 @@ time.sleep(.3)
 
     def test_transport_failure_after_recorded_result_does_not_resume(self):
         from unittest.mock import patch
-        from robert_agent import run_once
-        from robert_agent.worker import result as worker_result
+        from robert_agent.delivery.application import submission as worker_result
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -6809,9 +6825,10 @@ time.sleep(.3)
         self.assertTrue(worker_result.record_result(db_path, payload)["ok"])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
-                run_once._supervise_running_attempts(
+                monitor.supervise_running_attempts(
                     conn, "repo:example/backend", {}, datetime.now(timezone.utc).isoformat(),
                     data_dir=self.data_dir, db_path=db_path, repo={"default_base_branch": "master"},
+                                                             resume_attempt=preparation.create_resume_attempt_and_prompt,
                 )
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
@@ -6819,8 +6836,8 @@ time.sleep(.3)
     def test_durable_command_is_startup_evidence_when_all_snapshot_writes_failed(self):
         import os
         from unittest.mock import patch
-        from robert_agent import run_once
-        from robert_agent.worker import heartbeat
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.execution import command as heartbeat
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False)
         now = datetime.now(timezone.utc)
@@ -6844,7 +6861,7 @@ time.sleep(.3)
 
     def test_bound_transport_resume_keeps_worktree_and_stops_at_recovery_quota(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         for expected_count, expected_delay in ((1, 30),):
@@ -6886,8 +6903,7 @@ time.sleep(.3)
 
     def test_completed_command_does_not_hide_another_live_command(self):
         import os
-        from robert_agent import run_once
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
         command_dir = self.data_dir / "artifacts" / task_id
@@ -6908,7 +6924,7 @@ time.sleep(.3)
                 " VALUES ('alias-prompt',?,?, 'prompt',?,?)",
                 (task_id, attempt_id, str(alias_dir / "prompt.md"), datetime.now(timezone.utc).isoformat()),
             )
-            recovery = run_once._inspect_attempt_recovery(conn, attempt_id, task_id, None)
+            recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
         self.assertEqual(recovery["status"], "orphaned_command_running")
         self.assertEqual(len(recovery["commands"]), 2)
         self.assertEqual(
@@ -6918,7 +6934,6 @@ time.sleep(.3)
 
     def test_recovery_replays_aliased_command_file_exactly_once(self):
         import hashlib
-        from robert_agent import run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt()
         command_dir = self.data_dir / "artifacts" / task_id
@@ -6940,7 +6955,7 @@ time.sleep(.3)
                 (task_id, attempt_id, str(custom_dir / "stdout.log"), datetime.now(timezone.utc).isoformat()),
             )
             for _ in range(2):
-                recovery = run_once._inspect_attempt_recovery(conn, attempt_id, task_id, None)
+                recovery = evidence.inspect_attempt_recovery(conn, attempt_id, task_id, None)
                 self.assertEqual(len(recovery["commands"]), 1)
                 self.assertEqual(recovery["status"], "recoverable_progress")
                 self.assertEqual(recovery["commands"][0]["command_record_path"], str(record_path.resolve()))
@@ -6951,7 +6966,7 @@ time.sleep(.3)
 
     def test_transport_exhaustion_takes_precedence_over_hard_timeout(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=False, transport=True)
         old = (datetime.now(timezone.utc) - timedelta(minutes=95)).isoformat()
@@ -6969,26 +6984,25 @@ time.sleep(.3)
         self.assertEqual(failure["status"], "failed_transport_retries_exhausted")
 
     def test_dispatch_process_status_treats_zombie_pid_as_not_found(self):
-        from robert_agent import run_once
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             status = attempt_process.dispatch_status(
                 {"dispatch": self._recorded_identity(43210)}
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertEqual(status["status"], "dead")
         self.assertEqual(status["reason"], "process_missing_or_zombie")
 
     def test_blocked_worktree_is_not_dispatched(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
-        with patch.object(run_once, "_prepare_worktree", return_value={
+        with patch.object(assigned_workspace, 'prepare_worktree', return_value={
             "ok": False, "status": "blocked_dirty_worktree", "worktree_path": "/unmanaged",
         }):
             result = run_once.run_once(self.config_path, fixture_path=self.fixture_path,
@@ -7000,7 +7014,7 @@ time.sleep(.3)
 
     def test_remote_close_waits_for_process_cleanup_and_preserves_dispatch_metadata(self):
         from unittest.mock import patch
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         run_once.run_once(self.config_path, fixture_path=self.fixture_path,
                           dry_run=True, skip_external=True)
@@ -7016,25 +7030,24 @@ time.sleep(.3)
             args = (conn, repo_id, ws, source_id, source_key, source_type, number,
                     task_id, {"state": "closed"}, "canceled", "remote_issue_closed", datetime.now(timezone.utc).isoformat())
             conn.execute("UPDATE attempts SET metadata_json = json_set('{}', '$.result_contract', 'compact-v1')")
-            self.assertFalse(run_once._record_remote_terminal_state(*args))
+            self.assertFalse(source_lifecycle.record_remote_terminal_state(*args))
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             conn.execute("UPDATE attempts SET metadata_json = json_set(?, '$.result_contract', 'compact-v1')", (json.dumps({"dispatch": {"pid": 12345}}),))
             with patch.object(attempt_process, "terminate_attempt", return_value={"status": "permission_denied"}):
-                run_once._record_remote_terminal_state(*args)
+                source_lifecycle.record_remote_terminal_state(*args)
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
             self.assertEqual(conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0], task_id)
             with patch.object(attempt_process, "terminate_attempt", return_value={"status": "terminated"}):
-                run_once._record_remote_terminal_state(*args)
+                source_lifecycle.record_remote_terminal_state(*args)
             status, metadata = conn.execute("SELECT status,metadata_json FROM attempts").fetchone()
             self.assertEqual(status, "canceled")
             self.assertEqual(json.loads(metadata)["dispatch"]["pid"], 12345)
 
     def test_terminate_attempt_process_skips_sigterm_for_zombie_pid(self):
         from unittest.mock import patch
-        from robert_agent import run_once
 
         with patch.object(
-            run_once.worker_identity, "terminate_recorded_identity",
+            worker_identity, "terminate_recorded_identity",
             return_value={"status": "already_dead", "pid": 24680},
         ), patch.object(worker_identity, "live_process_group", return_value=False):
             result = attempt_process.terminate_attempt(
@@ -7046,10 +7059,9 @@ time.sleep(.3)
 
     def test_dispatch_process_status_detects_zombie_pid_without_proc_stat(self):
         from unittest.mock import patch
-        from robert_agent import run_once
 
         with patch.object(
-            run_once.worker_identity, "inspect_recorded_identity", return_value="dead",
+            worker_identity, "inspect_recorded_identity", return_value="dead",
         ), patch.object(worker_identity, "live_process_group", return_value=False):
             status = attempt_process.dispatch_status(
                 {"dispatch": self._recorded_identity(13579)}
@@ -7059,7 +7071,7 @@ time.sleep(.3)
         self.assertEqual(status["reason"], "process_missing_or_zombie")
 
     def test_supervise_keeps_started_worker_with_prepare_snapshot_running(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace(
@@ -7100,9 +7112,9 @@ time.sleep(.3)
                 (attempt_id, old),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
             second = run_once.run_once(
@@ -7112,7 +7124,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -7124,7 +7136,7 @@ time.sleep(.3)
         self.assertIsNone(failure_json)
 
     def test_supervise_restores_recovered_stale_attempt(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7166,9 +7178,9 @@ time.sleep(.3)
                 (attempt_id, (now - timedelta(minutes=10)).isoformat()),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
             second = run_once.run_once(
@@ -7178,7 +7190,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -7189,7 +7201,7 @@ time.sleep(.3)
         self.assertEqual(attempt_status, "running")
 
     def test_supervise_does_not_restore_stale_attempt_when_pid_is_gone(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7235,9 +7247,9 @@ time.sleep(.3)
                 (attempt_id, (now - timedelta(minutes=10)).isoformat()),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         try:
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "dead"
             )
             second = run_once.run_once(
@@ -7247,7 +7259,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -7269,7 +7281,7 @@ time.sleep(.3)
         self.assertEqual(notification, ("worker_process_exited", "recorded"))
 
     def test_worker_timeout_seconds_caps_attempt_runtime(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7319,16 +7331,16 @@ time.sleep(.3)
                 (attempt_id, old),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         original_group = worker_identity.live_process_group
-        original_terminate = run_once.worker_identity.terminate_recorded_identity
+        original_terminate = worker_identity.terminate_recorded_identity
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
-            run_once.worker_identity.terminate_recorded_identity = (
+            worker_identity.terminate_recorded_identity = (
                 lambda _identity: {"status": "terminated", "pid": 12345}
             )
             second = run_once.run_once(
@@ -7339,8 +7351,8 @@ time.sleep(.3)
             )
         finally:
             worker_identity.live_process_group = original_group
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
-            run_once.worker_identity.terminate_recorded_identity = original_terminate
+            worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.terminate_recorded_identity = original_terminate
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -7353,7 +7365,7 @@ time.sleep(.3)
         self.assertEqual(json.loads(failure_json)["timeout_seconds"], 60)
 
     def test_stale_attempt_later_hard_timeout_signals_pid_and_releases_workstream(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7395,16 +7407,16 @@ time.sleep(.3)
                 (attempt_id, old),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         original_group = worker_identity.live_process_group
-        original_terminate = run_once.worker_identity.terminate_recorded_identity
+        original_terminate = worker_identity.terminate_recorded_identity
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
-            run_once.worker_identity.terminate_recorded_identity = (
+            worker_identity.terminate_recorded_identity = (
                 lambda _identity: {"status": "terminated", "pid": 12345}
             )
             second = run_once.run_once(
@@ -7415,8 +7427,8 @@ time.sleep(.3)
             )
         finally:
             worker_identity.live_process_group = original_group
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
-            run_once.worker_identity.terminate_recorded_identity = original_terminate
+            worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.terminate_recorded_identity = original_terminate
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -7440,7 +7452,7 @@ time.sleep(.3)
         self.assertEqual(notification, ("worker_timeout", "recorded"))
 
     def test_stale_attempt_retains_dispatch_capacity(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         self.config_path.write_text(
             self.config_path.read_text(encoding="utf-8").replace(
                 "max_concurrency: 3", "max_concurrency: 1"
@@ -7506,8 +7518,8 @@ time.sleep(.3)
             encoding="utf-8",
         )
         calls = []
-        original_dispatch = run_once.dispatch.dispatch_worker
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_dispatch = cycle_worker.dispatch_worker
+        original_inspect = worker_identity.inspect_recorded_identity
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
@@ -7519,8 +7531,8 @@ time.sleep(.3)
             }
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
-            run_once.worker_identity.inspect_recorded_identity = (
+            cycle_worker.dispatch_worker = fake_dispatch_worker
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
             second = run_once.run_once(
@@ -7531,8 +7543,8 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
+            cycle_worker.dispatch_worker = original_dispatch
+            worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
         self.assertEqual(len(calls), 0)
@@ -7545,7 +7557,7 @@ time.sleep(.3)
         self.assertEqual(task_count, 2)
 
     def test_live_discovery_failure_preserves_supervision_state(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7578,11 +7590,11 @@ time.sleep(.3)
                 ),
             )
 
-        original_inspect = run_once.worker_identity.inspect_recorded_identity
+        original_inspect = worker_identity.inspect_recorded_identity
         original_group = worker_identity.live_process_group
-        original_terminate = run_once.worker_identity.terminate_recorded_identity
-        original_collect_notifications = run_once.discover.collect_account_notifications
-        original_collect = run_once.discover.collect_live_events
+        original_terminate = worker_identity.terminate_recorded_identity
+        original_collect_notifications = discover.collect_account_notifications
+        original_collect = discover.collect_live_events
 
         def fake_collect_notifications(_repos, runner=None):
             return {}
@@ -7601,14 +7613,14 @@ time.sleep(.3)
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            run_once.worker_identity.inspect_recorded_identity = (
+            worker_identity.inspect_recorded_identity = (
                 lambda _identity: "alive_same"
             )
-            run_once.worker_identity.terminate_recorded_identity = (
+            worker_identity.terminate_recorded_identity = (
                 lambda _identity: {"status": "terminated", "pid": 12345}
             )
-            run_once.discover.collect_account_notifications = fake_collect_notifications
-            run_once.discover.collect_live_events = fake_collect
+            discover.collect_account_notifications = fake_collect_notifications
+            discover.collect_live_events = fake_collect
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7617,10 +7629,10 @@ time.sleep(.3)
             )
         finally:
             worker_identity.live_process_group = original_group
-            run_once.worker_identity.inspect_recorded_identity = original_inspect
-            run_once.worker_identity.terminate_recorded_identity = original_terminate
-            run_once.discover.collect_account_notifications = original_collect_notifications
-            run_once.discover.collect_live_events = original_collect
+            worker_identity.inspect_recorded_identity = original_inspect
+            worker_identity.terminate_recorded_identity = original_terminate
+            discover.collect_account_notifications = original_collect_notifications
+            discover.collect_live_events = original_collect
 
         self.assertFalse(second["ok"], second)
         self.assertEqual(second["status"], "failed_discovery")
@@ -7645,7 +7657,7 @@ time.sleep(.3)
         self.assertEqual(notification, ("worker_timeout", "recorded", task_id))
 
     def test_live_run_dispatches_existing_prepared_attempt(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7662,7 +7674,7 @@ time.sleep(.3)
                 (old, old, attempt_id),
             )
         calls = []
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
@@ -7676,7 +7688,7 @@ time.sleep(.3)
             }
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7684,7 +7696,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(second["ok"], second)
         self.assertEqual(len(calls), 1)
@@ -7698,7 +7710,7 @@ time.sleep(.3)
         self.assertGreater(datetime.fromisoformat(heartbeat_at), datetime.fromisoformat(old))
 
     def test_live_run_prepares_missing_worktree_before_dispatching_prepared_attempt(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7717,9 +7729,9 @@ time.sleep(.3)
         self.assertFalse(planned_worktree.exists())
         calls = []
         prepare_calls = []
-        original_dispatch = run_once.dispatch.dispatch_worker
-        original_prepare_worktree = run_once._prepare_worktree
-        original_can_materialize_worktree = run_once._can_materialize_worktree
+        original_dispatch = cycle_worker.dispatch_worker
+        original_prepare_worktree = assigned_workspace.prepare_worktree
+        original_can_materialize_worktree = dispatch_queue.can_materialize_worktree
 
         def fake_prepare_worktree(repo, event, route_result, dry_run):
             prepare_calls.append(
@@ -7747,9 +7759,9 @@ time.sleep(.3)
             }
 
         try:
-            run_once._can_materialize_worktree = lambda _repo: True
-            run_once._prepare_worktree = fake_prepare_worktree
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            dispatch_queue.can_materialize_worktree = lambda _repo: True
+            assigned_workspace.prepare_worktree = fake_prepare_worktree
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7757,9 +7769,9 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
-            run_once._prepare_worktree = original_prepare_worktree
-            run_once._can_materialize_worktree = original_can_materialize_worktree
+            cycle_worker.dispatch_worker = original_dispatch
+            assigned_workspace.prepare_worktree = original_prepare_worktree
+            dispatch_queue.can_materialize_worktree = original_can_materialize_worktree
 
         self.assertTrue(second["ok"], second)
         self.assertEqual(
@@ -7781,7 +7793,7 @@ time.sleep(.3)
         self.assertEqual(attempt, ("running", str(replacement_worktree), "codex/dd-123-task"))
 
     def test_live_run_passes_configured_worker_command_to_dispatch(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         config = yaml.safe_load(self.config_path.read_text())
         config['workers']['default'].update(adapter='codex', command='/opt/homebrew/bin/codex')
         self.config_path.write_text(yaml.safe_dump(config))
@@ -7801,7 +7813,7 @@ time.sleep(.3)
                 (old, old, attempt_id),
             )
         calls = []
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
@@ -7815,7 +7827,7 @@ time.sleep(.3)
             }
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7823,7 +7835,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(second["ok"], second)
         self.assertEqual(len(calls), 1)
@@ -7832,7 +7844,7 @@ time.sleep(.3)
         self.assertEqual(calls[0]["worker_agent_config"]["command_argv"], ["/opt/homebrew/bin/codex"])
 
     def test_classification_result_uses_selected_worker_defaults_and_route_override(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         config = yaml.safe_load(self.config_path.read_text())
         config['workers']['classifier'] = {
             'adapter': 'codex', 'command': '/opt/homebrew/bin/codex',
@@ -7882,7 +7894,7 @@ time.sleep(.3)
         self.assertIn('model_reasoning_effort="xhigh"', command)
 
     def test_live_dispatch_commits_attempt_before_worker_can_record_progress(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -7903,7 +7915,7 @@ time.sleep(.3)
         )
         db_path = self.data_dir / "dd.sqlite3"
         visibility = []
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             with closing(sqlite3.connect(db_path)) as external:
@@ -7922,7 +7934,7 @@ time.sleep(.3)
             }
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -7931,14 +7943,14 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(visibility, ["prepared"])
 
     def test_live_dispatch_does_not_overwrite_fast_worker_result(self):
-        from robert_agent.worker import result as worker_result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as worker_result
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -7958,7 +7970,7 @@ time.sleep(.3)
             encoding="utf-8",
         )
         db_path = self.data_dir / "dd.sqlite3"
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             record = worker_result.record_result(
@@ -7998,7 +8010,7 @@ time.sleep(.3)
             }
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             first = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8007,7 +8019,7 @@ time.sleep(.3)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(first["ok"], first)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -8017,7 +8029,7 @@ time.sleep(.3)
         self.assertEqual(attempt_status, "completed")
         self.assertEqual(result_count, 1)
 
-        original_publish = run_once.publish.publish_ready_actions
+        original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
             with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -8043,7 +8055,7 @@ time.sleep(.3)
         try:
             # The stub worker has exited; only the controller can confirm that fact.
             attempt_process.dispatch_status = lambda _metadata: {"status": "dead"}
-            run_once.publish.publish_ready_actions = fake_publish_ready_actions
+            publish.publish_ready_actions = fake_publish_ready_actions
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8052,7 +8064,7 @@ time.sleep(.3)
             )
         finally:
             attempt_process.dispatch_status = original_process
-            run_once.publish.publish_ready_actions = original_publish
+            publish.publish_ready_actions = original_publish
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -8078,7 +8090,7 @@ time.sleep(.3)
 
     def test_live_dispatch_accepts_fast_successful_worker_subprocess_result(self):
         import os
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -8104,7 +8116,7 @@ import json
 import sys
 
 sys.path.insert(0, {str(PACKAGE_ROOT.parent)!r})
-from robert_agent.worker import result
+from robert_agent.delivery.application import submission as result
 
 prompt = sys.stdin.read()
 fields = {{}}
@@ -8159,7 +8171,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
                 result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
                 if result_count:
-                    run_once._supervise_running_attempts(conn, "repo:example/backend", {}, run_once._now())
+                    monitor.supervise_running_attempts(conn, "repo:example/backend", {}, values.utc_now(), resume_attempt=preparation.create_resume_attempt_and_prompt)
                     attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
             if attempt_status == "completed" and result_count == 1:
                 break
@@ -8192,7 +8204,7 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(result_count, 1, {"dispatch": dispatch_metadata, "worker_logs": worker_logs})
         self.assertEqual(notification_count, 0)
 
-        original_publish = run_once.publish.publish_ready_actions
+        original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
             with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -8215,7 +8227,7 @@ raise SystemExit(0 if record["ok"] else 1)
             }
 
         try:
-            run_once.publish.publish_ready_actions = fake_publish_ready_actions
+            publish.publish_ready_actions = fake_publish_ready_actions
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8223,7 +8235,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 skip_external=True,
             )
         finally:
-            run_once.publish.publish_ready_actions = original_publish
+            publish.publish_ready_actions = original_publish
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -8233,7 +8245,7 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(workstream, ("completed", None))
 
     def test_live_dispatch_records_worker_log_artifacts(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8247,7 +8259,7 @@ raise SystemExit(0 if record["ok"] else 1)
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stdout_path.write_text("worker stdout", encoding="utf-8")
         stderr_path.write_text("worker stderr", encoding="utf-8")
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             return {
@@ -8262,7 +8274,7 @@ raise SystemExit(0 if record["ok"] else 1)
             }
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8270,7 +8282,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
@@ -8291,7 +8303,7 @@ raise SystemExit(0 if record["ok"] else 1)
         )
 
     def test_live_dispatch_failure_records_failed_state(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8300,13 +8312,13 @@ raise SystemExit(0 if record["ok"] else 1)
             skip_external=True,
         )
         self.assertTrue(first["ok"], first)
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**_kwargs):
             raise FileNotFoundError("cbc")
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8314,7 +8326,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertFalse(second["ok"], second)
         self.assertEqual(second["status"], "failed_dispatch")
@@ -8371,7 +8383,7 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(notification, ("worker_dispatch_failed", "recorded"))
 
     def test_failed_trigger_event_is_not_recreated_without_new_event(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8417,8 +8429,8 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(trigger_count, 1)
 
     def test_live_run_prioritizes_existing_pr_updates_over_older_prepared_work(self):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -8525,7 +8537,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES(?,?,'trigger',?)", (task, task, now))
 
         calls = []
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             calls.append((kwargs["task_id"], kwargs["attempt_id"], kwargs["prompt_path"]))
@@ -8539,7 +8551,7 @@ raise SystemExit(0 if record["ok"] else 1)
             }
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8547,14 +8559,14 @@ raise SystemExit(0 if record["ok"] else 1)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(calls[0][0], "task-pr")
         self.assertEqual(calls[0][1], "attempt-pr")
 
     def test_max_concurrency_blocks_new_dispatch_but_keeps_prepared_task(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace("max_concurrency: 3", "max_concurrency: 1"),
@@ -8595,14 +8607,14 @@ raise SystemExit(0 if record["ok"] else 1)
             encoding="utf-8",
         )
         calls = []
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
             return {"ok": True, "status": "running", "pid": 123, "command": ["cbc"]}
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8611,7 +8623,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(second["ok"], second)
         self.assertEqual(calls, [])
@@ -8624,8 +8636,8 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(task_count, 2)
 
     def test_child_task_dispatch_respects_live_capacity(self):
-        from robert_agent.worker import result
-        from robert_agent import run_once
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle as run_once
         self.config_path.write_text(
             self.config_path.read_text(encoding="utf-8").replace(
                 "max_concurrency: 3", "max_concurrency: 1"
@@ -8722,14 +8734,14 @@ raise SystemExit(0 if record["ok"] else 1)
                 (now, now),
             )
         calls = []
-        original_dispatch = run_once.dispatch.dispatch_worker
+        original_dispatch = cycle_worker.dispatch_worker
 
         def fake_dispatch_worker(**kwargs):
             calls.append(kwargs)
             return {"ok": True, "status": "running", "pid": 456, "command": ["cbc"]}
 
         try:
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             audited = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -8737,7 +8749,7 @@ raise SystemExit(0 if record["ok"] else 1)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch
+            cycle_worker.dispatch_worker = original_dispatch
 
         self.assertTrue(audited["ok"], audited)
         self.assertEqual(calls, [])
@@ -8758,7 +8770,7 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertFalse((REPO_ROOT / "tests" / "dd_github_dispatcher").exists())
 
     def test_robot_authored_pr_followup_without_hidden_metadata_reuses_existing_branch(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         fixture_path = self.root / "pr-followup.json"
         fixture_path.write_text(
             json.dumps(
@@ -8815,7 +8827,7 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertIn("codex__issue-2878-mcp-proxy", row[4])
 
     def test_dd_pr_followup_trigger_is_prioritized_over_older_issue_workstream(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         fixture_path = self.root / "priority-followup.json"
         fixture_path.write_text(
             json.dumps(
@@ -8921,12 +8933,12 @@ raise SystemExit(0 if record["ok"] else 1)
                 "WHERE t.task_id='task-pr-2886'").fetchone()
             self.assertEqual(row[:2], ("failed", "failed"))
             self.assertIn("missing-reroute-skill", json.loads(row[2]))
-            from robert_agent.run_once import _current_dispatch_target
-            self.assertIsNone(_current_dispatch_target(conn, "attempt-pr-2886"))
+            from robert_agent.execution.application.dispatch import current_dispatch_target
+            self.assertIsNone(current_dispatch_target(conn, "attempt-pr-2886"))
 
     def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(self, blocked=False):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -9093,8 +9105,8 @@ raise SystemExit(0 if record["ok"] else 1)
         )
 
     def test_live_dispatch_uses_refreshed_worktree_after_prepared_pr_reroute(self):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -9202,8 +9214,8 @@ raise SystemExit(0 if record["ok"] else 1)
         )
         dispatch_calls = []
         prepare_calls = []
-        original_dispatch_worker = run_once.dispatch.dispatch_worker
-        original_prepare_worktree = run_once._prepare_worktree
+        original_dispatch_worker = cycle_worker.dispatch_worker
+        original_prepare_worktree = assigned_workspace.prepare_worktree
 
         def fake_prepare_worktree(repo, event, route_result, dry_run):
             prepare_calls.append(dry_run)
@@ -9218,8 +9230,8 @@ raise SystemExit(0 if record["ok"] else 1)
             return {"ok": True, "status": "running", "pid": 456, "command": ["cbc"]}
 
         try:
-            run_once._prepare_worktree = fake_prepare_worktree
-            run_once.dispatch.dispatch_worker = fake_dispatch_worker
+            assigned_workspace.prepare_worktree = fake_prepare_worktree
+            cycle_worker.dispatch_worker = fake_dispatch_worker
             result = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -9228,8 +9240,8 @@ raise SystemExit(0 if record["ok"] else 1)
                 skip_external=True,
             )
         finally:
-            run_once.dispatch.dispatch_worker = original_dispatch_worker
-            run_once._prepare_worktree = original_prepare_worktree
+            cycle_worker.dispatch_worker = original_dispatch_worker
+            assigned_workspace.prepare_worktree = original_prepare_worktree
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(prepare_calls, [False, False])
@@ -9247,8 +9259,8 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(attempt, (str(new_worktree_path), "codex/issue-2884-fix-operator"))
 
     def test_publish_ready_actions_filters_by_repo_id(self):
-        from robert_agent import publish
-        from robert_agent import storage
+        from robert_agent.delivery.application import publish
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -9302,8 +9314,7 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(result["pending_count"], 1)
 
     def test_run_once_publish_filters_single_config_repo_when_db_has_other_repo_actions(self):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -9354,7 +9365,7 @@ raise SystemExit(0 if record["ok"] else 1)
                     ),
                 )
 
-        result = run_once._publish_ready_actions_for_repo(
+        result = repository_cycle._publish_ready_actions_for_repo(
             db_path,
             dry_run=True,
             repo_id="repo:example/backend",
@@ -9365,8 +9376,7 @@ raise SystemExit(0 if record["ok"] else 1)
         self.assertEqual(result["pending_count"], 1)
 
     def test_running_attempt_count_for_repos_counts_all_configured_repos(self):
-        from robert_agent import run_once
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -9399,7 +9409,7 @@ raise SystemExit(0 if record["ok"] else 1)
                     'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, metadata_json) VALUES (?, ?, 1, \'running\', \'{"result_contract":"compact-v1"}\')',
                     (attempt_id, task_id),
                 )
-            count = run_once._running_attempt_count_for_repos(conn, ["repo:a", "repo:b"])
+            count = capacity.running_attempt_count_for_repos(conn, ["repo:a", "repo:b"])
 
         self.assertEqual(count, 2)
 

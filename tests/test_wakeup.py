@@ -1,10 +1,12 @@
+from robert_agent.readmodels import dashboard
 from tests import support  # noqa: F401
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 
-from robert_agent import storage, wakeup
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.work import wakeup
 
 
 class WakeupReasonTests(unittest.TestCase):
@@ -52,11 +54,11 @@ class WakeupReasonTests(unittest.TestCase):
         self.assertEqual(summary['due'], 4)
 
     def test_logical_reason_reaches_operations_response_and_status_cli(self):
-        from robert_agent import status, web
+        from robert_agent.readmodels import status
         wakeup.request_wakeup(self.conn, repo_id='repo', reason='manual_operator_request',
                               dedupe_key='scan', metadata={'kind': 'github_observation_ready'})
         self.conn.commit()
-        data = web.build_dashboard_data(self.db)
+        data = dashboard.build_dashboard_data(self.db)
         self.assertEqual(data['wakeup_summary']['by_reason'], {'github_observation_ready': 1})
         self.assertEqual(data['recent_wakeups'][0]['reason'], 'github_observation_ready')
         serialized = status.build_status(self.db)

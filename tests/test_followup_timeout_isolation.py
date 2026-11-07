@@ -12,8 +12,14 @@ from unittest import mock
 
 from tests import test_reliability as result_fixture
 from tests import test_run_once as pipeline_fixture
-from robert_agent import common, execution_store, run_once
-from robert_agent.worker import result
+from robert_agent.foundation import commands as common
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.runtime import cycle as run_once
+from robert_agent.delivery.application import submission as result
+from robert_agent.delivery.application import result_audit
+from robert_agent.delivery.application import scope
+from robert_agent.execution.application import evidence
+from robert_agent.execution import workspace as assigned_workspace
 
 
 class TimeoutIsolationTests(unittest.TestCase):
@@ -60,7 +66,7 @@ class TimeoutIsolationTests(unittest.TestCase):
             events.append({**events[0], 'id': 'independent-comment', 'number': 124})
             fixture.fixture_path.write_text(json.dumps({'events': events}))
             with mock.patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}), \
-                    mock.patch.object(run_once, '_run_inspection_command', side_effect=subprocess.TimeoutExpired(['git', 'status'], 5)):
+                    mock.patch.object(evidence, 'run_inspection_command', side_effect=subprocess.TimeoutExpired(['git', 'status'], 5)):
                 outcome = run_once.run_once(fixture.config_path, fixture_path=fixture.fixture_path,
                                             dry_run=True, skip_external=True)
             self.assertTrue(outcome['ok'], outcome)
@@ -80,8 +86,8 @@ class TimeoutIsolationTests(unittest.TestCase):
             execution_store.ensure_subject(conn, 'task', task, 'human_request', now)
             conn.execute('''INSERT INTO route_decisions(route_decision_id,task_id,route_id,expected_output,confidence,created_at)
                 VALUES ('route-scope',?,'comment-analysis','comment_analysis','high',?)''', (task, now))
-            with mock.patch.object(run_once.result_scope, 'for_result', side_effect=subprocess.TimeoutExpired(['git', 'rev-parse'], 5)):
-                count = run_once._audit_completed_results(conn, repo, Path(fixture.db).parent,
+            with mock.patch.object(scope, 'for_result', side_effect=subprocess.TimeoutExpired(['git', 'rev-parse'], 5)):
+                count = result_audit.audit_completed_results(conn, repo, Path(fixture.db).parent,
                     fixture.db, {}, 'run-unused', now, True, [], {'remaining': 3})
             self.assertEqual(count, 0)
             self.assertNotIn('audit', json.loads(conn.execute('SELECT metadata_json FROM worker_results').fetchone()[0]))
@@ -93,7 +99,7 @@ class TimeoutIsolationTests(unittest.TestCase):
                    'event_type': 'review_request', 'actor_login': 'wklken',
                    'requested_reviewer': 'robert-bot', 'title': 'Review'} for number in (22, 23)]
         fixture.fixture_path.write_text(json.dumps({'events': events}))
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         visited = []
 
         def prepare(repo, event, route, dry_run):
@@ -102,7 +108,7 @@ class TimeoutIsolationTests(unittest.TestCase):
                 raise subprocess.TimeoutExpired(['git', 'fetch'], 5)
             return original(repo, event, route, dry_run)
 
-        with self.environment(), mock.patch.object(run_once, '_prepare_worktree', side_effect=prepare):
+        with self.environment(), mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=prepare):
             outcome = run_once.run_once(fixture.config_path, fixture_path=fixture.fixture_path,
                                        dry_run=True, skip_external=True)
         self.assertEqual(visited, [22, 23])
@@ -111,7 +117,7 @@ class TimeoutIsolationTests(unittest.TestCase):
 
     def test_shared_deadline_stops_routing_instead_of_becoming_an_event_failure(self):
         fixture = self.fixture()
-        with mock.patch.object(run_once, '_prepare_worktree',
+        with mock.patch.object(assigned_workspace, 'prepare_worktree',
                 side_effect=common.ControlDeadlineExceeded(['git', 'fetch'], 1)) as prepare:
             with self.assertRaises(common.ControlDeadlineExceeded):
                 run_once.run_once(fixture.config_path, fixture_path=fixture.fixture_path,

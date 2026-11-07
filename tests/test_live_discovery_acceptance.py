@@ -47,7 +47,7 @@ repos:
         )
 
     def test_live_discovery_acceptance_is_read_only_and_reports_gh_commands(self):
-        from robert_agent import live_discovery_acceptance
+        from robert_agent.acceptance import discovery as live_discovery_acceptance
         calls = []
 
         class Completed:

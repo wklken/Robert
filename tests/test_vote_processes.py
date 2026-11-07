@@ -5,7 +5,10 @@ import threading
 import time
 import unittest
 
-from robert_agent import dispatch, native_rounds, vote_store, worker_identity
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.execution import rounds as native_rounds
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.adapters.processes import identity as worker_identity
 from tests import test_vote_coordinator as fixture_module
 
 

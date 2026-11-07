@@ -1,6 +1,8 @@
 """Task lifecycle transitions shared by execution and publication."""
 import json
-from robert_agent import native_rounds, remediation, work_items
+from robert_agent.execution import rounds as native_rounds
+from robert_agent.workflows import pr_remediation as remediation
+from robert_agent.work.application import commands as work_items
 from robert_agent.execution import ownership as execution_ownership
 
 

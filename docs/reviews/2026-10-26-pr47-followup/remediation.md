@@ -12,10 +12,10 @@
 
 ## 行为变化与边界
 
-1. [`ControlDeadlineExceeded`](../../../src/robert_agent/common.py) 区分共享预算耗尽与单条命令超时。未传 timeout、也没有控制 deadline 的调用恢复原本不限时的行为；显式 5 秒检查和 60 秒 publication cap 保留。运行中真正耗尽共享预算仍中止本仓库控制执行。
-2. [`run_once.py`](../../../src/robert_agent/run_once.py) 的恢复观察、结果 scope 收集、分类后继和事件路由在本条工作上处理普通超时。未完成的观察保持待重试，避免把未知信息当成无进展或不合法 scope；回写仍核对最新 attempt/结果/执行控制。监督从前部阻断 audit/publish/discovery 的说法成立，路由发生在这些阶段之后，不能追溯阻断已经完成的阶段。
-3. [`daemon.py`](../../../src/robert_agent/daemon.py) 只在进程组观察边界保守处理 OSError/TimeoutExpired。真实 Popen 失败仍可见，成功 child payload 不再被 ps 超时替换；unknown stop proof 保留 agent run/lease。共享进程检查函数的异常语义保持。
-4. [`discover.py`](../../../src/robert_agent/discover.py) 继续优先匹配明确指令，再以有英文边界及否定保护的 bug fallback 处理混合 bug/analysis 文本。
+1. [`ControlDeadlineExceeded`](https://github.com/wklken/Robert/blob/b097248ee6c20400206018716449f748af43d463/src/robert_agent/common.py) 区分共享预算耗尽与单条命令超时。未传 timeout、也没有控制 deadline 的调用恢复原本不限时的行为；显式 5 秒检查和 60 秒 publication cap 保留。运行中真正耗尽共享预算仍中止本仓库控制执行。
+2. [`run_once.py`](https://github.com/wklken/Robert/blob/b097248ee6c20400206018716449f748af43d463/src/robert_agent/run_once.py) 的恢复观察、结果 scope 收集、分类后继和事件路由在本条工作上处理普通超时。未完成的观察保持待重试，避免把未知信息当成无进展或不合法 scope；回写仍核对最新 attempt/结果/执行控制。监督从前部阻断 audit/publish/discovery 的说法成立，路由发生在这些阶段之后，不能追溯阻断已经完成的阶段。
+3. [`daemon.py`](https://github.com/wklken/Robert/blob/b097248ee6c20400206018716449f748af43d463/src/robert_agent/daemon.py) 只在进程组观察边界保守处理 OSError/TimeoutExpired。真实 Popen 失败仍可见，成功 child payload 不再被 ps 超时替换；unknown stop proof 保留 agent run/lease。共享进程检查函数的异常语义保持。
+4. [`discover.py`](https://github.com/wklken/Robert/blob/b097248ee6c20400206018716449f748af43d463/src/robert_agent/discover.py) 继续优先匹配明确指令，再以有英文边界及否定保护的 bug fallback 处理混合 bug/analysis 文本。
 
 三个问题分别有独立因果和修复；不更改其他 retention、并发、审计和完整性策略，不新增依赖。
 

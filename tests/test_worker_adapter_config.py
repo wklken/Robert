@@ -3,8 +3,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from robert_agent.dispatch import _worker_environment
-from robert_agent.dispatch import dispatch_worker
+from robert_agent.adapters.processes.worker import _worker_environment
+from robert_agent.adapters.processes.worker import dispatch_worker
 from robert_agent.worker_adapters import normalize_worker_agent_config
 
 

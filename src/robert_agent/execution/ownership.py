@@ -1,7 +1,8 @@
 """Claim and close execution subjects in the caller-owned transaction."""
 import json
 from datetime import datetime, timezone
-from robert_agent import execution_store, execution_operations
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.execution import operations as execution_operations
 from robert_agent.execution import notifications as execution_notifications
 
 

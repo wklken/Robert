@@ -1,3 +1,5 @@
+from robert_agent.work import scan_batches as scan_batches
+from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.adapters.github import client as github_client
 import json
 import sqlite3
@@ -6,14 +8,26 @@ from contextlib import closing
 from pathlib import Path
 
 from tests import test_review_input_workflow as review_fixtures
-from robert_agent import publish, run_once, validate_config, execution_store
+from robert_agent.delivery.application import publish
+from robert_agent.runtime import cycle as run_once
+from robert_agent.configuration import command as validate_config
+from robert_agent.adapters.sqlite import execution_control as execution_store
 from robert_agent.execution import ownership as execution_ownership
 from tests import test_terminal_github_followup as terminal_fixtures
-from robert_agent.worker import result
+from robert_agent.delivery.application import submission as result
 
 from tests import test_pr_remediation_integration as remediation_fixtures
-from robert_agent import route, workstream, execution_operations
+from robert_agent.workflows import routes as route
+from robert_agent.work import streams as workstream
+from robert_agent.execution import operations as execution_operations
 import unittest
+from robert_agent.delivery.application import result_audit
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import completion
+from robert_agent.work.application import preparation
+from robert_agent.work.application import remediation_requests
+from robert_agent.work.application import source_lifecycle
+from robert_agent.foundation import values
 
 
 class PublicationLifecycleFollowupTests(unittest.TestCase):
@@ -99,14 +113,14 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
         assert config["ok"], config
         repo = next(r for r in config["repos"] if r["full_name"] == "example/backend")
         with closing(sqlite3.connect(db)) as conn, conn:
-            audited = run_once._audit_completed_results(
+            audited = result_audit.audit_completed_results(
                 conn,
                 repo_id,
                 f.data_dir,
                 db,
                 repo,
                 "lc1-evidence-run",
-                run_once._now(),
+                values.utc_now(),
                 True,
                 [],
                 None,
@@ -154,14 +168,14 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
 
         publication = publish.publish_ready_actions(db, run_command=transport)
         with closing(sqlite3.connect(db)) as conn, conn:
-            run_once._finalize_published_results(
+            completion.finalize_published_results(
                 conn,
                 repo_id,
                 f.data_dir,
                 db,
                 repo,
                 "lc1-evidence-run",
-                run_once._now(),
+                values.utc_now(),
                 True,
                 [],
                 None,
@@ -209,12 +223,12 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
             f = remediation_fixtures.PrRemediationIntegrationTests()
             f.setUp()
             try:
-                now = run_once._now()
+                now = values.utc_now()
                 with closing(sqlite3.connect(f.db_path)) as c, c:
                     for old_id, source_key in c.execute(
                         "SELECT source_id,source_key FROM github_sources"
                     ).fetchall():
-                        canonical = run_once._source_id(source_key)
+                        canonical = values.github_source_id(source_key)
                         c.execute(
                             "UPDATE github_sources SET source_id=? WHERE source_id=?",
                             (canonical, old_id),
@@ -223,14 +237,14 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                             "UPDATE workstreams SET primary_source_id=? WHERE primary_source_id=?",
                             (canonical, old_id),
                         )
-                    choices = run_once._collect_pr_remediation_decisions(
+                    choices = remediation_requests.collect_pr_remediation_decisions(
                         c, "repo:example/backend", f.repo, f.runner(), now
                     )
                     event = next(e for e in choices if e["task_kind"] == kind)
                     routed = route.route_task(event)
                     # Use the supported dry-run worktree preparation; no real Git worker.
-                    tree = run_once._prepare_worktree(f.repo, event, routed, True)
-                    task = run_once._create_task_attempt_and_prompt(
+                    tree = assigned_workspace.prepare_worktree(f.repo, event, routed, True)
+                    task = preparation.create_task_attempt_and_prompt(
                         c,
                         Path(f.tmp.name) / "data",
                         f.db_path,
@@ -271,7 +285,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                 )
                 assert recorded["ok"], recorded
                 with closing(sqlite3.connect(f.db_path)) as c, c:
-                    audited = run_once._audit_completed_results(
+                    audited = result_audit.audit_completed_results(
                         c,
                         "repo:example/backend",
                         Path(f.tmp.name) / "data",
@@ -342,7 +356,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                 ), state
                 assert pub["ok"] and calls and final["action"] == "published", pub
                 with closing(sqlite3.connect(f.db_path)) as c, c:
-                    run_once._finalize_published_results(
+                    completion.finalize_published_results(
                         c,
                         "repo:example/backend",
                         Path(f.tmp.name) / "data",
@@ -401,7 +415,8 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     )
                 )
                 if reply_mode == "board":
-                    from robert_agent import board, work_items, github_scan
+                    from robert_agent.readmodels import board
+                    from robert_agent.work.application import commands as work_items
 
                     with closing(sqlite3.connect(f.db_path)) as conn:
                         item_id = conn.execute(
@@ -427,7 +442,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     with closing(sqlite3.connect(f.db_path)) as conn, conn:
                         import time
 
-                        github_scan._save_reads(
+                        scan_batches.save_reads(
                             conn,
                             "repo:example/backend",
                             {
@@ -502,18 +517,18 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                         {
                             "state": "closed",
                             "state_reason": state_reason,
-                            "closed_at": run_once._now(),
+                            "closed_at": values.utc_now(),
                         }
                     ),
                     "",
                 )
 
-            run_once._reconcile_remote_source_states(
+            source_lifecycle.reconcile_remote_source_states(
                 conn,
                 f.fixture.repo_id,
                 {"full_name": "example/repo"},
                 remote,
-                run_once._now(),
+                values.utc_now(),
             )
             self.assertEqual(
                 conn.execute("SELECT publish_status FROM github_actions").fetchone()[0],
@@ -561,7 +576,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     conn.execute(
                         "UPDATE github_actions SET metadata_json=json_remove(metadata_json,'$.publish.next_retry_at')"
                     )
-                    publish.retire_unstarted_actions(conn, "task-1", run_once._now())
+                    publication_outcomes.retire_unstarted_actions(conn, "task-1", values.utc_now())
                     self.assertEqual(
                         conn.execute(
                             "SELECT publish_status FROM github_actions"

@@ -7,9 +7,9 @@ import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 import yaml
-from robert_agent.init_config import init_config
-from robert_agent.run_once import run_once
-from robert_agent.worker.result import record_result
+from robert_agent.operations.initialize import init_config
+from robert_agent.runtime.cycle import run_once
+from robert_agent.delivery.application.submission import record_result
 
 
 class ChildRoutePolicyTests(unittest.TestCase):
@@ -52,7 +52,7 @@ class ChildRoutePolicyTests(unittest.TestCase):
             self.assertEqual(second['dispatch_count'], 0)
 
     def test_local_task_preserves_required_skill_gate(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

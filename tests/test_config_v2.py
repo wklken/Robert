@@ -7,7 +7,7 @@ import unittest
 
 import yaml
 
-from robert_agent.validate_config import validate_config
+from robert_agent.configuration.command import validate_config
 from robert_agent.configuration.routes import resolve_route_config
 
 
@@ -148,7 +148,7 @@ class ConfigV2Tests(unittest.TestCase):
         self.path.write_text(yaml.safe_dump(self.config), encoding='utf-8')
         script = """
 import sys
-from robert_agent.validate_config import validate_config
+from robert_agent.configuration.command import validate_config
 
 result = validate_config(sys.argv[1], skip_external=True)
 assert result['ok'], result
@@ -283,7 +283,8 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
         from contextlib import closing
         from datetime import datetime, timedelta, timezone
         import sqlite3
-        from robert_agent import storage, supervise
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.execution import inspection as supervise
         from robert_agent.execution import leases as execution_leases
         self.config['scheduler'] = {'lease_ttl_seconds': 61}
         self.config['supervision'] = {'heartbeat_stale_seconds': 31, 'hard_timeout_seconds': 121}

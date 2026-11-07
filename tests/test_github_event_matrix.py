@@ -28,7 +28,7 @@ def _empty_discovery(args):
 
 class GitHubEventMatrixTests(unittest.TestCase):
     def collect_normalized(self, fake_runner, known_workstreams=None):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         raw_events = discover.collect_live_events(
             REPO_CONFIG,
             runner=fake_runner,
@@ -37,7 +37,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
         return discover.normalize_events(raw_events, REPO_CONFIG)
 
     def collect_decisions(self, fake_runner, known_workstreams=None):
-        from robert_agent import authorize
+        from robert_agent.security import authorization as authorize
         events = self.collect_normalized(
             fake_runner,
             known_workstreams=known_workstreams,

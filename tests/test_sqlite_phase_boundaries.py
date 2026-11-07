@@ -6,9 +6,22 @@ import sqlite3
 import unittest
 from unittest import mock
 
-from robert_agent import execution_store, loop_engine, route, run_once, workstream
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.workflows import routes as route
+from robert_agent.runtime import cycle as run_once
+from robert_agent.work import streams as workstream
 from robert_agent.work.application import lifecycle as work_application_lifecycle
 from tests import test_pr_remediation_integration, test_run_once
+from robert_agent.adapters.github import discovery
+from robert_agent.execution.application import evidence as cycle_evidence
+from robert_agent.execution.application import monitor
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import preparation
+from robert_agent.work.application import remediation_requests
+from robert_agent.work.application import source_lifecycle
+from robert_agent.configuration import command
+from robert_agent.foundation import values
 
 
 class TimeoutPhaseBoundaryTests(unittest.TestCase):
@@ -30,7 +43,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             ).fetchone()
 
     def cycle(self, now):
-        with mock.patch.object(run_once, "_now", return_value=now):
+        with mock.patch.object(values, 'utc_now', return_value=now):
             result = run_once.run_once(
                 self.fixture.config_path,
                 dry_run=True,
@@ -56,7 +69,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             return 1
 
         with mock.patch.object(
-            run_once, "_supervise_running_attempts", side_effect=timeout
+            monitor, 'supervise_running_attempts', side_effect=timeout
         ):
             self.cycle(now)
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -79,8 +92,8 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
                 attempt_process, "dispatch_status", return_value={"status": "dead"}
             ),
             mock.patch.object(
-                run_once,
-                "_inspect_attempt_recovery_with_metadata",
+                cycle_evidence,
+                'inspect_attempt_recovery_with_metadata',
                 return_value=evidence,
             ),
         ):
@@ -108,8 +121,8 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
                 attempt_process, "dispatch_status", return_value={"status": "dead"}
             ),
             mock.patch.object(
-                run_once,
-                "_inspect_attempt_recovery_with_metadata",
+                cycle_evidence,
+                'inspect_attempt_recovery_with_metadata',
                 return_value=evidence,
             ),
         ):
@@ -134,8 +147,8 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
                 attempt_process, "dispatch_status", return_value={"status": "dead"}
             ),
             mock.patch.object(
-                run_once,
-                "_inspect_attempt_recovery_with_metadata",
+                cycle_evidence,
+                'inspect_attempt_recovery_with_metadata',
                 return_value={"status": "no_progress"},
             ),
         ):
@@ -164,7 +177,7 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
         fixture.repo["worktree_root"] = fixture.tmp.name
         fixture.repo["pr_automation"]["ci"]["enabled"] = False
         with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
-            event = run_once._collect_pr_remediation_decisions(
+            event = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 fixture.repo,
@@ -172,7 +185,7 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                 "2026-07-26T00:01:00+00:00",
             )[0]
             episode = event["metadata"]["remediation"]["episode_id"]
-            task = run_once._create_task_attempt_and_prompt(
+            task = preparation.create_task_attempt_and_prompt(
                 conn,
                 Path(fixture.tmp.name),
                 fixture.db_path,
@@ -182,7 +195,7 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                 route.route_task(event),
                 workstream.plan_event(event, active_workstreams=set()),
                 "2026-07-26T00:01:00+00:00",
-                worktree_result=run_once._prepare_worktree(
+                worktree_result=assigned_workspace.prepare_worktree(
                     fixture.repo, event, route.route_task(event), True
                 ),
             )
@@ -221,26 +234,26 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                 }
             )
         )
-        config = run_once.validate_config.validate_config(
+        config = command.validate_config(
             config_path, skip_external=True
         )
         self.assertTrue(config["ok"], config)
         with (
             mock.patch.object(
-                run_once.validate_config, "validate_config", return_value=config
+                command, "validate_config", return_value=config
             ),
             mock.patch.object(
-                run_once.discover, "collect_account_notifications", return_value={}
+                discovery, "collect_account_notifications", return_value={}
             ),
             mock.patch.object(
-                run_once.discover, "collect_live_events", return_value=[]
+                discovery, "collect_live_events", return_value=[]
             ),
             mock.patch.object(
-                run_once, "_reconcile_remote_source_states", return_value=0
+                source_lifecycle, 'reconcile_remote_source_states', return_value=0
             ),
         ):
             for now in ("2026-07-26T00:03:00+00:00", "2026-07-26T00:04:00+00:00"):
-                with mock.patch.object(run_once, "_now", return_value=now):
+                with mock.patch.object(values, 'utc_now', return_value=now):
                     result = run_once.run_once(
                         config_path,
                         dry_run=True,

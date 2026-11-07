@@ -8,7 +8,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from robert_agent import discover, storage
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.adapters.sqlite import database as storage
 
 
 REPO = {'full_name': 'example/backend', 'github_account': 'robert-bot', 'trusted_actors': ['wklken']}
@@ -22,7 +23,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         storage.init_database(self.db)
 
     def session(self, runner, **kwargs):
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.adapters.github.read import GitHubReadSession
         return GitHubReadSession(self.db, account='robert-bot', runner=runner, now=lambda: 1000, **kwargs)
 
     def test_successful_reads_are_copied_and_failures_are_retried(self):
@@ -173,7 +174,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
     def test_expired_and_configuration_changed_observations_refresh(self):
         clock = [1000]
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.adapters.github.read import GitHubReadSession
         session = GitHubReadSession(self.db, account='robert-bot', now=lambda: clock[0])
         raw = {'number': 7, 'source_type': 'issue', 'event_type': 'mention', 'event_at': 'v1'}
         calls = []
@@ -199,7 +200,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         self.assertEqual(len(count), 2)
 
     def test_host_routing_and_account_cache_isolation(self):
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.adapters.github.read import GitHubReadSession
         calls = []
         def runner(args, **kwargs):
             calls.append((args, kwargs))
@@ -251,7 +252,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         runner.assert_not_called()
 
     def test_search_quota_fallback_survives_unrelated_writes_with_bounded_age(self):
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.adapters.github.read import GitHubReadSession
         clock = [1000]
         calls = []
         args = ['gh', 'search', 'issues', '--repo', 'example/backend', '--json', 'number']
@@ -273,7 +274,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_search_normal_freshness_remains_five_minutes(self):
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.adapters.github.read import GitHubReadSession
         clock = [1000]
         calls = []
         args = ['gh', 'search', 'issues', '--repo', 'example/backend', '--json', 'number']

@@ -39,7 +39,7 @@ jobs:
                   subprocess.run(['sudo', '-n', 'chmod', 'go-w', str(executable)], check=True)
               else:
                   executable.chmod(stat.S_IMODE(info.st_mode) & ~0o022)
-          from robert_agent.supervision_repair import _fingerprint_file
+          from robert_agent.workflows.maintenance.repair import _fingerprint_file
           _fingerprint_file(executable)
       - run: python -m ruff check src tests
       - run: >-
@@ -48,8 +48,8 @@ jobs:
           src/robert_agent/paths.py
           src/robert_agent/configuration
           src/robert_agent/execution/stages.py
-          src/robert_agent/skills.py
-          src/robert_agent/service.py
+          src/robert_agent/context/skills.py
+          src/robert_agent/adapters/services/native.py
       - run: python -B -m unittest discover -s tests
       - run: python -m compileall -q src
       - run: python -m build
@@ -85,6 +85,32 @@ jobs:
       - run: /tmp/robert-smoke/bin/pip install dist/*.whl
       - run: /tmp/robert-smoke/bin/robert --version
       - run: /tmp/robert-smoke/bin/robert --help
+      - name: Verify installed modules, resources and recovery entrypoints
+        working-directory: /tmp
+        run: |
+          /tmp/robert-smoke/bin/python -I - <<'PYTHON'
+          import importlib
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+          import robert_agent
+          from robert_agent.resource_files import resource
+          package = Path(robert_agent.__file__).parent
+          assert 'site-packages' in str(package), package
+          for path in package.rglob('*.py'):
+              parts = path.relative_to(package).with_suffix('').parts
+              if parts[-1] == '__init__':
+                  parts = parts[:-1]
+              if parts:
+                  importlib.import_module('robert_agent.' + '.'.join(parts))
+          for name, owner in json.loads(resource('entrypoints.json').read_text()).items():
+              assert callable(importlib.import_module(owner).main), name
+          assert resource('workflow.yml').is_file()
+          assert resource('routes.yml').is_file()
+          for name in ('github_scan', 'control_lane'):
+              subprocess.run([sys.executable, '-I', '-m', 'robert_agent.' + name, '--help'], check=True)
+          PYTHON
 
   secret-scan:
     runs-on: ubuntu-latest

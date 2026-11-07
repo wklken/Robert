@@ -1,3 +1,4 @@
+from robert_agent.work.application import synchronization as synchronization
 from tests import support  # noqa: F401
 from contextlib import closing
 import json
@@ -7,7 +8,11 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from robert_agent import daemon, github_scan, storage, validate_config, wakeup
+from robert_agent.runtime import daemon
+import time
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.configuration import command as validate_config
+from robert_agent.work import wakeup
 from robert_agent.work import repositories as work_repositories
 from tests import test_retention as retention_fixtures, test_run_once as run_fixtures
 
@@ -108,9 +113,9 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, json.dumps({'resources': {
                 'core': {'remaining': 0, 'reset': 1600}, 'search': {'remaining': 30}}}), '')
 
-        with mock.patch.object(github_scan.time, 'time', return_value=1000), \
-             mock.patch.object(github_scan, '_scan_repo') as scan:
-            result = github_scan.scan(fixture.config_path, runner=runner, refresh_context=True)
+        with mock.patch.object(time, 'time', return_value=1000), \
+             mock.patch.object(synchronization, 'scan_repo') as scan:
+            result = synchronization.scan(fixture.config_path, runner=runner, refresh_context=True)
         self.assertFalse(result['ok'])
         self.assertEqual(result['retry_after_seconds'], 600)
         self.assertEqual(result['failures'][0]['reason'], 'core_rate_limit_floor')
@@ -123,7 +128,7 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         runner = mock.Mock(side_effect=AssertionError('unexpected remote read'))
-        result = github_scan.scan(fixture.config_path, runner=runner, refresh_context=True)
+        result = synchronization.scan(fixture.config_path, runner=runner, refresh_context=True)
         self.assertTrue(result['ok'])
         self.assertEqual(result['batch_count'], 0)
         self.assertEqual(result['github_reads'], {})

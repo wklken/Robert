@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import supervision_rules
+from robert_agent.supervision import rules as supervision_rules
 
 
 NOW = datetime(2026, 11, 6, 10, tzinfo=timezone.utc)

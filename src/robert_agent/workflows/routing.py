@@ -1,7 +1,9 @@
 """Resolve workflow policy, current authority and installed skill requirements."""
-from robert_agent import discover, route, skills
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.workflows import routes as route
+from robert_agent.context import skills
 from robert_agent.configuration import routes as route_config
-from robert_agent.work import admission as work_admission
+from robert_agent.work import source_policy
 
 
 def effective_route(config_result, repo, event, route_id=None):
@@ -76,7 +78,7 @@ def effective_route(config_result, repo, event, route_id=None):
 
 
 def native_request_allowed(entry, repo, config_result):
-    authorized = work_admission.reauthorize_saved_request(entry['request']['event'], repo)
+    authorized = source_policy.reauthorize_saved_request(entry['request']['event'], repo)
     route_id = 'vote' if 'source_type' in entry else 'review-pr'
     current_route = effective_route(config_result, repo, authorized, route_id=route_id)
     workers_key = 'native_vote_workers' if route_id == 'vote' else 'native_review_workers'

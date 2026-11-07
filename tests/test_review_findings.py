@@ -1,5 +1,5 @@
 from robert_agent.adapters.processes import attempt as attempt_process
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import os
@@ -14,8 +14,15 @@ import unittest
 from unittest.mock import patch
 
 from tests import support  # noqa: F401
-from robert_agent import daemon, dispatch, execution_store, loop_engine
-from robert_agent import review_store, run_once, validate_config, vote_store
+from robert_agent.runtime import daemon
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.runtime import cycle as run_once
+from robert_agent.configuration import command as validate_config
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.execution import capacity
 
 
 class LaunchOwnershipTests(unittest.TestCase):
@@ -31,7 +38,7 @@ class LaunchOwnershipTests(unittest.TestCase):
 
     def test_cleanup_attention_can_only_be_canceled_after_group_is_gone(self):
         metadata = {'dispatch': {'pid': 987654, 'cleanup_pending': True}}
-        with patch.object(run_once.worker_identity, 'terminate_recorded_identity', side_effect=AssertionError('unverified PID must not be signaled')):
+        with patch.object(worker_identity, 'terminate_recorded_identity', side_effect=AssertionError('unverified PID must not be signaled')):
             with patch.object(worker_identity, 'live_process_group', return_value=True):
                 self.assertEqual(attempt_process.terminate_attempt(metadata)['status'], 'attention')
             with patch.object(worker_identity, 'live_process_group', return_value=False):
@@ -85,7 +92,7 @@ class LaunchOwnershipTests(unittest.TestCase):
         first = run_once.run_once(fixture.config_path, fixture_path=fixture.fixture_path,
                                    dry_run=True, skip_external=True, skip_publish=True)
         self.assertTrue(first['ok'], first)
-        with patch.object(run_once.dispatch, 'dispatch_worker', return_value={
+        with patch.object(dispatch, 'dispatch_worker', return_value={
             'ok': False, 'status': 'failed_dispatch', 'pid': 987654,
             'cleanup_pending': True, 'process_exited': True, 'returncode': 2,
             'safe_error': 'worker process group cleanup was not confirmed',
@@ -96,7 +103,7 @@ class LaunchOwnershipTests(unittest.TestCase):
         with closing(sqlite3.connect(fixture.data_dir / 'dd.sqlite3')) as conn:
             status, task_id = conn.execute('SELECT status,task_id FROM attempts').fetchone()
             self.assertEqual(status, 'stale')
-            self.assertEqual(run_once._running_attempt_count_for_repos(
+            self.assertEqual(capacity.running_attempt_count_for_repos(
                 conn, [row[0] for row in conn.execute('SELECT repo_id FROM repos')]), 1)
             self.assertEqual(execution_store.get_binding(conn, 'task', task_id)['binding_status'], 'attention')
             self.assertIn(conn.execute('SELECT lifecycle FROM tasks').fetchone()[0], ('queued', 'running'))

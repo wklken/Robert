@@ -7,7 +7,13 @@ import unittest
 from unittest import mock
 
 from tests import test_terminal_github_followup as fixtures
-from robert_agent import board, loop_engine, run_once, validate_config, work_items
+from robert_agent.readmodels import board
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.runtime import cycle as run_once
+from robert_agent.configuration import command as validate_config
+from robert_agent.work.application import commands as work_items
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.foundation import values
 
 
 class RetriggerPreparationRetryTests(unittest.TestCase):
@@ -32,7 +38,7 @@ class RetriggerPreparationRetryTests(unittest.TestCase):
         return row[0], row[1], json.loads(row[2])
 
     def test_permanent_error_stops_once_and_exposes_retrigger(self):
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=subprocess.CalledProcessError(1, ['git', 'fetch'], stderr='permission denied')) as prepare:
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=subprocess.CalledProcessError(1, ['git', 'fetch'], stderr='permission denied')) as prepare:
             for _ in range(5):
                 self.cycle()
         self.assertEqual(prepare.call_count, 1)
@@ -46,7 +52,7 @@ class RetriggerPreparationRetryTests(unittest.TestCase):
     def test_transient_error_backs_off_and_budget_survives_cycles(self):
         for count in range(1, 4):
             status, due, _ = self.state()
-            with mock.patch.object(run_once, '_now', return_value=due), mock.patch.object(run_once, '_prepare_worktree',
+            with mock.patch.object(values, 'utc_now', return_value=due), mock.patch.object(assigned_workspace, 'prepare_worktree',
                     side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
                 self.cycle()
             status, _, metadata = self.state()
@@ -54,14 +60,14 @@ class RetriggerPreparationRetryTests(unittest.TestCase):
             self.assertEqual(retry.get('attempt_count'), count, retry)
             self.assertEqual(status, 'pending' if count < 3 else 'canceled')
             if count < 3:
-                with mock.patch.object(run_once, '_now', return_value=retry['failed_at']), mock.patch.object(run_once, '_prepare_worktree') as prepare:
+                with mock.patch.object(values, 'utc_now', return_value=retry['failed_at']), mock.patch.object(assigned_workspace, 'prepare_worktree') as prepare:
                     self.cycle()
                     prepare.assert_not_called()
 
     def test_retry_after_transient_error_creates_only_one_child(self):
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=subprocess.TimeoutExpired(['git', 'fetch'], 1)):
             self.cycle()
-        with mock.patch.object(run_once, '_now', return_value=self.state()[1]):
+        with mock.patch.object(values, 'utc_now', return_value=self.state()[1]):
             self.cycle()
             self.cycle()
         self.assertEqual(self.state()[0], 'consumed')

@@ -6,8 +6,8 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from robert_agent import storage
-from robert_agent.web import (
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.interfaces.web.server import (
     build_http_response, build_read_only_control_context, handle_dashboard_post,
     validate_server_options,
 )

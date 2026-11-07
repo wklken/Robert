@@ -5,6 +5,11 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import completion
+from robert_agent.work.application import preparation
+from robert_agent.work.application import remediation_requests
+from robert_agent.work.application import source_events
 
 
 class FixtureRunner:
@@ -23,7 +28,7 @@ class FixtureRunner:
 
 class PrRemediationIntegrationTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -162,11 +167,10 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         )
 
     def test_collector_creates_system_events_and_conflict_first_decision(self):
-        from robert_agent import run_once
 
         runner = self.runner()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            decisions = run_once._collect_pr_remediation_decisions(
+            decisions = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
@@ -198,17 +202,16 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         self.assertIn("ci_run_completed", [row[2] for row in event_rows])
 
     def test_collector_is_idempotent_and_ignores_non_robert_owned_pr(self):
-        from robert_agent import run_once
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            first = run_once._collect_pr_remediation_decisions(
+            first = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
                 self.runner(),
                 "2026-07-26T00:01:00Z",
             )
-            second = run_once._collect_pr_remediation_decisions(
+            second = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
@@ -232,7 +235,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         self.db_path = other_db
         self.setUp_for_non_owned()
         with closing(sqlite3.connect(other_db)) as conn, conn:
-            decisions = run_once._collect_pr_remediation_decisions(
+            decisions = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
@@ -246,7 +249,6 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         self.assertEqual(episode_count, 0)
 
     def test_pending_system_event_waits_for_fresh_health_reconciliation(self):
-        from robert_agent import run_once
 
         event = {
             "source_key": "github:example/backend!13",
@@ -259,7 +261,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
             "intent": "pr_followup_fix",
         }
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            child = run_once._create_child_task_for_pending_events(
+            child = completion._create_child_task_for_pending_events(
                 conn,
                 Path(self.tmp.name),
                 self.db_path,
@@ -293,7 +295,6 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         self.assertEqual(task_count, 0)
 
     def test_pending_system_event_does_not_discard_later_human_event(self):
-        from robert_agent import run_once
 
         system_event = {
             "repo": "example/backend",
@@ -326,19 +327,19 @@ class PrRemediationIntegrationTests(unittest.TestCase):
             "url": "https://github.com/example/backend/pull/13",
         }
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            run_once._insert_source_and_event(
+            source_events.insert_source_and_event(
                 conn,
                 "repo:example/backend",
                 system_event,
                 "2026-07-26T00:01:00Z",
             )
-            run_once._insert_source_and_event(
+            source_events.insert_source_and_event(
                 conn,
                 "repo:example/backend",
                 human_event,
                 "2026-07-26T00:01:00Z",
             )
-            child = run_once._create_child_task_for_pending_events(
+            child = completion._create_child_task_for_pending_events(
                 conn,
                 Path(self.tmp.name),
                 self.db_path,
@@ -367,12 +368,13 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         self.assertEqual(trigger, "comment:human-1")
 
     def test_conflict_decision_creates_exact_snapshot_remediation_task(self):
-        from robert_agent import route, run_once, workstream
+        from robert_agent.workflows import routes as route
+        from robert_agent.work import streams as workstream
 
         runner = self.runner()
         data_dir = Path(self.tmp.name) / "data"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            decisions = run_once._collect_pr_remediation_decisions(
+            decisions = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
@@ -381,13 +383,13 @@ class PrRemediationIntegrationTests(unittest.TestCase):
             )
             event = decisions[0]
             route_result = route.route_task(event)
-            worktree_result = run_once._prepare_worktree(
+            worktree_result = assigned_workspace.prepare_worktree(
                 self.repo,
                 event,
                 route_result,
                 True,
             )
-            task = run_once._create_task_attempt_and_prompt(
+            task = preparation.create_task_attempt_and_prompt(
                 conn,
                 data_dir,
                 self.db_path,
@@ -431,10 +433,9 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         )
 
     def test_dirty_remediation_worktree_exhausts_episode_without_task(self):
-        from robert_agent import run_once
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            decisions = run_once._collect_pr_remediation_decisions(
+            decisions = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
@@ -442,7 +443,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
                 "2026-07-26T00:01:00Z",
             )
             event = decisions[0]
-            blocked = run_once._handle_blocked_remediation_worktree(
+            blocked = remediation_requests.handle_blocked_remediation_worktree(
                 conn,
                 event,
                 {
@@ -477,12 +478,13 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         self.assertEqual(task_count, 0)
 
     def test_failed_system_task_can_retry_same_guarded_event(self):
-        from robert_agent import route, run_once, workstream
+        from robert_agent.workflows import routes as route
+        from robert_agent.work import streams as workstream
         from robert_agent.work.application import lifecycle as work_application_lifecycle
 
         data_dir = Path(self.tmp.name) / "retry-data"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            event = run_once._collect_pr_remediation_decisions(
+            event = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
@@ -490,7 +492,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
                 "2026-07-26T00:01:00Z",
             )[0]
             route_result = route.route_task(event)
-            task = run_once._create_task_attempt_and_prompt(
+            task = preparation.create_task_attempt_and_prompt(
                 conn,
                 data_dir,
                 self.db_path,
@@ -500,7 +502,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
                 route_result,
                 workstream.plan_event(event, active_workstreams=set()),
                 "2026-07-26T00:01:00Z",
-                worktree_result=run_once._prepare_worktree(
+                worktree_result=assigned_workspace.prepare_worktree(
                     self.repo,
                     event,
                     route_result,
@@ -514,7 +516,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
                 "2026-07-26T00:02:00Z",
                 {"status": "worker_failed"},
             )
-            retry_events = run_once._collect_pr_remediation_decisions(
+            retry_events = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
@@ -528,7 +530,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         )
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertFalse(
-                run_once._should_skip_terminal_trigger(
+                source_events.should_skip_terminal_trigger(
                     conn,
                     retry_events[0],
                 )
@@ -536,17 +538,19 @@ class PrRemediationIntegrationTests(unittest.TestCase):
 
 
     def test_unbound_episode_is_claimed_legacy_before_repair_task_materialization(self):
-        from robert_agent import route, run_once, execution_store, workstream
+        from robert_agent.workflows import routes as route
+        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.work import streams as workstream
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            event = run_once._collect_pr_remediation_decisions(
+            event = remediation_requests.collect_pr_remediation_decisions(
                 conn,
                 "repo:example/backend",
                 self.repo,
                 self.runner(),
                 "2026-07-26T00:01:00Z",
             )[0]
-            task = run_once._create_task_attempt_and_prompt(
+            task = preparation.create_task_attempt_and_prompt(
                 conn,
                 Path(self.tmp.name),
                 self.db_path,
@@ -569,7 +573,7 @@ class PrRemediationIntegrationTests(unittest.TestCase):
         self.assertEqual(binding["binding_status"], "active")
 
     def setUp_for_non_owned(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         storage.init_database(self.db_path)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:

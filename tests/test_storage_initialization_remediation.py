@@ -7,7 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, vote_store
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
 
 
 DATA_MIGRATIONS = ('robert-pr-mainline-workstreams-v1', 'robert-route-recommended-skills-v1')

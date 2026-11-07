@@ -25,7 +25,7 @@ class FixtureRunner:
 
 class PrHealthTests(unittest.TestCase):
     def test_fetch_pr_snapshot_normalizes_exact_head_and_base(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         runner = FixtureRunner(
             {
@@ -73,7 +73,7 @@ class PrHealthTests(unittest.TestCase):
         )
 
     def test_fetch_pr_snapshot_preserves_unknown_mergeability_and_read_failure(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         payload = {
             "state": "open",
@@ -115,7 +115,7 @@ class PrHealthTests(unittest.TestCase):
         )
 
     def test_collect_ci_observations_aggregates_redacted_actions_failure(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         responses = {
             (
@@ -205,7 +205,7 @@ class PrHealthTests(unittest.TestCase):
         )
 
     def test_collect_ci_observations_marks_workflow_unavailable_when_any_failed_job_log_is_unreadable(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         responses = {
             (
@@ -276,7 +276,7 @@ class PrHealthTests(unittest.TestCase):
         self.assertIn("expected 1 got 2", observations[0]["failure_summary"])
 
     def test_collect_ci_observations_reads_external_check_output_and_annotations(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         runner = FixtureRunner(
             {
@@ -343,7 +343,7 @@ class PrHealthTests(unittest.TestCase):
         self.assertIn("expected 1 got 2", observations[0]["failure_summary"])
 
     def test_summarize_ci_distinguishes_waiting_green_failing_and_manual(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         success = {
             "check_name": "unit",
@@ -401,7 +401,7 @@ class PrHealthTests(unittest.TestCase):
         self.assertEqual(no_evidence["reason"], "failure_evidence_unavailable")
 
     def test_summarize_ci_uses_freshest_same_name_observation(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         newer_success = {
             "external_id": "202",
@@ -431,7 +431,7 @@ class PrHealthTests(unittest.TestCase):
         self.assertEqual(summary["observations"], [newer_success])
 
     def test_summarize_ci_uses_latest_rerun_attempt_when_time_matches(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         summary = pr_health.summarize_ci(
             [
@@ -461,7 +461,7 @@ class PrHealthTests(unittest.TestCase):
         self.assertEqual(summary["observations"][0]["attempt_no"], 2)
 
     def test_failure_signature_ignores_volatile_text(self):
-        from robert_agent import pr_health
+        from robert_agent.workflows import pr_health
 
         first = pr_health.failure_signature(
             [

@@ -1,3 +1,4 @@
+from robert_agent.readmodels import dashboard
 from unittest import mock
 from contextlib import closing, redirect_stdout
 import io
@@ -12,6 +13,10 @@ import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
+from robert_agent.delivery import values as publication_values
+from robert_agent.delivery import results
+from robert_agent.delivery.application import scope as cycle_scope
+from robert_agent.context import attempt as attempt_context
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,8 +30,8 @@ class OperationalCommandTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def test_loop_engine_local_work_accepts_repo_id_list(self):
-        from robert_agent import loop_engine
-        from robert_agent import storage
+        from robert_agent.runtime import loop as loop_engine
+        from robert_agent.adapters.sqlite import database as storage
 
         data_dir = self.root / "data"
         repo_root = self.root / "repo-a"
@@ -51,7 +56,7 @@ class OperationalCommandTests(unittest.TestCase):
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:b"]))
 
     def test_known_workstream_context_uses_latest_dd_mention_only(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         class Completed:
             def __init__(self, stdout):
                 self.stdout = stdout
@@ -103,7 +108,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("@robot", result["body"])
 
     def test_worktree_plans_new_branch_from_upstream_base(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
         result = worktree.plan_worktree(
             repo_root=self.root / "repo",
             worktree_root=self.root / "repo" / ".worktrees",
@@ -120,7 +125,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("git worktree add", result["commands"][1])
 
     def test_worktree_reuses_existing_pr_head_branch(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
         result = worktree.plan_worktree(
             repo_root=self.root / "repo",
             worktree_root=self.root / "repo" / ".worktrees",
@@ -135,7 +140,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["mode"], "reuse_existing_pr")
 
     def test_worktree_reuses_existing_worktree_when_branch_already_checked_out(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
         repo_root = self.root / "repo"
         repo_root.mkdir()
         worktree_root = repo_root / ".worktrees"
@@ -173,7 +178,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["commands"], ["reuse existing worktree /tmp/repo/.worktrees/issue-2878-mcp-proxy"])
 
     def test_review_worktree_fetches_pr_head(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
         result = worktree.plan_review_worktree(
             repo_root=Path("/tmp/repo"),
             worktree_root=Path("/tmp/repo/.worktrees"),
@@ -197,7 +202,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_review_worktree_refreshes_reused_branch_to_latest_pr_head(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
         repo_root = self.root / "repo"
         repo_root.mkdir()
         worktree_root = repo_root / ".worktrees"
@@ -261,7 +266,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(calls[-1][1]["cwd"], review_path)
 
     def test_dispatch_builds_worker_command_with_prompt_and_worktree(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "- prompt that starts like an option\nquotes: ' \" ` $() ; | --"
@@ -314,7 +319,7 @@ class OperationalCommandTests(unittest.TestCase):
                 )
 
     def test_dispatch_builds_worker_command_with_configured_launcher(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -330,7 +335,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertNotIn("hello", command)
 
     def test_dispatch_builds_codex_worker_command_with_stdin_prompt(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "codex prompt"
@@ -369,7 +374,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertNotIn(prompt, command)
 
     def test_dispatch_builds_tcodex_worker_command_with_reasoning_effort(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("tcodex prompt", encoding="utf-8")
@@ -391,7 +396,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertLess(command.index("--config"), command.index("exec"))
 
     def test_dispatch_builds_claude_family_worker_commands(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         from robert_agent.worker_adapters.cbc import (
             DEFAULT_DISALLOWED_WORKER_TOOLS,
         )
@@ -442,7 +447,7 @@ class OperationalCommandTests(unittest.TestCase):
                 self.assertNotIn(prompt, command)
 
     def test_dispatch_builds_opencode_worker_command_with_stdin_prompt(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt = "opencode prompt that must stay on stdin"
@@ -477,7 +482,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertNotIn(prompt, command)
 
     def test_dispatch_splits_configured_launcher_command(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -492,7 +497,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertLess(command.index("--config"), command.index("exec"))
 
     def test_dispatch_expands_user_in_configured_launcher_path(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -510,7 +515,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertLess(command.index("--config"), command.index("exec"))
 
     def test_dispatch_accepts_normalized_worker_agent_config(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -528,7 +533,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertLess(command.index("--config"), command.index("exec"))
 
     def test_dispatch_worker_environment_defaults_bash_timeout(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         env = dispatch._worker_environment(
             environ={"KEEP": "1"},
         )
@@ -543,7 +548,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(overridden["BASH_DEFAULT_TIMEOUT_MS"], "450000")
 
     def test_usage_parser_extracts_cbc_stream_json_result(self):
-        from robert_agent import usage
+        from robert_agent.readmodels import usage
 
         log = "\n".join(
             [
@@ -579,7 +584,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(parsed["num_turns"], 1)
 
     def test_usage_parser_handles_missing_result_event(self):
-        from robert_agent import usage
+        from robert_agent.readmodels import usage
 
         parsed = usage.parse_cbc_stream_json('{"type": "message"}\nnot json')
 
@@ -587,7 +592,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(parsed["source"], "no_result_event")
 
     def test_dispatch_dry_run_records_prepared_attempt(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -606,7 +611,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertNotIn("hello", result["command"])
 
     def test_dispatch_detects_immediate_worker_exit_with_log_artifacts(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -664,7 +669,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(calls[0][1]["start_new_session"])
 
     def test_dispatch_reports_popen_failure_with_log_artifacts(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -693,7 +698,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(Path(result["stderr_path"]).exists())
 
     def test_dispatch_records_observed_process_identity(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
@@ -739,7 +744,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(result["identity_source"], "ps")
 
     def test_dispatch_cleans_up_when_identity_capture_fails(self):
-        from robert_agent import dispatch
+        from robert_agent.adapters.processes import worker as dispatch
 
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
@@ -779,7 +784,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(cleanup, [23458])
 
     def test_acceptance_preflight_reports_live_gate_statuses(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
 
         def command_exists(command):
@@ -813,7 +818,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("Install or configure cbc worker agent command: cbc", result["next_actions"])
 
     def test_acceptance_preflight_marks_live_gates_skipped_explicitly(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
 
         result = acceptance.acceptance_preflight(
@@ -833,7 +838,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_checks_configured_worker_command(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         document = yaml.safe_load(config_path.read_text())
         document['workers']['default']['command'] = 'custom-cbc'
@@ -867,7 +872,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(gates["worker_command"]["evidence"], "/opt/bin/custom-cbc")
 
     def test_acceptance_preflight_checks_codex_worker_agent_command(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         document = yaml.safe_load(config_path.read_text())
         document['workers']['default'].update(adapter='codex', command='/opt/homebrew/bin/codex')
@@ -900,7 +905,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(gates["worker_command"]["evidence"], "/opt/homebrew/bin/codex")
 
     def test_acceptance_preflight_checks_every_named_worker_command(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         document = yaml.safe_load(config_path.read_text())
         document['workers']['default']['command'] = '/opt/bin/cbc'
@@ -940,7 +945,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_checks_configured_python_bin(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -976,7 +981,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(gates["python_bin"]["evidence"], "/opt/python/bin/python3")
 
     def test_acceptance_preflight_reports_missing_python_bin(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -999,8 +1004,8 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("Install or configure python_bin: python", result["next_actions"])
 
     def test_acceptance_preflight_reports_prepared_dispatch_state(self):
-        from robert_agent import acceptance
-        from robert_agent import storage
+        from robert_agent.acceptance import readiness as acceptance
+        from robert_agent.adapters.sqlite import database as storage
 
         config_path = self._write_acceptance_config()
         db_path = self.root / "data" / "dd.sqlite3"
@@ -1062,7 +1067,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_worktree_root_create_command(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         worktree_root = self.root / "repo" / ".worktrees"
         worktree_root.rmdir()
@@ -1084,7 +1089,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_rejects_worktree_root_file(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         worktree_root = self.root / "repo" / ".worktrees"
         worktree_root.rmdir()
@@ -1108,7 +1113,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_checks_all_configured_worktree_roots(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
@@ -1147,7 +1152,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_missing_config_without_traceback(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         result = acceptance.acceptance_preflight(self.root / "missing-config.yml")
 
         gates = {gate["id"]: gate for gate in result["gates"]}
@@ -1165,7 +1170,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_unconfigured_public_skeleton(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self.root / "config.yml"
         config_path.write_text(
             (PACKAGE_ROOT / "resources" / "config.example.yml").read_text(encoding="utf-8"),
@@ -1188,7 +1193,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_data_dir_file(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         data_file = self.root / "data-file"
         data_file.write_text("not a directory", encoding="utf-8")
@@ -1213,7 +1218,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_empty_database_name(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -1236,7 +1241,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_database_path(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -1262,7 +1267,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_nonpositive_max_concurrency(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -1285,7 +1290,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_nonpositive_runtime_threshold(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -1308,7 +1313,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_invalid_repo_root_path(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         bad_repo_root = self.root / "missing-repo"
         config_path.write_text(
@@ -1332,7 +1337,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_acceptance_preflight_reports_invalid_second_repo_root_path(self):
-        from robert_agent import acceptance
+        from robert_agent.acceptance import readiness as acceptance
         config_path = self._write_acceptance_config()
         bad_repo_root = self.root / "missing-repo-b"
         config_path.write_text(
@@ -1362,7 +1367,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_init_config_creates_public_config_and_refuses_overwrite(self):
-        from robert_agent import init_config
+        from robert_agent.operations import initialize as init_config
         target = self.root / "nested" / "config.yml"
         repo = self.root / "repo"
         repo.mkdir()
@@ -1397,7 +1402,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("already exists", second["safe_error"])
 
     def test_prompt_uses_current_python_executable_for_worker_commands(self):
-        from robert_agent import render_prompt
+        from robert_agent.context import prompts as render_prompt
         prompt = render_prompt.render_prompt(
             task={
                 "task_id": "task-1",
@@ -1431,8 +1436,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn(f"{sys.executable} /agent/result.py", prompt)
 
     def test_runtime_context_uses_running_python_bin(self):
-        from robert_agent import run_once
-        context = run_once._runtime_context(
+        context = attempt_context.runtime_context(
             self.root / "dd.sqlite3",
             {"default_base_branch": "master", "python_bin": "/opt/python/bin/python3"},
         )
@@ -1442,7 +1446,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(context["status_script"].endswith("status.py"))
 
     def test_supervise_classifies_stale_and_timeout(self):
-        from robert_agent import supervise
+        from robert_agent.execution import inspection as supervise
         now = datetime(2026, 6, 16, tzinfo=timezone.utc)
         stale = supervise.classify_attempt(
             heartbeat_at=now - timedelta(minutes=25),
@@ -1465,7 +1469,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(timed_out["terminate"])
 
     def test_supervise_defaults_hard_timeout_to_45_minutes(self):
-        from robert_agent import supervise
+        from robert_agent.execution import inspection as supervise
         now = datetime(2026, 10, 19, tzinfo=timezone.utc)
 
         timed_out = supervise.classify_attempt(
@@ -1478,7 +1482,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(timed_out["timeout_seconds"], 45 * 60)
 
     def test_notify_records_local_notification(self):
-        from robert_agent import notify
+        from robert_agent.delivery.application import notifications as notify
         db_path = self.root / "dd.sqlite3"
         self._init_notifications_db(db_path)
 
@@ -1497,7 +1501,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(row, ("worker_stale", "sent", "task-1"))
 
     def test_notify_command_uses_argv_not_shell(self):
-        from robert_agent import notify
+        from robert_agent.delivery.application import notifications as notify
         db_path = self.root / "dd.sqlite3"
         self._init_notifications_db(db_path)
         calls = []
@@ -1526,7 +1530,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertNotIn("shell", calls[0][1])
 
     def test_summarize_counts_control_plane_rows(self):
-        from robert_agent import summarize
+        from robert_agent.readmodels import summarize
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -1537,11 +1541,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(summary["tasks"], 2)
 
     def test_web_builds_dashboard_data(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(data["summary"]["tasks"], 2)
         self.assertEqual(
@@ -1565,7 +1568,6 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("acceptance_metrics", data)
 
     def test_web_groups_work_by_github_source(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -1583,7 +1585,7 @@ class OperationalCommandTests(unittest.TestCase):
                 """
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
         work_items = {item["source_key"]: item for item in data["work_items"]}
         item = work_items["github:example/backend#1"]
 
@@ -1595,7 +1597,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(item["latest_task_updated_at"], "2030-01-01T00:00:00+00:00")
 
     def test_web_retrigger_api_requires_control_auth_and_returns_child_task(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
 
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
@@ -1653,7 +1655,7 @@ class OperationalCommandTests(unittest.TestCase):
             )
 
     def test_web_shell_renders_failed_task_retrigger_control(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
 
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
@@ -1668,7 +1670,6 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("重新触发".encode(), body)
 
     def test_web_dashboard_data_lists_all_repositories(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -1679,7 +1680,7 @@ class OperationalCommandTests(unittest.TestCase):
                 """
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(
             data["repos"],
@@ -1693,11 +1694,10 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_builds_notification_center(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertIn("notification_center", data)
         self.assertTrue(
@@ -1717,7 +1717,6 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_sorts_notifications_by_newest_time(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -1734,12 +1733,11 @@ class OperationalCommandTests(unittest.TestCase):
                 """
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(data["notification_center"][0]["id"], "notification:notification-2")
 
     def test_web_exposes_acceptance_metrics_with_usage(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         usage_payload = {
@@ -1784,7 +1782,7 @@ class OperationalCommandTests(unittest.TestCase):
                 ),
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
         metrics = data["acceptance_metrics"]
 
         self.assertEqual(metrics["accepted_results"], 1)
@@ -1799,7 +1797,6 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(metrics["total_cost_usd"], 0.0123)
 
     def test_web_status_and_chat_expose_latest_loop_summary(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         latest_loop = {
@@ -1813,7 +1810,7 @@ class OperationalCommandTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
         chat_code, chat_payload = self._run_chat_status("--db", str(db_path), "status")
         status_code, status_payload = self._run_status("--db", str(db_path), "status")
 
@@ -1824,10 +1821,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(status_payload["data"]["latest_loop"]["cycles"], 2)
 
     def test_status_surfaces_daemon_summary(self):
-        from robert_agent import chat_status
-        from robert_agent import status
-        from robert_agent import web
-        from robert_agent import daemon_state, storage
+        from robert_agent.readmodels import chat as chat_status
+        from robert_agent.readmodels import status
+        from robert_agent.execution import runtime_state as daemon_state
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "daemon-status.sqlite3"
         storage.init_database(db_path)
@@ -1862,28 +1859,27 @@ class OperationalCommandTests(unittest.TestCase):
                 now="2026-07-03T00:00:01+00:00",
             )
 
-        dashboard = web.build_dashboard_data(db_path)
+        dashboard_data = dashboard.build_dashboard_data(db_path)
         status = status.build_status(db_path)
-        message = chat_status.format_status(dashboard)
+        message = chat_status.format_status(dashboard_data)
 
         self.assertEqual(
-            dashboard["daemon"]["latest_event"]["event_type"],
+            dashboard_data["daemon"]["latest_event"]["event_type"],
             "live_poll_skipped_rate_limit",
         )
-        self.assertEqual(dashboard["daemon"]["latest_lease"]["status"], "active")
-        self.assertEqual(dashboard["daemon"]["recent_events"][0]["event_type"], "live_poll_skipped_rate_limit")
-        self.assertEqual(dashboard["daemon"]["recent_events"][1]["event_type"], "run_once_triggered")
+        self.assertEqual(dashboard_data["daemon"]["latest_lease"]["status"], "active")
+        self.assertEqual(dashboard_data["daemon"]["recent_events"][0]["event_type"], "live_poll_skipped_rate_limit")
+        self.assertEqual(dashboard_data["daemon"]["recent_events"][1]["event_type"], "run_once_triggered")
         self.assertEqual(status["daemon"]["latest_run"]["status"], "running")
         self.assertIn("Daemon:", message)
         self.assertIn("live_poll_skipped_rate_limit", message)
 
     def test_web_exposes_knowledge_review_data(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_knowledge_candidate(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         review = data["knowledge_review"]
         self.assertEqual(review["counts"]["pending"], 1)
@@ -1893,7 +1889,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(review["submission_boundary"], "local_runtime_knowledge_only")
 
     def test_web_renders_operator_dashboard_html_shell(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         html = web.render_dashboard_html()
 
         self.assertIn('<main id="dashboard-app"', html)
@@ -1970,8 +1966,8 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("sourceMeta(item)", html)
 
     def test_web_pages_share_primary_navigation_and_language_preference(self):
-        from robert_agent import web
-        from robert_agent import storage
+        from robert_agent.interfaces.web import server as web
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "shared-navigation.sqlite3"
         storage.init_database(db_path)
@@ -2068,7 +2064,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn(b"function applyTranslations()", workbench_js)
 
     def test_web_routes_root_to_html_and_data_json_to_payload(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -2095,8 +2091,8 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(payload["recent_tasks"][0]["task_id"], "task-2")
 
     def test_web_serves_board_shell_assets_and_rejects_asset_traversal(self):
-        from robert_agent import web
-        from robert_agent import storage
+        from robert_agent.interfaces.web import server as web
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "board-shell.sqlite3"
         storage.init_database(db_path)
@@ -2146,8 +2142,8 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(traversal_status, 404)
 
     def test_board_api_session_create_read_and_conflict_contract(self):
-        from robert_agent import web
-        from robert_agent import storage
+        from robert_agent.interfaces.web import server as web
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "board-api.sqlite3"
         storage.init_database(db_path)
@@ -2248,8 +2244,8 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(json.loads(stale_body)["current"]["work_item_id"], work_item_id)
 
     def test_board_api_rejects_bad_filters_and_read_only_writes(self):
-        from robert_agent import web
-        from robert_agent import storage
+        from robert_agent.interfaces.web import server as web
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "board-readonly.sqlite3"
         storage.init_database(db_path)
@@ -2298,7 +2294,7 @@ class OperationalCommandTests(unittest.TestCase):
     def test_reverse_proxy_can_create_and_cancel_with_config_context(self):
         import http.client
         import threading
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
 
         context = web.build_control_context_from_config(
             self._write_acceptance_config(), host="0.0.0.0", port=8765,
@@ -2340,7 +2336,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIsNotNone(canceled["canceled_at"])
 
     def test_web_config_mode_initializes_control_context_and_repos(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         config_path = self._write_acceptance_config()
         context = web.build_control_context_from_config(
             config_path,
@@ -2365,8 +2361,8 @@ class OperationalCommandTests(unittest.TestCase):
         import http.client
         import threading
 
-        from robert_agent import web
-        from robert_agent import storage
+        from robert_agent.interfaces.web import server as web
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "handler.sqlite3"
         storage.init_database(db_path)
@@ -2407,7 +2403,7 @@ class OperationalCommandTests(unittest.TestCase):
         connection.close()
 
     def test_web_serves_github_native_workbench_assets(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -2453,7 +2449,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertNotIn(b"/data.json", body)
 
     def test_web_serves_registered_text_artifact_preview(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         log_path = self.root / "worker.stderr.log"
@@ -2479,7 +2475,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn(b"artifact_type=worker_stderr", body)
 
     def test_web_rejects_unregistered_artifact_preview(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -2773,7 +2769,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("missing-attempt", payload["safe_error"])
 
     def test_web_post_approves_knowledge_candidate_locally(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_knowledge_candidate(db_path)
@@ -2803,7 +2799,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(runtime_count, 1)
 
     def test_web_post_proposes_knowledge_candidates_locally(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_project_memory_entry(db_path)
@@ -2831,7 +2827,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(row, ("Prefer update existing PR", "pending"))
 
     def test_web_post_rejects_knowledge_candidate_locally(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_knowledge_candidate(db_path)
@@ -2852,7 +2848,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(candidate, ("rejected", "wklken", "too narrow"))
 
     def test_web_post_refuses_unknown_write_action(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -2866,7 +2862,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn(b"unsupported dashboard action", body)
 
     def test_web_post_refuses_knowledge_write_when_tables_are_missing(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         db_path = self.root / "old.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("CREATE TABLE repos(repo_id TEXT PRIMARY KEY, full_name TEXT)")
@@ -2884,11 +2880,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("Knowledge tables are not available", result["safe_error"])
 
     def test_web_exposes_task_route_decision_evidence(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         task = {task["task_id"]: task for task in data["recent_tasks"]}["task-2"]
         self.assertEqual(task["route_decision_id"], "route-2")
@@ -2906,11 +2901,10 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_exposes_recent_event_flow_evidence(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         event = {
             event["event_fingerprint"]: event
@@ -2927,11 +2921,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(event["payload"]["intent"], "analysis")
 
     def test_web_counts_event_flow_risk_states(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(
             data["event_flow_counts"],
@@ -2950,22 +2943,20 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_counts_ignored_events_for_operator_context(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_ignored_untrusted_event(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(data["event_flow_counts"]["ignored_events"], 1)
 
     def test_web_counts_real_authorized_trigger_unattached_events(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_authorized_trigger_unattached_event(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(data["event_flow_counts"]["authorized_unattached"], 2)
         steps = {
@@ -2976,12 +2967,11 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(steps[("event", "event-authorized-trigger")]["reason"], "authorized_unattached")
 
     def test_web_surfaces_pending_authorization_events(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_pending_authorization_event(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         alerts = {
             alert["alert_type"]: alert
@@ -3004,11 +2994,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(steps[("event", "event-pending-authorization")]["reason"], "pending_authorization")
 
     def test_web_builds_operator_alerts_from_risk_counts(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         alerts = {
             alert["alert_type"]: alert
@@ -3043,13 +3032,12 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_operator_alerts_include_pending_events_outside_recent_window(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_pending_authorization_event(db_path)
         self._record_ignored_untrusted_event(db_path)
 
-        data = web.build_dashboard_data(db_path, history_limit=1)
+        data = dashboard.build_dashboard_data(db_path, history_limit=1)
 
         self.assertNotEqual(
             data["recent_events"][0]["event_id"],
@@ -3063,13 +3051,12 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(alerts["pending_authorization_events"]["count"], 1)
 
     def test_web_operator_next_steps_include_pending_events_outside_recent_window(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_pending_authorization_event(db_path)
         self._record_ignored_untrusted_event(db_path)
 
-        data = web.build_dashboard_data(db_path, history_limit=1)
+        data = dashboard.build_dashboard_data(db_path, history_limit=1)
 
         steps = {
             (step["target_kind"], step["target_id"]): step
@@ -3085,11 +3072,10 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_builds_operator_next_steps_with_target_ids(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         steps = {
             (step["target_kind"], step["target_id"]): step
@@ -3145,12 +3131,11 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_marks_publish_failures_as_attention_steps_with_command(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_publish_failure(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
         self.assertEqual(task["operator_state"], "needs_attention")
@@ -3179,13 +3164,12 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_publish_failure_step_ignores_unrelated_latest_notification(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_publish_failure(db_path)
         self._record_unrelated_latest_notification(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         steps = {
             (step["target_kind"], step["target_id"]): step
@@ -3199,12 +3183,11 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_marks_skipped_publish_actions_as_attention(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_skipped_publish_action(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
         self.assertEqual(task["operator_state"], "needs_attention")
@@ -3217,24 +3200,22 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(steps[("task", "task-1")]["safe_error"], "publisher does not support action_type close_issue")
 
     def test_web_waiting_for_user_with_unpublished_question_waits_for_publish(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._mark_summary_task_waiting_for_user(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
         self.assertEqual(task["operator_state"], "waiting_publish")
         self.assertEqual(task["next_action"], "publish_accepted_github_actions")
 
     def test_web_does_not_report_recovered_publish_failure_as_attention(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_recovered_publish_failure(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
         self.assertEqual(task["operator_state"], "completed")
@@ -3248,11 +3229,10 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_exposes_recent_task_artifacts_for_debugging(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
         artifact_dir = self.root / "task-artifacts"
@@ -3278,11 +3258,10 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_exposes_recent_run_steps_for_debugging(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(data["recent_runs"][0]["run_id"], "run-1")
         self.assertEqual(data["recent_runs"][0]["status"], "failed")
@@ -3295,7 +3274,6 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(steps["summarize"], "skipped")
 
     def test_web_exposes_recent_run_repo_steps(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -3316,7 +3294,7 @@ class OperationalCommandTests(unittest.TestCase):
                 ),
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
         repo_steps = data["recent_runs"][0]["repo_steps"]
 
         self.assertEqual(repo_steps[0]["repo_id"], "repo-1")
@@ -3325,8 +3303,8 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(repo_steps[0]["error"]["status"], "api_failed")
 
     def test_status_run_includes_repo_steps(self):
-        from robert_agent import status
-        from robert_agent import storage
+        from robert_agent.readmodels import status
+        from robert_agent.adapters.sqlite import database as storage
 
         data_dir = self.root / "data"
         repo_root = self.root / "repo-a"
@@ -3371,7 +3349,6 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(run["repo_steps"][0]["repo_full_name"], "Org/a")
 
     def test_web_orders_recent_run_steps_by_runtime_flow(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -3388,14 +3365,13 @@ class OperationalCommandTests(unittest.TestCase):
                 ],
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
         step_keys = [step["step_key"] for step in data["recent_runs"][0]["steps"]]
 
         self.assertLess(step_keys.index("audit_results"), step_keys.index("publish_actions"))
         self.assertLess(step_keys.index("publish_actions"), step_keys.index("discover"))
 
     def test_web_orders_multi_repo_run_steps_by_runtime_flow(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -3416,7 +3392,7 @@ class OperationalCommandTests(unittest.TestCase):
                 ],
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
         step_keys = [step["step_key"] for step in data["recent_runs"][0]["steps"]]
 
         self.assertLess(step_keys.index("discover_notifications"), step_keys.index("acquire_lease"))
@@ -3426,7 +3402,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertLess(step_keys.index("repo_pipelines"), step_keys.index("dispatch"))
 
     def test_status_orders_multi_repo_run_steps_by_runtime_flow(self):
-        from robert_agent import status
+        from robert_agent.readmodels import status
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -3458,7 +3434,6 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertLess(step_keys.index("repo_pipelines"), step_keys.index("dispatch"))
 
     def test_web_orders_repo_steps_by_pipeline_flow(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -3478,13 +3453,13 @@ class OperationalCommandTests(unittest.TestCase):
                 ],
             )
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
         step_keys = [step["step_key"] for step in data["recent_runs"][0]["repo_steps"]]
 
         self.assertEqual(step_keys, ["acquire_lease", "supervise", "reconcile", "route"])
 
     def test_status_orders_repo_steps_by_pipeline_flow(self):
-        from robert_agent import status
+        from robert_agent.readmodels import status
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -3511,23 +3486,21 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(step_keys, ["acquire_lease", "supervise", "reconcile", "route"])
 
     def test_web_exposes_recent_github_action_audit_and_publish_status(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(data["recent_actions"][0]["action_id"], "action-1")
         self.assertEqual(data["recent_actions"][0]["audit_status"], "accepted")
         self.assertEqual(data["recent_actions"][0]["publish_status"], "not_published")
 
     def test_web_exposes_recent_notifications_for_rejected_worker_results(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_rejected_result(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         notification = data["recent_notifications"][0]
         self.assertEqual(notification["notification_type"], "worker_result_rejected")
@@ -3539,12 +3512,11 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_exposes_worker_result_skill_evidence(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_worker_result_evidence(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         result = data["recent_worker_results"][0]
         self.assertEqual(result["result_id"], "result-1")
@@ -3556,12 +3528,11 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(data["used_skill_counts"], {"fast-code-path": 1})
 
     def test_web_annotates_recent_tasks_with_operator_state(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._insert_operator_state_examples(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         tasks = {task["task_id"]: task for task in data["recent_tasks"]}
         self.assertEqual(tasks["task-worker"]["operator_state"], "worker_running")
@@ -3586,12 +3557,11 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_flags_repeated_worker_resume_notifications(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_operator_overview_db(db_path)
         self._record_repeated_worker_resume_notifications(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         tasks = {task["task_id"]: task for task in data["recent_tasks"]}
         self.assertEqual(tasks["task-worker"]["operator_state"], "worker_retrying")
@@ -3602,12 +3572,11 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(alerts["worker_retrying_tasks"]["severity"], "warning")
 
     def test_web_flags_worker_result_pending_audit(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_operator_overview_db(db_path)
         self._record_result_pending_audit_task(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         tasks = {task["task_id"]: task for task in data["recent_tasks"]}
         self.assertEqual(tasks["task-result-pending"]["operator_state"], "result_pending_audit")
@@ -3617,11 +3586,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(alerts["result_pending_audit_tasks"]["severity"], "warning")
 
     def test_web_counts_operator_states_for_dashboard_overview(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_operator_overview_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         self.assertEqual(
             data["operator_state_counts"],
@@ -3635,11 +3603,10 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_web_worker_next_steps_include_attempt_evidence(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_operator_overview_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         steps = {
             (step["target_kind"], step["target_id"]): step
@@ -3656,11 +3623,10 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIsNotNone(steps[("task", "task-timeout")]["finished_at"])
 
     def test_web_failure_next_steps_include_notification_evidence(self):
-        from robert_agent import web
         db_path = self.root / "dd.sqlite3"
         self._init_operator_overview_db(db_path)
 
-        data = web.build_dashboard_data(db_path)
+        data = dashboard.build_dashboard_data(db_path)
 
         steps = {
             (step["target_kind"], step["target_id"]): step
@@ -3672,7 +3638,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(steps[("task", "task-failed")]["safe_error"], "open_pr action missing fields: ['base']")
 
     def test_summarize_counts_rejected_results_and_action_backlog(self):
-        from robert_agent import summarize
+        from robert_agent.readmodels import summarize
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_rejected_result(db_path)
@@ -3691,7 +3657,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(summary["pending_authorization_events"], 1)
 
     def test_publish_ready_comment_action_marks_published_with_external_id(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         calls = []
@@ -3741,7 +3707,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_revalidates_comment_target_against_audited_scope(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -3807,7 +3773,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("action scope", result["failures"][0]["safe_error"])
 
     def test_publish_ready_comment_reuses_existing_comment_with_same_marker(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         body = self._dd_comment_body("ready")
@@ -3850,7 +3816,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(json.loads(action[3])["publish"]["deduplicated"])
 
     def test_publish_ready_comment_without_marker_fails_without_posting(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -3884,7 +3850,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("robert-comment", json.loads(action[1])["publish"]["safe_error"])
 
     def test_publish_ready_open_pr_action_creates_pr_and_records_url(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -3975,7 +3941,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(row, ("published", "42", "https://github.com/x/y/pull/42"))
 
     def test_publish_ready_new_pr_pushes_branch_before_opening_pr(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -4081,7 +4047,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_ready_open_pr_uses_fork_owner_from_published_push_action(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -4186,7 +4152,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(calls[2][0][calls[2][0].index("--head") + 1], f"robert-bot:{branch}")
 
     def test_publish_ready_new_pr_stops_open_pr_when_branch_push_fails(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -4282,7 +4248,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_ready_existing_pr_with_audited_head_stops_when_remote_lookup_fails(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -4357,7 +4323,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertIn("remote branch lookup failed", result["failures"][0]["safe_error"])
 
     def test_publish_ready_open_pr_reuses_existing_head_pr(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -4453,7 +4419,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(json.loads(action[3])["publish"]["deduplicated"])
 
     def test_publish_ready_open_pr_ignores_same_head_pr_without_marker(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -4535,7 +4501,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertFalse(json.loads(action[3])["publish"]["deduplicated"])
 
     def test_publish_ready_open_pr_reuses_same_owner_head_pr_with_different_marker(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -4636,7 +4602,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(metadata["publish"]["response"]["dedupe_reason"], "matching_head")
 
     def test_publish_ready_open_pr_does_not_reuse_different_owner_head_pr(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -4712,7 +4678,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(calls[2][0][calls[2][0].index("--head") + 1], "codex/dd-123")
 
     def test_publish_ready_open_pr_empty_stdout_does_not_crash(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -4760,7 +4726,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(publish_status, "published")
 
     def test_publish_ready_push_existing_pr_pushes_branch(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -4822,7 +4788,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(row, ("published", "codex/dd-123", "https://github.com/x/y/pull/42"))
 
     def test_remediation_publish_revalidates_snapshot_and_records_result_head(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
 
         db_path, worktree = self._init_remediation_publish_db()
         calls = []
@@ -4886,7 +4852,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(worktree.is_dir())
 
     def test_remediation_retry_recognizes_already_pushed_result(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
 
         db_path, worktree = self._init_remediation_publish_db()
         calls = []
@@ -4944,7 +4910,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(worktree.is_dir())
 
     def test_remediation_publish_skips_push_and_comment_when_snapshot_changed(self):
-        from robert_agent import publish, run_once
+        from robert_agent.delivery.application import publish
 
         db_path, _worktree = self._init_remediation_publish_db()
         calls = []
@@ -5007,7 +4973,7 @@ class OperationalCommandTests(unittest.TestCase):
                 WHERE episode_id = 'episode-ci'
                 """
             ).fetchone()[0]
-            actions_terminal = run_once._result_actions_all_published(
+            actions_terminal = results.result_actions_all_published(
                 conn,
                 "result-1",
             )
@@ -5022,7 +4988,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertTrue(actions_terminal)
 
     def test_remediation_publish_failure_skips_following_comment(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
 
         db_path, _worktree = self._init_remediation_publish_db()
 
@@ -5093,7 +5059,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(episode_status, "open")
 
     def test_remediation_publish_rejects_head_changed_after_audit(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
 
         db_path, _worktree = self._init_remediation_publish_db()
         calls = []
@@ -5131,7 +5097,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertFalse(any(command[:2] == ["git", "push"] for command in calls))
 
     def test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -5182,7 +5148,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_ready_push_existing_pr_uses_audited_head_sha_for_lease(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -5262,7 +5228,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_ready_push_existing_pr_skips_diverged_result_actions(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -5388,7 +5354,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_ready_push_existing_pr_allows_remote_ancestor_of_result(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -5481,7 +5447,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_ready_push_existing_pr_retries_ancestry_check_errors(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -5558,7 +5524,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(publish_status, "not_published")
 
     def test_publish_ready_push_existing_pr_without_audited_head_and_target_url_uses_fast_forward_push(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -5610,7 +5576,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["cwd"], str(worktree))
 
     def test_publish_ignores_actions_not_accepted_or_already_published(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -5630,7 +5596,7 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_publish_failure_keeps_action_retryable_and_records_notification(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -5702,7 +5668,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_repeated_publish_failure_updates_existing_notification(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -5729,7 +5695,7 @@ class OperationalCommandTests(unittest.TestCase):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(db_path)) as retry_conn:
             due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
-        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock = mock.patch.object(publication_values, 'now', return_value=due)
         retry_clock.start()
         self.addCleanup(retry_clock.stop)
         second = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
@@ -5755,7 +5721,7 @@ class OperationalCommandTests(unittest.TestCase):
         )
 
     def test_publish_success_resolves_previous_failure_notification(self):
-        from robert_agent import publish
+        from robert_agent.delivery.application import publish
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -5790,7 +5756,7 @@ class OperationalCommandTests(unittest.TestCase):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(db_path)) as retry_conn:
             due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
-        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock = mock.patch.object(publication_values, 'now', return_value=due)
         retry_clock.start()
         self.addCleanup(retry_clock.stop)
         published = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
@@ -5822,26 +5788,26 @@ class OperationalCommandTests(unittest.TestCase):
         self.assertEqual(hits, [])
 
     def _init_notifications_db(self, db_path):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         storage.init_database(db_path)
 
     def _run_chat_status(self, *args):
-        from robert_agent import chat_status
+        from robert_agent.readmodels import chat as chat_status
         output = io.StringIO()
         with redirect_stdout(output):
             code = chat_status.main(list(args))
         return code, json.loads(output.getvalue())
 
     def _run_status(self, *args):
-        from robert_agent import status
+        from robert_agent.readmodels import status
         output = io.StringIO()
         with redirect_stdout(output):
             code = status.main(list(args))
         return code, json.loads(output.getvalue())
 
     def _init_summary_db(self, db_path):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         storage.init_database(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -6124,7 +6090,6 @@ class OperationalCommandTests(unittest.TestCase):
 
     def test_audit_scope_records_controller_observed_commit_and_fork(self):
         import subprocess
-        from robert_agent import run_once
 
         db_path = self.root / "scope.sqlite3"
         self._init_summary_db(db_path)
@@ -6142,7 +6107,7 @@ class OperationalCommandTests(unittest.TestCase):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET worktree_path = ?, branch_name = 'codex/fix'", (str(tree),))
             ws = conn.execute("SELECT workstream_id FROM tasks WHERE task_id='task-1'").fetchone()[0]
-            scope = run_once.result_scope.for_result(conn, "task-1", "attempt-1", ws)
+            scope = cycle_scope.for_result(conn, "task-1", "attempt-1", ws)
         self.assertEqual(scope["result_head_sha"], expected_sha)
         self.assertEqual(scope["head_owner"], "expected-owner")
 
@@ -6273,7 +6238,7 @@ class OperationalCommandTests(unittest.TestCase):
             )
 
     def _record_project_memory_entry(self, db_path):
-        from robert_agent import project_memory
+        from robert_agent.context import project as project_memory
 
         now = datetime.now(timezone.utc).isoformat()
         payload = {
@@ -6286,7 +6251,7 @@ class OperationalCommandTests(unittest.TestCase):
                         "short_summary": "Review follow-up should update the current DD PR branch.",
                         "long_summary": "When review comments arrive on an existing DD PR, keep work on the same PR unless the route says otherwise.",
                         "keywords": ["dd-pr", "review-follow-up"],
-                        "paths": ["src/robert_agent/run_once.py"],
+                        "paths": ["src/robert_agent/runtime/cycle.py"],
                     }
                 ],
             }
@@ -6411,7 +6376,7 @@ class OperationalCommandTests(unittest.TestCase):
             )
 
     def _init_operator_overview_db(self, db_path):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         storage.init_database(db_path)
         now = datetime.now(timezone.utc).isoformat()

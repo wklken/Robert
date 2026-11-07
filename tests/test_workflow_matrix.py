@@ -85,7 +85,7 @@ repos:
         return path
 
     def run_fixture(self, events, name="events.json"):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
         return run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -200,7 +200,7 @@ repos:
         self.assertIn("assigned:assign-issue-101", prompt)
 
     def test_issue_assignment_bugfix_result_materializes_dd_pr_workflow(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         first = self.run_fixture(
             [
@@ -307,7 +307,7 @@ repos:
         )
 
     def test_dd_pr_followup_routes_to_existing_pr_workflow(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         first = self.run_fixture(
             [
@@ -688,8 +688,8 @@ repos:
         self.assertNotIn("allowed_github_actions: [\"push_existing_pr\"", prompt)
 
     def test_trusted_reply_resumes_waiting_for_user_workflow(self):
-        from robert_agent.worker import result
-        from robert_agent import board
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.readmodels import board
 
         first = self.run_fixture(
             [

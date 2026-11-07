@@ -11,12 +11,16 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import daemon_state, storage, supervision_diagnose, supervision_store, worker_identity
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import diagnosis as supervision_diagnose
+from robert_agent.supervision import store as supervision_store
+from robert_agent.adapters.processes import identity as worker_identity
 
 
 class RepairTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import supervision_repair
+        from robert_agent.workflows.maintenance import repair as supervision_repair
 
         self.repair = supervision_repair
         directory = tempfile.TemporaryDirectory()

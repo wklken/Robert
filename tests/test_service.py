@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from robert_agent import service
-from robert_agent.service import (
+from robert_agent.adapters.services import native as service
+from robert_agent.adapters.services.native import (
     install_service,
     render_launch_agent,
     render_supervisord_config,
@@ -96,10 +96,10 @@ class ServiceTests(unittest.TestCase):
 
     def test_linux_install_uses_supervisor_when_systemd_user_bus_unavailable(self):
         with mock.patch(
-            "robert_agent.service._linux_systemd_user_available",
+            "robert_agent.adapters.services.native._linux_systemd_user_available",
             return_value=False,
         ), mock.patch(
-            "robert_agent.service.Path.home",
+            "robert_agent.adapters.services.native.Path.home",
             return_value=Path("/home/test"),
         ):
             result = install_service(
@@ -119,10 +119,10 @@ class ServiceTests(unittest.TestCase):
 
     def test_linux_install_keeps_systemd_when_user_bus_available(self):
         with mock.patch(
-            "robert_agent.service._linux_systemd_user_available",
+            "robert_agent.adapters.services.native._linux_systemd_user_available",
             return_value=True,
         ), mock.patch(
-            "robert_agent.service.Path.home",
+            "robert_agent.adapters.services.native.Path.home",
             return_value=Path("/home/test"),
         ):
             result = install_service(
@@ -159,16 +159,16 @@ class ServiceTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "", "")
 
         with mock.patch(
-            "robert_agent.service._linux_systemd_user_available",
+            "robert_agent.adapters.services.native._linux_systemd_user_available",
             return_value=False,
         ), mock.patch(
-            "robert_agent.service.subprocess.run",
+            "robert_agent.adapters.services.native.subprocess.run",
             side_effect=fake_run,
         ), mock.patch(
-            "robert_agent.service.sys.executable",
+            "robert_agent.adapters.services.native.sys.executable",
             "/opt/robert/venv/bin/python",
         ), mock.patch(
-            "robert_agent.service.Path.home",
+            "robert_agent.adapters.services.native.Path.home",
             return_value=Path("/home/test"),
         ):
             result = service.control_service("linux", "start")

@@ -7,7 +7,11 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import audit_result, publication_reconcile, publish, review_publish, storage
+from robert_agent.delivery.application import audit as audit_result
+from robert_agent.delivery.application import reconcile as publication_reconcile
+from robert_agent.delivery.application import publish
+from robert_agent.workflows.review import publish as review_publish
+from robert_agent.adapters.sqlite import database as storage
 
 
 class Completed:

@@ -12,7 +12,7 @@ from tests.support import PACKAGE_ROOT  # noqa: F401
 
 class RuntimeIdentityTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import runtime_identity
+        from robert_agent.adapters.processes import runtime_identity
 
         self.runtime = runtime_identity
         temporary = tempfile.TemporaryDirectory()

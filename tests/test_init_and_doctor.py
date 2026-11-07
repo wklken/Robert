@@ -7,8 +7,8 @@ from unittest import mock
 
 import yaml
 
-from robert_agent.doctor import doctor
-from robert_agent.init_config import init_config
+from robert_agent.operations.doctor import doctor
+from robert_agent.operations.initialize import init_config
 
 
 class InitAndDoctorTests(unittest.TestCase):

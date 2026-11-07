@@ -52,7 +52,7 @@ repos:
         )
 
     def test_controlled_worker_uses_the_running_package_interpreter(self):
-        from robert_agent import controlled_e2e_acceptance
+        from robert_agent.acceptance import controlled_e2e as controlled_e2e_acceptance
         shadow_bin = self.root / 'shadow-bin'
         shadow_bin.mkdir()
         wrong_python = shadow_bin / 'python3'
@@ -67,7 +67,7 @@ repos:
         self.assertEqual(result['publish_result']['published_count'], 2)
 
     def test_controlled_e2e_acceptance_completes_new_pr_workflow(self):
-        from robert_agent import controlled_e2e_acceptance
+        from robert_agent.acceptance import controlled_e2e as controlled_e2e_acceptance
         workspace_dir = (self.root / "controlled-e2e").resolve()
 
         result = controlled_e2e_acceptance.controlled_e2e_acceptance(

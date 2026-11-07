@@ -1,7 +1,7 @@
 # Robert 源码组织与分层重构执行计划
 
 日期：2026-11-06
-状态：分阶段实施；本 PR 建立底层边界，后续应用层迁移未完成
+状态：历史计划；PR #87 仅完成部分内容，未完成项由 [最终源码组织完整计划](2026-11-07-final-source-architecture.md) 接管。原阶段记录保留用于说明实际完成范围。
 分析基线：`origin/main@2aff5524bde229735ec5a7278535a14d3d65bfa9`
 实施基线：`origin/main@e5989c381c52680deb7ecf585c52a8c18f6f7b6d`（已合入 config v2）
 源码检查工作树：`/tmp/robert-main-architecture-20261106`（detached）

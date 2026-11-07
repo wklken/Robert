@@ -12,8 +12,11 @@ from unittest.mock import patch
 
 import yaml
 
-from robert_agent import dispatch, review_coordinator, review_store, worker_identity
-from robert_agent.publication_lock import task_publication_lock
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.workflows.review import coordinator as review_coordinator
+from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.delivery.lock import task_publication_lock
 from tests import test_review_coordinator as coordinator_fixture
 
 
@@ -370,7 +373,7 @@ sys.exit(int(sys.argv[3]))
             for run in runs:
                 review_store.update_run(conn, run['run_id'], status='waiting')
         script = '''import sys
-from robert_agent import review_store
+from robert_agent.adapters.sqlite import review_rounds as review_store
 with review_store.connect(sys.argv[1]) as conn:
     conn.execute('BEGIN IMMEDIATE')
     acquired=review_store.reserve_slot(conn,sys.argv[2])

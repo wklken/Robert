@@ -10,8 +10,15 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT
-from robert_agent import render_prompt, route, run_once
-from robert_agent.publication_lock import task_publication_lock
+from robert_agent.context import prompts as render_prompt
+from robert_agent.workflows import routes as route
+from robert_agent.runtime import cycle as run_once
+from robert_agent.delivery.lock import task_publication_lock
+from robert_agent.execution.application import dispatch as dispatch_queue
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import preparation
+from robert_agent.work.application import source_events
+from robert_agent.foundation import values
 
 
 class AttemptContextTests(unittest.TestCase):
@@ -28,7 +35,7 @@ class AttemptContextTests(unittest.TestCase):
         (Path(self.repo['repo_root']) / '.git').mkdir()
         Path(self.repo['worktree_root']).mkdir()
         config = self.root / 'config.yml'
-        from robert_agent.init_config import init_config
+        from robert_agent.operations.initialize import init_config
         import yaml
         init_config(config, {"repo": self.repo['full_name'], "repo_path": self.repo['repo_root'],
                     "worker": "cbc", "github_account": "robot", "trusted_actor": "human"})
@@ -52,7 +59,7 @@ class AttemptContextTests(unittest.TestCase):
         self.prompt = Path(result['prompt_paths'][0])
         self.route = deepcopy(route.ROUTES['update-existing-pr'])
         self.route['confidence'] = 'high'
-        self.prepare = patch.object(run_once, '_prepare_worktree', return_value={
+        self.prepare = patch.object(assigned_workspace, 'prepare_worktree', return_value={
             'ok': True, 'worktree_path': str(self.root / 'worktree'), 'branch_name': 'fix'})
         self.prepare_mock = self.prepare.start()
         self.addCleanup(self.prepare.stop)
@@ -66,24 +73,24 @@ class AttemptContextTests(unittest.TestCase):
                  'number': 2, 'workstream_id': self.stream, 'actor_login': 'human',
                  'body': f'@robot follow-up {number}', 'intent': 'bug_fix',
                  'has_open_dd_pr': True, 'url': 'https://github.com/example/backend/pull/2'}
-        run_once._insert_source_and_event(self.conn, run_once._repo_id('example/backend'), event, run_once._now())
+        source_events.insert_source_and_event(self.conn, values.repository_id('example/backend'), event, values.utc_now())
         self.conn.execute('INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES (?,?,?,?)',
-                          (self.task_id, run_once._event_id(event['event_fingerprint']), 'context', run_once._now()))
+                          (self.task_id, values.github_event_id(event['event_fingerprint']), 'context', values.utc_now()))
         self.conn.commit()
         return event
 
     def refresh(self, event):
-        return run_once._refresh_prepared_task(self.conn, self.data, self.db, self.repo,
-                                               event, run_once._now(), True)
+        return preparation.refresh_prepared_task(self.conn, self.data, self.db, self.repo,
+                                               event, values.utc_now(), True)
 
     def artifacts(self):
         return self.conn.execute("SELECT artifact_type,path,bytes FROM artifacts WHERE attempt_id=? AND artifact_type IN ('prompt','github_context_md','github_context_json')", (self.attempt_id,)).fetchall()
 
     def test_resume_preserves_previous_attempt_inputs(self):
         before = {path: Path(path).read_bytes() for _, path, _ in self.artifacts()}
-        resumed = run_once._create_resume_attempt_and_prompt(self.conn, self.data, self.db,
-            self.repo, run_once._repo_id('example/backend'), self.task_id, self.stream,
-            self.attempt_id, run_once._now(), {'summary': 'retry'})
+        resumed = preparation.create_resume_attempt_and_prompt(self.conn, self.data, self.db,
+            self.repo, values.repository_id('example/backend'), self.task_id, self.stream,
+            self.attempt_id, values.utc_now(), {'summary': 'retry'})
         self.assertIsNotNone(resumed)
         paths = dict(self.conn.execute('SELECT artifact_type,path FROM artifacts WHERE attempt_id=?', (resumed['attempt_id'],)))
         self.assertIn(resumed['attempt_id'] + '.github-context.md', paths['github_context_md'])
@@ -131,8 +138,8 @@ class AttemptContextTests(unittest.TestCase):
         event = self.add_event()
         def prepare(*args, **kwargs):
             queue = [{'task_info': {'task_id': self.task_id}}]
-            with patch.object(run_once, '_dispatch_queued_locked') as dispatch:
-                self.assertEqual(run_once._dispatch_queued(self.db, [], queue, True, 1), [])
+            with patch.object(dispatch_queue, 'dispatch_queued_locked') as dispatch:
+                self.assertEqual(dispatch_queue.dispatch_queued(self.db, [], queue, True, 1), [])
                 dispatch.assert_not_called()
             # The task lock must not be confused with a SQLite writer lock.
             with sqlite3.connect(self.db) as observer:
@@ -170,7 +177,7 @@ class AttemptContextTests(unittest.TestCase):
             if calls == 2:
                 raise OSError('injected replace failure')
             return original(source, destination)
-        with patch.object(run_once.os, 'replace', side_effect=replace):
+        with patch.object(os, 'replace', side_effect=replace):
             with self.assertRaisesRegex(OSError, 'injected'):
                 self.refresh(event)
         self.assertEqual(before, {path: Path(path).read_bytes() for path in before})
@@ -181,7 +188,7 @@ class AttemptContextTests(unittest.TestCase):
         event = self.add_event()
         before = {path: Path(path).read_bytes() for _, path, _ in self.artifacts()}
         artifacts = self.artifacts()
-        with patch.object(run_once, '_upsert_route_decision', side_effect=sqlite3.OperationalError('injected')):
+        with patch.object(preparation, 'upsert_route_decision', side_effect=sqlite3.OperationalError('injected')):
             with self.assertRaisesRegex(sqlite3.OperationalError, 'injected'):
                 self.refresh(event)
         self.assertEqual(before, {path: Path(path).read_bytes() for path in before})

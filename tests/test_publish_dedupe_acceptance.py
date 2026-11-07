@@ -18,7 +18,7 @@ class PublishDedupeAcceptanceTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def test_publish_dedupe_acceptance_reuses_existing_comment_and_pr_markers(self):
-        from robert_agent import publish_dedupe_acceptance
+        from robert_agent.acceptance import publish_dedupe as publish_dedupe_acceptance
 
         original_insert = publish_dedupe_acceptance._insert_fixture
 

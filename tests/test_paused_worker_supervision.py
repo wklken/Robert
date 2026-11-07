@@ -1,6 +1,6 @@
 """A stopped admission lane still bounds and reaps its existing workers."""
 from robert_agent.adapters.processes import attempt as attempt_process
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
@@ -13,8 +13,13 @@ import unittest
 from unittest import mock
 
 from tests import test_terminal_github_followup as fixtures
-from robert_agent import daemon, daemon_state, run_once, validate_config
+from robert_agent.runtime import daemon
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.configuration import command as validate_config
 from robert_agent.execution import leases as execution_leases
+from robert_agent.execution.application import evidence
+from robert_agent.execution.application import monitor
+from robert_agent.execution import workspace as assigned_workspace
 
 
 class PausedWorkerSupervisionTests(unittest.TestCase):
@@ -66,10 +71,10 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
         self.context.background_lanes['scan'].start.assert_not_called()
 
     def test_supervision_only_keeps_healthy_worker_and_avoids_git_recovery(self):
-        from robert_agent import worker_supervision
+        from robert_agent.runtime import paused_monitor as worker_supervision
         proc = self.process(age=0)
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=AssertionError('no preparation')), \
-             mock.patch.object(run_once, '_inspect_attempt_recovery_with_metadata', side_effect=AssertionError('no Git recovery')):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=AssertionError('no preparation')), \
+             mock.patch.object(evidence, 'inspect_attempt_recovery_with_metadata', side_effect=AssertionError('no Git recovery')):
             result = worker_supervision.run(self.config_path)
             self.assertTrue(result['ok'], result)
             self.assertIsNone(proc.poll())
@@ -81,7 +86,7 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT status FROM attempts').fetchone()[0], 'failed')
 
     def test_supervision_only_respects_repository_lease(self):
-        from robert_agent import worker_supervision
+        from robert_agent.runtime import paused_monitor as worker_supervision
         proc = self.process()
         with closing(sqlite3.connect(self.db)) as conn, conn:
             execution_leases.acquire(conn, self.fixture.fixture.repo_id, 'other-owner', self.now.isoformat(), 60)
@@ -90,8 +95,8 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
         self.assertIsNone(proc.poll())
 
     def test_received_result_is_reaped_without_audit_or_publication(self):
-        from robert_agent import worker_supervision
-        from robert_agent.worker import result
+        from robert_agent.runtime import paused_monitor as worker_supervision
+        from robert_agent.delivery.application import submission as result
         proc = self.process(age=0)
         with closing(sqlite3.connect(self.db)) as conn:
             task, attempt = conn.execute('SELECT task_id,attempt_id FROM attempts').fetchone()
@@ -108,10 +113,10 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
 
     def test_unknown_identity_keeps_capacity_and_does_not_signal(self):
-        from robert_agent import worker_supervision
+        from robert_agent.runtime import paused_monitor as worker_supervision
         proc = self.process()
         with mock.patch.object(attempt_process, 'dispatch_status', return_value={'status': 'unknown'}), \
-             mock.patch.object(run_once, '_terminate_owned_attempt', side_effect=AssertionError('unverified identity')):
+             mock.patch.object(monitor, 'terminate_owned_attempt', side_effect=AssertionError('unverified identity')):
             self.assertTrue(worker_supervision.run(self.config_path)['ok'])
         self.assertIsNone(proc.poll())
         with closing(sqlite3.connect(self.db)) as conn:
@@ -119,8 +124,9 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT binding_status FROM execution_subjects').fetchone()[0], 'attention')
 
     def test_busy_task_lock_does_not_prevent_other_worker_cleanup(self):
-        from robert_agent import execution_store, worker_supervision
-        from robert_agent.publication_lock import task_publication_lock
+        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.runtime import paused_monitor as worker_supervision
+        from robert_agent.delivery.lock import task_publication_lock
         proc = self.process()
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task = conn.execute('SELECT task_id FROM tasks').fetchone()[0]
@@ -136,8 +142,9 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT status FROM attempts WHERE task_id=?', (task,)).fetchone()[0], 'failed')
 
     def test_deferred_result_is_ingested_before_paused_exit_finalization(self):
-        from robert_agent import worker_supervision, result_spool
-        from robert_agent.worker import result
+        from robert_agent.runtime import paused_monitor as worker_supervision
+        from robert_agent.execution import spool as result_spool
+        from robert_agent.delivery.application import submission as result
         proc = self.process(age=0)
         with closing(sqlite3.connect(self.db)) as conn:
             task, attempt = conn.execute('SELECT task_id,attempt_id FROM attempts').fetchone()
@@ -154,8 +161,9 @@ class PausedWorkerSupervisionTests(unittest.TestCase):
         self.assertFalse(list(result_spool.directory(self.db).glob('rejected/*.json')))
 
     def test_deferred_or_inflight_spool_prevents_failure_when_replay_is_busy(self):
-        from robert_agent import worker_supervision, result_spool
-        from robert_agent.worker import result
+        from robert_agent.runtime import paused_monitor as worker_supervision
+        from robert_agent.execution import spool as result_spool
+        from robert_agent.delivery.application import submission as result
         proc = self.process(age=0)
         with closing(sqlite3.connect(self.db)) as conn:
             task, attempt = conn.execute('SELECT task_id,attempt_id FROM attempts').fetchone()

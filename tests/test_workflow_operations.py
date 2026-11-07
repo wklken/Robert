@@ -5,7 +5,8 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent import storage, execution_store
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.adapters.sqlite import execution_control as execution_store
 
 
 NOW = "2026-08-02T00:00:00+00:00"
@@ -102,7 +103,7 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
 
     def test_load_subject_snapshot_returns_authoritative_rows_and_ids_without_secrets(self):
-        from robert_agent import execution_operations
+        from robert_agent.execution import operations as execution_operations
 
         snapshot = execution_operations.load_subject_snapshot(
             self.db_path,
@@ -119,7 +120,7 @@ class WorkflowOperationsTests(unittest.TestCase):
         self.assertNotIn("do-not-return", json.dumps(snapshot, sort_keys=True))
 
     def test_load_episode_snapshot_includes_episode_binding_and_child_task_ids(self):
-        from robert_agent import execution_operations
+        from robert_agent.execution import operations as execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             binding = execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
@@ -147,7 +148,7 @@ class WorkflowOperationsTests(unittest.TestCase):
         self.assertNotIn("binding-secret", rendered)
 
     def test_claim_subject_is_idempotent_and_does_not_transfer_dbos_or_terminal(self):
-        from robert_agent import execution_operations
+        from robert_agent.execution import operations as execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             first = execution_operations.claim_subject(
@@ -201,7 +202,7 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
 
     def test_claim_and_require_reject_invalid_subjects_and_owner_mismatches(self):
-        from robert_agent import execution_operations
+        from robert_agent.execution import operations as execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             with self.assertRaises(ValueError):
@@ -252,7 +253,7 @@ class MigratedSubjectClaimTests(unittest.TestCase):
         execution_store.initialize(self.conn)
 
     def test_claim_migrated_task_respects_kind_and_lifecycle(self):
-        from robert_agent import execution_operations
+        from robert_agent.execution import operations as execution_operations
 
         for row_factory in (None, sqlite3.Row):
             self.conn.row_factory = row_factory
@@ -282,7 +283,7 @@ class MigratedSubjectClaimTests(unittest.TestCase):
                         execution_operations.claim_subject(self.conn, "task", "task", now=NOW)
 
     def test_claim_migrated_episode_does_not_reopen_terminal_status(self):
-        from robert_agent import execution_operations
+        from robert_agent.execution import operations as execution_operations
 
         for row_factory in (None, sqlite3.Row):
             self.conn.row_factory = row_factory

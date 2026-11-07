@@ -22,7 +22,8 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self._init_db()
 
     def test_propose_candidates_from_project_memory_without_activating_them(self):
-        from robert_agent import project_memory, runtime_knowledge
+        from robert_agent.context import project as project_memory
+        from robert_agent.context import knowledge as runtime_knowledge
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
@@ -51,7 +52,8 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertEqual(runtime_count, 0)
 
     def test_approve_candidate_creates_active_runtime_knowledge(self):
-        from robert_agent import project_memory, runtime_knowledge
+        from robert_agent.context import project as project_memory
+        from robert_agent.context import knowledge as runtime_knowledge
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
@@ -94,7 +96,8 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertIn("update the PR branch", loaded[0]["prompt_text"])
 
     def test_reject_candidate_keeps_runtime_knowledge_empty(self):
-        from robert_agent import project_memory, runtime_knowledge
+        from robert_agent.context import project as project_memory
+        from robert_agent.context import knowledge as runtime_knowledge
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
@@ -129,8 +132,9 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertEqual(loaded, [])
 
     def test_memory_curator_cli_approve_prints_json(self):
-        from robert_agent import project_memory, runtime_knowledge
-        from robert_agent import memory_curator
+        from robert_agent.context import project as project_memory
+        from robert_agent.context import knowledge as runtime_knowledge
+        from robert_agent.context import curation as memory_curator
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
                 conn,
@@ -169,7 +173,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertEqual(runtime_count, 1)
 
     def _init_db(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         storage.init_database(self.db_path)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -196,7 +200,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                         "title": "DD PR follow-up uses update-existing-pr",
                         "short_summary": "When review comments arrive on a DD PR, update the PR branch.",
                         "long_summary": "A DD PR has its own workstream; reviewer follow-up should not reopen the origin issue task.",
-                        "paths": ["src/robert_agent/run_once.py"],
+                        "paths": ["src/robert_agent/runtime/cycle.py"],
                         "symbols": ["_is_dd_pr_followup_event"],
                         "keywords": ["dd-pr-followup", "update-existing-pr"],
                         "confidence": "medium",

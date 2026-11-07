@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
+from robert_agent.work.application import source_lifecycle
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +14,8 @@ AGENT = PACKAGE_ROOT
 
 class BoardReadModelTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import storage, work_items
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.work.application import commands as work_items
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -31,7 +33,7 @@ class BoardReadModelTests(unittest.TestCase):
         )
 
     def _create(self, name, *, start=False, priority="P2"):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         return work_items.create_work_item(
             self.db_path,
@@ -47,7 +49,7 @@ class BoardReadModelTests(unittest.TestCase):
         )["item"]
 
     def _seed_six_columns(self):
-        from robert_agent.work_items import record_system_event
+        from robert_agent.work.application.commands import record_system_event
 
         backlog = self._create("Backlog card")
         todo = self._create("Todo card", start=True)
@@ -120,7 +122,7 @@ class BoardReadModelTests(unittest.TestCase):
         return {item["title"].split()[0].lower(): item for item in (backlog, todo, doing, waiting, review, done)}
 
     def test_projection_places_each_item_in_exactly_one_of_six_columns(self):
-        from robert_agent import board
+        from robert_agent.readmodels import board
 
         self._seed_six_columns()
         result = board.list_board(self.db_path)
@@ -144,8 +146,8 @@ class BoardReadModelTests(unittest.TestCase):
         )
 
     def test_resolved_old_attention_does_not_return_card_to_waiting(self):
-        from robert_agent import board
-        from robert_agent.work_items import record_system_event
+        from robert_agent.readmodels import board
+        from robert_agent.work.application.commands import record_system_event
 
         item = self._create("Resolved card", start=True)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -170,8 +172,8 @@ class BoardReadModelTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["attention_signals"], [])
 
     def test_unmerged_closed_pr_remains_in_review_with_attention(self):
-        from robert_agent import board
-        from robert_agent.work_items import record_system_event
+        from robert_agent.readmodels import board
+        from robert_agent.work.application.commands import record_system_event
 
         item = self._create("Closed PR card", start=True)
         now = "2026-07-19T03:00:00+00:00"
@@ -207,7 +209,8 @@ class BoardReadModelTests(unittest.TestCase):
         self.assertIn("request_changes", projected["valid_commands"])
 
     def test_direct_closed_pr_stays_in_review_until_operator_cancels(self):
-        from robert_agent import board, run_once, work_items
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
 
         now = "2026-10-13T06:35:18+00:00"
         source_key = "github:example/repo!3353"
@@ -234,7 +237,7 @@ class BoardReadModelTests(unittest.TestCase):
                 "INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, route_id, expected_output, created_at, updated_at) VALUES ('task-direct', ?, 'completed', 'P1', 'review', 'review', ?, ?)",
                 (source_key, now, now),
             )
-            run_once._record_remote_terminal_state(
+            source_lifecycle.record_remote_terminal_state(
                 conn,
                 "repo-1",
                 source_key,
@@ -276,7 +279,7 @@ class BoardReadModelTests(unittest.TestCase):
         self.assertEqual(board.list_board(self.db_path)["items"], [])
 
     def test_issue_origin_is_linked_separately_from_its_derived_pr(self):
-        from robert_agent import board
+        from robert_agent.readmodels import board
 
         item = self._seed_six_columns()["review"]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -299,7 +302,7 @@ class BoardReadModelTests(unittest.TestCase):
         self.assertIsNone(board.get_work_item_detail(self.db_path, item["work_item_id"])["source"]["url"])
 
     def test_projection_does_not_expose_non_http_pull_request_urls(self):
-        from robert_agent import board
+        from robert_agent.readmodels import board
 
         items = self._seed_six_columns()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -315,7 +318,7 @@ class BoardReadModelTests(unittest.TestCase):
         self.assertNotIn("javascript:", json.dumps(detail))
 
     def test_filters_cursor_detail_and_timeline_are_safe(self):
-        from robert_agent import board
+        from robert_agent.readmodels import board
 
         for index in range(55):
             self._create(f"Card {index:02d}", priority="P1" if index % 2 else "P2")

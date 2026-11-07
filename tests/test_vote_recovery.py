@@ -6,7 +6,9 @@ import threading
 from unittest.mock import patch
 
 import yaml
-from robert_agent import vote_store, work_items, audit_result
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.work.application import commands as work_items
+from robert_agent.delivery.application import audit as audit_result
 from robert_agent.execution import stages as model_execution
 from tests import test_vote_coordinator as fixture_module
 

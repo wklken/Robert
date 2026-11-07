@@ -1,6 +1,6 @@
 """Native session history must not pin isolated, proven-stopped processes."""
 from robert_agent.adapters.processes import attempt as attempt_process
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 from contextlib import closing
 import json
 import os
@@ -13,8 +13,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from robert_agent import native_rounds, result_cutover, supervise
-from robert_agent.publication_lock import task_publication_lock
+from robert_agent.execution import rounds as native_rounds
+from robert_agent.execution.application import cutover as result_cutover
+from robert_agent.execution import inspection as supervise
+from robert_agent.delivery.lock import task_publication_lock
 from tests import test_cutover_recovery as cutover_fixture
 from tests import test_review_coordinator as review_fixture
 from tests import test_vote_coordinator as vote_fixture

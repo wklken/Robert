@@ -7,7 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, supervision_observe
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision.application import observation as supervision_observe
 
 
 NOW = datetime(2026, 11, 6, 10, tzinfo=timezone.utc)

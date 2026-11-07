@@ -9,8 +9,14 @@ from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from tests import test_review_input_workflow as integration
-from robert_agent import action_scope, result_contract, result_cutover, result_spool, run_once
-from robert_agent.worker import result
+from robert_agent.delivery.application import scope as action_scope
+from robert_agent.delivery import contract as result_contract
+from robert_agent.execution.application import cutover as result_cutover
+from robert_agent.execution import spool as result_spool
+from robert_agent.runtime import cycle as run_once
+from robert_agent.delivery.application import submission as result
+from robert_agent.execution.application import monitor
+from robert_agent.foundation import commands as control_commands
 
 
 class SubmissionHeadTests(unittest.TestCase):
@@ -57,7 +63,7 @@ class SubmissionHeadTests(unittest.TestCase):
         self.assertTrue(result.record_result(db, envelope)['ok'])
         with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute("UPDATE attempts SET status='completed' WHERE attempt_id=?", (attempt,))
-        with patch.object(run_once, "_supervise_running_attempts", return_value=0):
+        with patch.object(monitor, 'supervise_running_attempts', return_value=0):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertNotIn('audit', self.metadata(db))
         with closing(sqlite3.connect(db)) as conn, conn:
@@ -80,7 +86,7 @@ class SubmissionHeadTests(unittest.TestCase):
 
     def test_git_read_failure_is_validation_unavailable(self):
         db, _, _, envelope = self.fixture()
-        with patch('robert_agent.action_scope.subprocess.run', side_effect=OSError('unavailable')):
+        with patch('robert_agent.delivery.application.scope.subprocess.run', side_effect=OSError('unavailable')):
             receipt = result.record_result(db, envelope)
         self.assertEqual(receipt['status'], 'validation_unavailable')
         self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])
@@ -153,7 +159,7 @@ class SubmissionHeadTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 1, '', 'cannot read index')
             return original(command, **kwargs)
 
-        with patch('robert_agent.action_scope.subprocess.run', side_effect=fail_status):
+        with patch('robert_agent.delivery.application.scope.subprocess.run', side_effect=fail_status):
             receipt = result.record_result(db, envelope)
         self.assertEqual(receipt['status'], 'validation_unavailable')
         self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])
@@ -161,14 +167,14 @@ class SubmissionHeadTests(unittest.TestCase):
     def test_final_audit_cannot_accept_an_unreadable_worktree(self):
         db, _, _, envelope = self.fixture()
         self.assertTrue(result.record_result(db, envelope)['ok'])
-        original = run_once.run_command
+        original = control_commands.run_command
 
         def fail_status(command, **kwargs):
             if 'status' in command[:3]:
                 return subprocess.CompletedProcess(command, 1, '', 'cannot read index')
             return original(command, **kwargs)
 
-        with patch.object(run_once, 'run_command', side_effect=fail_status):
+        with patch.object(control_commands, 'run_command', side_effect=fail_status):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertEqual(self.metadata(db)['audit']['violations'], ['worktree_status_unavailable'])
 
@@ -181,7 +187,7 @@ class SubmissionHeadTests(unittest.TestCase):
                 raise subprocess.TimeoutExpired(command, 5)
             return original(command, **kwargs)
 
-        with patch('robert_agent.action_scope.subprocess.run', side_effect=timeout_status):
+        with patch('robert_agent.delivery.application.scope.subprocess.run', side_effect=timeout_status):
             receipt = result.record_result(db, envelope)
         self.assertEqual(receipt['status'], 'validation_unavailable')
         self.assertEqual(list(result_spool.directory(db).glob('*.json')), [])

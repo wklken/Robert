@@ -1,3 +1,5 @@
+from robert_agent.supervision.application import checks as supervision_checks
+from robert_agent.supervision import health as supervision_health
 import argparse
 from collections.abc import Sequence
 from contextlib import redirect_stdout
@@ -8,19 +10,20 @@ import shutil
 import sys
 
 from robert_agent import __version__
-from robert_agent import daemon
-from robert_agent import diagnostics
-from robert_agent import sqlite_migration, execution_store
-from robert_agent import retention
-from robert_agent import run_once
-from robert_agent import status
-from robert_agent import service
-from robert_agent import validate_config
-from robert_agent import web
+from robert_agent.runtime import daemon
+from robert_agent.operations import diagnostics
+from robert_agent.operations import migration as sqlite_migration
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.operations import retention
+from robert_agent.runtime import cycle as run_once
+from robert_agent.readmodels import status
+from robert_agent.adapters.services import native as service
+from robert_agent.configuration import command as validate_config
+from robert_agent.interfaces.web import server as web
 from robert_agent.cli import exit_codes
 from robert_agent.cli.output import emit_result
-from robert_agent.doctor import doctor
-from robert_agent.init_config import init_config
+from robert_agent.operations.doctor import doctor
+from robert_agent.operations.initialize import init_config
 from robert_agent.integrations import openclaw
 from robert_agent.paths import default_config_path
 from robert_agent.resource_files import resource
@@ -422,11 +425,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output,
             )
         if args.command == "supervisor":
-            from robert_agent import supervisor
+            from robert_agent.runtime import supervisor
             if args.supervisor_command == "build-manifest":
-                from robert_agent import runtime_identity
+                from robert_agent.adapters.processes import runtime_identity
                 manifest = runtime_identity.build_manifest(args.repo, args.wheel)
-                supervisor.atomic_json(Path(args.output_file).expanduser(), manifest)
+                supervision_health.atomic_json(Path(args.output_file).expanduser(), manifest)
                 return _emit_and_code({"ok": True, "status": "recorded", "manifest": manifest}, args.output)
             validated = validate_config.validate_config(args.config, skip_external=True)
             if not validated.get("ok"):
@@ -434,18 +437,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.supervisor_command == "run":
                 result = supervisor.run(validated, once=args.once)
             elif args.supervisor_command == "check":
-                result = supervisor.check(validated)
+                result = supervision_checks.check(validated)
             elif args.supervisor_command.startswith("repair-"):
-                from robert_agent import supervision_repair
+                from robert_agent.workflows.maintenance import repair as supervision_repair
                 if args.supervisor_command == "repair-propose":
                     result = supervision_repair.propose(validated, args.incident_id)
                 elif args.supervisor_command == "repair-verify":
                     result = supervision_repair.verify(validated, args.incident_id, checkout=args.checkout,
-                                                       runtime=supervisor.runtime_status(validated))
+                                                       runtime=supervision_health.runtime_status(validated))
                 else:
                     result = supervision_repair.status(validated, args.incident_id)
             else:
-                result = supervisor.status(validated)
+                result = supervision_checks.status(validated)
             return _emit_and_code(result, args.output)
         if args.command == "service":
             platform_name = (

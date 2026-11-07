@@ -1,3 +1,4 @@
+from robert_agent.delivery.application import effects as publication_effects
 from contextlib import closing
 import json
 from pathlib import Path
@@ -8,7 +9,9 @@ from unittest.mock import patch
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import publish, audit_result, storage
+from robert_agent.delivery.application import publish
+from robert_agent.delivery.application import audit as audit_result
+from robert_agent.adapters.sqlite import database as storage
 
 
 def completed(stdout=''):
@@ -50,7 +53,7 @@ class PublicationRecoveryTests(unittest.TestCase):
                 commands.append(command)
                 return completed()
 
-            result = publish._publish_push_existing_pr(action, runner, conn)
+            result = publication_effects.publish_push_existing_pr(action, runner, conn)
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(
@@ -106,7 +109,7 @@ class PublicationRecoveryTests(unittest.TestCase):
 
             # Crash between the external push and its durable outcome. Earlier
             # action outcomes now commit independently to avoid locks across I/O.
-            with patch('robert_agent.publish._mark_published', side_effect=RuntimeError('crash after push')):
+            with patch('robert_agent.delivery.application.receipts.mark_published', side_effect=RuntimeError('crash after push')):
                 with self.assertRaisesRegex(RuntimeError, 'crash after push'):
                     publish.publish_ready_actions(db, run_command=runner)
             crash[0] = False
@@ -129,7 +132,7 @@ class PublicationRecoveryTests(unittest.TestCase):
                 writes.append(command)
                 return completed("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/codex/fix")
 
-            result = publish._publish_push_existing_pr(action, runner, conn)
+            result = publication_effects.publish_push_existing_pr(action, runner, conn)
             self.assertFalse(result["ok"])
             self.assertEqual(writes, [])
 
@@ -140,7 +143,7 @@ class PublicationRecoveryTests(unittest.TestCase):
                 {"worktree_path": "/assigned", "branch": "codex/fix"})}
             from unittest.mock import Mock
             runner = Mock(return_value=completed())
-            self.assertFalse(publish._publish_push_existing_pr(action, runner, conn)["ok"])
+            self.assertFalse(publication_effects.publish_push_existing_pr(action, runner, conn)["ok"])
             runner.assert_not_called()
 
     def test_marker_cannot_override_missing_fork_owner(self):
@@ -149,7 +152,7 @@ class PublicationRecoveryTests(unittest.TestCase):
               'headRepositoryOwner': None, 'body': '<!-- robert-workstream ws -->'}
         def runner(command, **kwargs):
             return completed(json.dumps([pr] if command[2] == 'list' else pr))
-        result = publish._find_existing_open_pr(
+        result = publication_effects.find_existing_open_pr(
             'x/y', 'expected-owner:codex/fix', '<!-- robert-workstream ws -->', runner,
             base='main', head_owner='expected-owner')
         self.assertEqual(result['status'], 'not_found')
@@ -174,7 +177,7 @@ class PublicationRecoveryTests(unittest.TestCase):
         def runner(command, **kwargs):
             return completed(json.dumps([pr] if command[2] == 'list' else pr))
 
-        result = publish._find_existing_open_pr(
+        result = publication_effects.find_existing_open_pr(
             'x/y', 'expected-owner:codex/fix', '<!-- robert-workstream ws -->', runner,
             base='main', head_owner='expected-owner')
         self.assertEqual(result['status'], 'not_found')

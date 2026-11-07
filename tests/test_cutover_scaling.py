@@ -6,7 +6,9 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import result_contract, result_cutover, storage
+from robert_agent.delivery import contract as result_contract
+from robert_agent.execution.application import cutover as result_cutover
+from robert_agent.adapters.sqlite import database as storage
 
 
 class CutoverScalingTests(unittest.TestCase):

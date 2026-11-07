@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from robert_agent import dispatch, worker_identity
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.adapters.processes import identity as worker_identity
 
 
 class DispatchExitRaceTests(unittest.TestCase):

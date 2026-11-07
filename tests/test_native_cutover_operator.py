@@ -6,7 +6,11 @@ import unittest
 from unittest import mock
 
 from tests import test_review_coordinator as fixtures
-from robert_agent import board, discover, native_rounds, result_cutover, work_items
+from robert_agent.readmodels import board
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.execution import rounds as native_rounds
+from robert_agent.execution.application import cutover as result_cutover
+from robert_agent.work.application import commands as work_items
 
 
 class NativeCutoverOperatorTests(unittest.TestCase):
@@ -40,7 +44,7 @@ class NativeCutoverOperatorTests(unittest.TestCase):
 
     def test_recovered_vote_clarification_keeps_selected_round_through_completion(self):
         from tests import test_vote_coordinator
-        from robert_agent import vote_store
+        from robert_agent.adapters.sqlite import vote_rounds as vote_store
         fixture = test_vote_coordinator.VoteCoordinatorTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)

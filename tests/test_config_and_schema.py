@@ -84,7 +84,9 @@ class NewSkillSkeletonTests(unittest.TestCase):
             for path in root.rglob("*.py"):
                 text = path.read_text(encoding="utf-8")
                 for literal in forbidden_literals:
-                    if literal == "result.json" and path.name in {"review_files.py", "review_coordinator.py"}:
+                    if literal == "result.json" and path.relative_to(PACKAGE_ROOT).as_posix() in {
+                        "workflows/review/files.py", "workflows/review/coordinator.py"
+                    }:
                         # Native review results are registered artifacts, not the
                         # removed file-backed task/control plane.
                         continue
@@ -195,7 +197,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.data_dir = self.root / "data"
 
     def test_fresh_database_init_creates_expected_tables_and_is_idempotent(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         first = storage.init_database(db_path)
@@ -225,7 +227,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertIn("idx_wakeups_result", indexes)
 
     def test_schema_includes_daemon_tables_and_indexes(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "daemon-schema.sqlite3"
         storage.init_database(db_path)
@@ -250,7 +252,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertIn("idx_daemon_events_type_created", indexes)
 
     def test_schema_includes_origin_workstream_link(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -262,7 +264,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertIn("origin_workstream_id", columns)
 
     def test_github_actions_track_publish_status_separately_from_audit(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -274,7 +276,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertIn("publish_status", columns)
 
     def test_schema_includes_remediation_contracts_and_unique_identities(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -373,7 +375,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertEqual(task_columns["task_kind"], "'human_request'")
 
     def test_schema_includes_project_memory_tables_and_lookup_index(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -406,7 +408,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertIn("short_summary", entry_columns)
 
     def test_schema_includes_runtime_knowledge_tables(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)

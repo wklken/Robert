@@ -8,7 +8,7 @@ import unittest
 
 class RemediationTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -82,7 +82,7 @@ class RemediationTests(unittest.TestCase):
             ).fetchall()
 
     def test_upsert_is_idempotent_and_prioritizes_conflict_over_ci(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         ci_summary = {
             "status": "failing",
@@ -149,7 +149,7 @@ class RemediationTests(unittest.TestCase):
         )
 
     def test_new_snapshot_supersedes_nonterminal_old_episode(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -179,7 +179,7 @@ class RemediationTests(unittest.TestCase):
         )
 
     def test_terminal_pr_cancels_open_episodes(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -202,7 +202,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(self.episodes()[0][2], "canceled")
 
     def test_waiting_conflict_resolves_when_result_head_is_mergeable(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -240,7 +240,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(self.episodes()[0][5], "head-2")
 
     def test_exhausted_result_is_not_retried_on_later_identical_polls(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         for kind in ("merge_conflict", "ci"):
             with self.subTest(kind=kind), closing(self.connect()) as conn, conn:
@@ -275,7 +275,7 @@ class RemediationTests(unittest.TestCase):
                     conn, repo=self.repo, now="2026-07-26T00:06:00Z")), 1)
 
     def test_waiting_conflict_exhausts_when_result_head_is_still_conflicted(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -314,7 +314,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(self.episodes()[0][5], "head-2")
 
     def test_waiting_ci_resolves_green_and_exhausts_repeated_signature(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         failing = {
             "status": "failing",
@@ -391,7 +391,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(self.episodes()[0][2], "resolved")
 
     def test_record_task_started_and_publish_result_are_guarded(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -444,7 +444,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(row[3], 1)
 
     def test_budget_status_enforces_attempt_wall_token_and_cost_limits(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         policy = {
             "max_attempts": 2,
@@ -523,7 +523,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(usage_limited["total_cost_usd"], 2.5)
 
     def test_budget_status_stops_when_configured_usage_cannot_be_measured(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             conn.execute(
@@ -566,7 +566,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(budget["measured_attempt_count"], 0)
 
     def test_attestation_requires_head_base_branch_and_clean_merge_graph(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         class Runner:
             def __init__(
@@ -659,7 +659,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(unchanged["reason"], "unchanged_head")
 
     def test_manual_ci_signal_exhausts_episode_and_notifies_operator(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         manual = {
             "status": "manual",
@@ -712,7 +712,7 @@ class RemediationTests(unittest.TestCase):
         )
 
     def test_budget_exhaustion_notifies_operator_once(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -759,7 +759,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(notifications, 1)
 
     def test_terminal_pr_cancels_all_nonterminal_episodes(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -796,7 +796,7 @@ class RemediationTests(unittest.TestCase):
         )
 
     def test_disabled_policy_cancels_existing_episode_before_decision(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         with closing(self.connect()) as conn, conn:
             remediation.upsert_health_episodes(
@@ -845,7 +845,7 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(status, "canceled")
 
     def test_running_episode_keeps_original_failure_evidence(self):
-        from robert_agent import remediation
+        from robert_agent.workflows import pr_remediation as remediation
 
         first = {
             "status": "failing",

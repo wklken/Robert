@@ -6,8 +6,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from robert_agent import run_once, storage
+from robert_agent.adapters.sqlite import database as storage
 from robert_agent.execution import leases as execution_leases
+from robert_agent.adapters.processes import identity
 
 
 class AgentLeaseSafetyTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class AgentLeaseSafetyTests(unittest.TestCase):
                     conn.execute("INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('old','running','2000-01-01',?)",
                                  (json.dumps({'executor_identity': {'pid': 123}}),))
                     execution_leases.acquire(conn, 'repo', 'old', '2000-01-01T00:00:00+00:00', 1)
-                    with mock.patch.object(run_once.worker_identity, 'inspect_recorded_identity', return_value=state):
+                    with mock.patch.object(identity, 'inspect_recorded_identity', return_value=state):
                         result = execution_leases.acquire(conn, 'repo', 'new', '2026-10-29T00:00:00+00:00', 1)
                     self.assertEqual(result['ok'], state == 'dead')
                     owners = conn.execute("SELECT owner_id FROM leases WHERE status='active'").fetchall()

@@ -105,7 +105,7 @@ healthy-worker 回归另验证 `run_loop.cycles == 0`、`agent_runs == 0`；不�
 
 代码/测试：`run_once.py / lifecycle:remote_close_stops_registered_native_models`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/run_once.py](../../../src/robert_agent/run_once.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)
+[src/robert_agent/run_once.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/run_once.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)
 
 <a id="change-r02"></a>
 ### R02 · fixed
@@ -114,7 +114,7 @@ healthy-worker 回归另验证 `run_loop.cycles == 0`、`agent_runs == 0`；不�
 
 代码/测试：`worker/result.py + supervise.py + retry_policy.py / lifecycle:received_result,fast_receipt,result_arriving; controlplane:publication_requires_recorded_worker_process_stop`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/worker/result.py](../../../src/robert_agent/worker/result.py)、[src/robert_agent/supervise.py](../../../src/robert_agent/supervise.py)、[src/robert_agent/retry_policy.py](../../../src/robert_agent/retry_policy.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
+[src/robert_agent/worker/result.py](../../../src/robert_agent/worker/result.py)、[src/robert_agent/supervise.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/supervise.py)、[src/robert_agent/retry_policy.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/retry_policy.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
 
 <a id="change-r03"></a>
 ### R03 · fixed
@@ -123,7 +123,7 @@ healthy-worker 回归另验证 `run_loop.cycles == 0`、`agent_runs == 0`；不�
 
 代码/测试：`run_once.py / lifecycle:health_reads,backfill_does_not_hold_writer,startup_command_inspection,result_arriving`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/run_once.py](../../../src/robert_agent/run_once.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)
+[src/robert_agent/run_once.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/run_once.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)
 
 <a id="change-r04"></a>
 ### R04 · fixed
@@ -141,7 +141,7 @@ healthy-worker 回归另验证 `run_loop.cycles == 0`、`agent_runs == 0`；不�
 
 代码/测试：`daemon_state.py + supervise.py / lifecycle:stale_live_worker_keeps_dispatch_capacity`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/daemon_state.py](../../../src/robert_agent/daemon_state.py)、[src/robert_agent/supervise.py](../../../src/robert_agent/supervise.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)
+[src/robert_agent/daemon_state.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/daemon_state.py)、[src/robert_agent/supervise.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/supervise.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)
 
 <a id="change-r06"></a>
 ### R06 · fixed
@@ -150,7 +150,7 @@ Git/GitHub 命令继承剩余控制 deadline；外层 child 有独立 executor n
 
 代码/测试：`daemon.py + common.py + worktree.py + publish.py + run_once.py / deadline:8 regressions; controlplane:timed_out_control_child,expired_control_deadline`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/common.py](../../../src/robert_agent/common.py)、[src/robert_agent/daemon.py](../../../src/robert_agent/daemon.py)、[src/robert_agent/worktree.py](../../../src/robert_agent/worktree.py)、[src/robert_agent/publish.py](../../../src/robert_agent/publish.py)、[tests/test_deadline_remediation.py](../../../tests/test_deadline_remediation.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
+[src/robert_agent/common.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/common.py)、[src/robert_agent/daemon.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/daemon.py)、[src/robert_agent/worktree.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/worktree.py)、[src/robert_agent/publish.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/publish.py)、[tests/test_deadline_remediation.py](../../../tests/test_deadline_remediation.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
 
 <a id="change-r07"></a>
 ### R07 · fixed
@@ -168,7 +168,7 @@ Git/GitHub 命令继承剩余控制 deadline；外层 child 有独立 executor n
 
 代码/测试：`loop_engine.py / scheduler:healthy_worker_does_not_create_business_runs,observation_is_read_only,dead_worker_is_runnable`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/loop_engine.py](../../../src/robert_agent/loop_engine.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
+[src/robert_agent/loop_engine.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/loop_engine.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
 
 <a id="change-r09"></a>
 ### R09 · fixed
@@ -177,7 +177,7 @@ Git/GitHub 命令继承剩余控制 deadline；外层 child 有独立 executor n
 
 代码/测试：`daemon.py + retention.py / controlplane:maintenance_catches_up_more_than_one_event_batch`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/daemon.py](../../../src/robert_agent/daemon.py)、[src/robert_agent/retention.py](../../../src/robert_agent/retention.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
+[src/robert_agent/daemon.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/daemon.py)、[src/robert_agent/retention.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/retention.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
 
 <a id="change-r10"></a>
 ### R10 · fixed
@@ -186,7 +186,7 @@ queued review/vote 使用统一有 repo/workstream/attention 约束的探测。
 
 代码/测试：`loop_engine.py / scheduler:queued_vote_is_discovered,native_queue_scope`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/loop_engine.py](../../../src/robert_agent/loop_engine.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
+[src/robert_agent/loop_engine.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/loop_engine.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
 
 <a id="change-r11"></a>
 ### R11 · fixed
@@ -195,7 +195,7 @@ Git 前持久化分类 handoff，失败有 3 次/10 分钟上限及 durable back
 
 代码/测试：`run_once.py + loop_engine.py / lifecycle:classification_handoff_survives_git_failure; scheduler:orphaned_classification`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/run_once.py](../../../src/robert_agent/run_once.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
+[src/robert_agent/run_once.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/run_once.py)、[tests/test_lifecycle_remediation.py](../../../tests/test_lifecycle_remediation.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
 
 <a id="change-r12"></a>
 ### R12 · fixed
@@ -204,7 +204,7 @@ prepared.resume.not_before_at 未到时不触发 drain；真实超时配置传�
 
 代码/测试：`loop_engine.py / scheduler:prepared_backoff_waits_until_due`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/loop_engine.py](../../../src/robert_agent/loop_engine.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
+[src/robert_agent/loop_engine.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/loop_engine.py)、[tests/test_scheduler_remediation.py](../../../tests/test_scheduler_remediation.py)
 
 <a id="change-r13"></a>
 ### R13 · fixed
@@ -213,7 +213,7 @@ prepared.resume.not_before_at 未到时不触发 drain；真实超时配置传�
 
 代码/测试：`discover.py / controlplane:analysis_and_implementation_intents`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/discover.py](../../../src/robert_agent/discover.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
+[src/robert_agent/discover.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/discover.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
 
 <a id="change-r14"></a>
 ### R14 · fixed
@@ -222,7 +222,7 @@ search 低配额不再把仅用 core 的本地 publication 全部关闭；core �
 
 代码/测试：`daemon.py / controlplane:search_floor_does_not_disable_core_only_publication`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/daemon.py](../../../src/robert_agent/daemon.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
+[src/robert_agent/daemon.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/daemon.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
 
 <a id="change-r15"></a>
 ### R15 · fixed
@@ -249,7 +249,7 @@ search 低配额不再把仅用 core 的本地 publication 全部关闭；core �
 
 代码/测试：`review_store.py + vote_store.py + schema.sql + loop_engine.py / runtime:activity_queries,legacy_model_tables; scheduler:healthy_worker`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/review_store.py](../../../src/robert_agent/review_store.py)、[src/robert_agent/vote_store.py](../../../src/robert_agent/vote_store.py)、[src/robert_agent/resources/db/schema.sql](../../../src/robert_agent/resources/db/schema.sql)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
+[src/robert_agent/review_store.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/review_store.py)、[src/robert_agent/vote_store.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/vote_store.py)、[src/robert_agent/resources/db/schema.sql](../../../src/robert_agent/resources/db/schema.sql)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
 
 <a id="change-r18"></a>
 ### R18 · fixed
@@ -258,7 +258,7 @@ search 低配额不再把仅用 core 的本地 publication 全部关闭；core �
 
 代码/测试：`review_files.py / runtime:file_hash_preserves_digest_with_bounded_memory`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/review_files.py](../../../src/robert_agent/review_files.py)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
+[src/robert_agent/review_files.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/review_files.py)、[tests/test_runtime_remediation.py](../../../tests/test_runtime_remediation.py)
 
 <a id="change-r19"></a>
 ### R19 · pending
@@ -274,7 +274,7 @@ rejected 原子归档到独立子目录，旧 rejected 在持有稳定 attempt �
 
 代码/测试：`result_spool.py / controlplane:rejected_spool_prefix`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/result_spool.py](../../../src/robert_agent/result_spool.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
+[src/robert_agent/result_spool.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/result_spool.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
 
 <a id="change-r21"></a>
 ### R21 · fixed
@@ -283,7 +283,7 @@ PR mainline 与 recommended-skills 数据迁移按独立 name/checksum 门控；
 
 代码/测试：`storage.py / storage_initialization:5 regressions; test_migration + run_once:legacy_backfill`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/storage.py](../../../src/robert_agent/storage.py)、[tests/test_storage_initialization_remediation.py](../../../tests/test_storage_initialization_remediation.py)
+[src/robert_agent/storage.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/storage.py)、[tests/test_storage_initialization_remediation.py](../../../tests/test_storage_initialization_remediation.py)
 
 <a id="change-r22"></a>
 ### R22 · fixed
@@ -292,7 +292,7 @@ health 与 backlog 清理分开节流，通知投递命中 pending 索引；修�
 
 代码/测试：`daemon.py + schema.sql + reliability_health.py / controlplane:notification_delivery_queries_only_pending_history,maintenance_catches_up`。测试名为稳定的前缀定位，完整方法名见对应新增 `test_*_remediation.py`。
 
-[src/robert_agent/daemon.py](../../../src/robert_agent/daemon.py)、[src/robert_agent/resources/db/schema.sql](../../../src/robert_agent/resources/db/schema.sql)、[src/robert_agent/reliability_health.py](../../../src/robert_agent/reliability_health.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
+[src/robert_agent/daemon.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/daemon.py)、[src/robert_agent/resources/db/schema.sql](../../../src/robert_agent/resources/db/schema.sql)、[src/robert_agent/reliability_health.py](https://github.com/wklken/Robert/blob/59e0eed5c81d72d51f0386bfb498c149f1b8978d/src/robert_agent/reliability_health.py)、[tests/test_controlplane_remediation.py](../../../tests/test_controlplane_remediation.py)
 
 <a id="change-r23"></a>
 ### R23 · pending

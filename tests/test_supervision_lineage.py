@@ -6,9 +6,15 @@ import unittest
 from unittest.mock import patch
 
 from tests import test_github_board_recovery, test_review_coordinator, test_run_once
-from robert_agent import review_store, run_once, supervision_lineage, work_items
+from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.runtime import cycle as run_once
+from robert_agent.supervision import lineage as supervision_lineage
+from robert_agent.work.application import commands as work_items
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.work.application import lifecycle as work_application_lifecycle
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import ready_work
+from robert_agent.foundation import values
 
 
 def _receipt(conn, scope_type, event_id):
@@ -45,7 +51,7 @@ class SupervisionLineageTests(unittest.TestCase):
                                  conn.execute('SELECT count(*) FROM tasks').fetchone()[0]))
             raise subprocess.CalledProcessError(1, 'git', stderr='preparation failed')
 
-        with patch.object(run_once, '_prepare_worktree', side_effect=fail_after_commit):
+        with patch.object(assigned_workspace, 'prepare_worktree', side_effect=fail_after_commit):
             self.assertFalse(self.cycle(fixture)['ok'])
         (before_preparation, task_count), = observed
         self.assertTrue(before_preparation['received_at'])
@@ -72,7 +78,7 @@ class SupervisionLineageTests(unittest.TestCase):
             conn.execute("UPDATE tasks SET lifecycle='failed'")
             conn.execute("UPDATE attempts SET status='failed'")
             conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL")
-            execution_ownership.close_terminal_task(conn, parent, run_once._now())
+            execution_ownership.close_terminal_task(conn, parent, values.utc_now())
         events = json.loads(fixture.fixture_path.read_text())['events']
         fixture.fixture_path.write_text(json.dumps({'events': [{**events[0], 'id': 'next',
             'body': '@robert-bot please investigate the next issue', 'intent': 'analysis'}]}))
@@ -104,7 +110,7 @@ class SupervisionLineageTests(unittest.TestCase):
 
     def test_native_round_has_receipt_before_task_and_transfers_lineage(self):
         fixture = self.fixture(test_review_coordinator.ReviewCoordinatorTests)
-        with patch.object(run_once, '_prepare_queued_reviews'):
+        with patch.object(ready_work, 'prepare_queued_reviews'):
             fixture.cycle([fixture.event()])
         with closing(sqlite3.connect(fixture.db)) as conn:
             round_id, task_id = conn.execute('SELECT round_id,task_id FROM review_sessions').fetchone()
@@ -125,7 +131,7 @@ class SupervisionLineageTests(unittest.TestCase):
         with review_store.connect(fixture.db) as conn:
             round_entry = review_store.session(conn, task_id=parent)
             lineage = _task_lineage(conn, parent)
-            now = run_once._now()
+            now = values.utc_now()
             review_store.update(conn, round_entry['round_id'], status='superseded')
             work_application_lifecycle.finalize_failed_task(conn, parent, round_entry['workstream_id'], now, {'status': 'failed_worker_process_exited'})
             # The dry-run launcher recorded synthetic dispatch metadata; it started no worker.
@@ -151,7 +157,7 @@ class SupervisionLineageTests(unittest.TestCase):
             event_id, repo_id, source_id, payload = conn.execute(
                 'SELECT event_id,repo_id,source_id,payload_json FROM github_events').fetchone()
             event = json.loads(payload)
-            now = run_once._now()
+            now = values.utc_now()
             older = supervision_lineage.github_admission(event, event_id)
             current = supervision_lineage.record_github_received(conn, {**event, 'body': 'Edited instruction'},
                 event_id, repo_id, source_id, now)

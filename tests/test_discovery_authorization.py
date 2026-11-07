@@ -17,8 +17,8 @@ REPO_CONFIG = {
 
 class DiscoveryAuthorizationTests(unittest.TestCase):
     def normalize_and_authorize(self, raw_events, existing_workstreams=None):
-        from robert_agent import authorize
-        from robert_agent import discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         events = discover.normalize_events(raw_events, REPO_CONFIG)
         return authorize.authorize_events(
             events,
@@ -27,7 +27,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         )
 
     def test_quoted_partial_and_code_mentions_do_not_authorize(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
 
         for body in ("@robert-bot-helper fix", "a@robert-bot.com", "> @robert-bot fix",
                      "```\n@robert-bot fix\n```", "`@robert-bot` fix",
@@ -42,7 +42,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
                 self.assertFalse(decision["drives_execution"])
 
     def test_trailing_mention_authorizes_analysis_of_the_complete_request(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
 
         body = "目前有哪些报错，是否可以修复？\n你跑一遍，统计分析下结果 @robert-bot"
         raw = discover._issue_search_to_raw(
@@ -93,7 +93,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(decisions[0]["event_fingerprint"], "comment:comment-1")
 
     def test_normalize_requires_event_id_without_explicit_fingerprint(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         with self.assertRaisesRegex(ValueError, "event id"):
             discover.normalize_events(
                 [
@@ -109,7 +109,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
             )
 
     def test_normalize_allows_explicit_fingerprint_without_event_id(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         events = discover.normalize_events(
             [
                 {
@@ -272,7 +272,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(decisions[0]["authorization_status"], "pending_authorization")
 
     def test_account_notifications_bucket_by_repository_full_name(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         repo_a = {
             "full_name": "Org/repo-a",
             "github_account": "robert-bot",
@@ -331,7 +331,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(buckets["Org/repo-b"][0]["source_type"], "pull_request")
 
     def test_repo_live_events_accept_preloaded_notification_hints_without_refetching_notifications(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         calls = []
         repo = {
             "full_name": "Org/repo-a",
@@ -411,7 +411,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertNotIn(["gh", "api", "notifications", "--paginate", "--slurp"], calls)
 
     def test_repo_live_events_ignores_mismatched_preloaded_notification_hints(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         calls = []
         repo = {
             "full_name": "Org/repo-a",
@@ -501,8 +501,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertFalse(decisions[0]["drives_execution"])
 
     def test_live_unknown_association_is_enriched_with_repo_permission(self):
-        from robert_agent import authorize
-        from robert_agent import discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -600,7 +600,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertFalse(ignored["drives_execution"])
 
     def test_live_discovery_uses_gh_search_and_notification_hints(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         calls = []
 
         def fake_runner(args, **_kwargs):
@@ -672,7 +672,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[1]["state"], "open")
 
     def test_closed_issue_notification_hint_is_ignored(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         calls = []
 
         def fake_runner(args, **_kwargs):
@@ -728,8 +728,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         )
 
     def test_live_assignment_is_enriched_from_timeline_actor(self):
-        from robert_agent import authorize
-        from robert_agent import discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(
@@ -783,7 +783,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(decisions[0]["authorization_status"], "authorized_trigger")
 
     def test_notification_assignment_reuses_assignment_fingerprint(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(
@@ -859,8 +859,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual({event["event_type"] for event in events}, {"assigned", "notification"})
 
     def test_live_assignment_without_timeline_actor_stays_pending(self):
-        from robert_agent import authorize
-        from robert_agent import discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(
@@ -893,8 +893,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(decisions[0]["authorization_status"], "pending_authorization")
 
     def test_live_mention_prefers_trusted_comment_over_untrusted_body(self):
-        from robert_agent import authorize
-        from robert_agent import discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -940,7 +940,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(decisions[0]["authorization_status"], "authorized_trigger")
 
     def test_live_pr_followup_extracts_dd_origin_workstream_and_head_branch(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -992,7 +992,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent")
 
     def test_live_pr_followup_collects_all_trusted_comments(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -1073,8 +1073,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         )
 
     def test_live_known_pr_workstream_accepts_collaborator_followup(self):
-        from robert_agent import authorize
-        from robert_agent import discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -1141,7 +1141,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertFalse(decisions[0]["drives_execution"])
 
     def test_notification_for_known_pr_workstream_uses_latest_non_bot_comment(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args or "--mentions" in args:
                 return _Completed(args, "[]")
@@ -1231,8 +1231,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[0]["workstream_id"], "github:example/backend!2886")
 
     def test_live_robot_authored_pr_without_hidden_metadata_still_routes_to_existing_pr_update(self):
-        from robert_agent import discover
-        from robert_agent import route
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.workflows import routes as route
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -1285,7 +1285,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertNotIn("open_pr", route_result["allowed_github_actions"])
 
     def test_fixture_pr_body_extracts_dd_origin_workstream_without_live_lookup(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         events = discover.normalize_events(
             [
                 {
@@ -1307,7 +1307,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[0]["metadata"]["dd_workstream"]["task_id"], "task-parent")
 
     def test_legacy_dd_workstream_metadata_maps_to_origin_workstream_id(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         events = discover.normalize_events(
             [
                 {
@@ -1327,7 +1327,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#123")
 
     def test_dd_pr_event_keeps_pr_workstream_and_tracks_origin_issue(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         events = discover.normalize_events(
             [
                 {
@@ -1373,7 +1373,7 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertFalse(decisions[0]["drives_execution"])
 
     def test_discover_cli_config_accepts_trusted_actors(self):
-        from robert_agent import discover
+        from robert_agent.adapters.github import discovery as discover
         repo_config = discover.build_repo_config(
             "example/backend",
             "robert-bot",
@@ -1383,8 +1383,8 @@ class DiscoveryAuthorizationTests(unittest.TestCase):
         self.assertEqual(repo_config["trusted_actors"], ["wklken"])
 
     def test_notification_lookup_failure_stays_pending_authorization(self):
-        from robert_agent import authorize
-        from robert_agent import discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         def fake_runner(args, **_kwargs):
             if "--assignee" in args or "--mentions" in args:
                 return _Completed(args, "[]")

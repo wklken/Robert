@@ -9,7 +9,7 @@ from pathlib import Path
 
 class WorkerIdentityTests(unittest.TestCase):
     def test_proc_stat_parser_handles_parentheses_and_extracts_identity_fields(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         fields = ["S", "1", "4321"] + ["0"] * 16 + ["987654"]
         stat = "77 (worker name (v1)) " + " ".join(fields)
@@ -21,7 +21,7 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(identity["process_start_token"], "987654")
 
     def test_proc_identity_hashes_observed_cmdline_bytes(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         stat = "77 (worker) " + " ".join(["R", "1", "77"] + ["0"] * 16 + ["123"])
         cmdline = b"worker\x00--attempt\x00a1\x00"
@@ -37,7 +37,7 @@ class WorkerIdentityTests(unittest.TestCase):
         )
 
     def test_empty_proc_cmdline_is_not_a_running_identity(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         stat = "77 (worker) " + " ".join(["S", "1", "77"] + ["0"] * 16 + ["123"])
         with tempfile.TemporaryDirectory() as tmp:
@@ -55,7 +55,7 @@ class WorkerIdentityTests(unittest.TestCase):
                 )
 
     def test_captured_zombie_is_not_a_running_identity(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         stat = "77 (worker) " + " ".join(["Z", "1", "77"] + ["0"] * 16 + ["123"])
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,7 +68,7 @@ class WorkerIdentityTests(unittest.TestCase):
 
     def test_exited_proc_with_empty_cmdline_is_dead(self):
         from unittest.mock import patch
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
             "pid": 77,
@@ -87,7 +87,7 @@ class WorkerIdentityTests(unittest.TestCase):
 
     def test_capturing_exited_proc_does_not_fall_back_to_ps(self):
         from unittest.mock import patch
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         stat = "77 (worker) " + " ".join(["Z", "1", "77"] + ["0"] * 16 + ["123"])
         with patch.object(Path, "read_text", return_value=stat), \
@@ -98,7 +98,7 @@ class WorkerIdentityTests(unittest.TestCase):
                 )
 
     def test_proc_disappearance_rechecks_pid_before_calling_it_dead(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
             "pid": 77,
@@ -128,7 +128,7 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(calls, [(77, 0), (77, 0)])
 
     def test_proc_disappearance_with_visible_pid_is_unknown(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
             "pid": 78,
@@ -156,7 +156,7 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(calls, [(78, 0), (78, 0)])
 
     def test_identity_mismatch_and_missing_fields_are_unknown(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
             "pid": 7,
@@ -183,7 +183,7 @@ class WorkerIdentityTests(unittest.TestCase):
         )
 
     def test_terminate_requires_isolated_verified_group_and_rechecks_identity(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
             "pid": 7,
@@ -209,7 +209,7 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(signals[0][1], getattr(__import__("signal"), "SIGTERM"))
 
     def test_termination_waits_for_confirmed_exit_after_identity_loss(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
             "pid": 7, "process_group_id": 7, "process_start_token": "123",
@@ -226,7 +226,7 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(len(signals), 1)
 
     def test_identity_loss_never_escalates_even_if_identity_returns(self):
-        from robert_agent import worker_identity
+        from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
             "pid": 7, "process_group_id": 7, "process_start_token": "123",
@@ -250,7 +250,8 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed[0], .1)
 
     def test_db_backed_identity_operations_load_only_attempt_dispatch_metadata(self):
-        from robert_agent import storage, execution_operations
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.execution import operations as execution_operations
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "robert.sqlite3"
@@ -301,7 +302,9 @@ class WorkerIdentityTests(unittest.TestCase):
                 execution_operations.worker_identity.inspect_recorded_identity = original
 
     def test_terminate_worker_persists_redacted_result_once_and_marks_attention(self):
-        from robert_agent import storage, execution_operations, execution_store
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.execution import operations as execution_operations
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "robert.sqlite3"

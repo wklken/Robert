@@ -1,4 +1,6 @@
 """Fresh trusted requests start independent subjects after terminal executions."""
+from robert_agent.work.application import synchronization as synchronization
+from robert_agent.work import scan_batches as scan_batches
 from robert_agent.adapters.github import sources as github_sources
 from contextlib import closing
 import json
@@ -8,7 +10,11 @@ from unittest import mock
 
 from tests import test_board_control_integration as fixtures
 from tests.support import PACKAGE_ROOT
-from robert_agent import execution_store, run_once
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.runtime import cycle as run_once
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import source_events
+from robert_agent.foundation import values
 
 
 class TerminalGithubFollowupTests(unittest.TestCase):
@@ -39,11 +45,11 @@ class TerminalGithubFollowupTests(unittest.TestCase):
             self.parent_id, self.stream_id = conn.execute('SELECT task_id,workstream_id FROM tasks').fetchone()
             conn.execute('UPDATE tasks SET lifecycle=?', (lifecycle,))
             conn.execute('UPDATE attempts SET status=?,finished_at=?,metadata_json=?',
-                         (lifecycle, run_once._now(), '{"result_contract":"compact-v1"}'))
+                         (lifecycle, values.utc_now(), '{"result_contract":"compact-v1"}'))
             conn.execute('UPDATE workstreams SET lifecycle=?,active_task_id=NULL', (lifecycle,))
-            execution_store.close_binding(conn, 'task', self.parent_id, run_once._now())
+            execution_store.close_binding(conn, 'task', self.parent_id, values.utc_now())
             if lifecycle == 'completed':
-                conn.execute('UPDATE work_items SET completed_at=?', (run_once._now(),))
+                conn.execute('UPDATE work_items SET completed_at=?', (values.utc_now(),))
             self.old_binding = execution_store.get_binding(conn, 'task', self.parent_id)
 
     def tasks(self):
@@ -74,7 +80,7 @@ class TerminalGithubFollowupTests(unittest.TestCase):
                     conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (rows[1][0],))
                     conn.execute("UPDATE attempts SET status='completed',metadata_json='{}' WHERE task_id=?", (rows[1][0],))
                     conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
-                    execution_store.close_binding(conn, 'task', rows[1][0], run_once._now())
+                    execution_store.close_binding(conn, 'task', rows[1][0], values.utc_now())
                 self.deliver('followup')
                 self.assertEqual(len(self.tasks()), 2)
 
@@ -115,7 +121,7 @@ class TerminalGithubFollowupTests(unittest.TestCase):
                 with closing(sqlite3.connect(self.db_path)) as conn, conn:
                     conn.execute(release)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("INSERT INTO github_actions(action_id,task_id,action_type,audit_status,publish_status,created_at,metadata_json) SELECT 'pending',task_id,'comment','accepted','not_published',?, '{}' FROM attempts", (run_once._now(),))
+            conn.execute("INSERT INTO github_actions(action_id,task_id,action_type,audit_status,publish_status,created_at,metadata_json) SELECT 'pending',task_id,'comment','accepted','not_published',?, '{}' FROM attempts", (values.utc_now(),))
         self.deliver('publication-pending')
         self.assertEqual(len(self.tasks()), 1)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -125,28 +131,29 @@ class TerminalGithubFollowupTests(unittest.TestCase):
 
     def test_rechecks_cancellation_after_worktree_io(self):
         self.finish()
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         def cancel(*args, **kwargs):
             with closing(sqlite3.connect(self.db_path)) as conn, conn:
                 conn.execute("UPDATE work_items SET canceled_at='2026-10-31T00:00:00Z'")
                 conn.execute("UPDATE workstreams SET lifecycle='canceled'")
             return original(*args, **kwargs)
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=cancel):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=cancel):
             self.deliver('racing-cancel')
         self.assertEqual(len(self.tasks()), 1)
 
     def test_scanner_reobserves_unlinked_followup_after_original_batch_finished(self):
-        from robert_agent import github_scan, validate_config
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.configuration import command as validate_config
+        from robert_agent.adapters.github.read import GitHubReadSession
         self.finish()
         repo = validate_config.validate_config(self.fixture.config_path, skip_external=True)['repos'][0]
         event = {'id': 'lost', 'number': 123, 'source_type': 'issue', 'event_type': 'comment',
                  'actor_login': 'owner', 'body': '@robot compare decorators', 'state': 'open'}
-        from robert_agent import authorize, discover
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
         decision = authorize.authorize_events(discover.normalize_events([event], repo), repo,
                                               known_workstreams={self.stream_id})[0]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            run_once._insert_source_and_event(conn, self.fixture.repo_id, decision, run_once._now())
+            source_events.insert_source_and_event(conn, self.fixture.repo_id, decision, values.utc_now())
         seen = []
         def collect(_repo, **kwargs):
             seen.extend(kwargs['notification_hints'])
@@ -155,22 +162,22 @@ class TerminalGithubFollowupTests(unittest.TestCase):
         session = GitHubReadSession(self.db_path, account='robot')
         with mock.patch.object(session, 'collect_events', side_effect=collect), \
                 mock.patch.object(github_sources, 'read_source_state', return_value={'state': 'open'}), \
-                mock.patch('robert_agent.discover._source_metadata', return_value=({'number': 123, 'source_type': 'issue', 'event_type': 'notification', 'state': 'open'}, 'open')), \
-                mock.patch('robert_agent.discover._enrich_known_workstream_contexts', return_value=[event]):
-            batch_id = github_scan._scan_repo(config, repo, session, [])
-        batch = github_scan.next_batch(self.db_path, self.fixture.repo_id)
+                mock.patch('robert_agent.adapters.github.discovery._source_metadata', return_value=({'number': 123, 'source_type': 'issue', 'event_type': 'notification', 'state': 'open'}, 'open')), \
+                mock.patch('robert_agent.adapters.github.discovery._enrich_known_workstream_contexts', return_value=[event]):
+            batch_id = synchronization.scan_repo(config, repo, session, [])
+        batch = scan_batches.next_batch(self.db_path, self.fixture.repo_id)
         self.assertEqual(batch['batch_id'], batch_id)
         self.assertTrue(any(raw.get('id') == 'lost' for raw in batch['raw_events']))
         self.assertTrue(any(h['number'] == 123 for h in seen))
 
     def test_closed_source_after_worktree_io_does_not_admit_followup(self):
         self.finish()
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         def close(*args, **kwargs):
             with closing(sqlite3.connect(self.db_path)) as conn, conn:
                 conn.execute("UPDATE github_sources SET state='closed'")
             return original(*args, **kwargs)
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=close):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=close):
             self.deliver('racing-close')
         self.assertEqual(len(self.tasks()), 1)
 
@@ -181,34 +188,36 @@ class TerminalGithubFollowupTests(unittest.TestCase):
             conn.execute("UPDATE tasks SET lifecycle='waiting_for_user'")
             conn.execute("UPDATE workstreams SET lifecycle='waiting_for_user'")
             conn.execute("UPDATE attempts SET status='completed',metadata_json='{}'")
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         def cancel(*args, **kwargs):
             with closing(sqlite3.connect(self.db_path)) as conn, conn:
                 conn.execute("UPDATE tasks SET lifecycle='canceled'")
                 conn.execute("UPDATE workstreams SET lifecycle='canceled',active_task_id=NULL")
                 conn.execute("UPDATE work_items SET canceled_at='2026-10-31T00:00:00Z'")
-                execution_store.close_binding(conn, 'task', self.parent_id, run_once._now())
+                execution_store.close_binding(conn, 'task', self.parent_id, values.utc_now())
             return original(*args, **kwargs)
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=cancel):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=cancel):
             self.deliver('waiting-reply')
         self.assertEqual(self.tasks(), [(self.parent_id, None, 'canceled')])
 
     def test_new_owner_during_worktree_io_keeps_followup_unlinked(self):
         self.finish()
-        original = run_once._prepare_worktree
+        original = assigned_workspace.prepare_worktree
         def occupy(*args, **kwargs):
             with closing(sqlite3.connect(self.db_path)) as conn, conn:
                 conn.execute("UPDATE workstreams SET lifecycle='active',active_task_id=?", (self.parent_id,))
             return original(*args, **kwargs)
-        with mock.patch.object(run_once, '_prepare_worktree', side_effect=occupy):
+        with mock.patch.object(assigned_workspace, 'prepare_worktree', side_effect=occupy):
             self.deliver('racing-owner')
         self.assertEqual(len(self.tasks()), 1)
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertIsNone(conn.execute("SELECT 1 FROM task_events WHERE event_id='event:comment:racing-owner'").fetchone())
 
     def test_scanner_does_not_recover_requests_after_trust_revocation_or_cancellation(self):
-        from robert_agent import authorize, discover, github_scan, validate_config
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.configuration import command as validate_config
+        from robert_agent.adapters.github.read import GitHubReadSession
         self.finish()
         config = validate_config.validate_config(self.fixture.config_path, skip_external=True)
         repo = config['repos'][0]
@@ -217,7 +226,7 @@ class TerminalGithubFollowupTests(unittest.TestCase):
         decision = authorize.authorize_events(discover.normalize_events([event], repo), repo,
                                               known_workstreams={self.stream_id})[0]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            run_once._insert_source_and_event(conn, self.fixture.repo_id, decision, run_once._now())
+            source_events.insert_source_and_event(conn, self.fixture.repo_id, decision, values.utc_now())
         cases = [
             ({**repo, 'trusted_actors': []}, None),
             (repo, "UPDATE work_items SET canceled_at='2026-10-31T00:00:00Z'"),
@@ -229,13 +238,15 @@ class TerminalGithubFollowupTests(unittest.TestCase):
                         conn.execute(mutation)
                 session = GitHubReadSession(self.db_path, account='robot')
                 with mock.patch.object(session, 'collect_events', return_value=[]) as collect, \
-                        mock.patch('robert_agent.discover._source_metadata', side_effect=AssertionError('recovered blocked source')):
-                    github_scan._scan_repo(config, current_repo, session, [])
+                        mock.patch('robert_agent.adapters.github.discovery._source_metadata', side_effect=AssertionError('recovered blocked source')):
+                    synchronization.scan_repo(config, current_repo, session, [])
                 self.assertEqual(collect.call_args.kwargs['notification_hints'], [])
 
     def test_scanner_preserves_existing_pr_metadata_for_recovered_comments(self):
-        from robert_agent import authorize, discover, github_scan, validate_config
-        from robert_agent.github_read import GitHubReadSession
+        from robert_agent.security import authorization as authorize
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.configuration import command as validate_config
+        from robert_agent.adapters.github.read import GitHubReadSession
         self.source_type = 'pull_request'
         self.finish()
         config = validate_config.validate_config(self.fixture.config_path, skip_external=True)
@@ -245,7 +256,7 @@ class TerminalGithubFollowupTests(unittest.TestCase):
         decision = authorize.authorize_events(discover.normalize_events([event], repo), repo,
                                               known_workstreams={self.stream_id})[0]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            run_once._insert_source_and_event(conn, self.fixture.repo_id, decision, run_once._now())
+            source_events.insert_source_and_event(conn, self.fixture.repo_id, decision, values.utc_now())
         session = GitHubReadSession(self.db_path, account='robot')
         def discussion(raw, _repo, _runner):
             return [{**raw, **event}]
@@ -257,8 +268,8 @@ class TerminalGithubFollowupTests(unittest.TestCase):
                     'has_open_dd_pr': True, 'existing_pr_head_branch': 'codex/existing',
                     'origin_workstream_id': 'github:example/repo#99'}), \
                 mock.patch.object(discover, '_enrich_known_workstream_contexts', side_effect=discussion):
-            github_scan._scan_repo(config, repo, session, [])
-        recovered = github_scan.next_batch(self.db_path, self.fixture.repo_id)['raw_events'][0]
+            synchronization.scan_repo(config, repo, session, [])
+        recovered = scan_batches.next_batch(self.db_path, self.fixture.repo_id)['raw_events'][0]
         self.assertEqual(recovered['existing_pr_head_branch'], 'codex/existing')
         self.assertEqual(recovered['origin_workstream_id'], 'github:example/repo#99')
 

@@ -8,7 +8,12 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
-from robert_agent import board, review_coordinator, review_store, web, work_items, worker_identity
+from robert_agent.readmodels import board
+from robert_agent.workflows.review import coordinator as review_coordinator
+from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.interfaces.web import server as web
+from robert_agent.work.application import commands as work_items
+from robert_agent.adapters.processes import identity as worker_identity
 from tests import test_review_coordinator as fixtures
 
 

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.worktree import plan_analysis_worktree, plan_review_worktree
+from robert_agent.adapters.git.workspace import plan_analysis_worktree, plan_review_worktree
 
 
 class WorktreeSafetyTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertEqual((human / 'data').read_text(), 'human changes')
 
     def test_worktree_creation_keeps_control_stdout_valid_json(self):
-        result = subprocess.run([sys.executable, '-B', '-m', 'robert_agent.worktree',
+        result = subprocess.run([sys.executable, '-B', '-m', 'robert_agent.adapters.git.workspace',
             '--repo-root', str(self.repo), '--worktree-root', str(self.managed),
             '--source-number', '205', '--short-slug', 'warning', '--base-branch', 'main'],
             text=True, capture_output=True, check=True)

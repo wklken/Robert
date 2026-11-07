@@ -7,8 +7,10 @@ from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from tests import test_review_input_workflow as integration_tests
-from robert_agent.worker import result
-from robert_agent import result_spool, result_contract, audit_result
+from robert_agent.delivery.application import submission as result
+from robert_agent.execution import spool as result_spool
+from robert_agent.delivery import contract as result_contract
+from robert_agent.delivery.application import audit as audit_result
 
 
 class CompactResultTests(unittest.TestCase):
@@ -48,7 +50,7 @@ class CompactResultTests(unittest.TestCase):
         envelope = self.envelope(task, attempt)
         first = result.record_result(db, envelope)
         self.assertTrue(first["ok"], first)
-        with patch("robert_agent.result_contract.normalize", side_effect=AssertionError("must reuse persisted result")):
+        with patch("robert_agent.delivery.contract.normalize", side_effect=AssertionError("must reuse persisted result")):
             again = result.record_result(db, envelope)
         self.assertEqual(again["result_id"], first["result_id"])
         envelope["submission"]["handoff"] = "Different semantics"

@@ -1,5 +1,5 @@
 from robert_agent.workflows import routing as workflow_routing
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 from collections import Counter
 from contextlib import closing
 import json
@@ -18,10 +18,23 @@ from unittest.mock import patch
 import yaml
 
 from tests import test_review_workspace as workspace_fixture
-from robert_agent import dispatch, loop_engine, publish, review_coordinator, review_files, review_store, run_once, validate_config, work_items
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.delivery.application import publish
+from robert_agent.workflows.review import coordinator as review_coordinator
+from robert_agent.workflows.review import files as review_files
+from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.runtime import cycle as run_once
+from robert_agent.configuration import command as validate_config
+from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
-from robert_agent.init_config import init_config
+from robert_agent.operations.initialize import init_config
 from robert_agent.resource_files import resource
+from robert_agent.execution.application import evidence
+from robert_agent.execution.application import monitor
+from robert_agent.work.application import remediation_requests
+from robert_agent.work.application import source_lifecycle
+from robert_agent.work.application import preparation
 
 
 class ReviewCoordinatorTests(unittest.TestCase):
@@ -229,7 +242,7 @@ class ReviewCoordinatorTests(unittest.TestCase):
             self.assertTrue(all(run['status'] == 'succeeded' for run in review_store.runs(conn, driver.round_id)))
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM worker_results').fetchone()[0], 0)
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM github_actions').fetchone()[0], 0)
-            recovery = run_once._inspect_attempt_recovery(conn, driver.attempt_id, driver.task_id,
+            recovery = evidence.inspect_attempt_recovery(conn, driver.attempt_id, driver.task_id,
                                                          driver.manifest['worktree_path'])
             self.assertEqual(recovery['status'], 'unrecoverable')
             self.assertEqual(recovery['reason_code'], 'redaction_blocked')
@@ -263,8 +276,8 @@ class ReviewCoordinatorTests(unittest.TestCase):
             repo_id = conn.execute('SELECT repo_id FROM workstreams WHERE workstream_id=?',
                                   (driver.session['workstream_id'],)).fetchone()[0]
         with review_store.connect(self.db) as conn:
-            run_once._supervise_running_attempts(conn, repo_id, {}, now,
-                data_dir=self.db.parent, db_path=self.db, repo={})
+            monitor.supervise_running_attempts(conn, repo_id, {}, now,
+                data_dir=self.db.parent, db_path=self.db, repo={}, resume_attempt=preparation.create_resume_attempt_and_prompt)
             failure = json.loads(conn.execute('SELECT failure_json FROM attempts WHERE attempt_id=?',
                                              (driver.attempt_id,)).fetchone()[0])
             self.assertEqual(failure['status'], 'failed_validation')
@@ -459,7 +472,7 @@ class ReviewCoordinatorTests(unittest.TestCase):
                                        driver.manifest['artifact_root'], driver.manifest['prompt_sha256'])
         os.mkfifo(Path(run['output_dir'], 'result.json'))
         script = '''import json,sys
-from robert_agent.review_coordinator import Coordinator
+from robert_agent.workflows.review.coordinator import Coordinator
 driver=object.__new__(Coordinator)
 driver.manifest=json.loads(sys.argv[1])
 try:
@@ -754,8 +767,8 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
             return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr='')
 
         def poll():
-            with patch.object(run_once, '_reconcile_remote_source_states', return_value=0), \
-                 patch.object(run_once, '_collect_pr_remediation_decisions', return_value=[]):
+            with patch.object(source_lifecycle, 'reconcile_remote_source_states', return_value=0), \
+                 patch.object(remediation_requests, 'collect_pr_remediation_decisions', return_value=[]):
                 result = run_once.run_once(self.config_path, workflow_path=resource('workflow.yml'),
                     dry_run=True, skip_publish=True, discovery_runner=api)
             self.assertTrue(result['ok'], result)

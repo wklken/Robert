@@ -1,5 +1,5 @@
 """Construct the controller's internal audit input without submitting a worker result."""
-from robert_agent.worker import result
+from robert_agent.delivery.application import submission as result
 
 
 def internal_result(*args, **kwargs):

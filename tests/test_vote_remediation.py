@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import unittest
 
 import yaml
-from robert_agent import discover, vote_store, vote_workspace, vote_publish
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.workflows.vote import workspace as vote_workspace
+from robert_agent.workflows.vote import publish as vote_publish
 from tests import test_vote_coordinator as coordinator_fixture
 from tests import test_vote_files as files_fixture
 
@@ -63,7 +66,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
         self.assertNotEqual(discover.infer_intent('', body, 'comment', 'robert-bot'), 'vote')
         self.assertNotEqual(discover.infer_intent('', '@robert-bot-other vote A/B', 'comment', 'robert-bot'), 'vote')
         self.assertEqual(discover._issue_search_to_raw({'number': 42, 'body': body}, 'mention', 'custom-bot')['intent'], 'vote')
-        from robert_agent import validate_config
+        from robert_agent.configuration import command as validate_config
         config = validate_config.validate_config(self.vote.fixture.config_path, skip_external=True)
         event = {**self.vote.event(), 'body': '@alice choose A or B', 'mentions_dd': True}
         route = workflow_routing.effective_route(config, config['repos'][0], event, route_id='vote')

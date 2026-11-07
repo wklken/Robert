@@ -11,8 +11,14 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import board, daemon, daemon_state, result_cutover, run_once, storage
+from robert_agent.readmodels import board
+from robert_agent.runtime import daemon
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.execution.application import cutover as result_cutover
+from robert_agent.adapters.sqlite import database as storage
 from robert_agent.work import queries as work_queries
+from robert_agent.context import attempt as attempt_context
+from robert_agent.adapters.sqlite import execution_control as store
 
 
 class CutoverRecoveryTests(unittest.TestCase):
@@ -45,7 +51,7 @@ class CutoverRecoveryTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='good'").fetchone()[0], 'running')
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM work_item_events').fetchone()[0], 1)
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM notifications').fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks t WHERE t.task_id='good' AND " + run_once.execution_store.runnable_sql()).fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks t WHERE t.task_id='good' AND " + store.runnable_sql()).fetchone()[0], 1)
         card = board.get_work_item_detail(self.db, 'item')
         self.assertEqual(card['column'], 'waiting', card)
 
@@ -117,7 +123,9 @@ class CutoverRecoveryTests(unittest.TestCase):
             self.assertTrue(daemon._run_live_poll(context, child_runner=lambda *a, **k: {'ok': True}, now=self.now)['ok'])
 
     def test_explicit_retrigger_preserves_old_evidence_and_refreshes_source_body(self):
-        from robert_agent import discover, loop_engine, work_items
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.runtime import loop as loop_engine
+        from robert_agent.work.application import commands as work_items
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')")
             conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
@@ -150,7 +158,8 @@ class CutoverRecoveryTests(unittest.TestCase):
         self.assertEqual(context[0]['authorization_status'], 'authorized_trigger')
 
     def test_cutover_retrigger_rejects_live_worker_and_pending_publication(self):
-        from robert_agent import discover, work_items
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.work.application import commands as work_items
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')")
             conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
@@ -198,7 +207,9 @@ class CutoverRecoveryTests(unittest.TestCase):
             conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES('bad','event','trigger',?)", (self.now,))
 
     def test_isolated_worker_exit_releases_capacity_and_allows_retrigger(self):
-        from robert_agent import discover, supervise, work_items
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.execution import inspection as supervise
+        from robert_agent.work.application import commands as work_items
         self.github_item()
         with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
@@ -214,7 +225,7 @@ class CutoverRecoveryTests(unittest.TestCase):
             self.assertTrue(requested['ok'], requested)
 
     def test_isolated_completed_worker_exit_releases_capacity_without_rewriting_result(self):
-        from robert_agent import supervise
+        from robert_agent.execution import inspection as supervise
         with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'alive_same'}):
             result_cutover.prepare(self.db, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -226,7 +237,7 @@ class CutoverRecoveryTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT status,finished_at FROM attempts WHERE task_id='bad'").fetchone(), ('completed', 'original'))
 
     def test_global_cutover_pause_still_times_out_real_control_children(self):
-        from robert_agent.control_lane import ControlLane
+        from robert_agent.runtime.control import ControlLane
         context = self.context()
         for latched in (False, True):
             with self.subTest(latched=latched):
@@ -278,7 +289,7 @@ class CutoverRecoveryTests(unittest.TestCase):
         self.assertEqual(board.get_work_item_detail(self.db, 'item')['valid_commands'], ['cancel'])
 
     def test_ordinary_approve_cannot_resolve_cutover_isolation(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
         self.github_item()
         with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             result_cutover.prepare(self.db, now=self.now)
@@ -312,7 +323,8 @@ class CutoverRecoveryTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], 'running')
 
     def test_main_board_retrigger_route_creates_one_recovery_and_hides_pending_action(self):
-        from robert_agent import discover, web
+        from robert_agent.adapters.github import discovery as discover
+        from robert_agent.interfaces.web import server as web
         self.github_item()
         with patch.object(attempt_process, 'dispatch_status', return_value={'status': 'dead'}):
             result_cutover.prepare(self.db, now=self.now)
@@ -346,9 +358,10 @@ class CutoverRecoveryTests(unittest.TestCase):
 class RuntimeAndContextTests(unittest.TestCase):
     def test_internal_helpers_use_running_robert_even_with_old_config_override(self):
         import sys
-        from robert_agent import render_prompt, route
+        from robert_agent.context import prompts as render_prompt
+        from robert_agent.workflows import routes as route
         with patch.object(sys, 'executable', '/opt/current/bin/python'):
-            runtime = run_once._runtime_context('/tmp/db', {'python_bin': '/opt/old/bin/python', 'default_base_branch': 'main'})
+            runtime = attempt_context.runtime_context('/tmp/db', {'python_bin': '/opt/old/bin/python', 'default_base_branch': 'main'})
             prompt = render_prompt.render_prompt({'task_id': 'task', 'attempt_id': 'attempt', 'workstream_id': 'ws'},
                 route.ROUTES['classification-result'], [], runtime_context={**runtime, 'python_bin': '/opt/old/bin/python'})
         self.assertEqual(runtime['python_bin'], '/opt/current/bin/python')

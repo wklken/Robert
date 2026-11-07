@@ -1,5 +1,5 @@
 from robert_agent.adapters.processes import attempt as attempt_process
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -12,7 +12,9 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import execution_store, loop_engine, storage
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.adapters.sqlite import database as storage
 
 
 class SchedulerRemediationTests(unittest.TestCase):

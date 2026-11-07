@@ -7,7 +7,12 @@ import unittest
 
 import yaml
 from tests import test_review_coordinator as review_fixture
-from robert_agent import vote_coordinator, vote_files, vote_store, vote_publish, vote_tally, publish
+from robert_agent.workflows.vote import coordinator as vote_coordinator
+from robert_agent.workflows.vote import files as vote_files
+from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.workflows.vote import publish as vote_publish
+from robert_agent.workflows.vote import tally as vote_tally
+from robert_agent.delivery.application import publish
 
 
 class VoteCoordinatorTests(unittest.TestCase):
@@ -225,7 +230,7 @@ class VoteCoordinatorTests(unittest.TestCase):
             self.assertEqual(entry['status'], 'waiting_for_user')
 
     def test_classification_recommendation_activates_semantic_vote_request(self):
-        from robert_agent.worker.result import record_result
+        from robert_agent.delivery.application.submission import record_result
         event = {**self.event(), 'intent': 'unclear',
                  'body': '@robert-bot 请让三个独立智能体各选一种路线，并报告各自的选择理由'}
         self.fixture.cycle([event])
@@ -243,7 +248,7 @@ class VoteCoordinatorTests(unittest.TestCase):
     def test_submitted_review_vote_tracks_the_triggering_review_body(self):
         import subprocess
         from unittest.mock import patch
-        from robert_agent import vote_workspace
+        from robert_agent.workflows.vote import workspace as vote_workspace
         self.issue = False
         event = {**self.event('123'), 'event_type': 'review'}
         source = self.source()
@@ -257,7 +262,7 @@ class VoteCoordinatorTests(unittest.TestCase):
                 return original_run(command, **kwargs)
             value = [[review]] if '/reviews?' in command[2] else [[]]
             return SimpleNamespace(returncode=0, stdout=json.dumps(value))
-        with patch('robert_agent.vote_workspace.api', return_value=source), patch('robert_agent.vote_workspace.subprocess.run', side_effect=transport):
+        with patch('robert_agent.workflows.vote.workspace.api', return_value=source), patch('robert_agent.workflows.vote.workspace.subprocess.run', side_effect=transport):
             driver.prepare()
             self.assertIn('review:123', driver.manifest['sources'])
             review['body'] = 'Do not vote now'

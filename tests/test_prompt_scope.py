@@ -2,7 +2,8 @@ import json
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import render_prompt, route
+from robert_agent.context import prompts as render_prompt
+from robert_agent.workflows import routes as route
 
 
 class PromptScopeTests(unittest.TestCase):

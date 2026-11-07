@@ -9,7 +9,7 @@ function dashboard() {
     if (!nodes.has(id)) nodes.set(id,{innerHTML:'',textContent:'',addEventListener(){}});
     return nodes.get(id);
   },querySelectorAll(){return [];}}});
-  const source = fs.readFileSync(path.join(__dirname,'../../src/robert_agent/web.py'),'utf8');
+  const source = fs.readFileSync(path.join(__dirname,'../../src/robert_agent/interfaces/web/templates.py'),'utf8');
   vm.runInContext(source.slice(source.indexOf('    const translations ='),source.indexOf("    $('theme-select').addEventListener")),context);
   vm.runInContext('state.language="zh"',context);
   return {context,nodes};

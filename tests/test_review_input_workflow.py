@@ -6,8 +6,10 @@ import sqlite3
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import audit_result, render_prompt, route
-from robert_agent.worker import result
+from robert_agent.delivery.application import audit as audit_result
+from robert_agent.context import prompts as render_prompt
+from robert_agent.workflows import routes as route
+from robert_agent.delivery.application import submission as result
 from tests import test_run_once as run_tests
 
 
@@ -96,7 +98,7 @@ class ReviewInputIntegrationTests(unittest.TestCase):
     setUp = run_tests.RunOnceDryRunTests.setUp
 
     def prepare(self, event_type):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         self.fixture_path.write_text(json.dumps({"events": [{
             "id": "request-1", "number": 456, "source_type": "pull_request",
@@ -115,7 +117,7 @@ class ReviewInputIntegrationTests(unittest.TestCase):
         return db_path, task_id, attempt_id, json.loads(metadata), Path(prompt_path).read_text()
 
     def test_comment_policy_survives_record_reload_and_controller_audit(self):
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         db_path, task_id, attempt_id, metadata, prompt = self.prepare("comment")
         self.assertEqual(metadata["review_input_policy"], "classify")

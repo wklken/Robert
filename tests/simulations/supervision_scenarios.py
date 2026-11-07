@@ -3,6 +3,8 @@
 Run with the installed project interpreter; this is not a unittest runner.
 All Git repositories, credentials-free command fixtures and databases are temporary.
 """
+from robert_agent.supervision.application import checks as supervision_checks
+from robert_agent.supervision import health as supervision_health
 
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -15,7 +17,8 @@ import sys
 import tempfile
 import time
 
-from robert_agent import daemon_state, storage, supervisor
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.adapters.sqlite import database as storage
 
 
 def wait_for(predicate, label, timeout=15):
@@ -67,17 +70,17 @@ def process_observation(root):
     receiver.write_text('import json,sys\nfrom pathlib import Path\npayload=json.load(sys.stdin)\n'
                         'with Path(sys.argv[1]).open("a") as stream: stream.write(json.dumps(payload)+"\\n")\n')
     env = {**os.environ, 'ROBERT_NOTIFICATION_COMMAND': f'{sys.executable} {receiver} {notices}'}
-    command = [sys.executable, '-c', 'import json,sys; from robert_agent import supervisor; supervisor.run(json.load(open(sys.argv[1])))', str(config_file)]
+    command = [sys.executable, '-c', 'import json,sys; from robert_agent.runtime import supervisor; supervisor.run(json.load(open(sys.argv[1])))', str(config_file)]
     process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_for(lambda: query(db, "SELECT incident_id FROM supervision_incidents WHERE status='open'"), 'independent incident')
         wait_for(lambda: notices.exists() and notices.stat().st_size, 'independent notification')
         initial_count = query(db, 'SELECT count(*) FROM supervision_incidents')[0][0]
-        stamp = read_json(supervisor.health_path(config)).get('checked_at')
-        wait_for(lambda: read_json(supervisor.health_path(config)).get('checked_at') != stamp, 'second observation')
+        stamp = read_json(supervision_health.health_path(config)).get('checked_at')
+        wait_for(lambda: read_json(supervision_health.health_path(config)).get('checked_at') != stamp, 'second observation')
         assert query(db, 'SELECT count(*) FROM supervision_incidents')[0][0] == initial_count
         # A second OS process cannot become the same installation's observer.
-        duplicate = subprocess.run([sys.executable, '-c', 'import json,sys; from robert_agent import supervisor; print(json.dumps(supervisor.run(json.load(open(sys.argv[1])),once=True)))', str(config_file)], capture_output=True, text=True, timeout=5)
+        duplicate = subprocess.run([sys.executable, '-c', 'import json,sys; from robert_agent.runtime import supervisor; print(json.dumps(supervisor.run(json.load(open(sys.argv[1])),once=True)))', str(config_file)], capture_output=True, text=True, timeout=5)
         assert json.loads(duplicate.stdout)['status'] == 'already_running', duplicate.stdout
         # A real half-second writer collision is visible locally but sends no outage notice.
         stop(process)
@@ -85,29 +88,29 @@ def process_observation(root):
         brief = subprocess.Popen([sys.executable, '-c', 'import sqlite3,sys,time; from pathlib import Path; c=sqlite3.connect(sys.argv[1]); c.execute("BEGIN IMMEDIATE"); Path(sys.argv[2]).touch(); time.sleep(.5)', str(db), str(brief_locked)])
         try:
             wait_for(brief_locked.exists, 'brief writer acquired')
-            assert supervisor.check(config, record=True)['status'] == 'unobservable'
-            subprocess.run([sys.executable, '-m', 'robert_agent.supervisor', '--deliver-once', str(db), str(supervisor.health_path(config))], env=env, check=True, timeout=5)
-            assert not supervisor.health_path(config).with_name('health-delivery.json').exists()
+            assert supervision_checks.check(config, record=True)['status'] == 'unobservable'
+            subprocess.run([sys.executable, '-m', 'robert_agent.runtime.supervisor', '--deliver-once', str(db), str(supervision_health.health_path(config))], env=env, check=True, timeout=5)
+            assert not supervision_health.health_path(config).with_name('health-delivery.json').exists()
             brief.wait(timeout=3)
         finally:
             stop(brief)
-        assert supervisor.check(config, record=True)['ok']
+        assert supervision_checks.check(config, record=True)['ok']
         process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # Hold a real SQLite writer in another process; observation cannot mutate business state.
         locked = root / 'writer.locked'
         holder = subprocess.Popen([sys.executable, '-c', 'import sqlite3,sys,time; from pathlib import Path; c=sqlite3.connect(sys.argv[1]); c.execute("BEGIN IMMEDIATE"); Path(sys.argv[2]).touch(); time.sleep(30)', str(db), str(locked)])
         try:
             wait_for(locked.exists, 'writer lock acquired')
-            wait_for(lambda: read_json(supervisor.health_path(config)).get('status') == 'unobservable', 'DB degraded health')
-            wait_for(lambda: read_json(supervisor.health_path(config).with_name('health-delivery.json')).get('status') == 'sent', 'DB-independent notice')
+            wait_for(lambda: read_json(supervision_health.health_path(config)).get('status') == 'unobservable', 'DB degraded health')
+            wait_for(lambda: read_json(supervision_health.health_path(config).with_name('health-delivery.json')).get('status') == 'sent', 'DB-independent notice')
             assert process.poll() is None
         finally:
             stop(holder)
-        wait_for(lambda: read_json(supervisor.health_path(config)).get('status') == 'observed', 'observation resumed')
+        wait_for(lambda: read_json(supervision_health.health_path(config)).get('status') == 'observed', 'observation resumed')
         stop(process)
         process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        previous = read_json(supervisor.health_path(config)).get('checked_at')
-        wait_for(lambda: read_json(supervisor.health_path(config)).get('checked_at') != previous, 'restart observation')
+        previous = read_json(supervision_health.health_path(config)).get('checked_at')
+        wait_for(lambda: read_json(supervision_health.health_path(config)).get('checked_at') != previous, 'restart observation')
         assert query(db, 'SELECT count(*) FROM supervision_incidents')[0][0] == initial_count
         assert not query(db, 'SELECT action_id FROM supervision_recovery_actions')
         payloads = [json.loads(line) for line in notices.read_text().splitlines()]
@@ -122,7 +125,8 @@ def process_observation(root):
 
 
 def diagnosis_contention(root):
-    from robert_agent import supervision_diagnose, supervision_store
+    from robert_agent.supervision import diagnosis as supervision_diagnose
+    from robert_agent.supervision import store as supervision_store
     db = root / 'diagnosis.sqlite3'
     storage.init_database(db)
     when = datetime.now(timezone.utc)
@@ -173,7 +177,7 @@ json.dump({'bundle_id':packet['bundle_id'],'bundle_sha256':packet['bundle_sha256
 
 
 def diagnosis_oversized_evidence(root):
-    from robert_agent import supervision_store
+    from robert_agent.supervision import store as supervision_store
 
     db = root / 'diagnosis-oversized.sqlite3'
     storage.init_database(db)
@@ -209,7 +213,7 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
 
     launcher = '''
 import json,sys,time
-from robert_agent import supervision_diagnose
+from robert_agent.supervision import diagnosis as supervision_diagnose
 config = json.loads(sys.argv[1])
 try:
     while True:

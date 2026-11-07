@@ -1,3 +1,4 @@
+from robert_agent.readmodels import dashboard
 from contextlib import closing
 import json
 import sqlite3
@@ -13,7 +14,7 @@ AGENT = PACKAGE_ROOT
 
 class WorkbenchTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -128,7 +129,8 @@ class WorkbenchTests(unittest.TestCase):
         return workstream_id, task_id
 
     def test_history_exposes_board_lifecycle_without_changing_workflow_bucket(self):
-        from robert_agent import board, workbench
+        from robert_agent.readmodels import board
+        from robert_agent.readmodels import workbench
 
         self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -152,7 +154,7 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(item["lifecycle"]["work_item_id"], "wi-1")
 
     def test_workflow_without_board_item_does_not_invent_delivery(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
         item = workbench.list_work_items(self.db_path, bucket="history")["items"][0]
@@ -160,12 +162,11 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(item["workstream_lifecycle"], "completed")
 
     def test_operations_task_link_falls_back_to_workstream_source(self):
-        from robert_agent import web
 
         self.seed_workstream()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("DELETE FROM task_events WHERE task_id = 'task-1'")
-        task = web.build_dashboard_data(self.db_path)["recent_tasks"][0]
+        task = dashboard.build_dashboard_data(self.db_path)["recent_tasks"][0]
         self.assertEqual(task["github_url"], "https://github.com/Org/repo/pull/1")
         self.assertEqual(task["source_number"], 1)
 
@@ -207,7 +208,7 @@ class WorkbenchTests(unittest.TestCase):
             )
 
     def test_failed_publish_action_is_attention(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="active")
         self.seed_publish_action(
@@ -226,7 +227,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["needs_attention"], 1)
 
     def test_old_notification_does_not_create_attention(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
         self.seed_notification("worker_startup_failed")
@@ -241,7 +242,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(active_payload["counts"]["history"], 1)
 
     def test_closed_completed_source_keeps_old_failures_in_history(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         self.seed_workstream(task_lifecycle="failed", workstream_lifecycle="completed")
         self.seed_publish_action(publish_status="skipped")
@@ -263,7 +264,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(workbench.list_work_items(self.db_path)["counts"]["history"], 0)
 
     def test_legacy_read_only_detail_without_board_table_remains_available(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         workstream_id, _task_id = self.seed_workstream()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -273,7 +274,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertIsNone(detail['work_item_id'])
 
     def test_exhausted_remediation_episode_is_operator_attention(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         self.seed_workstream(
             task_lifecycle="completed",
@@ -310,7 +311,7 @@ class WorkbenchTests(unittest.TestCase):
         )
 
     def test_newer_resolved_episode_clears_old_exhausted_attention(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         self.seed_workstream(
             task_lifecycle="completed",
@@ -360,7 +361,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["reason_code"], "inactive")
 
     def test_search_qualifiers_and_cursor_cover_the_full_database(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         for index in range(1, 36):
             self.seed_workstream(str(index), title=f"Workbench item {index}")
@@ -387,7 +388,7 @@ class WorkbenchTests(unittest.TestCase):
         )
 
     def test_detail_returns_structured_safe_data(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         workstream_id, task_id = self.seed_workstream(
             task_lifecycle="completed",
@@ -430,7 +431,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertIsNone(workbench.get_work_item(self.db_path, "missing"))
 
     def test_failed_open_github_detail_exposes_retrigger_control(self):
-        from robert_agent import workbench
+        from robert_agent.readmodels import workbench
 
         workstream_id, task_id = self.seed_workstream(
             task_lifecycle="failed",
@@ -449,7 +450,7 @@ class WorkbenchTests(unittest.TestCase):
         )
 
     def test_web_routes_workbench_list_and_detail(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         workstream_id, _task_id = self.seed_workstream()
 
         status, headers, body = web.build_http_response(
@@ -471,7 +472,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(payload["id"], workstream_id)
 
     def test_web_routes_encoded_github_workstream_id_with_repo_slash(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
 
         workstream_id, _task_id = self.seed_workstream()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -497,7 +498,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["id"], "github:Org/repo!1")
 
     def test_web_returns_safe_workbench_errors(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         self.seed_workstream()
 
         for path in (
@@ -520,7 +521,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["safe_error"], "work item not found")
 
     def test_web_returns_safe_error_for_incomplete_schema(self):
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         old_db = self.root / "old.sqlite3"
         with closing(sqlite3.connect(old_db)) as conn, conn:
             conn.execute("CREATE TABLE repos(repo_id TEXT PRIMARY KEY)")

@@ -49,7 +49,7 @@ repos:
         )
 
     def test_live_worktree_acceptance_creates_real_git_worktree_in_isolated_checkout(self):
-        from robert_agent import live_worktree_acceptance
+        from robert_agent.acceptance import worktree as live_worktree_acceptance
         workspace_dir = (self.root / "worktree-acceptance").resolve()
 
         result = live_worktree_acceptance.live_worktree_acceptance(
@@ -119,7 +119,7 @@ repos:
         return checkout, worktrees, head_sha, base_sha
 
     def test_existing_pr_write_worktree_uses_exact_head_and_base_refs(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
 
         checkout, worktrees, head_sha, base_sha = self._existing_pr_fixture()
 
@@ -157,7 +157,7 @@ repos:
         )
 
     def test_review_fetches_upstream_pr_head_and_refreshes_reused_worktree(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
 
         checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
         # Git canonicalizes worktree paths, including macOS /var -> /private/var.
@@ -190,7 +190,7 @@ repos:
         )
 
     def test_review_refresh_preserves_dirty_worktree(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
 
         checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
         first = worktree.plan_review_worktree(
@@ -209,7 +209,7 @@ repos:
         self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=worktree_path), head_sha)
 
     def test_review_refresh_does_not_reset_unmanaged_worktree(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
 
         checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
         external = self.root / "external-review"
@@ -225,7 +225,7 @@ repos:
         self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=external), head_sha)
 
     def test_existing_pr_write_worktree_blocks_dirty_reuse_and_stale_sha(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
 
         checkout, worktrees, head_sha, base_sha = self._existing_pr_fixture()
         first = worktree.prepare_existing_pr_worktree(
@@ -269,7 +269,8 @@ repos:
         self.assertEqual(stale["status"], "stale_snapshot")
 
     def test_conflict_remediation_real_merge_graph_passes_attestation(self):
-        from robert_agent import remediation, worktree
+        from robert_agent.workflows import pr_remediation as remediation
+        from robert_agent.adapters.git import workspace as worktree
 
         checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
         seed = self.root / "seed"
@@ -349,7 +350,7 @@ repos:
         )
 
     def test_existing_pr_write_worktree_never_resets_unmanaged_checkout(self):
-        from robert_agent import worktree
+        from robert_agent.adapters.git import workspace as worktree
 
         _checkout, worktrees, head_sha, base_sha = (
             self._existing_pr_fixture()

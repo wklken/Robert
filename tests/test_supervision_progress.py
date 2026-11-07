@@ -1,3 +1,4 @@
+from robert_agent.supervision.application import checks as supervision_checks
 from contextlib import closing
 from datetime import datetime, timezone
 import json
@@ -7,7 +8,9 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, supervision_observe, supervision_rules, supervisor
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision.application import observation as supervision_observe
+from robert_agent.supervision import rules as supervision_rules
 
 
 NOW = datetime(2026, 11, 6, 10, tzinfo=timezone.utc)
@@ -139,7 +142,7 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
                      (key, 'stream-' + key, lifecycle, parent, OLD, OLD, lineage))
 
     def check(self, now, **config):
-        return supervisor.check({'db_path': str(self.db), 'data_dir': str(self.db.parent),
+        return supervision_checks.check({'db_path': str(self.db), 'data_dir': str(self.db.parent),
                                  'repos': [{'full_name': 'example/repo'}], **config}, record=True, now=now)
 
     def daemon(self):

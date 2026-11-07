@@ -7,7 +7,13 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import result_contract, result_spool
+from robert_agent.delivery import contract as result_contract
+from robert_agent.execution import spool as result_spool
+from robert_agent.delivery.application import result_audit
+from robert_agent.delivery.application import scope
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.work.application import completion
+from robert_agent.foundation import values
 
 
 class SupervisionSpoolConsumerTests(unittest.TestCase):
@@ -65,7 +71,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
         return fixture
 
     def config(self, config_path, kind):
-        from robert_agent import validate_config
+        from robert_agent.configuration import command as validate_config
         config = validate_config.validate_config(config_path, skip_external=True)
         self.assertTrue(config['ok'], config)
         config.pop('config_path', None)  # Pass the trusted in-memory fixture policy directly.
@@ -75,7 +81,8 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
         return config
 
     def request(self, conn, config, task_id, rule_id, reason_code, evidence, now):
-        from robert_agent import supervision_actions, supervision_lineage
+        from robert_agent.supervision import actions as supervision_actions
+        from robert_agent.supervision import lineage as supervision_lineage
         lineage = supervision_lineage.get_task_lineage(conn, task_id)
         self.assertTrue(lineage)
         request, = supervision_actions.plan(conn, config=config, now=now, observations=[{
@@ -87,8 +94,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
 
     def test_spool_replay_commits_bound_result_wakeup_and_recovery_receipt(self):
         from tests import test_compact_result
-        from robert_agent import run_once
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
         fixture = self.fixture(test_compact_result.CompactResultTests)
         db, task_id, attempt_id, _, _ = fixture.prepare('comment')
         config = self.config(fixture.config_path, 'spool_replay')
@@ -99,7 +105,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
         fingerprint = json.loads(path.read_text())['fingerprint']
         with closing(sqlite3.connect(db)) as conn, conn:
             action_id = self.request(conn, config, task_id, 'result_not_consumed', 'result_waiting_ingestion',
-                                     {'attempt_id': attempt_id, 'spool_fingerprint': fingerprint}, run_once._now())
+                                     {'attempt_id': attempt_id, 'spool_fingerprint': fingerprint}, values.utc_now())
         self.assertEqual(result.replay_pending_results(db, config=config, attempt_id=attempt_id)['recorded'], 1)
         self.assertEqual(result.replay_pending_results(db, config=config, attempt_id=attempt_id)['recorded'], 0)
         with closing(sqlite3.connect(db)) as conn:
@@ -112,7 +118,7 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
 
     def test_two_native_spool_deferrals_in_one_lineage_both_ingest(self):
         from tests import test_compact_result
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
         fixture = self.fixture(test_compact_result.CompactResultTests)
         db, task_id, attempt_id, _, _ = fixture.prepare('comment')
         config = self.config(fixture.config_path, 'spool_replay')
@@ -138,12 +144,11 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
 
     def test_audit_refuses_stale_request_when_operator_cancels_during_inspection(self):
         from tests import test_compact_result
-        from robert_agent import run_once
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
         fixture = self.fixture(test_compact_result.CompactResultTests)
         db, task_id, attempt_id, _, _ = fixture.prepare('comment')
         config = self.config(fixture.config_path, 'audit_retry')
-        now = run_once._now()
+        now = values.utc_now()
         recorded = result.record_result(db, fixture.envelope(task_id, attempt_id))
         self.assertTrue(recorded['ok'], recorded)
         with closing(sqlite3.connect(db)) as conn, conn:
@@ -151,14 +156,14 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
             action_id = self.request(conn, config, task_id, 'result_not_consumed', 'result_waiting_audit',
                                      {'result_id': recorded['result_id']}, now)
 
-        original = run_once.result_scope.for_result
+        original = scope.for_result
         def cancel_during_inspection(*args, **kwargs):
             with closing(sqlite3.connect(db)) as writer, writer:
                 writer.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (task_id,))
             return original(*args, **kwargs)
 
-        with closing(sqlite3.connect(db)) as conn, conn, patch.object(run_once.result_scope, 'for_result', side_effect=cancel_during_inspection):
-            self.assertEqual(run_once._audit_completed_results(conn, repo_id, fixture.data_dir, db, config['repos'][0],
+        with closing(sqlite3.connect(db)) as conn, conn, patch.object(scope, 'for_result', side_effect=cancel_during_inspection):
+            self.assertEqual(result_audit.audit_completed_results(conn, repo_id, fixture.data_dir, db, config['repos'][0],
                 'test-recovery', now, False, [], {'remaining': 1}, config_result=config), 0)
             self.assertEqual(conn.execute('SELECT status,budget_cost FROM supervision_recovery_actions WHERE action_id=?',
                                           (action_id,)).fetchone(), ('rejected', 0))
@@ -166,12 +171,13 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
 
     def test_unknown_audit_claim_does_not_keep_the_result_wakeup_runnable(self):
         from tests import test_compact_result
-        from robert_agent import loop_engine, run_once, supervision_actions
-        from robert_agent.worker import result
+        from robert_agent.runtime import loop as loop_engine
+        from robert_agent.supervision import actions as supervision_actions
+        from robert_agent.delivery.application import submission as result
         fixture = self.fixture(test_compact_result.CompactResultTests)
         db, task_id, attempt_id, _, _ = fixture.prepare('comment')
         config = self.config(fixture.config_path, 'audit_retry')
-        now = run_once._now()
+        now = values.utc_now()
         recorded = result.record_result(db, fixture.envelope(task_id, attempt_id))
         self.assertTrue(recorded['ok'], recorded)
         with closing(sqlite3.connect(db)) as conn, conn:
@@ -189,10 +195,10 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
 
     def test_handoff_uses_original_due_path_and_records_one_successor(self):
         from tests import test_pending_handoff_recovery
-        from robert_agent import pending_handoff, run_once
+        from robert_agent.work.application import handoff as pending_handoff
         fixture = self.fixture(test_pending_handoff_recovery.PendingHandoffRecoveryTests)
         config = self.config(fixture.fixture.config_path, 'handoff_resume')
-        now = run_once._now()
+        now = values.utc_now()
         repo_id = 'repo:example/backend'
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.execute("UPDATE tasks SET lifecycle='completed',metadata_json=json_set(metadata_json,'$.pending_handoff.status','pending')")
@@ -200,10 +206,10 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
             conn.execute("UPDATE github_actions SET audit_status='accepted'")
             action_id = self.request(conn, config, fixture.task, 'handoff_stalled', 'handoff_waiting_consumer', {}, now)
             self.assertTrue(pending_handoff.ready_rows(conn, [repo_id], now, config=config))
-        original = run_once._prepare_worktree
-        with closing(sqlite3.connect(fixture.db)) as conn, conn, patch.object(run_once, '_prepare_worktree',
+        original = assigned_workspace.prepare_worktree
+        with closing(sqlite3.connect(fixture.db)) as conn, conn, patch.object(assigned_workspace, 'prepare_worktree',
                 side_effect=lambda repo, event, route, _dry_run: original(repo, event, route, True)):
-            self.assertEqual(run_once._recover_pending_handoffs(conn, repo_id, fixture.fixture.data_dir, fixture.db,
+            self.assertEqual(completion.recover_pending_handoffs(conn, repo_id, fixture.fixture.data_dir, fixture.db,
                 config['repos'][0], now, False, [], {'remaining': 1}, config), 1)
             child, = conn.execute('SELECT task_id FROM tasks WHERE parent_task_id=?', (fixture.task,)).fetchone()
             status, encoded = conn.execute('SELECT status,receipt_json FROM supervision_recovery_actions WHERE action_id=?',

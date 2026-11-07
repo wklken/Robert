@@ -1,6 +1,7 @@
 from tests import test_board
 import unittest
-from robert_agent import board, supervision_store
+from robert_agent.readmodels import board
+from robert_agent.supervision import store as supervision_store
 import sqlite3
 
 

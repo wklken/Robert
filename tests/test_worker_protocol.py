@@ -8,6 +8,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
+from robert_agent.execution.application import evidence as cycle_evidence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def test_snapshot_builds_phase_row(self):
-        from robert_agent.worker import snapshot
+        from robert_agent.execution import progress as snapshot
 
         row = snapshot.build_snapshot(
             task_id="task-1",
@@ -37,7 +38,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(row["task_id"], "task-1")
 
     def test_heartbeat_command_record_tracks_active_command(self):
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         record = heartbeat.build_command_record(
             task_id="task-1",
@@ -50,7 +51,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(record["active_command"], ["python", "-m", "unittest"])
 
     def test_result_with_allowed_actions_audits_clean(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -83,7 +84,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["action_scope"], action_scope)
 
     def test_result_comment_target_must_match_action_scope_source(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -115,7 +116,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["action_scope"])
 
     def test_result_open_pr_target_must_match_action_scope(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -157,7 +158,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["action_scope"])
 
     def test_result_push_target_must_match_action_scope(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -199,7 +200,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["action_scope"])
 
     def test_result_audit_accepts_missing_recommended_skills(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -227,7 +228,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_result_recording_allows_no_external_skills(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         payload = result.build_result(
@@ -246,7 +247,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertTrue(record["ok"], record)
 
     def test_result_audit_accepts_extra_installed_skills(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -274,7 +275,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_update_existing_pr_result_accepts_push_existing_pr_action_with_response_comment(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -308,7 +309,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_update_existing_pr_push_without_response_comment_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -337,7 +338,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("comment", audit["safe_error"])
 
     def test_update_existing_pr_response_comment_must_follow_push_action(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -367,7 +368,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("after push_existing_pr", audit["safe_error"])
 
     def test_push_existing_pr_without_review_point_evaluation_creates_policy_violation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -396,7 +397,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["missing_review_point_evaluation"])
 
     def test_push_existing_pr_with_all_rejected_review_points_creates_policy_violation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -426,7 +427,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["no_implemented_review_points"])
 
     def test_push_existing_pr_with_invalid_review_point_entry_creates_policy_violation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -458,7 +459,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["invalid_review_point_evaluation"])
 
     def test_push_existing_pr_cannot_implement_incorrect_review_point(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -488,7 +489,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["invalid_review_point_evaluation"])
 
     def test_update_existing_pr_comment_only_requires_review_point_evaluation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -516,7 +517,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_update_existing_pr_mergeable_report_accepts_comment_only_response(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -551,7 +552,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_update_existing_pr_comment_only_without_review_point_evaluation_fails(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -579,7 +580,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["missing_review_point_evaluation"])
 
     def test_review_comment_result_requires_review_point_evaluation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -607,7 +608,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_pr_review_comment_result_does_not_require_review_point_evaluation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -637,7 +638,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_pr_review_comment_requires_pr_author_login(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -667,7 +668,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("pr_author_login", audit["safe_error"])
 
     def test_pr_review_comment_requires_mentioning_pr_author(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -698,7 +699,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("@pr-author", audit["safe_error"])
 
     def test_pr_review_comment_requires_fast_review_skill(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -729,7 +730,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("fast-review-github-pr", audit["safe_error"])
 
     def test_required_skill_missing_from_used_skills_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -759,7 +760,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("fast-verify-review-point", audit["safe_error"])
 
     def test_update_existing_pr_result_without_type_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -782,7 +783,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("planned_github_actions[*].type", audit["safe_error"])
 
     def test_result_with_extra_action_creates_policy_violation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -800,7 +801,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["open_pr"])
 
     def test_new_pr_result_requires_open_pr_action(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -821,7 +822,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("output_type", audit["safe_error"])
 
     def test_new_pr_result_accepts_push_then_open_pr_actions(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -855,7 +856,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_issue_sourced_new_pr_rejects_complete_resolution_with_refs(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         audit = audit_result.audit_result(
             self._issue_new_pr_result(
@@ -870,7 +871,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("closing keyword", audit["safe_error"])
 
     def test_issue_sourced_partial_pr_requires_remaining_scope(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         audit = audit_result.audit_result(
             self._issue_new_pr_result(
@@ -885,7 +886,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("remaining_scope", audit["safe_error"])
 
     def test_issue_sourced_partial_pr_accepts_refs_with_remaining_scope(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         audit = audit_result.audit_result(
             self._issue_new_pr_result(
@@ -900,7 +901,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_issue_sourced_partial_pr_rejects_closing_keyword(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         audit = audit_result.audit_result(
             self._issue_new_pr_result(
@@ -916,7 +917,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("must not use a closing keyword", audit["safe_error"])
 
     def test_issue_sourced_complete_pr_accepts_closing_reference(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         audit = audit_result.audit_result(
             self._issue_new_pr_result(
@@ -930,7 +931,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_issue_sourced_closing_reference_requires_explicit_resolution(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = self._issue_new_pr_result(
             issue_resolution="complete",
@@ -948,7 +949,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("issue_resolution", audit["safe_error"])
 
     def test_new_pr_route_policy_rejects_empty_verification(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -989,7 +990,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("verification policy failed", audit["safe_error"])
 
     def test_new_pr_route_policy_accepts_required_passed_verification(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1029,7 +1030,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_route_policy_rejects_skipped_required_verification(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         skipped = self._verification_entry(status="skipped")
         skipped["skipped_reason"] = "not run"
@@ -1072,7 +1073,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("required verification cannot be skipped", audit["safe_error"])
 
     def test_update_existing_pr_comment_only_policy_allows_empty_verification(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1105,7 +1106,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_result_output_type_must_match_expected_output(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1134,7 +1135,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("expected_output new_pr", audit["safe_error"])
 
     def test_classification_result_records_recommended_route(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db(output_type="classification_result", route_id="classification-result")
         payload = result.build_result(
@@ -1166,7 +1167,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(metadata["branch_slug"], "model-service-connectivity-test")
 
     def test_classification_result_rejects_invalid_branch_slug(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1191,7 +1192,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("branch_slug", audit["safe_error"])
 
     def test_blocked_execution_cannot_complete_with_waiting_route_recommendation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1229,7 +1230,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("output_type waiting_for_user", audit["safe_error"])
 
     def test_classification_can_recommend_waiting_route(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1252,7 +1253,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_blocked_execution_accepts_waiting_output_and_scope_question(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1285,7 +1286,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_comment_action_without_idempotency_marker_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1309,7 +1310,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("robert-comment", audit["safe_error"])
 
     def test_open_pr_action_missing_publisher_fields_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1339,7 +1340,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("title", audit["safe_error"])
 
     def test_open_pr_action_without_workstream_marker_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1369,7 +1370,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("robert-workstream", audit["safe_error"])
 
     def test_push_existing_pr_action_missing_publisher_fields_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1394,7 +1395,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("branch", audit["safe_error"])
 
     def test_result_with_sensitive_public_action_text_creates_policy_violation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1418,7 +1419,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["redaction_blocked"])
 
     def test_result_with_local_public_action_text_requires_redaction(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1445,7 +1446,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["violations"], ["redaction_required"])
 
     def test_result_missing_consumed_events_fails_audit(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-1",
@@ -1463,7 +1464,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("consumed_event_fingerprints", audit["safe_error"])
 
     def test_web_waiting_result_accepts_local_event_and_structured_question(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-local",
@@ -1495,7 +1496,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(audit["status"], "accepted")
 
     def test_waiting_result_without_question_fails(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-local",
@@ -1520,7 +1521,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("operator_question", audit["safe_error"])
 
     def test_web_result_requires_local_event_and_rejects_github_action(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         payload = internal_result(
             task_id="task-local",
@@ -1558,8 +1559,8 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(public["status"], "policy_violation")
 
     def test_snapshot_and_result_write_sqlite_rows(self):
-        from robert_agent.worker import result
-        from robert_agent.worker import snapshot
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.execution import progress as snapshot
 
         db_path = self._init_attempt_db()
 
@@ -1595,7 +1596,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(action_count, 1)
 
     def test_result_records_worker_result_ready_wakeup(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = result.build_result(
@@ -1629,8 +1630,8 @@ class WorkerProtocolTests(unittest.TestCase):
 
 
     def test_legacy_worker_result_does_not_queue_subject_signal(self):
-        from robert_agent import execution_store
-        from robert_agent.worker import result
+        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -1658,7 +1659,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
 
     def test_result_notifies_only_after_transaction_commits(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         payload = result.build_result(
@@ -1695,7 +1696,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(observed, [(1, 1, "completed")])
 
     def test_result_stays_successful_when_post_commit_notification_fails(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
         payload = result.build_result(
@@ -1720,7 +1721,7 @@ class WorkerProtocolTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
 
     def test_duplicate_result_does_not_create_extra_wakeup(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = result.build_result(
@@ -1744,7 +1745,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(wakeup_count, 1)
 
     def test_rejected_result_does_not_record_wakeup(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -1773,7 +1774,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(result_count, 0)
 
     def test_snapshot_rejects_task_attempt_mismatch(self):
-        from robert_agent.worker import snapshot
+        from robert_agent.execution import progress as snapshot
 
         db_path = self._init_attempt_db()
 
@@ -1792,7 +1793,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(phase_count, 0)
 
     def test_result_records_used_skills_metadata(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = result.build_result(
@@ -1824,7 +1825,7 @@ class WorkerProtocolTests(unittest.TestCase):
         )
 
     def test_result_records_remediation_evidence_metadata(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db(output_type="update_existing_pr", route_id="update-existing-pr")
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -1865,7 +1866,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(metadata["remediation_evidence"], evidence)
 
     def test_remediation_audit_requires_matching_trusted_evidence_and_attestation(self):
-        from robert_agent import audit_result
+        from robert_agent.delivery.application import audit as audit_result
 
         evidence = {
             "kind": "ci",
@@ -1957,7 +1958,7 @@ class WorkerProtocolTests(unittest.TestCase):
         )
 
     def test_result_records_memory_metadata(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         memory_delta = {
@@ -1969,7 +1970,7 @@ class WorkerProtocolTests(unittest.TestCase):
                     "title": "Keep PR workstreams separate from issue workstreams",
                     "short_summary": "DD PR follow-up comments update the PR workstream.",
                     "long_summary": "The PR workstream remains linked to the origin issue, but it has its own active task mutex.",
-                    "paths": ["src/robert_agent/run_once.py"],
+                    "paths": ["src/robert_agent/runtime/cycle.py"],
                     "symbols": ["_create_task_attempt_and_prompt"],
                     "keywords": ["workstream", "dd-pr-followup"],
                     "confidence": "medium",
@@ -2000,7 +2001,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(metadata["used_memory_ids"], ["pmem-existing"])
 
     def test_result_records_default_memory_metadata(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = result.build_result(
@@ -2031,7 +2032,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(metadata["used_memory_ids"], [])
 
     def test_result_records_planned_actions_as_unpublished_intents(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = result.build_result(
@@ -2065,7 +2066,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertTrue(json.loads(action[5])["body"].startswith("Looks good\n\n<!-- robert-comment"))
 
     def test_result_rejects_missing_used_skills(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = {
@@ -2094,7 +2095,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(action_count, 0)
 
     def test_result_rejects_legacy_actual_actions_key(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = {
@@ -2122,7 +2123,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(action_count, 0)
 
     def test_stale_attempt_result_is_recorded_for_audit(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -2156,7 +2157,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(action_count, 1)
 
     def test_result_rejects_action_without_type(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         payload = result.build_result(
@@ -2183,7 +2184,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(action_count, 0)
 
     def test_result_rejects_supervisor_failed_attempt_without_pending_actions(self):
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -2225,8 +2226,8 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(action_count, 0)
 
     def test_result_rejects_unknown_task_or_attempt(self):
-        from robert_agent.worker import result
-        from robert_agent import storage
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.root / "dd.sqlite3"
         storage.init_database(db_path)
@@ -2245,7 +2246,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(result.record_result(db_path, payload)["status"], "rejected_by_supervisor")
 
     def test_heartbeat_executes_command_and_records_phase(self):
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
 
@@ -2274,7 +2275,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertTrue(any("still running" in summary for summary in summaries))
 
     def test_heartbeat_returns_only_tail_for_large_output(self):
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
 
@@ -2306,7 +2307,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_heartbeat_preserves_command_result_when_snapshots_are_locked(self):
         from unittest.mock import patch
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         for locked_summary in ("Starting command", "Command still running", "Command exited 0"):
@@ -2338,7 +2339,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_heartbeat_journals_completion_before_database_write(self):
         from unittest.mock import patch
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         original = heartbeat.snapshot.record_snapshot
@@ -2367,7 +2368,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(len(observed), 1)
 
     def test_heartbeat_timeout_has_durable_terminal_record(self):
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         result = heartbeat.run_command_with_heartbeat(
             self._init_attempt_db(), "task-1", "attempt-1", "verify",
@@ -2382,7 +2383,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_heartbeat_completes_under_real_sqlite_writer_lock(self):
         import threading
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         with closing(sqlite3.connect(db_path, check_same_thread=False)) as writer:
@@ -2401,7 +2402,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_heartbeat_invalid_attempt_does_not_launch_command_when_sqlite_locked(self):
         from unittest.mock import patch
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         marker = self.root / "unauthorized-command"
@@ -2416,7 +2417,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_heartbeat_unexpected_snapshot_error_reaps_child_and_records_failure(self):
         from unittest.mock import patch
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         original = heartbeat.snapshot.record_snapshot
@@ -2441,8 +2442,7 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_heartbeat_timeout_reaps_command_descendants(self):
         import os
         import signal
-        from robert_agent import run_once
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         pid_path = self.root / "descendant.pid"
         child_script = "import time; time.sleep(30)"
@@ -2457,7 +2457,7 @@ class WorkerProtocolTests(unittest.TestCase):
         )
         pid = int(pid_path.read_text())
         try:
-            self.assertEqual(run_once._command_process_status(pid, ""), "not_found")
+            self.assertEqual(cycle_evidence._command_process_status(pid, ""), "not_found")
         finally:
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -2467,7 +2467,7 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_heartbeat_keeps_commands_in_worker_process_group(self):
         import os
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         result = heartbeat.run_command_with_heartbeat(
             self._init_attempt_db(), "task-1", "attempt-1", "verify",
@@ -2478,8 +2478,7 @@ class WorkerProtocolTests(unittest.TestCase):
                          "Worker cancellation must still clean up the whole command group")
 
     def test_custom_command_output_keeps_journal_discoverable_by_supervisor(self):
-        from robert_agent import run_once
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         result = heartbeat.run_command_with_heartbeat(
@@ -2489,13 +2488,13 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(Path(result["stdout_path"]).parent, self.root / "external-output")
         self.assertEqual(Path(result["command_record_path"]).parent, self.root / "artifacts" / "task-1")
         with closing(sqlite3.connect(db_path)) as conn:
-            recovery = run_once._inspect_attempt_recovery(conn, "attempt-1", "task-1", None)
+            recovery = cycle_evidence.inspect_attempt_recovery(conn, "attempt-1", "task-1", None)
         self.assertEqual(recovery["commands"][0]["returncode"], 0)
 
     def test_command_cleanup_reaps_parent_when_process_inspection_fails(self):
         import subprocess
         from unittest.mock import patch
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(proc.wait)
@@ -2508,7 +2507,7 @@ class WorkerProtocolTests(unittest.TestCase):
             self.assertIsNotNone(proc.poll(), "Inspection failure must not skip reaping the command")
 
     def test_command_start_failure_has_terminal_journal(self):
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         with self.assertRaises(FileNotFoundError):
@@ -2520,8 +2519,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(record["summary"], "Command failed to start: FileNotFoundError")
 
     def test_replay_after_completion_snapshot_does_not_duplicate_phase(self):
-        from robert_agent import run_once
-        from robert_agent.worker import heartbeat
+        from robert_agent.execution import command as heartbeat
 
         db_path = self._init_attempt_db()
         result = heartbeat.run_command_with_heartbeat(
@@ -2534,13 +2532,14 @@ class WorkerProtocolTests(unittest.TestCase):
         record["snapshot_status"] = "deferred"
         path.write_text(json.dumps(record))
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            run_once._inspect_attempt_recovery(conn, "attempt-1", "task-1", None)
+            cycle_evidence.inspect_attempt_recovery(conn, "attempt-1", "task-1", None)
             self.assertEqual(conn.execute(
                 "SELECT COUNT(*) FROM worker_phases WHERE summary='Command exited 0'",
             ).fetchone()[0], 1)
 
     def _init_attempt_db(self, *, output_type="comment_analysis", route_id="comment-analysis"):
-        from robert_agent import storage, route
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.workflows import routes as route
 
         db_path = self.root / "dd.sqlite3"
         storage.init_database(db_path)

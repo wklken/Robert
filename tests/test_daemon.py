@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
+from robert_agent.execution import capacity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +15,7 @@ AGENT = PACKAGE_ROOT
 
 class DaemonStateTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         # The stop flag is module state; it now also gates child launches.
         self.addCleanup(setattr, daemon, "_STOP_REQUESTED", False)
@@ -24,7 +25,7 @@ class DaemonStateTests(unittest.TestCase):
         self.db_path = self.root / "dd.sqlite3"
 
     def _init_db(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         storage.init_database(self.db_path)
         return self.db_path
@@ -41,7 +42,7 @@ class DaemonStateTests(unittest.TestCase):
         return "repo-1"
 
     def test_daemon_run_event_and_summary(self):
-        from robert_agent import daemon_state
+        from robert_agent.execution import runtime_state as daemon_state
 
         self._init_db()
         with closing(daemon_state.connect(self.db_path)) as conn, conn:
@@ -67,7 +68,7 @@ class DaemonStateTests(unittest.TestCase):
         self.assertEqual(summary["latest_event"]["event_type"], "daemon_started")
 
     def test_daemon_lease_rejects_active_owner_and_replaces_expired(self):
-        from robert_agent import daemon_state
+        from robert_agent.execution import runtime_state as daemon_state
 
         self._init_db()
         with closing(daemon_state.connect(self.db_path)) as conn, conn:
@@ -100,7 +101,7 @@ class DaemonStateTests(unittest.TestCase):
         self.assertEqual(replaced["status"], "acquired")
 
     def test_daemon_lease_heartbeat_and_release(self):
-        from robert_agent import daemon_state
+        from robert_agent.execution import runtime_state as daemon_state
 
         self._init_db()
         with closing(daemon_state.connect(self.db_path)) as conn, conn:
@@ -136,7 +137,7 @@ class DaemonStateTests(unittest.TestCase):
         self.assertEqual(status, "released")
 
     def test_capacity_full_counts_running_and_stale_attempts(self):
-        from robert_agent import daemon_state
+        from robert_agent.execution import runtime_state as daemon_state
 
         self._init_db()
         now = "2026-07-03T00:00:00+00:00"
@@ -165,8 +166,8 @@ class DaemonStateTests(unittest.TestCase):
                 """,
                 (now, now),
             )
-            count = daemon_state.running_attempt_count(conn, "repo-1")
-            full = daemon_state.capacity_full(conn, "repo-1", max_concurrency=1)
+            count = capacity.running_attempt_count(conn, "repo-1")
+            full = capacity.capacity_full(conn, "repo-1", max_concurrency=1)
 
         self.assertEqual(count, 1)
         self.assertTrue(full)
@@ -174,7 +175,7 @@ class DaemonStateTests(unittest.TestCase):
 
 class DaemonChildRunnerTests(unittest.TestCase):
     def test_daemon_resource_key_is_database_scoped(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         db_path = Path("/tmp/robert-state/../robert-state/robert.sqlite3")
         first = daemon._daemon_resource_key(
@@ -188,7 +189,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertEqual(second, first)
 
     def test_wait_for_next_decision_uses_listener_instead_of_sleep(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         context = daemon.DaemonContext(
             config_path="/tmp/config.yml",
@@ -226,7 +227,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertEqual(listener.timeout, 30)
 
     def test_build_child_commands(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         run_once_cmd = daemon.build_run_once_command(
             "/tmp/config.yml",
             "/tmp/workflow.yml",
@@ -257,7 +258,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertIn("--skip-publish", skip_publish_cmd)
 
     def test_run_child_json_parses_single_json_object(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         class Completed:
             returncode = 0
             stdout = '{"ok": true, "status": "completed"}\n'
@@ -277,7 +278,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertEqual(result["child"]["returncode"], 0)
 
     def test_run_child_json_reports_non_json_and_nonzero(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         class Completed:
             returncode = 3
             stdout = "not json"
@@ -299,7 +300,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_run_child_json_reports_timeout(self):
         import subprocess
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         def runner(command, **kwargs):
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
@@ -313,7 +314,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertEqual(result["status"], "child_timeout")
 
     def test_rate_limit_guard_skips_low_search_or_core(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config = {"min_search_remaining": 10, "min_core_remaining": 500}
         parsed = daemon.parse_rate_limit(
             {
@@ -342,7 +343,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertEqual(decision["reason"], "search_rate_limit_floor")
 
     def test_rate_limit_guard_allows_sufficient_budget(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         parsed = daemon.parse_rate_limit(
             {
                 "resources": {
@@ -360,7 +361,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertEqual(decision["reason"], "rate_limit_ok")
 
     def test_fetch_rate_limit_parses_gh_payload(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         class Completed:
             returncode = 0
             stdout = (
@@ -381,7 +382,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         self.assertEqual(result["rate_limit"]["search"]["remaining"], 22)
 
     def test_idle_sleep_seconds_uses_nearest_live_poll_deadline(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         context = daemon.DaemonContext(
             config_path="/tmp/config.yml",
             workflow_path=None,
@@ -423,7 +424,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         )
 
     def test_sleep_seconds_after_failed_local_drain_uses_local_poll_interval(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         context = daemon.DaemonContext(
             config_path="/tmp/config.yml",
             workflow_path=None,
@@ -449,7 +450,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
         )
 
     def test_sleep_seconds_after_no_progress_local_drain_uses_local_poll_interval(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         context = daemon.DaemonContext(
             config_path="/tmp/config.yml",
             workflow_path=None,
@@ -482,7 +483,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 class DaemonSchedulingTests(DaemonStateTests):
     def _write_config(self, overrides=None):
         import yaml
-        from robert_agent.init_config import init_config
+        from robert_agent.operations.initialize import init_config
         repo_root = self.root / "repo"
         repo_root.mkdir()
         (repo_root / ".git").mkdir()
@@ -496,7 +497,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         return config_path
 
     def test_resident_loop_waits_on_listener_and_closes_it(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         config_path = self._write_config()
         self._init_db()
@@ -544,7 +545,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertIn("wakeup_listener_started", event_types)
 
     def test_resident_loop_falls_back_to_polling_when_listener_is_unavailable(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         config_path = self._write_config()
         self._init_db()
@@ -588,7 +589,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertIn("wakeup_listener_unavailable", event_types)
 
     def test_resident_loop_closes_listener_when_start_event_fails(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         config_path = self._write_config()
         self._init_db()
@@ -624,7 +625,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertEqual(closed, [True])
 
     def test_default_lease_ttl_covers_live_and_local_decision_window(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config()
         now = "2026-07-03T00:00:00+00:00"
         self._init_db()
@@ -648,7 +649,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertGreaterEqual((expires_dt - now_dt).total_seconds(), 510)
 
     def test_load_context_uses_existing_repo_ids_for_configured_repos(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config()
         now = "2026-07-03T00:00:00+00:00"
         self._init_db()
@@ -664,7 +665,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertEqual(context.repo_ids, ["repo-1"])
 
     def test_run_once_decision_only_uses_run_on_start_once_before_next_poll(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config({"daemon": {"scan_on_start": True}})
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -708,7 +709,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertEqual(len(calls), 2)
 
     def test_run_once_decision_full_capacity_uses_when_full_interval(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config({"scheduler": {"max_concurrency": 1}})
         now = "2026-07-03T00:00:00+00:00"
         self._init_db()
@@ -755,7 +756,7 @@ class DaemonSchedulingTests(DaemonStateTests):
 
 
     def test_run_once_decision_running_attempt_initializes_and_honors_live_poll_schedule(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config(
             {"scheduler": {"max_concurrency": 3}, "github": {"account": "robot", "polling": {"fallback_seconds": 300}}}
         )
@@ -831,7 +832,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertIn("loop_engine.py", " ".join(calls[2]))
 
     def test_run_once_decision_startup_live_poll_runs_at_full_capacity(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config(
             {"scheduler": {"max_concurrency": 1}, "daemon": {"scan_on_start": True}, "github": {"account": "robot", "polling": {"synchronous": {"full_capacity_seconds": 300}}}}
         )
@@ -906,7 +907,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertIn("loop_engine.py", " ".join(calls[1]))
 
     def test_run_once_decision_due_live_poll_is_not_starved_by_running_attempt(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config(
             {"scheduler": {"max_concurrency": 1}, "github": {"account": "robot", "polling": {"synchronous": {"full_capacity_seconds": 300}}}}
         )
@@ -972,8 +973,8 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertIn("loop_engine.py", " ".join(calls[1]))
 
     def test_once_runs_local_drain_for_due_wakeup_without_live_poll(self):
-        from robert_agent import daemon
-        from robert_agent import storage
+        from robert_agent.runtime import daemon
+        from robert_agent.adapters.sqlite import database as storage
 
         config_path = self._write_config()
         storage.init_database(self.db_path)
@@ -1013,8 +1014,8 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertNotIn("run_once.py", " ".join(calls[0]))
 
     def test_once_runs_local_drain_with_skip_publish_when_rate_limit_floor_is_hit(self):
-        from robert_agent import daemon
-        from robert_agent import storage
+        from robert_agent.runtime import daemon
+        from robert_agent.adapters.sqlite import database as storage
 
         config_path = self._write_config()
         storage.init_database(self.db_path)
@@ -1064,8 +1065,8 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertNotIn("run_once.py", " ".join(calls[0]))
 
     def test_once_runs_live_poll_then_local_drain_when_run_on_start_enabled(self):
-        from robert_agent import daemon
-        from robert_agent import storage
+        from robert_agent.runtime import daemon
+        from robert_agent.adapters.sqlite import database as storage
 
         config_path = self._write_config({"daemon": {"scan_on_start": True}})
         storage.init_database(self.db_path)
@@ -1099,8 +1100,8 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertIn("loop_engine.py", joined[1])
 
     def test_once_skips_live_poll_when_rate_limit_floor_is_hit(self):
-        from robert_agent import daemon
-        from robert_agent import storage
+        from robert_agent.runtime import daemon
+        from robert_agent.adapters.sqlite import database as storage
 
         config_path = self._write_config({"daemon": {"scan_on_start": True}})
         storage.init_database(self.db_path)
@@ -1132,7 +1133,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertEqual(calls, [])
 
     def test_rate_limit_decision_uses_cache_within_cache_window(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config()
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -1173,7 +1174,7 @@ class DaemonSchedulingTests(DaemonStateTests):
         self.assertTrue(second.get("cached"))
 
     def test_daemon_disabled_exits_before_acquiring_lease(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         config_path = self._write_config({"daemon": {"enabled": False}})
 
         result = daemon.run_daemon(
@@ -1195,7 +1196,7 @@ class DaemonSchedulingTests(DaemonStateTests):
 class DaemonGracefulStopTests(DaemonSchedulingTests):
     def _request_stop_later(self, delay=0.3):
         import threading
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         timer = threading.Timer(delay, daemon._request_stop, (daemon.signal.SIGTERM, None))
         timer.start()
@@ -1205,7 +1206,7 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
         import os
         import sys
         import time
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         pid_file = self.root / "grandchild.pid"
         script = (
@@ -1228,7 +1229,7 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
             os.kill(grandchild, 0)
 
     def test_stop_request_prevents_starting_another_child(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         daemon._STOP_REQUESTED = True
         with mock.patch.object(daemon.subprocess, "Popen") as popen:
@@ -1240,7 +1241,8 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
 
     def test_stop_signal_wakes_the_idle_listener(self):
         import time
-        from robert_agent import daemon, wakeup_notifier
+        from robert_agent.runtime import daemon
+        from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         handlers = {}
         with mock.patch.object(daemon.signal, "signal", side_effect=lambda sig, fn: handlers.setdefault(sig, fn)):
@@ -1258,7 +1260,7 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
 
     def test_default_sleep_returns_when_stop_is_requested(self):
         import time
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         self._request_stop_later()
         started = time.monotonic()
@@ -1267,7 +1269,8 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
         self.assertLess(time.monotonic() - started, 3)
 
     def _hold_lease(self, owner_id, ttl_seconds):
-        from robert_agent import daemon_state, validate_config
+        from robert_agent.execution import runtime_state as daemon_state
+        from robert_agent.configuration import command as validate_config
 
         config_path = self._write_config()
         self._init_db()
@@ -1282,7 +1285,7 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
         return config_path
 
     def test_service_daemon_waits_for_a_stale_lease_instead_of_exiting(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         config_path = self._hold_lease("daemon-run-killed", ttl_seconds=1)
         with (
@@ -1297,7 +1300,7 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
         self.assertEqual(result["status"], "stopped")
 
     def test_lease_wait_ends_cleanly_when_stop_is_requested(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         config_path = self._hold_lease("daemon-run-live", ttl_seconds=600)
         self._request_stop_later()
@@ -1312,7 +1315,7 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
         self.assertEqual(result["status"], "stopped_waiting_for_lease")
 
     def test_manual_daemon_still_reports_an_active_lease(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         config_path = self._hold_lease("daemon-run-live", ttl_seconds=600)
         with mock.patch.object(daemon, "_resident_loop") as resident:
@@ -1322,7 +1325,7 @@ class DaemonGracefulStopTests(DaemonSchedulingTests):
         self.assertEqual(result["status"], "skipped_active_daemon")
 
     def test_daemon_main_accepts_wait_for_lease(self):
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
 
         with mock.patch.object(daemon, "run_daemon", return_value={"ok": True}) as run:
             daemon.main(["--config", "c.yml", "--wait-for-lease"])

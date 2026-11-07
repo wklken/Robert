@@ -9,7 +9,7 @@ AGENT = PACKAGE_ROOT
 
 class RedactionTests(unittest.TestCase):
     def test_synthetic_password_literals_are_normalized_without_changing_url_shape(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         for text, expected in (
             ('redis://localhost:6379/0?password=secret&db=1',
@@ -25,7 +25,7 @@ class RedactionTests(unittest.TestCase):
                 self.assertEqual(redaction.redact_text(expected)['text'], expected)
 
     def test_example_password_does_not_exempt_other_credentials_or_literal_suffixes(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         for text in ('password=secret!suffix', 'password=secret-value', 'api_key=secret',
                      '示例：password=private-example-value',
@@ -35,7 +35,7 @@ class RedactionTests(unittest.TestCase):
                 self.assertFalse(result['ok'], result)
 
     def test_blocked_text_reports_rule_and_location_without_returning_the_value(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_text('Example report\npassword=private-example-value')
         self.assertFalse(result['ok'])
@@ -43,7 +43,7 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn('private-example-value', str(result))
 
     def test_token_configuration_and_comparisons_are_not_credentials(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         for text in ("max_tokens = 10", "if token == x:", "use Authorization: none",
                      "api_key=...", "password = None", "TOKEN = os.environ['TOKEN']"):
@@ -51,7 +51,7 @@ class RedactionTests(unittest.TestCase):
                 self.assertTrue(redaction.redact_text(text)["ok"])
 
     def test_redacted_header_values_are_allowed_but_suffixes_and_other_headers_are_blocked(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         self.assertTrue(redaction.redact_text('Authorization: <redacted>\nCookie: <redacted>')['ok'])
         self.assertTrue(redaction.redact_text('Authorization:  <redacted>  \r\nCookie:\t<redacted>\r\n')['ok'])
@@ -62,7 +62,7 @@ class RedactionTests(unittest.TestCase):
 
     def test_literal_password_api_key_and_jwt_are_blocked(self):
         import base64
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip('=')
         payload = base64.urlsafe_b64encode(b'{"sub":"test-user"}').decode().rstrip('=')
@@ -72,7 +72,7 @@ class RedactionTests(unittest.TestCase):
                 self.assertFalse(redaction.redact_text(text)["ok"])
 
     def test_custom_authorization_schemes_and_quoted_literals_are_blocked(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         for text in ("Authorization: Negotiate " + "abcdefghijklmnop",
                      "Authorization: ApiKey " + "private-value",
@@ -82,7 +82,7 @@ class RedactionTests(unittest.TestCase):
                 self.assertFalse(redaction.redact_text(text)["ok"])
 
     def test_secret_blocks_publication(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_text(
             "Authorization" + ": Bearer secret-token"
@@ -92,7 +92,7 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked_secret")
 
     def test_local_path_and_internal_ip_are_replaced(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_text(
             "failed in /Users/sample-user/workspace/project "
@@ -107,7 +107,7 @@ class RedactionTests(unittest.TestCase):
         self.assertIn("test_gateway", result["text"])
 
     def test_github_tokens_are_blocked(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_text(
             "token: " + "ghp_" + "1234567890abcdefghijk"
@@ -117,7 +117,7 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked_secret")
 
     def test_common_cloud_and_service_tokens_are_blocked(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         samples = [
             "AWS_ACCESS_KEY_ID=" + "AKIA" + "1234567890ABCDEF",
@@ -134,7 +134,7 @@ class RedactionTests(unittest.TestCase):
                 self.assertEqual(result["status"], "blocked_secret")
 
     def test_non_user_local_paths_and_internal_domains_are_replaced(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_text(
             "failed in /root/workspace/app and /data/workspace/acme/app; see /tmp/robert.log on ci.example.internal"
@@ -149,7 +149,7 @@ class RedactionTests(unittest.TestCase):
         self.assertIn("<internal-domain>", result["text"])
 
     def test_home_path_is_replaced(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_text("failed in /home/runner/work/project")
 
@@ -158,7 +158,7 @@ class RedactionTests(unittest.TestCase):
         self.assertIn("<local-path>", result["text"])
 
     def test_repository_relative_paths_with_local_path_segments_are_kept(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         text = (
             "see `src/dashboard/apigateway/apigateway/data/apigw-definitions/resources.yaml:1894`, "
@@ -171,7 +171,7 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(result["text"], text)
 
     def test_absolute_local_paths_after_punctuation_are_replaced(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_text(
             "see `/data/workspace/app`, (/tmp/robert.log), file:///root/report.md and \"/home/runner/x\""
@@ -183,7 +183,7 @@ class RedactionTests(unittest.TestCase):
             self.assertNotIn(leaked, result["text"])
 
     def test_redact_and_truncate_never_returns_unredacted_suffix(self):
-        from robert_agent import redaction
+        from robert_agent.security import redaction
 
         result = redaction.redact_and_truncate(
             "failed in /home/runner/work/project " + ("x" * 100),

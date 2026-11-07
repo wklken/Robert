@@ -8,7 +8,8 @@ from pathlib import Path
 
 class WorkerLifecycleWorkflowTests(unittest.TestCase):
     def _database(self):
-        from robert_agent import storage, execution_store
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -36,7 +37,8 @@ class WorkerLifecycleWorkflowTests(unittest.TestCase):
         return db_path
 
     def test_dead_recoverable_progress_consumes_quota_once_then_attention(self):
-        from robert_agent import execution_operations, execution_store
+        from robert_agent.execution import operations as execution_operations
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         db_path = self._database()
         evidence = {
@@ -74,7 +76,8 @@ class WorkerLifecycleWorkflowTests(unittest.TestCase):
             )
 
     def test_alive_same_never_consumes_recovery_quota(self):
-        from robert_agent import execution_operations, execution_store
+        from robert_agent.execution import operations as execution_operations
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         db_path = self._database()
         evidence = {

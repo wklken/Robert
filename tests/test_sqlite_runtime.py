@@ -4,7 +4,9 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent import storage, validate_config
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.configuration import command as validate_config
+from robert_agent.execution.application import dispatch as dispatch_queue
 
 
 class SQLiteRuntimeTests(unittest.TestCase):
@@ -31,9 +33,11 @@ class SQLiteRuntimeTests(unittest.TestCase):
 
     def test_direct_entrypoints_refuse_unmigrated_dbos_subject(self):
         from tests.test_run_once import RunOnceDryRunTests
-        from robert_agent import publish, run_once, daemon
+        from robert_agent.delivery.application import publish
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.runtime import daemon
         from tests import legacy_workflow_store as workflow_store
-        from robert_agent.worker import result
+        from robert_agent.delivery.application import submission as result
 
         fixture = RunOnceDryRunTests()
         fixture.setUp()
@@ -60,7 +64,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "offline migration"):
             result.record_result(db, payload)
-        from robert_agent import web
+        from robert_agent.interfaces.web import server as web
         with self.assertRaisesRegex(RuntimeError, "offline migration"):
             web.build_control_context_from_config(
                 fixture.config_path, host="127.0.0.1", port=8765, operator_identity="test"
@@ -78,7 +82,8 @@ class SQLiteRuntimeTests(unittest.TestCase):
     def test_native_dispatch_crash_fence_prevents_second_spawn(self):
         from unittest.mock import patch
         from tests.test_run_once import RunOnceDryRunTests
-        from robert_agent import run_once, dispatch
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.adapters.processes import worker as dispatch
 
         fixture = RunOnceDryRunTests()
         fixture.setUp()
@@ -117,22 +122,22 @@ class SQLiteRuntimeTests(unittest.TestCase):
             "config_result": config,
         }
         with (
-            patch.object(run_once, "_ensure_dispatch_worktree", return_value={}),
+            patch.object(dispatch_queue, 'ensure_dispatch_worktree', return_value={}),
             patch.object(
                 dispatch, "dispatch_worker", side_effect=SystemExit("crash")
             ) as spawn,
         ):
             with self.assertRaises(SystemExit):
-                run_once._dispatch_queued(
+                dispatch_queue.dispatch_queued(
                     db, ["repo:example/backend"], queue, False, 3, **kwargs
                 )
             self.assertEqual(spawn.call_count, 1)
 
         with (
-            patch.object(run_once, "_ensure_dispatch_worktree", return_value={}),
+            patch.object(dispatch_queue, 'ensure_dispatch_worktree', return_value={}),
             patch.object(dispatch, "dispatch_worker") as spawn,
         ):
-            run_once._dispatch_queued(
+            dispatch_queue.dispatch_queued(
                 db, ["repo:example/backend"], queue, False, 3, **kwargs
             )
             spawn.assert_not_called()
@@ -147,7 +152,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
     def _prepared_queue(self, count=1):
         import json
         from tests import test_run_once
-        from robert_agent import run_once
+        from robert_agent.runtime import cycle as run_once
 
         fixture = test_run_once.RunOnceDryRunTests()
         fixture.setUp()
@@ -164,14 +169,14 @@ class SQLiteRuntimeTests(unittest.TestCase):
         queue = []
         with closing(sqlite3.connect(db)) as conn, conn:
             for (attempt,) in conn.execute("SELECT attempt_id FROM attempts").fetchall():
-                task, worktree = run_once._current_dispatch_target(conn, attempt)
+                task, worktree = dispatch_queue.current_dispatch_target(conn, attempt)
                 queue.append({"task_info": task, "worktree_result": worktree, "repo_id": "repo:example/backend", "repo": config["repos"][0]})
         self.assertEqual(len(queue), count)
         return db, queue, {"workers": config["workers"], "default_worker": config["default_worker"], "config_result": config}
 
     def test_different_tasks_cannot_race_past_capacity(self):
         from unittest.mock import patch
-        from robert_agent import run_once, dispatch
+        from robert_agent.adapters.processes import worker as dispatch
 
         db, queue, kwargs = self._prepared_queue(2)
         entered = False
@@ -179,18 +184,18 @@ class SQLiteRuntimeTests(unittest.TestCase):
             nonlocal entered
             if not entered:
                 entered = True
-                run_once._dispatch_queued(db, ["repo:example/backend"], queue[1:], False, 1, **kwargs)
+                dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue[1:], False, 1, **kwargs)
             return {}
-        with patch.object(run_once, "_ensure_dispatch_worktree", side_effect=competing_dispatch), patch.object(dispatch, "dispatch_worker", return_value={"ok": True, "status": "running", "pid": 123456}) as spawn:
-            run_once._dispatch_queued(db, ["repo:example/backend"], queue[:1], False, 1, **kwargs)
-            run_once._dispatch_queued(db, ["repo:example/backend"], queue[1:], False, 1, **kwargs)
+        with patch.object(dispatch_queue, 'ensure_dispatch_worktree', side_effect=competing_dispatch), patch.object(dispatch, "dispatch_worker", return_value={"ok": True, "status": "running", "pid": 123456}) as spawn:
+            dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue[:1], False, 1, **kwargs)
+            dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue[1:], False, 1, **kwargs)
         self.assertEqual(spawn.call_count, 1)
         with closing(sqlite3.connect(db)) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0], 1)
 
     def test_missing_episode_stops_once_and_is_not_runnable(self):
         import json
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         from robert_agent.execution import ownership as execution_ownership
 
         db, queue, _kwargs = self._prepared_queue()
@@ -208,7 +213,8 @@ class SQLiteRuntimeTests(unittest.TestCase):
     def test_fact_replay_never_replaces_newer_evidence(self):
         import json
         from tests.test_workflow_events import WorkflowEventApplicationTests, _fact, NOW
-        from robert_agent import execution_operations, execution_store
+        from robert_agent.execution import operations as execution_operations
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         fixture = WorkflowEventApplicationTests()
         fixture.setUp()
@@ -234,7 +240,8 @@ class SQLiteRuntimeTests(unittest.TestCase):
     def test_concurrent_dispatch_cannot_reuse_stale_prepared_target(self):
         from unittest.mock import patch
         from tests.test_run_once import RunOnceDryRunTests
-        from robert_agent import run_once, dispatch
+        from robert_agent.runtime import cycle as run_once
+        from robert_agent.adapters.processes import worker as dispatch
 
         fixture = RunOnceDryRunTests()
         fixture.setUp()
@@ -278,20 +285,20 @@ class SQLiteRuntimeTests(unittest.TestCase):
             nonlocal entered
             if not entered:
                 entered = True
-                run_once._dispatch_queued(
+                dispatch_queue.dispatch_queued(
                     db, ["repo:example/backend"], queue, False, 3, **kwargs
                 )
             return {}
 
         with (
-            patch.object(run_once, "_ensure_dispatch_worktree", side_effect=ensure),
+            patch.object(dispatch_queue, 'ensure_dispatch_worktree', side_effect=ensure),
             patch.object(
                 dispatch,
                 "dispatch_worker",
                 return_value={"ok": True, "status": "running", "pid": 123456},
             ) as spawn,
         ):
-            run_once._dispatch_queued(
+            dispatch_queue.dispatch_queued(
                 db, ["repo:example/backend"], queue, False, 3, **kwargs
             )
             self.assertEqual(spawn.call_count, 1)

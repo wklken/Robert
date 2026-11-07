@@ -6,7 +6,11 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from robert_agent import publication_reconcile, publish, storage, execution_store
+from robert_agent.delivery import values as publication_values
+from robert_agent.delivery.application import reconcile as publication_reconcile
+from robert_agent.delivery.application import publish
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.adapters.sqlite import execution_control as execution_store
 
 
 class Completed:
@@ -57,7 +61,7 @@ class PublicationReconcileTests(unittest.TestCase):
         self.body = body
 
     def test_last_ambiguous_write_reconciles_before_terminal_attention(self):
-        from robert_agent import retry_policy
+        from robert_agent.execution import retry as retry_policy
 
         now = "2026-10-29T00:00:00+00:00"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -76,7 +80,7 @@ class PublicationReconcileTests(unittest.TestCase):
             writes.append(command)
             return Completed("", 1, "connection reset after response")
 
-        with mock.patch.object(publish, "_now", return_value=now):
+        with mock.patch.object(publication_values, "now", return_value=now):
             first = publish.publish_ready_actions(self.db_path, run_command=ambiguous)
             self.assertFalse(first["ok"])
             with closing(sqlite3.connect(self.db_path)) as conn:
@@ -92,7 +96,7 @@ class PublicationReconcileTests(unittest.TestCase):
         self.assertEqual(len(writes), 1)
 
     def test_exhausted_crashed_write_checks_absence_without_another_write(self):
-        from robert_agent import retry_policy
+        from robert_agent.execution import retry as retry_policy
 
         def crash(command, **kwargs):
             if command[2].endswith("comments?per_page=100"):
@@ -306,7 +310,7 @@ class PublicationReconcileTests(unittest.TestCase):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(self.db_path)) as retry_conn:
             due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
-        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock = mock.patch.object(publication_values, 'now', return_value=due)
         retry_clock.start()
         self.addCleanup(retry_clock.stop)
         second = publish.publish_ready_actions(self.db_path, run_command=runner)
@@ -605,7 +609,7 @@ class PublicationReconcileTests(unittest.TestCase):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(self.db_path)) as retry_conn:
             due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
-        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock = mock.patch.object(publication_values, 'now', return_value=due)
         retry_clock.start()
         self.addCleanup(retry_clock.stop)
         with self.assertRaisesRegex(RuntimeError, "confirmed-absent retry"):
@@ -674,7 +678,7 @@ class PublicationReconcileTests(unittest.TestCase):
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(self.db_path)) as retry_conn:
             due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
-        retry_clock = mock.patch.object(publish, '_now', return_value=due)
+        retry_clock = mock.patch.object(publication_values, 'now', return_value=due)
         retry_clock.start()
         self.addCleanup(retry_clock.stop)
         second = publish.publish_ready_actions(self.db_path, run_command=runner)
@@ -702,7 +706,7 @@ class PublicationReconcileTests(unittest.TestCase):
         self.assertEqual(calls, [["git", "ls-remote", "--heads", "origin", "feature"]])
 
     def test_missing_or_malformed_scope_performs_zero_writes(self):
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')
@@ -720,7 +724,7 @@ class PublicationReconcileTests(unittest.TestCase):
         self.assertEqual(binding_status, "attention")
 
     def test_empty_accepted_scope_performs_zero_remote_calls(self):
-        from robert_agent import execution_store
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')

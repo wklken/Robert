@@ -26,7 +26,7 @@ class AcceptanceSuiteTests(unittest.TestCase):
         self.config_path.write_text("{}", encoding="utf-8")
 
     def test_acceptance_suite_reports_safe_checks_and_production_write_gap(self):
-        from robert_agent import acceptance_suite
+        from robert_agent.acceptance import suite as acceptance_suite
         calls = []
 
         def passing(name):
@@ -59,7 +59,7 @@ class AcceptanceSuiteTests(unittest.TestCase):
         )
 
     def test_acceptance_suite_can_include_live_worker_check(self):
-        from robert_agent import acceptance_suite
+        from robert_agent.acceptance import suite as acceptance_suite
         calls = []
 
         def passing(name):
@@ -87,7 +87,7 @@ class AcceptanceSuiteTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
 
     def test_acceptance_suite_can_plan_production_write_canary_without_writing(self):
-        from robert_agent import acceptance_suite
+        from robert_agent.acceptance import suite as acceptance_suite
         def passing(name):
             def check(**kwargs):
                 return {"ok": True, "status": "completed", "name": name}
@@ -114,7 +114,7 @@ class AcceptanceSuiteTests(unittest.TestCase):
         self.assertIn("--confirm-github-write", result["production_write"]["canary_command"])
 
     def test_acceptance_suite_accepts_verified_production_canary_evidence(self):
-        from robert_agent import acceptance_suite
+        from robert_agent.acceptance import suite as acceptance_suite
         calls = []
 
         def passing(name):

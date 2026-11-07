@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from robert_agent.skills import discover_skill_names, route_skill_status
+from robert_agent.context.skills import discover_skill_names, route_skill_status
 
 
 class SkillTests(unittest.TestCase):

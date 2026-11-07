@@ -4,7 +4,9 @@ import tempfile
 import unittest
 
 
-from robert_agent import audit_result, publish, storage
+from robert_agent.delivery.application import audit as audit_result
+from robert_agent.delivery.application import effects as publication_effects
+from robert_agent.adapters.sqlite import database as storage
 
 
 class MigrationTests(unittest.TestCase):
@@ -23,10 +25,10 @@ class MigrationTests(unittest.TestCase):
             audit_result.WORKSTREAM_MARKER_RE.search(legacy_workstream)
         )
         self.assertIsNone(
-            publish.COMMENT_MARKER_RE.search(legacy_comment)
+            publication_effects.COMMENT_MARKER_RE.search(legacy_comment)
         )
         self.assertIsNone(
-            publish.WORKSTREAM_MARKER_RE.search(legacy_workstream)
+            publication_effects.WORKSTREAM_MARKER_RE.search(legacy_workstream)
         )
 
     def test_database_init_adds_remediation_columns_to_legacy_schema(self):

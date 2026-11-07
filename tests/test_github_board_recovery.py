@@ -1,4 +1,5 @@
 """Kanban operator requests reach GitHub attempts without polling empty work."""
+from robert_agent.work import scan_batches as scan_batches
 from robert_agent.adapters.github import client as github_client
 from contextlib import closing
 from datetime import datetime
@@ -9,7 +10,13 @@ import unittest
 from unittest.mock import patch
 
 from tests import test_board_control_integration
-from robert_agent import board, execution_store, github_scan, loop_engine, run_once, work_items
+from robert_agent.readmodels import board
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.runtime import loop as loop_engine
+from robert_agent.runtime import cycle as run_once
+from robert_agent.work.application import commands as work_items
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.foundation import values
 
 
 class GitHubBoardRecoveryTests(unittest.TestCase):
@@ -31,14 +38,14 @@ class GitHubBoardRecoveryTests(unittest.TestCase):
             self.parent = c.execute('SELECT task_id FROM tasks').fetchone()[0]
             self.original = {p: Path(p).read_bytes() for p, in c.execute('SELECT path FROM artifacts')}
             c.execute("UPDATE tasks SET lifecycle='waiting_for_user' WHERE task_id=?", (self.parent,))
-            c.execute("UPDATE attempts SET status='completed',finished_at=? WHERE task_id=?", (run_once._now(), self.parent))
+            c.execute("UPDATE attempts SET status='completed',finished_at=? WHERE task_id=?", (values.utc_now(), self.parent))
             c.execute("UPDATE workstreams SET lifecycle='waiting_for_user'")
             self.item = work_items.resolve_work_item_for_workstream(c, 'github:example/repo#70')
             for (decision,) in c.execute("SELECT event_id FROM work_item_events WHERE event_type='operator_decision_required'").fetchall():
                 work_items.record_system_event(c, self.item['work_item_id'], event_type='operator_approved',
-                    idempotency_key='accept-' + decision, resolves_event_id=decision, now=run_once._now())
+                    idempotency_key='accept-' + decision, resolves_event_id=decision, now=values.utc_now())
             work_items.record_system_event(c, self.item['work_item_id'], event_type='operator_question',
-                idempotency_key='question', body='Which architecture?', now=run_once._now())
+                idempotency_key='question', body='Which architecture?', now=values.utc_now())
         self.reply = work_items.execute_command(self.db, self.item['work_item_id'],
             context=self.fixture.context, command='reply', expected_version=self.item['version'],
             idempotency_key='reply', body='Read the full issue body and draw the architecture.')
@@ -50,7 +57,7 @@ class GitHubBoardRecoveryTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as c, c:
             requested = c.execute('SELECT created_at FROM wakeups WHERE task_id=?', (self.task_id,)).fetchone()[0]
             when = datetime.fromisoformat(requested).timestamp() + (1 if fresh else -1)
-            github_scan._save_reads(c, self.fixture.repo_id,
+            scan_batches.save_reads(c, self.fixture.repo_id,
                 {github_client.command_key(['gh', 'api', 'repos/example/repo/issues/70']): json.dumps(payload)}, when)
 
     def cycle(self):
@@ -146,10 +153,10 @@ class GitHubBoardRecoveryTests(unittest.TestCase):
         def cancel(*args, **kwargs):
             with closing(sqlite3.connect(self.db)) as c, c:
                 c.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (self.task_id,))
-                c.execute("UPDATE work_items SET canceled_at=?", (run_once._now(),))
+                c.execute("UPDATE work_items SET canceled_at=?", (values.utc_now(),))
                 c.execute("UPDATE wakeups SET status='canceled' WHERE task_id=?", (self.task_id,))
             return None
-        with patch.object(run_once, '_prepare_worktree', side_effect=cancel):
+        with patch.object(assigned_workspace, 'prepare_worktree', side_effect=cancel):
             self.cycle()
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(c.execute('SELECT lifecycle FROM tasks WHERE task_id=?', (self.task_id,)).fetchone()[0], 'canceled')
@@ -176,14 +183,14 @@ class GitHubBoardRecoveryTests(unittest.TestCase):
     def test_reopen_and_request_changes_prepare_github_tasks(self):
         for command in ('reopen', 'request_changes'):
             with self.subTest(command=command):
-                self.fixture._finish_task(self.task_id, run_once._now())
+                self.fixture._finish_task(self.task_id, values.utc_now())
                 with closing(sqlite3.connect(self.db)) as c, c:
                     c.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
                     if command == 'reopen':
-                        c.execute('UPDATE work_items SET completed_at=?', (run_once._now(),))
+                        c.execute('UPDATE work_items SET completed_at=?', (values.utc_now(),))
                     else:
                         work_items.record_system_event(c, self.item['work_item_id'], event_type='operator_question',
-                            idempotency_key='changes-question', now=run_once._now())
+                            idempotency_key='changes-question', now=values.utc_now())
                 item = board.get_work_item_detail(self.db, self.item['work_item_id'])
                 response = work_items.execute_command(self.db, self.item['work_item_id'],
                     context=self.fixture.context, command=command, expected_version=item['version'],

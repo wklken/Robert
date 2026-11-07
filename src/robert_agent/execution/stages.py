@@ -12,9 +12,13 @@ import threading
 import time
 from typing import Any, ContextManager, Protocol
 
-from robert_agent import dispatch, execution_store, model_environment, retry_policy, worker_identity
-from robert_agent.publication_lock import task_publication_lock
-from robert_agent.worker import snapshot
+from robert_agent.adapters.processes import worker as dispatch
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.adapters.processes import environment as model_environment
+from robert_agent.execution import retry as retry_policy
+from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.delivery.lock import task_publication_lock
+from robert_agent.execution import progress as snapshot
 
 
 class StageStore(Protocol):
@@ -96,9 +100,9 @@ def _group_finished(recorded):
 def _wait_for_group_exit(recorded, timeout=2):
     deadline = time.monotonic() + timeout
     while True:
-        proc = dispatch._BACKGROUND_PROCESSES.get(recorded.get('pid'))
+        proc = dispatch.tracked_process(recorded.get('pid'))
         if proc is not None and proc.poll() is not None:
-            dispatch._BACKGROUND_PROCESSES.pop(proc.pid, None)
+            dispatch.reap_finished_process(proc.pid)
         if _group_finished(recorded):
             return True
         if time.monotonic() >= deadline:
@@ -329,7 +333,7 @@ class StageCoordinator:
                         )
                         # Retain our Popen even when another thread's dispatch
                         # reaps the shared registry before this waiter polls it.
-                        process = dispatch._BACKGROUND_PROCESSES.get(launched.get('pid'))
+                        process = dispatch.tracked_process(launched.get('pid'))
                         if process is not None:
                             self.processes[launched['pid']] = process
                         with store.connect(self.db_path) as conn:
@@ -406,11 +410,11 @@ class StageCoordinator:
         started = datetime.fromisoformat(run.get('started_at') or run['created_at'])
         while not launched.get('process_exited'):
             self.check_active()
-            proc = self.processes.get(launched.get('pid')) or dispatch._BACKGROUND_PROCESSES.get(launched.get('pid'))
+            proc = self.processes.get(launched.get('pid')) or dispatch.tracked_process(launched.get('pid'))
             if proc is not None:
                 code = proc.poll()
                 if code is not None:
-                    dispatch._BACKGROUND_PROCESSES.pop(proc.pid, None)
+                    dispatch.reap_finished_process(proc.pid)
                     self.processes.pop(proc.pid, None)
                     launched = {**launched, 'process_exited': True, 'returncode': code}
                     break

@@ -30,7 +30,7 @@ import json
 import sys
 
 sys.path.insert(0, {str(PACKAGE_ROOT.parent)!r})
-from robert_agent.worker import result
+from robert_agent.delivery.application import submission as result
 
 prompt = sys.stdin.read()
 fields = {{}}
@@ -104,7 +104,7 @@ repos:
         )
 
     def test_live_worker_acceptance_uses_isolated_state_and_dry_run_publication(self):
-        from robert_agent import live_worker_acceptance
+        from robert_agent.acceptance import worker as live_worker_acceptance
         workspace_dir = (self.root / "acceptance-workspace").resolve()
 
         result = live_worker_acceptance.live_worker_acceptance(
@@ -137,7 +137,7 @@ repos:
 
     def test_remote_only_base_reports_local_snapshot_prerequisite(self):
         import subprocess
-        from robert_agent import live_worker_acceptance
+        from robert_agent.acceptance import worker as live_worker_acceptance
         for args in (['update-ref', 'refs/remotes/upstream/main', 'HEAD'],
                      ['checkout', '--detach'], ['branch', '-D', 'main']):
             subprocess.run(['git', '-C', str(self.repo_root), *args], check=True, capture_output=True)
@@ -150,7 +150,9 @@ repos:
 
     def test_isolated_workspace_does_not_reset_source_analysis_worktree(self):
         import subprocess
-        from robert_agent import live_worker_acceptance, validate_config, worktree
+        from robert_agent.acceptance import worker as live_worker_acceptance
+        from robert_agent.configuration import command as validate_config
+        from robert_agent.adapters.git import workspace as worktree
 
         def git(*args):
             return subprocess.run(['git', '-C', str(self.repo_root), *args], check=True,
@@ -179,7 +181,7 @@ repos:
         self.assertTrue(Path(result['worktree_path']).is_relative_to(workspace))
 
     def test_isolated_config_preserves_named_workers_and_route_selection(self):
-        from robert_agent import live_worker_acceptance
+        from robert_agent.acceptance import worker as live_worker_acceptance
         import yaml
         document = yaml.safe_load(self.config_path.read_text())
         document['workers']['default']['fallback_model'] = 'gpt-5.6-sol'

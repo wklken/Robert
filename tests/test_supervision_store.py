@@ -5,7 +5,8 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import storage, supervision_store
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.supervision import store as supervision_store
 
 
 NOW = '2026-11-06T10:00:00+00:00'

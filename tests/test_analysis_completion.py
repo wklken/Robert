@@ -5,7 +5,9 @@ import sqlite3
 import unittest
 
 from tests import test_board as fixtures
-from robert_agent import board, run_once, work_items
+from robert_agent.readmodels import board
+from robert_agent.work.application import commands as work_items
+from robert_agent.work.application import completion
 
 
 class AnalysisCompletionTests(unittest.TestCase):
@@ -34,7 +36,7 @@ class AnalysisCompletionTests(unittest.TestCase):
 
     def reconcile(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            run_once._complete_published_analysis_items(conn, "repo-1", self.now)
+            completion._complete_published_analysis_items(conn, "repo-1", self.now)
         return board.get_work_item_detail(self.db, self.item["work_item_id"])
 
     def test_historical_published_analysis_is_completed_once(self):

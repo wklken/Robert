@@ -4,6 +4,8 @@ import sqlite3
 import unittest
 import yaml
 from tests import test_review_coordinator as review_fixtures, test_vote_coordinator as vote_fixtures
+from robert_agent.adapters.processes import worker
+from robert_agent.execution.application import dispatch as dispatch_queue
 
 
 class NativeAdmissionPolicyTests(unittest.TestCase):
@@ -43,7 +45,7 @@ class NativeAdmissionPolicyTests(unittest.TestCase):
 
     def test_prepared_native_round_rechecks_trust_at_dispatch(self):
         from unittest import mock
-        from robert_agent import run_once, validate_config
+        from robert_agent.configuration import command as validate_config
         for vote in (False, True):
             with self.subTest(vote=vote):
                 fixture, event = self.fixture(vote)
@@ -55,10 +57,10 @@ class NativeAdmissionPolicyTests(unittest.TestCase):
                 repo = current['repos'][0]
                 queue = []
                 with closing(sqlite3.connect(fixture.db)) as conn:
-                    run_once._queue_prepared_attempts(conn, 'repo:example/backend', repo, queue, 3)
+                    dispatch_queue.queue_prepared_attempts(conn, 'repo:example/backend', repo, queue, 3)
                 self.assertTrue(queue)
-                with mock.patch.object(run_once.dispatch, 'dispatch_worker') as launch:
-                    run_once._dispatch_queued(fixture.db, ['repo:example/backend'], queue, True, 3,
+                with mock.patch.object(worker, 'dispatch_worker') as launch:
+                    dispatch_queue.dispatch_queued(fixture.db, ['repo:example/backend'], queue, True, 3,
                         current['workers'], current['default_worker'], current)
                     launch.assert_not_called()
                 with closing(sqlite3.connect(fixture.db)) as conn:

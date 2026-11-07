@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import review_files
+from robert_agent.workflows.review import files as review_files
 
 
 class ReviewFilesTests(unittest.TestCase):

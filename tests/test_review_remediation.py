@@ -8,8 +8,12 @@ from unittest import mock
 
 from tests import support  # noqa: F401
 from tests import test_reconcile_isolation as fixtures
-from robert_agent import daemon_state, reliability_health, run_once
-from robert_agent.common import ControlDeadlineExceeded
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.operations import health as reliability_health
+from robert_agent.runtime import cycle as run_once
+from robert_agent.foundation.commands import ControlDeadlineExceeded
+from robert_agent.execution.application import monitor
+from robert_agent.work.application import source_lifecycle
 
 
 class ReviewRemediationTests(unittest.TestCase):
@@ -23,7 +27,7 @@ class ReviewRemediationTests(unittest.TestCase):
             conn.commit()
             conn.execute("UPDATE repos SET github_account='uncommitted'")
             raise ControlDeadlineExceeded('probe', 0)
-        with mock.patch.object(run_once, '_supervise_running_attempts', side_effect=supervise):
+        with mock.patch.object(monitor, 'supervise_running_attempts', side_effect=supervise):
             with self.assertRaises(ControlDeadlineExceeded):
                 run_once.run_once(self.fixture.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(self.db)) as conn:
@@ -36,19 +40,19 @@ class ReviewRemediationTests(unittest.TestCase):
 
     def test_repeated_source_failure_has_one_notice_and_success_resolves_it(self):
         self.seed()
-        with mock.patch.object(run_once, '_record_remote_terminal_state', side_effect=ValueError('bad source')):
+        with mock.patch.object(source_lifecycle, 'record_remote_terminal_state', side_effect=ValueError('bad source')):
             for _ in range(3):
                 with closing(sqlite3.connect(self.db)) as conn, conn:
-                    run_once._reconcile_remote_source_states(conn, 'repo:example/backend',
+                    source_lifecycle.reconcile_remote_source_states(conn, 'repo:example/backend',
                         {'full_name': 'example/backend'}, self.remote, '2026-10-28T07:15:00Z')
         with closing(sqlite3.connect(self.db)) as conn, conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM notifications WHERE notification_type='source_reconcile_failed'").fetchone()[0], 1)
-            run_once._reconcile_remote_source_states(conn, 'repo:example/backend',
+            source_lifecycle.reconcile_remote_source_states(conn, 'repo:example/backend',
                 {'full_name': 'example/backend'}, self.remote, '2026-10-28T07:20:00Z')
             self.assertEqual(conn.execute("SELECT status FROM notifications WHERE notification_type='source_reconcile_failed'").fetchone()[0], 'resolved')
 
     def test_repeated_repo_failure_has_one_notice_and_success_resolves_it(self):
-        with mock.patch.object(run_once, '_supervise_running_attempts', side_effect=ValueError('bad repo')):
+        with mock.patch.object(monitor, 'supervise_running_attempts', side_effect=ValueError('bad repo')):
             for _ in range(3):
                 run_once.run_once(self.fixture.config_path, dry_run=True, skip_external=True)
         with closing(sqlite3.connect(self.db)) as conn:
@@ -68,9 +72,9 @@ class ReviewRemediationTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, json.dumps({
                 'state': 'closed', 'state_reason': 'completed', 'closed_at': '2026-10-28T07:10:33Z'}), '')
         with closing(sqlite3.connect(self.db)) as conn, conn, mock.patch.object(
-                run_once, '_terminate_owned_attempt', return_value={'status': 'terminated'}) as terminate:
+                monitor, 'terminate_owned_attempt', return_value={'status': 'terminated'}) as terminate:
             for _ in range(3):
-                self.assertEqual(run_once._reconcile_remote_source_states(conn, 'repo:example/backend',
+                self.assertEqual(source_lifecycle.reconcile_remote_source_states(conn, 'repo:example/backend',
                     {'full_name': 'example/backend'}, remote, '2026-10-28T07:15:00Z'), 0)
             self.assertEqual(conn.execute('SELECT state FROM github_sources').fetchone()[0], 'closed')
             self.assertEqual(conn.execute('SELECT lifecycle FROM tasks').fetchone()[0], 'running')
@@ -107,7 +111,7 @@ class ReviewHealthTests(unittest.TestCase):
 
     def test_alert_write_contention_retries_at_local_poll_interval(self):
         from tests import test_retention as health_fixtures
-        from robert_agent import daemon
+        from robert_agent.runtime import daemon
         fixture = health_fixtures.RetentionTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)

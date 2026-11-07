@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import review_workspace
+from robert_agent.workflows.review import workspace as review_workspace
 
 
 class ReviewWorkspaceTests(unittest.TestCase):

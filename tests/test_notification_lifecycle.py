@@ -1,4 +1,5 @@
 """Notifications must retain fresh requests after an assignment has completed."""
+from robert_agent.work.application import synchronization as synchronization
 from contextlib import closing
 import json
 import sqlite3
@@ -6,9 +7,13 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from robert_agent import discover, execution_store, github_scan, run_once, validate_config
-from robert_agent.github_read import GitHubReadSession
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.runtime import cycle as run_once
+from robert_agent.configuration import command as validate_config
+from robert_agent.adapters.github.read import GitHubReadSession
 from tests import test_board_control_integration as fixtures
+from robert_agent.foundation import values
 
 
 class NotificationLifecycleTests(unittest.TestCase):
@@ -28,10 +33,10 @@ class NotificationLifecycleTests(unittest.TestCase):
             task_id = conn.execute('SELECT task_id FROM tasks').fetchone()[0]
             conn.execute("UPDATE tasks SET lifecycle='completed'")
             conn.execute("UPDATE attempts SET status='completed',finished_at=?,metadata_json=?",
-                         (run_once._now(), '{"result_contract":"compact-v1"}'))
+                         (values.utc_now(), '{"result_contract":"compact-v1"}'))
             conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
-            execution_store.close_binding(conn, 'task', task_id, run_once._now())
-            conn.execute('UPDATE work_items SET completed_at=?', (run_once._now(),))
+            execution_store.close_binding(conn, 'task', task_id, values.utc_now())
+            conn.execute('UPDATE work_items SET completed_at=?', (values.utc_now(),))
         return fixture
 
     def remote(self, source_type, comments, calls, *, timeline=None):
@@ -69,7 +74,7 @@ class NotificationLifecycleTests(unittest.TestCase):
         hints = [{'repo_full_name': 'example/repo', 'id': 'thread', 'number': 1,
                   'source_type': source_type, 'event_type': 'notification',
                   'notification_reason': reason, 'event_at': '2026-10-31T10:00:00Z'}]
-        batch = github_scan._scan_repo(config, config['repos'][0], session, hints)
+        batch = synchronization.scan_repo(config, config['repos'][0], session, hints)
         with closing(sqlite3.connect(fixture.db_path)) as conn:
             return json.loads(conn.execute('SELECT raw_events_json FROM github_scan_batches '
                                            'WHERE batch_id=?', (batch,)).fetchone()[0])

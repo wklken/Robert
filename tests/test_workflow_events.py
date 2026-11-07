@@ -6,7 +6,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from robert_agent import discover, run_once, storage, workflow_events, execution_operations, execution_store
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.work import events as workflow_events
+from robert_agent.execution import operations as execution_operations
+from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.execution.application import facts
+from robert_agent.work.application import source_lifecycle
 
 
 NOW = "2026-08-02T00:00:00+00:00"
@@ -179,7 +185,7 @@ class WorkflowEventApplicationTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO attempts(attempt_id, task_id, attempt_no, status) VALUES ('attempt-1', 'task-1', 1, 'running')"
             )
-            result = run_once._apply_workflow_event_fact(
+            result = facts.apply_workflow_event_fact(
                 conn,
                 _fact(
                     task_id="task-1",
@@ -192,11 +198,11 @@ class WorkflowEventApplicationTests(unittest.TestCase):
             conn.commit()
         self.assertEqual(result["attempt_id"], "attempt-1")
         with mock.patch.object(
-            run_once.execution_operations,
+            execution_operations,
             "terminate_worker",
             return_value="terminated",
         ) as terminate:
-            outcomes = run_once._terminate_invalidated_attempts(
+            outcomes = facts.terminate_invalidated_attempts(
                 self.db_path, ["attempt-1", "attempt-1"]
             )
         self.assertEqual(outcomes, [("attempt-1", "terminated")])
@@ -213,7 +219,7 @@ class WorkflowEventApplicationTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, state) VALUES ('source-1', 'repo-1', 'github:example/repo!7', 'pull_request', 7, 'open')"
             )
-            result = run_once._record_remote_terminal_state(
+            result = source_lifecycle.record_remote_terminal_state(
                 conn,
                 "repo-1",
                 "ws-1",
@@ -255,7 +261,7 @@ class WorkflowEventApplicationTests(unittest.TestCase):
                 (NOW, NOW, json.dumps({"remediation_episode_id": "episode-1"})),
             )
             binding = execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
-            result = run_once._record_remote_terminal_state(
+            result = source_lifecycle.record_remote_terminal_state(
                 conn,
                 "repo-1",
                 "ws-1",

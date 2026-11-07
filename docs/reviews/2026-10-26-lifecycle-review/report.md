@@ -78,7 +78,7 @@
 
 原ID：A/1。
 
-控制代码：[src/robert_agent/run_once.py:1183](../../../src/robert_agent/run_once.py#L1183)；[src/robert_agent/review_coordinator.py:164](../../../src/robert_agent/review_coordinator.py#L164)。
+控制代码：[src/robert_agent/run_once.py:1183](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L1183)；[src/robert_agent/review_coordinator.py:164](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_coordinator.py#L164)。
 
 隔离证据：[robert-verify-lifecycle-remote-close.out](evidence/robert-verify-lifecycle-remote-close.out)。
 
@@ -91,7 +91,7 @@
 
 原ID：A/2。
 
-控制代码：[src/robert_agent/worker/result.py:336](../../../src/robert_agent/worker/result.py#L336)；[src/robert_agent/run_once.py:869](../../../src/robert_agent/run_once.py#L869)。
+控制代码：[src/robert_agent/worker/result.py:336](../../../src/robert_agent/worker/result.py#L336)；[src/robert_agent/run_once.py:869](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L869)。
 
 隔离证据：[robert-verify-lifecycle-capacity.out](evidence/robert-verify-lifecycle-capacity.out)。
 
@@ -106,7 +106,7 @@ B/I/8 的“全程一个事务、全部 gh 都持锁”过宽：代码在 public
 
 原ID：A/3, B/I/4, B/I/8, B/LATENCY-7。
 
-控制代码：[src/robert_agent/run_once.py:2239](../../../src/robert_agent/run_once.py#L2239)；[src/robert_agent/run_once.py:6179](../../../src/robert_agent/run_once.py#L6179)。
+控制代码：[src/robert_agent/run_once.py:2239](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L2239)；[src/robert_agent/run_once.py:6179](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L6179)。
 
 隔离证据：[robert-verify-network-lock.out](evidence/robert-verify-network-lock.out)。
 
@@ -119,7 +119,7 @@ check_active 同时读取所有权和更新父 attempt 心跳，每个模型等�
 
 原ID：B/I/4。
 
-控制代码：[src/robert_agent/model_execution.py:136](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L136)；[src/robert_agent/review_store.py:81](../../../src/robert_agent/review_store.py#L81)；[src/robert_agent/review_coordinator.py:114](../../../src/robert_agent/review_coordinator.py#L114)。
+控制代码：[src/robert_agent/model_execution.py:136](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L136)；[src/robert_agent/review_store.py:81](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_store.py#L81)；[src/robert_agent/review_coordinator.py:114](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_coordinator.py#L114)。
 
 隔离证据：[robert-verify-agent-lifecycle-results.json](evidence/robert-verify-agent-lifecycle-results.json)。
 
@@ -132,7 +132,7 @@ daemon_state 把 running/stale 都计入容量，run_once 的实际派发计数�
 
 原ID：A/4, B/I/2。
 
-控制代码：[src/robert_agent/run_once.py:2407](../../../src/robert_agent/run_once.py#L2407)；[src/robert_agent/daemon_state.py:258](../../../src/robert_agent/daemon_state.py#L258)；[tests/test_run_once.py:7145](../../../tests/test_run_once.py#L7145)。
+控制代码：[src/robert_agent/run_once.py:2407](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L2407)；[src/robert_agent/daemon_state.py:258](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon_state.py#L258)；[tests/test_run_once.py:7145](../../../tests/test_run_once.py#L7145)。
 
 隔离证据：[robert-verify-lifecycle-capacity.out](evidence/robert-verify-lifecycle-capacity.out)。
 
@@ -147,7 +147,7 @@ local drain 的内部 max_seconds 和外部 subprocess timeout 使用同一个�
 
 原ID：B/I/1, B/LATENCY-4, B/LATENCY-7。
 
-控制代码：[src/robert_agent/daemon.py:432](../../../src/robert_agent/daemon.py#L432)；[src/robert_agent/daemon.py:101](../../../src/robert_agent/daemon.py#L101)；[src/robert_agent/loop_engine.py:255](../../../src/robert_agent/loop_engine.py#L255)；[src/robert_agent/run_once.py:808](../../../src/robert_agent/run_once.py#L808)。
+控制代码：[src/robert_agent/daemon.py:432](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon.py#L432)；[src/robert_agent/daemon.py:101](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon.py#L101)；[src/robert_agent/loop_engine.py:255](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L255)；[src/robert_agent/run_once.py:808](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L808)。
 
 隔离证据：[robert-verify-agent-lifecycle-results.json](evidence/robert-verify-agent-lifecycle-results.json)。
 
@@ -175,7 +175,7 @@ has_runnable_local_work 把任何可执行 binding 下的 running/stale attempt 
 
 原ID：A/6, B/III/1。
 
-控制代码：[src/robert_agent/loop_engine.py:144](../../../src/robert_agent/loop_engine.py#L144)；[src/robert_agent/daemon.py:581](../../../src/robert_agent/daemon.py#L581)；[src/robert_agent/run_once.py:7117](../../../src/robert_agent/run_once.py#L7117)。
+控制代码：[src/robert_agent/loop_engine.py:144](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L144)；[src/robert_agent/daemon.py:581](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon.py#L581)；[src/robert_agent/run_once.py:7117](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L7117)。
 
 隔离证据：[robert-verify-no-progress.out](evidence/robert-verify-no-progress.out)。
 
@@ -190,7 +190,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：A/7, B/III/1, B/III/6。
 
-控制代码：[src/robert_agent/retention.py:20](../../../src/robert_agent/retention.py#L20)；[src/robert_agent/retention.py:81](../../../src/robert_agent/retention.py#L81)；[src/robert_agent/daemon.py:403](../../../src/robert_agent/daemon.py#L403)。
+控制代码：[src/robert_agent/retention.py:20](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/retention.py#L20)；[src/robert_agent/retention.py:81](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/retention.py#L81)；[src/robert_agent/daemon.py:403](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon.py#L403)。
 
 隔离证据：[robert-verify-scheduler-storage.out](evidence/robert-verify-scheduler-storage.out)。
 
@@ -203,7 +203,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：A/8。
 
-控制代码：[src/robert_agent/loop_engine.py:118](../../../src/robert_agent/loop_engine.py#L118)；[src/robert_agent/run_once.py:3657](../../../src/robert_agent/run_once.py#L3657)。
+控制代码：[src/robert_agent/loop_engine.py:118](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L118)；[src/robert_agent/run_once.py:3657](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L3657)。
 
 隔离证据：[robert-verify-scheduler-storage.out](evidence/robert-verify-scheduler-storage.out)。
 
@@ -216,7 +216,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：B/I/6。
 
-控制代码：[src/robert_agent/run_once.py:5491](../../../src/robert_agent/run_once.py#L5491)；[src/robert_agent/run_once.py:5797](../../../src/robert_agent/run_once.py#L5797)；[src/robert_agent/loop_engine.py:95](../../../src/robert_agent/loop_engine.py#L95)。
+控制代码：[src/robert_agent/run_once.py:5491](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L5491)；[src/robert_agent/run_once.py:5797](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L5797)；[src/robert_agent/loop_engine.py:95](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L95)。
 
 隔离证据：[robert-verify-agent-lifecycle-results.json](evidence/robert-verify-agent-lifecycle-results.json)。
 
@@ -229,7 +229,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：B/I/7。
 
-控制代码：[src/robert_agent/loop_engine.py:177](../../../src/robert_agent/loop_engine.py#L177)；[src/robert_agent/run_once.py:4475](../../../src/robert_agent/run_once.py#L4475)。
+控制代码：[src/robert_agent/loop_engine.py:177](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L177)；[src/robert_agent/run_once.py:4475](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L4475)。
 
 隔离证据：[robert-verify-local.out](evidence/robert-verify-local.out)。
 
@@ -242,7 +242,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：B/I/11, B/LATENCY-2。
 
-控制代码：[src/robert_agent/discover.py:188](../../../src/robert_agent/discover.py#L188)；[src/robert_agent/route.py:187](../../../src/robert_agent/route.py#L187)；[docs/reliability-followup-20261024.md:40](../../reliability-followup-20261024.md#L40)。
+控制代码：[src/robert_agent/discover.py:188](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/discover.py#L188)；[src/robert_agent/route.py:187](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/route.py#L187)；[docs/reliability-followup-20261024.md:40](../../reliability-followup-20261024.md#L40)。
 
 隔离证据：[robert-verify-local.out](evidence/robert-verify-local.out)。
 
@@ -255,7 +255,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：A/9。
 
-控制代码：[src/robert_agent/daemon.py:168](../../../src/robert_agent/daemon.py#L168)；[src/robert_agent/daemon.py:581](../../../src/robert_agent/daemon.py#L581)；[src/robert_agent/publish.py:180](../../../src/robert_agent/publish.py#L180)。
+控制代码：[src/robert_agent/daemon.py:168](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon.py#L168)；[src/robert_agent/daemon.py:581](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon.py#L581)；[src/robert_agent/publish.py:180](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/publish.py#L180)。
 
 隔离证据：[robert-verify-rate-gate.out](evidence/robert-verify-rate-gate.out)。
 
@@ -268,7 +268,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：B/III/2。
 
-控制代码：[src/robert_agent/worker/snapshot.py:27](../../../src/robert_agent/worker/snapshot.py#L27)；[src/robert_agent/retention.py:9](../../../src/robert_agent/retention.py#L9)。
+控制代码：[src/robert_agent/worker/snapshot.py:27](../../../src/robert_agent/worker/snapshot.py#L27)；[src/robert_agent/retention.py:9](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/retention.py#L9)。
 
 隔离证据：[robert-verify-local.out](evidence/robert-verify-local.out)。
 
@@ -292,7 +292,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：A/PERFORMANCE-1, B/III/3, B/III/6。
 
-控制代码：[src/robert_agent/loop_engine.py:52](../../../src/robert_agent/loop_engine.py#L52)；[src/robert_agent/model_pool.py:6](../../../src/robert_agent/model_pool.py#L6)；[src/robert_agent/review_store.py:181](../../../src/robert_agent/review_store.py#L181)；[src/robert_agent/run_once.py:1133](../../../src/robert_agent/run_once.py#L1133)。
+控制代码：[src/robert_agent/loop_engine.py:52](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L52)；[src/robert_agent/model_pool.py:6](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_pool.py#L6)；[src/robert_agent/review_store.py:181](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_store.py#L181)；[src/robert_agent/run_once.py:1133](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L1133)。
 
 隔离证据：[robert-review-lifecycle-native-cost.out](evidence/robert-review-lifecycle-native-cost.out)、[robert-verify-scheduler-storage.out](evidence/robert-verify-scheduler-storage.out)。
 
@@ -305,7 +305,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：A/PERFORMANCE-2, B/LATENCY-9, B/III/4。
 
-控制代码：[src/robert_agent/review_workspace.py:161](../../../src/robert_agent/review_workspace.py#L161)；[src/robert_agent/review_files.py:20](../../../src/robert_agent/review_files.py#L20)；[src/robert_agent/model_execution.py:358](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L358)。
+控制代码：[src/robert_agent/review_workspace.py:161](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_workspace.py#L161)；[src/robert_agent/review_files.py:20](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_files.py#L20)；[src/robert_agent/model_execution.py:358](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L358)。
 
 隔离证据：[robert-review-lifecycle-native-cost.out](evidence/robert-review-lifecycle-native-cost.out)、[reused-evidence-code-hashes.json](evidence/reused-evidence-code-hashes.json)。
 
@@ -318,7 +318,7 @@ B/III/1 把“每批 100”当成总删除行数不准确：retention 分别选�
 
 原ID：B/III/4, B/III/5。
 
-控制代码：[src/robert_agent/review_workspace.py:108](../../../src/robert_agent/review_workspace.py#L108)；[src/robert_agent/dispatch.py:122](../../../src/robert_agent/dispatch.py#L122)；[src/robert_agent/publication_lock.py:9](../../../src/robert_agent/publication_lock.py#L9)；[src/robert_agent/result_spool.py:26](../../../src/robert_agent/result_spool.py#L26)。
+控制代码：[src/robert_agent/review_workspace.py:108](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_workspace.py#L108)；[src/robert_agent/dispatch.py:122](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/dispatch.py#L122)；[src/robert_agent/publication_lock.py:9](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/publication_lock.py#L9)；[src/robert_agent/result_spool.py:26](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/result_spool.py#L26)。
 
 <a id="r20"></a>
 ### R20 · 条件性 P2 · rejected spool 记录可反复耗尽扫描预算，尾部 pending 缺少公平性
@@ -329,7 +329,7 @@ replay 对所有 *.json 排序，逐条读取后才跳过 status!=pending。reje
 
 原ID：B/III/5。
 
-控制代码：[src/robert_agent/result_spool.py:112](../../../src/robert_agent/result_spool.py#L112)；[src/robert_agent/result_spool.py:146](../../../src/robert_agent/result_spool.py#L146)。
+控制代码：[src/robert_agent/result_spool.py:112](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/result_spool.py#L112)；[src/robert_agent/result_spool.py:146](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/result_spool.py#L146)。
 
 隔离证据：[robert-verify-local.out](evidence/robert-verify-local.out)。
 
@@ -342,7 +342,7 @@ loop config 加载与 run_once 各调用 init_database；未版本门控的 PR m
 
 原ID：B/I/9。
 
-控制代码：[src/robert_agent/storage.py:80](../../../src/robert_agent/storage.py#L80)；[src/robert_agent/storage.py:162](../../../src/robert_agent/storage.py#L162)；[src/robert_agent/storage.py:532](../../../src/robert_agent/storage.py#L532)；[src/robert_agent/loop_engine.py:27](../../../src/robert_agent/loop_engine.py#L27)。
+控制代码：[src/robert_agent/storage.py:80](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/storage.py#L80)；[src/robert_agent/storage.py:162](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/storage.py#L162)；[src/robert_agent/storage.py:532](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/storage.py#L532)；[src/robert_agent/loop_engine.py:27](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L27)。
 
 <a id="r22"></a>
 ### R22 · 优化 · health/通知/历史保留的成本与压缩边界需要区分
@@ -353,7 +353,7 @@ reliability_health.collect 的 docstring 称 read-only，实际会 INSERT OR IGN
 
 原ID：B/III/6。
 
-控制代码：[src/robert_agent/reliability_health.py:10](../../../src/robert_agent/reliability_health.py#L10)；[src/robert_agent/notify.py:78](../../../src/robert_agent/notify.py#L78)；[src/robert_agent/retention.py:81](../../../src/robert_agent/retention.py#L81)；[docs/reliability-followup-20261024.md:57](../../reliability-followup-20261024.md#L57)。
+控制代码：[src/robert_agent/reliability_health.py:10](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/reliability_health.py#L10)；[src/robert_agent/notify.py:78](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/notify.py#L78)；[src/robert_agent/retention.py:81](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/retention.py#L81)；[docs/reliability-followup-20261024.md:57](../../reliability-followup-20261024.md#L57)。
 
 <a id="r23"></a>
 ### R23 · 策略说明 · 45 分钟是明确声明的全局上限，不是被 worker 配置意外覆盖
@@ -364,7 +364,7 @@ supervise 的 min(global, worker) 可复现：45 分钟且心跳新鲜、worker 
 
 原ID：B/I/3, B/LATENCY-3。
 
-控制代码：[src/robert_agent/supervise.py:34](../../../src/robert_agent/supervise.py#L34)；[docs/reference.md:197](../../reference.md#L197)；[docs/multi-model-review.md:54](../../multi-model-review.md#L54)。
+控制代码：[src/robert_agent/supervise.py:34](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/supervise.py#L34)；[docs/reference.md:197](../../reference.md#L197)；[docs/multi-model-review.md:54](../../multi-model-review.md#L54)。
 
 隔离证据：[robert-verify-agent-lifecycle-results.json](evidence/robert-verify-agent-lifecycle-results.json)。
 
@@ -377,7 +377,7 @@ model_execution._group_finished 的 killpg(pgid,0) 仅是存在性探测，不�
 
 原ID：B/I/5, B/LATENCY-6。
 
-控制代码：[src/robert_agent/run_once.py:1410](../../../src/robert_agent/run_once.py#L1410)；[src/robert_agent/run_once.py:937](../../../src/robert_agent/run_once.py#L937)；[src/robert_agent/worker_identity.py:325](../../../src/robert_agent/worker_identity.py#L325)；[src/robert_agent/execution_store.py:297](../../../src/robert_agent/execution_store.py#L297)。
+控制代码：[src/robert_agent/run_once.py:1410](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L1410)；[src/robert_agent/run_once.py:937](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L937)；[src/robert_agent/worker_identity.py:325](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/worker_identity.py#L325)；[src/robert_agent/execution_store.py:297](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/execution_store.py#L297)。
 
 隔离证据：[robert-verify-agent-process-termination.out](evidence/robert-verify-agent-process-termination.out)。
 
@@ -390,7 +390,7 @@ live poll 对通知/source/PR/CI 串行采集，daemon 同步等待 child 返回
 
 原ID：B/LATENCY-1, B/LATENCY-7。
 
-控制代码：[src/robert_agent/validate_config.py:246](../../../src/robert_agent/validate_config.py#L246)；[src/robert_agent/daemon.py:573](../../../src/robert_agent/daemon.py#L573)；[src/robert_agent/discover.py:739](../../../src/robert_agent/discover.py#L739)；[src/robert_agent/run_once.py:2050](../../../src/robert_agent/run_once.py#L2050)。
+控制代码：[src/robert_agent/validate_config.py:246](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/validate_config.py#L246)；[src/robert_agent/daemon.py:573](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/daemon.py#L573)；[src/robert_agent/discover.py:739](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/discover.py#L739)；[src/robert_agent/run_once.py:2050](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L2050)。
 
 <a id="r26"></a>
 ### R26 · 策略说明 · workstream 顺序推进和 review 三阶段是现有契约
@@ -401,7 +401,7 @@ live poll 对通知/source/PR/CI 串行采集，daemon 同步等待 child 返回
 
 原ID：B/LATENCY-8, B/LATENCY-9。
 
-控制代码：[src/robert_agent/resources/db/schema.sql:107](../../../src/robert_agent/resources/db/schema.sql#L107)；[src/robert_agent/review_coordinator.py:164](../../../src/robert_agent/review_coordinator.py#L164)；[docs/multi-model-review.md:48](../../multi-model-review.md#L48)。
+控制代码：[src/robert_agent/resources/db/schema.sql:107](../../../src/robert_agent/resources/db/schema.sql#L107)；[src/robert_agent/review_coordinator.py:164](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/review_coordinator.py#L164)；[docs/multi-model-review.md:48](../../multi-model-review.md#L48)。
 
 <a id="n01"></a>
 ### N01 · 拒绝 · “死进程必须等20/45分钟才被发现”不成立
@@ -412,7 +412,7 @@ live poll 对通知/source/PR/CI 串行采集，daemon 同步等待 child 返回
 
 原ID：B/LATENCY-5。
 
-控制代码：[src/robert_agent/run_once.py:936](../../../src/robert_agent/run_once.py#L936)；[src/robert_agent/run_once.py:963](../../../src/robert_agent/run_once.py#L963)；[src/robert_agent/model_execution.py:136](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L136)。
+控制代码：[src/robert_agent/run_once.py:936](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L936)；[src/robert_agent/run_once.py:963](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/run_once.py#L963)；[src/robert_agent/model_execution.py:136](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/model_execution.py#L136)。
 
 <a id="u01"></a>
 ### U01 · 待补证 · pending fact 的无限空转风险尚缺常规生产触发证据
@@ -425,7 +425,7 @@ execution_pending_facts 没有通用 TTL 或 retry_count；replay 中存在不�
 
 原ID：B/I/10。
 
-控制代码：[src/robert_agent/execution_replay.py:12](../../../src/robert_agent/execution_replay.py#L12)；[src/robert_agent/sqlite_migration.py:265](../../../src/robert_agent/sqlite_migration.py#L265)；[src/robert_agent/loop_engine.py:133](../../../src/robert_agent/loop_engine.py#L133)。
+控制代码：[src/robert_agent/execution_replay.py:12](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/execution_replay.py#L12)；[src/robert_agent/sqlite_migration.py:265](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/sqlite_migration.py#L265)；[src/robert_agent/loop_engine.py:133](https://github.com/wklken/Robert/blob/764c5e3771565899b4b7dcf45044a229a31fb591/src/robert_agent/loop_engine.py#L133)。
 
 隔离证据：[robert-verify-local.out](evidence/robert-verify-local.out)。
 

@@ -1,4 +1,4 @@
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 from contextlib import closing
 from datetime import datetime, timezone
 import json
@@ -12,7 +12,11 @@ import unittest
 from unittest import mock
 
 from tests import test_daemon as daemon_fixture
-from robert_agent import daemon, daemon_state, discover, route, storage
+from robert_agent.runtime import daemon
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.adapters.github import discovery as discover
+from robert_agent.workflows import routes as route
+from robert_agent.adapters.sqlite import database as storage
 from robert_agent.execution import leases as execution_leases
 from tests.support import DAEMON_DEFAULTS
 

@@ -10,8 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from tests import support  # noqa: F401
-from robert_agent import storage
-from robert_agent.worker import heartbeat
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.execution import command as heartbeat
 
 
 class ExecutionJournalTests(unittest.TestCase):

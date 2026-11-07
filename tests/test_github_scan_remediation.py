@@ -1,4 +1,8 @@
+import time
 from robert_agent.adapters.github import client as github_client
+from robert_agent.work.application import synchronization as synchronization
+from robert_agent.operations import scan_batches as scan_batch_operations
+from robert_agent.work import scan_batches as scan_batches
 from robert_agent.adapters.processes import attempt as attempt_process
 from tests import support  # noqa: F401
 from contextlib import closing
@@ -9,9 +13,12 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from robert_agent import daemon, github_scan, run_once, storage, validate_config
+from robert_agent.runtime import daemon
+from robert_agent.runtime import cycle as run_once
+from robert_agent.adapters.sqlite import database as storage
+from robert_agent.configuration import command as validate_config
 from robert_agent.work import repositories as work_repositories
-from robert_agent.github_read import GitHubReadSession
+from robert_agent.adapters.github.read import GitHubReadSession
 
 
 class GitHubScanRemediationTests(unittest.TestCase):
@@ -51,11 +58,11 @@ class GitHubScanRemediationTests(unittest.TestCase):
             calls.append(args)
             return subprocess.CompletedProcess(args, 0, '[]' if args[1] == 'search' else '{"state":"closed"}', '')
         for _ in range(2):
-            github_scan._scan_repo(config, repo, GitHubReadSession(config['db_path'], account=repo['github_account'], runner=runner), [])
+            synchronization.scan_repo(config, repo, GitHubReadSession(config['db_path'], account=repo['github_account'], runner=runner), [])
         self.assertEqual([args for args in calls if args[1] == 'api' and '/issues/' in args[2]], [])
 
     def test_child_attention_is_reported_once_without_detaching_the_child(self):
-        from robert_agent.control_lane import ControlLane
+        from robert_agent.runtime.control import ControlLane
         _, config, _ = self.fixture()
         lane = ControlLane(config['db_path'], 'scan', 'owner')
         lane.process = SimpleNamespace(pid=1, poll=lambda: 0)
@@ -65,36 +72,36 @@ class GitHubScanRemediationTests(unittest.TestCase):
             self.assertIsNotNone(lane.process)
 
     def test_context_mismatch_is_not_runnable_and_machine_wakeup_does_not_override(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         _, config, repo_id = self.fixture()
-        github_scan.save_batch(config['db_path'], repo_id, 'old-context', [], {})
+        scan_batches.save_batch(config['db_path'], repo_id, 'old-context', [], {})
         with closing(sqlite3.connect(config['db_path'])) as conn:
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=[repo_id],
                 config_result=config, consume_observations=True, include_publication=False))
-        current = github_scan.context_digest(config['repos'][0], [], config=config)
-        github_scan.save_batch(config['db_path'], repo_id, current, [], {})
+        current = synchronization.context_digest(config['repos'][0], [], config=config)
+        scan_batches.save_batch(config['db_path'], repo_id, current, [], {})
         with closing(sqlite3.connect(config['db_path'])) as conn:
             self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=[repo_id],
                 config_result=config, consume_observations=True, include_publication=False))
 
     def test_unreadable_batch_stops_retrying_and_can_be_explicitly_retried(self):
         _, config, repo_id = self.fixture()
-        batch = github_scan.save_batch(config['db_path'], repo_id, 'ctx', [], {}, now=100)
+        batch = scan_batches.save_batch(config['db_path'], repo_id, 'ctx', [], {}, now=100)
         for attempt in range(5):
-            github_scan.finish_batch(config['db_path'], batch, success=False, now=100 + attempt * 300)
+            scan_batches.finish_batch(config['db_path'], batch, success=False, now=100 + attempt * 300)
         with closing(sqlite3.connect(config['db_path'])) as conn:
-            self.assertFalse(github_scan.has_pending(conn, [repo_id], now=9999))
+            self.assertFalse(scan_batches.has_pending(conn, [repo_id], now=9999))
             row = conn.execute('SELECT retry_count,attention_reason FROM github_scan_batches WHERE batch_id=?', (batch,)).fetchone()
             self.assertEqual(row[0], 5)
             self.assertTrue(row[1])
             self.assertEqual(conn.execute("SELECT count(*) FROM notifications WHERE notification_type='github_scan_attention'").fetchone()[0], 1)
-        self.assertTrue(github_scan.retry_batch(config['db_path'], batch, [repo_id], now=2000)['ok'])
-        self.assertIsNotNone(github_scan.next_batch(config['db_path'], repo_id, now=2000))
+        self.assertTrue(scan_batches.retry_batch(config['db_path'], batch, [repo_id], now=2000)['ok'])
+        self.assertIsNotNone(scan_batches.next_batch(config['db_path'], repo_id, now=2000))
 
     def test_replay_read_failure_marks_run_steps(self):
         fixture, config, repo_id = self.fixture()
-        context = github_scan.context_digest(config['repos'][0], [], config=config)
-        github_scan.save_batch(config['db_path'], repo_id, context,
+        context = synchronization.context_digest(config['repos'][0], [], config=config)
+        scan_batches.save_batch(config['db_path'], repo_id, context,
             [{'id': 'one', 'number': 7, 'event_type': 'comment', 'source_type': 'issue'}], {})
         result = run_once.run_once(fixture.config_path, dry_run=True, skip_external=True,
                                   skip_publish=True, consume_observations=True)
@@ -107,7 +114,8 @@ class GitHubScanRemediationTests(unittest.TestCase):
 
     def test_publisher_only_work_does_not_wake_local_only_drain(self):
         from tests.test_reliability import PublicationBudgetTests
-        from robert_agent import loop_engine, execution_store
+        from robert_agent.runtime import loop as loop_engine
+        from robert_agent.adapters.sqlite import execution_control as execution_store
         fixture = PublicationBudgetTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -115,7 +123,7 @@ class GitHubScanRemediationTests(unittest.TestCase):
             execution_store.ensure_subject(conn, 'task', 't', 'human_request', fixture.now.isoformat())
             self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=['repo']))
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=['repo'], include_publication=False))
-            from robert_agent import wakeup
+            from robert_agent.work import wakeup
             wakeup.request_wakeup(conn, repo_id='repo', reason='publish_retry_ready', dedupe_key='publisher-retry', now=fixture.now.isoformat())
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=['repo'], include_publication=False))
 
@@ -125,24 +133,24 @@ class GitHubScanRemediationTests(unittest.TestCase):
         clock = [1000]
         bad = {'id': 'deleted', 'number': 7, 'source_type': 'issue', 'event_type': 'comment'}
         good = {'id': 'good', 'number': 8, 'source_type': 'issue', 'event_type': 'comment', 'authorization_lookup_complete': True}
-        old = github_scan.save_batch(config['db_path'], repo_id, 'old-context', [bad, good], {}, now=100)
+        old = scan_batches.save_batch(config['db_path'], repo_id, 'old-context', [bad, good], {}, now=100)
         def runner(args, **kwargs):
             if args[2].endswith('/issues/7'):
                 return subprocess.CompletedProcess(args, 1, '', 'HTTP 410: deleted')
             return subprocess.CompletedProcess(args, 0, '{"state":"open"}', '')
-        with mock.patch.object(github_scan.time, 'time', side_effect=lambda: clock[0]):
+        with mock.patch.object(time, 'time', side_effect=lambda: clock[0]):
             for attempt in range(5):
                 session = GitHubReadSession(config['db_path'], account=repo['github_account'], runner=runner, now=lambda: clock[0])
                 with mock.patch.object(session, 'collect_events', return_value=[good]):
-                    fresh = github_scan._scan_repo(config, repo, session, [])
+                    fresh = synchronization.scan_repo(config, repo, session, [])
                 with closing(sqlite3.connect(config['db_path'])) as conn:
                     covered = json.loads(conn.execute('SELECT complete_sources_json FROM github_scan_batches WHERE batch_id=?', (fresh,)).fetchone()[0])
                     self.assertEqual(covered, [['issue', 8]])
-                github_scan.finish_batch(config['db_path'], fresh, success=True, now=clock[0])
+                scan_batches.finish_batch(config['db_path'], fresh, success=True, now=clock[0])
                 clock[0] += 300
         with closing(sqlite3.connect(config['db_path'])) as conn:
             self.assertTrue(conn.execute('SELECT attention_reason FROM github_scan_batches WHERE batch_id=?', (old,)).fetchone()[0])
-            self.assertFalse(github_scan.has_pending(conn, [repo_id], now=clock[0]))
+            self.assertFalse(scan_batches.has_pending(conn, [repo_id], now=clock[0]))
 
     def test_upgrade_preserves_old_pending_batch_and_adds_retry_state(self):
         _, config, repo_id = self.fixture()
@@ -157,39 +165,39 @@ class GitHubScanRemediationTests(unittest.TestCase):
         storage.init_database(config['db_path'])
         with closing(sqlite3.connect(config['db_path'])) as conn:
             self.assertEqual(conn.execute("SELECT retry_count,attention_reason FROM github_scan_batches WHERE batch_id='old'").fetchone(), (0, None))
-        self.assertEqual(github_scan.next_batch(config['db_path'], repo_id)['batch_id'], 'old')
+        self.assertEqual(scan_batches.next_batch(config['db_path'], repo_id)['batch_id'], 'old')
 
     def test_attention_coalesces_and_retry_cli_is_scoped(self):
         fixture, config, repo_id = self.fixture()
-        batch = github_scan.save_batch(config['db_path'], repo_id, 'ctx', [], {})
+        batch = scan_batches.save_batch(config['db_path'], repo_id, 'ctx', [], {})
         for _ in range(5):
-            github_scan.finish_batch(config['db_path'], batch, success=False)
-        self.assertEqual(github_scan.save_batch(config['db_path'], repo_id, 'ctx', [], {}), batch)
+            scan_batches.finish_batch(config['db_path'], batch, success=False)
+        self.assertEqual(scan_batches.save_batch(config['db_path'], repo_id, 'ctx', [], {}), batch)
         with closing(sqlite3.connect(config['db_path'])) as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM github_scan_batches').fetchone()[0], 1)
-            self.assertFalse(github_scan.has_pending(conn, [repo_id]))
-        self.assertFalse(github_scan.retry_batch(config['db_path'], batch, ['other'])['ok'])
-        rows = github_scan.manage_batches(fixture.config_path)['batches']
+            self.assertFalse(scan_batches.has_pending(conn, [repo_id]))
+        self.assertFalse(scan_batches.retry_batch(config['db_path'], batch, ['other'])['ok'])
+        rows = scan_batch_operations.manage_batches(fixture.config_path)['batches']
         self.assertEqual(rows[0]['batch_id'], batch)
         self.assertTrue(rows[0]['attention_reason'])
-        github_scan.manage_batches(fixture.config_path, retry=batch, dry_run=True)
-        self.assertTrue(github_scan.manage_batches(fixture.config_path)['batches'][0]['attention_reason'])
-        self.assertTrue(github_scan.manage_batches(fixture.config_path, retry=batch)['ok'])
-        self.assertIsNone(github_scan.manage_batches(fixture.config_path)['batches'][0]['attention_reason'])
+        scan_batch_operations.manage_batches(fixture.config_path, retry=batch, dry_run=True)
+        self.assertTrue(scan_batch_operations.manage_batches(fixture.config_path)['batches'][0]['attention_reason'])
+        self.assertTrue(scan_batch_operations.manage_batches(fixture.config_path, retry=batch)['ok'])
+        self.assertIsNone(scan_batch_operations.manage_batches(fixture.config_path)['batches'][0]['attention_reason'])
         for _ in range(5):
-            github_scan.finish_batch(config['db_path'], batch, success=False)
+            scan_batches.finish_batch(config['db_path'], batch, success=False)
         with closing(sqlite3.connect(config['db_path'])) as conn:
             self.assertEqual(conn.execute("SELECT status FROM notifications WHERE notification_type='github_scan_attention'").fetchone()[0], 'recorded')
 
     def test_partial_replay_routes_healthy_source_even_when_other_source_is_unreadable(self):
         fixture, config, repo_id = self.fixture()
-        context = github_scan.context_digest(config['repos'][0], [], config=config)
+        context = synchronization.context_digest(config['repos'][0], [], config=config)
         bad = {'id': 'bad', 'number': 7, 'event_type': 'comment', 'source_type': 'issue'}
         good = {'id': 'good', 'number': 8, 'event_type': 'comment', 'source_type': 'issue',
                 'actor_login': 'wklken', 'body': '@robert-bot please analyze this', 'intent': 'analysis',
                 'url': 'https://github.com/example/backend/issues/8'}
         key = github_client.command_key(['gh', 'api', 'repos/example/backend/issues/8'])
-        github_scan.save_batch(config['db_path'], repo_id, context, [bad, good], {key: '{"state":"open"}'})
+        scan_batches.save_batch(config['db_path'], repo_id, context, [bad, good], {key: '{"state":"open"}'})
         result = run_once.run_once(fixture.config_path, dry_run=True, skip_external=True,
                                   skip_publish=True, consume_observations=True)
         self.assertFalse(result['ok'])
@@ -205,7 +213,7 @@ class GitHubScanRemediationTests(unittest.TestCase):
         repo = config['repos'][0]
         one = {'id': 'one', 'number': 1, 'source_type': 'issue', 'event_type': 'mention'}
         two = {**one, 'id': 'two', 'number': 2}
-        github_scan.save_batch(config['db_path'], repo_id, 'old-context', [one, two], {})
+        scan_batches.save_batch(config['db_path'], repo_id, 'old-context', [one, two], {})
         def runner(args, **kwargs):
             if '/permission' in args[2]:
                 raise subprocess.CalledProcessError(1, args)
@@ -220,7 +228,7 @@ class GitHubScanRemediationTests(unittest.TestCase):
             return (session.source_events(repo, one, failed_lookup)
                     + session.source_events(repo, two, lambda: [two]))
         with mock.patch.object(session, 'collect_events', side_effect=collect):
-            fresh = github_scan._scan_repo(config, repo, session, [])
+            fresh = synchronization.scan_repo(config, repo, session, [])
         with closing(sqlite3.connect(config['db_path'])) as conn:
             covered = json.loads(conn.execute('SELECT complete_sources_json FROM github_scan_batches WHERE batch_id=?', (fresh,)).fetchone()[0])
         self.assertEqual(covered, [['issue', 2]])

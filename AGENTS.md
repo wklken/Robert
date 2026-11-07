@@ -20,141 +20,143 @@ These rules apply to the entire Robert repository.
 
 ## Source structure and ownership
 
-The current layout is the first stage of the source architecture migration.
-Use [the architecture map](docs/architecture.md) for the implemented structure
-and [the migration plan](docs/superpowers/plans/2026-11-06-source-architecture-refactor.md)
-for remaining work. Planned directories are not existing APIs. Keep each change
-within a reviewable migration unit; do not move the whole repository to match a
-future tree in one patch.
+The source is a modular monolith organized by domain, with smaller responsibility
+and layer modules inside each domain. See [the architecture map](docs/architecture.md)
+and [the complete execution plan](docs/superpowers/plans/2026-11-07-final-source-architecture.md).
+A unit of that plan is a verification checkpoint, not a partial delivery boundary.
+Do not describe the reorganization as complete while planned ownership or
+integration checks remain unfinished.
 
-All paths below are relative to `src/robert_agent/`.
+Paths below are relative to `src/robert_agent/`.
 
-| Location | Owns | Placement rule |
+| Domain or boundary | Stable responsibilities | Application or composition responsibilities |
 | --- | --- | --- |
-| `configuration/` | Loading, schema application, validation, route and supervision configuration | Normalize and validate at the boundary; do not start work or import runtime orchestration. |
-| `work/policies.py`, `work/errors.py` | Work admission predicates and shared work errors | Keep policy decisions independent of database, process, and presentation code. |
-| `work/queries.py`, `work/repositories.py` | Workstream/event queries and repository persistence | Use the caller's connection; queries do not change state. |
-| `work/admission.py`, `work/application/lifecycle.py` | Work admission and lifecycle use cases | Coordinate policy and state transitions here, preserving authority and transaction boundaries. |
-| `execution/ownership.py` | Task/episode ownership, parent-child admission, attention and closure | Ownership operations may mutate state; do not treat them as read-only predicates. |
-| `execution/leases.py`, `execution/notifications.py` | Repository leases and durable notification records | Keep resource ownership and notification persistence separate from workflow decisions. |
-| `execution/stages.py` | Shared model-stage execution mechanics and collaborator protocols | Receive workflow-specific store, workspace, and artifact collaborators explicitly. |
-| `delivery/policies.py` | Pure submission/question and review-evaluation policy | Share policy with result validation without importing publication or workflow implementations. |
-| `workflows/routing.py` | Effective workflow selection and native-request eligibility | Compose normalized configuration and policy; do not duplicate configuration parsing. |
-| `adapters/processes/`, `adapters/git/`, `adapters/github/` | Process observations/termination, Git remotes, GitHub reads | Translate external state; leave admission and lifecycle decisions to their owners. |
-| `security/text.py` | Redacted text suitable for exposure | Reuse the existing redaction implementation rather than adding a separate sanitizer. |
-| `cli/`, worker entrypoints, daemon and board modules | User/process entrypoints and runtime or view composition | Call the owning capability instead of becoming a reusable source of business helpers. |
-| `resources/` | Packaged schemas, route policy, prompts and other runtime data | Load through the package resource API; verify installed-wheel behavior after changes. |
+| `work/` | Input validation, event/trust policy, workstream and operator queries, source batches, repository/task facts | `work/application/`: commands, admission, preparation, input refresh, handoff, completion and source lifecycle |
+| `execution/` | Identity/ownership, capacity, leases, progress/command journals, result spool, shared model stages and round mechanics | `execution/application/`: dispatch, monitoring, recovery evidence, replay and readiness |
+| `delivery/` | Submission contract, pure policies, locks, result/intent facts, selection and notification persistence | `delivery/application/`: audit, submission, trusted scope, guarded effects, intents, receipts, notifications, reconciliation and publication |
+| `supervision/` | Rules, lineage, durable recovery records, receipt proof and health projections | `supervision/application/`: observation, checks and publication recovery coordination |
+| `context/` | Prompt/skill rendering, review guidance, project memory and runtime knowledge | `context/application/`: transactional human knowledge review |
+| `workflows/` | Concrete review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
+| `configuration/` | v2 loading, normalization, schema validation and route/supervision settings | Boundary parsing only; no execution or workflow imports |
+| `readmodels/` | Read-only dashboard, board, status, execution, usage and history projections | No HTTP dependency and no lifecycle mutations |
+| `adapters/` | GitHub, Git, processes, SQLite, notifications and native services | External protocols and persistence details; no reverse imports of their application callers |
+| `runtime/` | Cycle, loop, daemon, scanner, supervisor and child entrypoints | Scheduling, resource lifetime and invoking use cases; no business SQL |
+| `application/` | Cross-domain repository-cycle composition | Explicit coordination only; domain-owned use cases live under their own domain |
+| `interfaces/web/`, `cli/`, `worker/`, `integrations/` | HTTP/CLI/Worker/OpenClaw input and output contracts | Translate input, authenticate and call use cases; no business SQL in HTTP |
+| `foundation/`, `security/` | Shared value/error/command capabilities, redaction and safe text | Keep shared concepts narrow; do not create a general business helper collection |
+| `operations/`, `acceptance/` | Initialization, database upgrades, diagnostics, maintenance commands and verification tools | Preserve dry-run, read-only and explicit live-write authority boundaries |
+| `resources/`, `web_assets/` | Installed package data and frontend assets | Resolve through the package/resource API, not relative to a moved implementation file |
 
-Existing root modules still implement substantial application behavior.
-`run_once.py` remains the main orchestrator; `worker_supervision.py` and
-`loop_engine.py` still consume some of its monitoring/readiness helpers.
-`work_items.py`, `execution_store.py`, `execution_operations.py`, publication,
-review/vote, supervision and presentation modules have not all been relocated.
-These are explicit migration seams, not permission to grow a new general-purpose
-helper collection in the package root.
+## Dependency and reuse rules
 
-## Dependency and module rules
-
-- Organize code around responsibility and the invariants it owns. Use small
-  Python modules, functions, dataclasses or protocols where they clarify a real
-  contract. DDD does not require an ORM, service/repository class for every
-  function, generic event bus, plugin registry, or a directory for each layer.
-- Keep pure policies stable and independent of I/O. Application use cases
-  coordinate decisions and persistence. Adapters own external protocols.
-  Entry points and views compose these capabilities. Do not make a lower-level
-  capability import its caller to obtain a helper.
-- `configuration/`, `work/`, `execution/`, `delivery/`, `adapters/`, and
-  `security/` must not import `run_once`, `daemon`, or `board_execution`.
-  Existing migrated root consumers have the same restriction in
-  [the architecture guard](tests/test_architecture_boundaries.py).
-- Configuration may depend on its own modules, package resources, and worker
-  adapter capabilities. It must not depend on workflow execution. Keep
-  `work.policies` and `delivery.policies` free of application dependencies.
-- Keep `execution.stages` independent of concrete review/vote coordinators,
-  stores and workspace implementations. Supply its protocols at the workflow
-  boundary. Preserve the correspondence between stage stores and model-pool
-  run tables; ordinary workers and model subprocess capacity are distinct.
-- Import reusable behavior from its owner. Do not borrow private helpers from
-  orchestration or board code, or add forwarding wrappers solely to preserve
-  obsolete internal paths. Preserve wrappers that implement a public CLI,
-  persisted entrypoint, lifecycle, instrumentation, or compatibility contract.
-- The explicit Python import graph must stay acyclic, including imports inside
-  functions. Delaying an import or using dynamic lookup to evade the guard does
-  not resolve a dependency inversion. Dynamic entrypoints also need smoke tests;
-  an acyclic static graph alone does not validate them.
-- When a new dependency is necessary, document its ownership and update the
-  narrow module contract in the architecture guard. Do not add package-wide
-  exceptions to make a failing boundary test pass. Extract shared policy or
-  inject a collaborator when callers would otherwise depend on each other.
+- Group by domain first, then split a domain into responsibility/layer submodules.
+  Reuse the domain's existing input types, errors, policies, facts and public
+  capabilities. Do not scatter another implementation of the same concept into
+  a top-level utility module or a parallel application directory.
+- Keep stable rules/contracts and capability modules independent of application
+  use cases, concrete workflows, runtime, interfaces and operations. Inside a
+  domain, dependencies flow toward these stable owners, never back to callers.
+  Cross-domain coordination belongs to a named use case or the outer composition
+  layer. A read model uses query capabilities, not command handlers or HTTP code.
+- The explicit Python import graph must be acyclic, including function-local
+  imports. Removing top-level imports alone is not evidence of a resolved cycle.
+  Do not use delayed imports, dynamic import/lookup, `sys.modules` aliases,
+  mutable shared globals, forwarding facades or a registry to evade a boundary.
+- Resolve dependency cycles by correcting ownership, extracting shared functions,
+  constants/types/enums with a concrete common meaning, or supplying a narrow
+  collaborator explicitly from composition. Do not add a lazy fallback import
+  when a required collaborator is missing. A non-recovering monitor must not
+  acquire a new recovery capability implicitly.
+- Worker result, snapshot and heartbeat modules parse command-line input only.
+  Shared progress/command execution belongs to `execution/`; durable result
+  submission belongs to `delivery/application/submission.py`. Lower layers must
+  never import Worker entrypoints, including for a helper or constant.
+- SQLite execution controls and shared model slots belong to `adapters/sqlite/`.
+  Adapters cannot import their domain/use-case callers. Database upgrades belong
+  to `operations/migration.py`, which coordinates stable persistence and work facts.
+  Public process-handle capabilities own access to the dispatch registry.
+- Same-layer use cases may call a named capability in another domain only in
+  the direction permitted by the complete module DAG. Share facts/policies below
+  both use cases; do not import a command handler to read its private helper.
+- Keep `execution.stages` independent of concrete review/vote implementations.
+  Workflows supply store/workspace/artifact capabilities. Keep model table/store
+  pairings consistent; ordinary Worker capacity and model subprocess capacity
+  remain distinct. Persistence adapters may share stable schema mechanics.
+- Prefer normal Python functions, small values and protocols where they express
+  real contracts. No required class/service/repository hierarchy, generic event
+  bus, plugin registry or empty layer scaffold for hypothetical use cases.
+- Use public capabilities across modules. Keep private functions local; extract
+  a shared public owner rather than importing a caller's underscore helper.
+  Configuration may depend on resource access and Worker adapter capabilities,
+  not application execution. Pure policies must not gain I/O.
+- [Architecture tests](tests/test_architecture_boundaries.py) enforce dependency
+  direction, import acyclicity, thin root entrypoints and the runtime/HTTP SQL
+  boundary. Do not add broad package exceptions to make a failing check pass.
+  Document and test the actual dependency contract when introducing a capability.
 
 ## State, authority and transaction boundaries
 
-- Keep task, workstream, input, lineage, attempt, round and recovery identities
-  distinct. Preserve cross-attempt recovery budgets and parent-child ownership.
-  Do not derive authority merely from a process being alive or a result existing.
-- Preserve claims, leases, fencing and idempotency checks before side effects.
-  Result arrival does not establish process exit or permit releasing resources
-  still owned by a live worker. Unknown process identity must remain visible
-  through the existing attention/recovery path.
-- Persistence helpers using a supplied SQLite connection do not commit it or
-  silently open an independent transaction. The application use case owns the
-  transaction that makes a transition durable, including required receipts and
-  audit records. Name and test mutating ownership operations accordingly.
-- Keep network calls, Git operations and process waits outside long write
-  transactions. When applying observations, recheck the current task/attempt,
-  owner and relevant state under the write boundary before accepting the result.
-- Publication and recovery must preserve current trust, action-scope,
-  reauthorization, redaction and audit checks. Configuration extensibility must
-  not widen what an untrusted input or worker result is authorized to do.
-- UI/read models may format durable facts but must not become the source of
-  execution or lifecycle policy. Keep status queries read-only.
+- Keep task, workstream, input, lineage, attempt, round, publication intent and
+  recovery identities distinct. Preserve cross-attempt budgets and parent-child
+  ownership. A live process alone does not prove progress or authority.
+- Preserve claims, leases, fencing and idempotency checks before effects. Result
+  arrival does not prove process exit or permit resource release. Unknown process
+  identity remains visible through the existing attention/recovery path.
+- Persistence helpers using a supplied SQLite connection must not silently commit
+  or open another transaction. Application use cases own durable transitions,
+  including receipts, audit evidence and required savepoint/checkpoint behavior.
+  Mutating ownership operations are not read-only predicates.
+- Keep network/Git/process waits outside long write transactions. Recheck the
+  task/attempt, owner and relevant current state under the writer before applying
+  an observation. Preserve existing callback, deadline and cancellation behavior.
+- Publication and recovery retain current trust, action-scope, reauthorization,
+  redaction and audit checks. An unknown remote effect must be reconciled before
+  retrying. UI formatting cannot become the source of lifecycle state.
 
 ## Configuration and extension rules
 
-- Configuration version 2 is the supported contract. Keep loading, schema
-  application, normalization and validation in `configuration/`; do not restore
-  legacy aliases or add a second parser in CLI, workflow or runtime code.
-- `resources/routes.yml` owns fixed route policy. Python route representations
-  derive from it. Operators can select supported workers and skills; configuration
-  must not widen action permissions, verification, output or workspace policy.
-- Keep defaults in their existing owning schema/normalization module and preserve
-  explicit units, including seconds for timeout and interval fields. New options
-  need a demonstrated operational requirement, validation and documented meaning.
-  Do not expose internal implementation choices as configuration by default.
-- Add a workflow by composing the existing policies and execution collaborators.
-  Add an external integration in its adapter boundary. Add a pure decision to
-  the capability that owns the invariant. Avoid speculative registries and
-  generic abstractions for hypothetical future workflows.
-- Package initializers should stay lightweight. Importing a configuration or
-  policy module must not start workers, connect to production state or perform
-  remote operations.
+- Version 2 is the configuration contract. Loading, schema application,
+  normalization and validation have one owner in `configuration/`; no alternate
+  CLI/workflow parser or restored legacy aliases.
+- `resources/routes.yml` is the fixed route-policy source. Python representations
+  derive from it. Operators may select supported workers/skills, but cannot widen
+  action permissions, verification, output contracts or workspace policies.
+- Preserve defaults, overrides, worker order, author whitelist semantics and
+  explicit units. New options need a demonstrated operational need and validation;
+  do not expose internal implementation choices as configuration by default.
+- A new workflow composes domain capabilities. A new external protocol belongs
+  in its adapter. A new invariant belongs to the owning domain's rules or use case.
+  Importing policies/configuration must not connect to production or launch work.
 
-## Migration and verification rules
+## Entry points, migration and verification
 
-- Before moving or deleting a symbol, inventory production callers, tests,
-  exports, CLI registration, persisted prompt commands and dynamic entrypoints.
-  Update callers together. Static search alone does not prove a public symbol
-  or an executable module is unused.
-- Preserve `robert_agent.cli.main:main` and the root worker result, snapshot,
-  heartbeat and status entrypoints used by generated/persisted commands unless
-  an explicit migration handles their consumers. Keep `validate_config`'s
-  executable module boundary while its implementation lives in configuration.
-- For a structural change, run the focused architecture boundary tests and the
-  full code-change gates. Test observable lifecycle/authority behavior as well
-  as imports. Check old/new references and introduced dead wrappers after moves.
-- Use [the development commands](docs/development.md) and
-  [CI](.github/workflows/ci.yml) as the gate definitions. CI covers Ruff, the
-  configured Mypy scope, unit tests, compilation, packaging, wheel smoke,
-  dependency/secret scans and documentation links on its supported matrix.
-- Controlled subprocess tests should use the intended interpreter explicitly
-  (for example `sys.executable`), with dependencies installed in that environment.
-  A system `python3` found through `PATH` is not necessarily that interpreter.
-- Resource and packaging changes require an installed-wheel smoke check outside
-  the source tree. Verify both resource loading and executable entrypoints.
-- Update current architecture/development documentation with structural changes.
-  Historical review evidence must retain its original meaning: if a linked file
-  moves, pin the link to the reviewed commit rather than pointing old line numbers
-  at a different implementation. Do not suppress link checks to hide stale links.
+- The root package contains only package primitives and the finite CLI contracts
+  in [entrypoints.json](src/robert_agent/resources/entrypoints.json). These scripts
+  contain a main import and execution guard, not business code or private exports.
+  Keep each entry only for a documented script, persisted command or module-launch
+  consumer. Production modules import the real owner, never a compatibility entry.
+- Preserve `robert_agent.cli.main:main`, Worker result/snapshot/heartbeat commands,
+  status paths in persisted prompts, and daemon/subprocess launch contracts.
+  Internal private import paths are migrated directly. Do not keep them merely
+  because old tests patched or imported them.
+- Inventory source callers, tests, registrations, dynamic/module commands,
+  persisted prompt paths, resources and service targets before moving a symbol.
+  Update mocks where production actually looks up the collaborator. Static search
+  does not prove a public executable is unused.
+- Check old/new references and dead/forwarding residue after moves. Retain useful
+  contract tests and compare discovered test IDs before/after; moving a test must
+  not silently stop unittest discovery. Avoid wholesale test directory churn.
+- Follow [development commands](docs/development.md) and [CI](.github/workflows/ci.yml).
+  Structural changes require focused boundaries plus the full code-change gates.
+  Controlled subprocess tests use the intended interpreter (`sys.executable`),
+  not an unrelated `python3` selected by PATH.
+- Packaging/resources require clean installed-wheel smoke outside the source tree,
+  including executable entrypoints and resources. CI covers Linux/macOS and the
+  supported Python matrix, lint/types/tests/build, dependency/secret scans and links.
+- Update AGENTS and current architecture docs with the actual final structure.
+  Preserve historical review evidence: pin moved-file links to an appropriate
+  historical commit instead of pointing old line numbers at new implementations.
+  Do not suppress documentation or architecture checks to hide migration residue.
 
 ## Deployment checks
 

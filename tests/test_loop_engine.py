@@ -54,7 +54,7 @@ repos:
         )
 
     def test_loop_stops_without_runnable_work(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         result = loop_engine.run_loop(
             self.config_path,
             dry_run=True,
@@ -68,7 +68,7 @@ repos:
         self.assertTrue(Path(result["latest_loop_path"]).is_file())
 
     def test_loop_ignores_local_work_outside_configured_repos(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -104,7 +104,7 @@ repos:
         self.assertEqual(result["stop_reason"], "no_runnable_work")
 
     def test_archived_workflow_signal_does_not_drive_native_execution(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
 
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
@@ -124,7 +124,8 @@ repos:
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=[]))
 
     def test_sqlite_execution_is_scoped_to_configured_repo(self):
-        from robert_agent import loop_engine, execution_store
+        from robert_agent.runtime import loop as loop_engine
+        from robert_agent.adapters.sqlite import execution_control as execution_store
 
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
@@ -163,7 +164,7 @@ repos:
             self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["repo-b"]))
 
     def test_loop_stops_when_cycle_makes_no_progress(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         db_path = self._init_runnable_db()
 
         def runner(*_args, **_kwargs):
@@ -182,7 +183,7 @@ repos:
         self.assertFalse(result["cycle_results"][0]["progress"]["changed"])
 
     def test_loop_ignores_agent_run_count_when_detecting_progress(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         db_path = self._init_runnable_db()
 
         def runner(*_args, **_kwargs):
@@ -209,7 +210,7 @@ repos:
         self.assertFalse(result["cycle_results"][0]["progress"]["changed"])
 
     def test_loop_stops_at_max_cycles_while_progress_continues(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         db_path = self._init_runnable_db()
         calls = []
 
@@ -258,7 +259,7 @@ repos:
         self.assertEqual(calls, [1, 2])
 
     def test_loop_runs_when_attempt_needs_supervision(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -315,7 +316,7 @@ repos:
         self.assertEqual(result["stop_reason"], "no_progress")
 
     def test_loop_stops_when_run_once_fails(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         self._init_runnable_db()
 
         def runner(*_args, **_kwargs):
@@ -333,7 +334,7 @@ repos:
         self.assertEqual(result["stop_reason"], "run_once_failed")
 
     def test_loop_passes_skip_publish_to_run_once(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         self._init_runnable_db()
         runner_kwargs = []
 
@@ -353,7 +354,7 @@ repos:
         self.assertEqual(runner_kwargs[0]["skip_publish"], True)
 
     def test_loop_zero_publish_budget_does_not_block_skip_publish_work(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         self._init_runnable_db()
         runner_kwargs = []
 
@@ -379,7 +380,7 @@ repos:
         self.assertEqual(result["stop_reason"], "run_once_failed")
 
     def test_loop_enforces_publish_action_budget(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         db_path = self._init_runnable_db()
         runner_kwargs = []
 
@@ -431,7 +432,7 @@ repos:
         )
 
     def _init_runnable_db(self):
-        from robert_agent import loop_engine
+        from robert_agent.runtime import loop as loop_engine
         db_path = loop_engine.load_config_db_path(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:

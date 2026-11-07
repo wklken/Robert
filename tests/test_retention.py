@@ -1,3 +1,4 @@
+from robert_agent.readmodels import dashboard
 from contextlib import closing, redirect_stdout
 import io
 import json
@@ -8,8 +9,12 @@ import unittest
 from unittest import mock
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent import daemon, daemon_state, run_once, status, storage, web
+from robert_agent.runtime import daemon
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.readmodels import status
+from robert_agent.adapters.sqlite import database as storage
 from tests.support import DAEMON_DEFAULTS, maintenance_config
+from robert_agent.execution import journal as run_journal
 
 
 NOW = '2026-10-23T00:00:00+00:00'
@@ -83,17 +88,17 @@ class RetentionTests(unittest.TestCase):
         summary = {'repo_summaries': [{'full_name': 'example/repo', 'status': 'completed'}], 'dispatch_count': 2}
         with self.connect() as conn:
             conn.execute('UPDATE agent_runs SET summary_json=? WHERE run_id=\'run\'', (json.dumps(summary),))
-            run_once._mark_run_step(conn, 'run', 'summarize', 'succeeded', NOW, output=summary)
+            run_journal.mark_run_step(conn, 'run', 'summarize', 'succeeded', NOW, output=summary)
             raw = conn.execute("SELECT output_json FROM run_steps WHERE run_id='run'").fetchone()[0]
             self.assertNotIn('repo_summaries', raw)
             cli_run = status.build_run(conn, 'run')
         self.assertEqual(cli_run['steps'][0]['output'], summary)
-        dashboard = web.build_dashboard_data(self.db)
-        run = next(r for r in dashboard['recent_runs'] if r['run_id'] == 'run')
+        dashboard_data = dashboard.build_dashboard_data(self.db)
+        run = next(r for r in dashboard_data['recent_runs'] if r['run_id'] == 'run')
         self.assertEqual(run['steps'][0]['output'], summary)
 
     def test_prune_preserves_recovery_references_and_core_history(self):
-        from robert_agent import retention
+        from robert_agent.operations import retention
         for name in ('expired-success','source','consumed','leased'):
             self.add_run(name)
         self.add_run('expired-failure', 'failed')
@@ -139,7 +144,7 @@ class RetentionTests(unittest.TestCase):
                     self.completed = True
                     with closing(real_connect(db)) as writer, writer:
                         writer.execute("UPDATE agent_runs SET status='completed', summary_json=? WHERE run_id='run'", (json.dumps(summary),))
-                        run_once._mark_run_step(writer, 'run', 'summarize', 'succeeded', NOW, output=summary)
+                        run_journal.mark_run_step(writer, 'run', 'summarize', 'succeeded', NOW, output=summary)
                 return super().execute(sql, parameters)
 
         for reader in ('cli', 'web'):
@@ -152,14 +157,14 @@ class RetentionTests(unittest.TestCase):
                     if reader == 'cli':
                         run = status.build_run(conn, 'run')
                     else:
-                        with mock.patch('robert_agent.web.sqlite3.connect', side_effect=lambda *a, **k: real_connect(*a, **k, factory=CompletingConnection)):
-                            run = web.build_dashboard_data(db)['recent_runs'][0]
+                        with mock.patch('robert_agent.interfaces.web.server.sqlite3.connect', side_effect=lambda *a, **k: real_connect(*a, **k, factory=CompletingConnection)):
+                            run = dashboard.build_dashboard_data(db)['recent_runs'][0]
                     self.assertEqual(run['steps'][0]['status'], 'succeeded')
                     self.assertEqual(run['steps'][0]['output'], summary)
                     self.assertNotIn('referenced_summary_json', run['steps'][0])
 
     def test_batches_bound_work_and_timestamp_offsets_are_compared_as_instants(self):
-        from robert_agent import retention
+        from robert_agent.operations import retention
         for i in range(5):
             self.add_run('old-'+str(i))
         self.add_run('latest', when=NOW)
@@ -172,32 +177,32 @@ class RetentionTests(unittest.TestCase):
         with self.connect() as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM agent_runs').fetchone()[0], 3)
 
-    @mock.patch("robert_agent.daemon.loop_engine.has_runnable_local_work", return_value=False)
+    @mock.patch("robert_agent.runtime.daemon.loop_engine.has_runnable_local_work", return_value=False)
     def test_maintenance_runs_again_in_resident_daemon_and_can_be_disabled(self, _local_work):
         self.add_run('old')
         self.add_run('latest', when=NOW)
-        with mock.patch('robert_agent.daemon.time.monotonic', return_value=1):
+        with mock.patch('robert_agent.runtime.daemon.time.monotonic', return_value=1):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
             self.assertIsNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='old'").fetchone())
         self.add_run('another-old')
-        with mock.patch('robert_agent.daemon.time.monotonic', return_value=2):
+        with mock.patch('robert_agent.runtime.daemon.time.monotonic', return_value=2):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
             self.assertIsNotNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='another-old'").fetchone())
-        with mock.patch('robert_agent.daemon.time.monotonic', return_value=10000):
+        with mock.patch('robert_agent.runtime.daemon.time.monotonic', return_value=10000):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
             self.assertIsNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='another-old'").fetchone())
         self.add_run('disabled')
         self.context.runtime_config['maintenance']['enabled'] = False
-        with mock.patch('robert_agent.daemon.time.monotonic', return_value=20000):
+        with mock.patch('robert_agent.runtime.daemon.time.monotonic', return_value=20000):
             daemon.run_once_decision(self.context, now=NOW)
         with self.connect() as conn:
             self.assertIsNotNone(conn.execute("SELECT 1 FROM agent_runs WHERE run_id='disabled'").fetchone())
 
     def test_busy_database_rolls_back_and_is_retryable(self):
-        from robert_agent import retention
+        from robert_agent.operations import retention
         self.add_run('old')
         self.add_run('latest', when=NOW)
         with closing(sqlite3.connect(self.db)) as lock:
@@ -209,7 +214,7 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT count(*) FROM agent_runs').fetchone()[0], 2)
 
     def test_missing_database_is_not_created(self):
-        from robert_agent import retention
+        from robert_agent.operations import retention
         path = self.db.with_name('missing.sqlite3')
         for apply in (False, True):
             result = retention.prune_database(path, apply=apply, now=NOW)
@@ -239,7 +244,7 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue())['counts']['agent_runs'], 2)
 
     def test_invalid_limits_cannot_delete_data(self):
-        from robert_agent import retention
+        from robert_agent.operations import retention
         for kwargs in ({'batch_size': 0}, {'batch_size': 501}, {'batch_size': True},
                        {'max_batches': 0}, {'run_retention_days': -1},
                        {'now': '2026-10-23T00:00:00'}):
@@ -247,7 +252,7 @@ class RetentionTests(unittest.TestCase):
                 retention.prune_database(self.db, apply=True, **kwargs)
 
     def test_failed_batch_rolls_back_already_deleted_steps(self):
-        from robert_agent import retention
+        from robert_agent.operations import retention
         self.add_run('old')
         self.add_run('latest', when=NOW)
         with self.connect() as conn:
@@ -266,7 +271,7 @@ class RetentionTests(unittest.TestCase):
             conn.execute("UPDATE agent_runs SET summary_json=? WHERE run_id='run'", (json.dumps(summary),))
             conn.execute("UPDATE run_steps SET output_json=? WHERE run_id='run'", (json.dumps(summary),))
             legacy = status.build_run(conn, 'run')
-            run_once._mark_run_step(conn, 'run', 'summarize', 'succeeded', NOW, output=summary)
+            run_journal.mark_run_step(conn, 'run', 'summarize', 'succeeded', NOW, output=summary)
             current = status.build_run(conn, 'run')
             self.assertEqual(current['steps'][0]['output'], legacy['steps'][0]['output'])
 

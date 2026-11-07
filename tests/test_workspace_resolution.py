@@ -7,10 +7,10 @@ import unittest
 
 import yaml
 
-from robert_agent.init_config import init_config
+from robert_agent.operations.initialize import init_config
 from robert_agent.resource_files import resource
-from robert_agent.run_once import run_once
-from robert_agent.worktree import resolve_task_workspace
+from robert_agent.runtime.cycle import run_once
+from robert_agent.adapters.git.workspace import resolve_task_workspace
 
 
 class WorkspaceResolutionTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-from robert_agent import worker_identity
+from robert_agent.adapters.processes import identity as worker_identity
 from contextlib import closing
 import os
 from pathlib import Path
@@ -10,9 +10,13 @@ import time
 import unittest
 from unittest import mock
 
-from robert_agent import common, daemon, publish, run_once, worktree
+from robert_agent.foundation import commands as common
+from robert_agent.runtime import daemon
+from robert_agent.delivery.application import publish
+from robert_agent.adapters.git import workspace as worktree
 from tests import test_publication_reconcile as publication_fixture
 from tests.support import DAEMON_DEFAULTS
+from robert_agent.execution.application import dispatch as dispatch_queue
 
 
 class DeadlineRemediationTests(unittest.TestCase):
@@ -86,7 +90,7 @@ class DeadlineRemediationTests(unittest.TestCase):
             os.environ, {'_ROBERT_CONTROL_DEADLINE': str(time.monotonic() - 1)}
         ):
             with self.assertRaises(subprocess.TimeoutExpired):
-                run_once._can_materialize_worktree({'repo_root': '/unused'})
+                dispatch_queue.can_materialize_worktree({'repo_root': '/unused'})
         runner.assert_not_called()
 
     def test_publication_expired_deadline_retains_intent_without_remote_invocation(self):

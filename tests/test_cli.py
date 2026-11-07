@@ -9,9 +9,9 @@ from unittest import mock
 
 import yaml
 
-from robert_agent import storage
+from robert_agent.adapters.sqlite import database as storage
 from robert_agent.cli.main import main
-from robert_agent.init_config import init_config
+from robert_agent.operations.initialize import init_config
 
 
 class CliTests(unittest.TestCase):

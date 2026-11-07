@@ -181,3 +181,29 @@ def remote_source_rows(conn, repo_id):
         """,
         (repo_id,),
     ).fetchall()
+
+
+def sources_for_workstream(conn, workstream_id):
+    return [
+        {
+            "source_type": source_type,
+            "number": number,
+        }
+        for source_type, number in conn.execute(
+            """
+            SELECT DISTINCT gs.source_type, gs.number
+            FROM github_sources gs
+            WHERE gs.source_id IN (
+              SELECT primary_source_id
+              FROM workstreams
+              WHERE workstream_id = ?
+              UNION
+              SELECT source_id
+              FROM workstream_sources
+              WHERE workstream_id = ?
+            )
+            ORDER BY gs.source_type, gs.number
+            """,
+            (workstream_id, workstream_id),
+        )
+    ]

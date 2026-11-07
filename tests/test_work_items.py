@@ -18,7 +18,7 @@ def table_columns(conn, table):
 
 class WorkItemSchemaTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -233,7 +233,7 @@ class WorkItemMigrationTests(unittest.TestCase):
             )
 
     def test_upgrade_backfills_only_root_workstream_once_without_mutating_execution_rows(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         self._create_legacy_database()
         storage.init_database(self.db_path)
@@ -267,7 +267,7 @@ class WorkItemMigrationTests(unittest.TestCase):
         self.assertEqual(migration[0][1], storage.WORK_ITEM_MIGRATION_CHECKSUM)
 
     def test_failed_backfill_does_not_record_migration_marker(self):
-        from robert_agent import storage
+        from robert_agent.adapters.sqlite import database as storage
 
         self._create_legacy_database()
         with mock.patch.object(storage, "_backfill_work_items", side_effect=RuntimeError("stop")):
@@ -284,8 +284,8 @@ class WorkItemMigrationTests(unittest.TestCase):
 
 class WorkItemCommandTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent import storage
-        from robert_agent.work_items import CommandContext
+        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.work.application.commands import CommandContext
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -309,7 +309,7 @@ class WorkItemCommandTests(unittest.TestCase):
         )
 
     def _create(self, **overrides):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         values = {
             "context": self.context,
@@ -326,7 +326,7 @@ class WorkItemCommandTests(unittest.TestCase):
         return work_items.create_work_item(self.db_path, **values)
 
     def _question(self, work_item_id, sequence):
-        from robert_agent.work_items import record_system_event
+        from robert_agent.work.application.commands import record_system_event
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
@@ -458,7 +458,7 @@ class WorkItemCommandTests(unittest.TestCase):
         return "task-failed-github"
 
     def test_retrigger_failed_github_task_queues_one_idempotent_wakeup(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         parent_task_id = self._failed_github_task()
         notifications = []
@@ -495,7 +495,7 @@ class WorkItemCommandTests(unittest.TestCase):
         self.assertEqual(notifications, [self.db_path])
 
     def test_retrigger_refuses_nonfailed_or_closed_github_task(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         task_id = self._failed_github_task()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -583,7 +583,7 @@ class WorkItemCommandTests(unittest.TestCase):
         self.assertEqual(observed, [(1, 1)])
 
     def test_validation_conflict_and_transaction_rollback_are_explicit(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         with self.assertRaises(work_items.WorkItemValidationError):
             self._create(repo_id="repo-2", idempotency_key="bad-repo")
@@ -616,7 +616,7 @@ class WorkItemCommandTests(unittest.TestCase):
             )
 
     def test_duplicate_command_replay_does_not_increment_version_or_add_wakeup(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         item = self._create()["item"]
         first = work_items.execute_command(
@@ -642,7 +642,7 @@ class WorkItemCommandTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
 
     def test_start_command_notifies_only_after_transaction_commits(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         item = self._create()["item"]
         observed = []
@@ -670,7 +670,7 @@ class WorkItemCommandTests(unittest.TestCase):
         self.assertEqual(observed, [(1, 1)])
 
     def test_start_command_stays_successful_when_notification_fails(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         item = self._create()["item"]
 
@@ -693,7 +693,7 @@ class WorkItemCommandTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
 
     def test_two_waiting_reply_cycles_keep_one_item_and_one_serial_workstream(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         item = self._create(start=True)["item"]
         first_question = self._question(item["work_item_id"], 1)
@@ -745,7 +745,8 @@ class WorkItemCommandTests(unittest.TestCase):
         self.assertEqual(active_tasks, 1)
 
     def test_approve_route_decision_resolves_attention_without_duplicate_task(self):
-        from robert_agent import board, work_items
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
 
         now = "2026-07-19T01:00:00+00:00"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -826,7 +827,8 @@ class WorkItemCommandTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
     def test_cancel_is_terminal_for_start_and_reply(self):
-        from robert_agent import board, work_items
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
 
         for command in ("start", "reply"):
             with self.subTest(command=command):
@@ -854,7 +856,7 @@ class WorkItemCommandTests(unittest.TestCase):
                     ).fetchone()[0], 0)
 
     def test_cancel_rejects_a_live_attempt_without_mutation(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         item = self._create(start=True)["item"]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -883,7 +885,7 @@ class WorkItemCommandTests(unittest.TestCase):
             )
 
     def test_github_issue_and_derived_pr_resolve_to_one_stable_item(self):
-        from robert_agent import work_items
+        from robert_agent.work.application import commands as work_items
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
