@@ -1,33 +1,45 @@
 """Prepare work already admitted by operators or durable workflows."""
 
-from robert_agent.supervision import store as supervision_store
-from robert_agent.execution.application import dispatch as dispatcher
+import json
+import subprocess
+
 from robert_agent.adapters.github import discovery as discover
-from robert_agent.foundation import errors as run_errors
-from robert_agent.execution import workspace as assigned_workspace
-from robert_agent.work.application import commands as work_items
-from robert_agent.work.application import lifecycle as work_application_lifecycle
-from robert_agent.work.application import preparation
-from robert_agent.work.application import source_lifecycle
 from robert_agent.context import attempt as attempt_context
 from robert_agent.context import prompts as render_prompt
 from robert_agent.delivery import contract as result_contract
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import retry as retry_policy
+from robert_agent.execution import rounds as native_rounds
+from robert_agent.execution import workspace as assigned_workspace
+from robert_agent.execution.application import dispatch as dispatcher
+from robert_agent.foundation import errors as run_errors
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.queries import scheduling
+from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import wakeups as db_read_wakeups
+from robert_agent.persistence.queries import (
+    work_item_events as db_read_work_item_events,
+)
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import vote as vote_store
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.security import authorization as authorize
+from robert_agent.supervision import store as supervision_store
 from robert_agent.work import queries as work_queries
 from robert_agent.work import streams as workstream
+from robert_agent.work.application import commands as work_items
+from robert_agent.work.application import lifecycle as work_application_lifecycle
+from robert_agent.work.application import preparation, source_lifecycle
 from robert_agent.workflows import pr_remediation as remediation
-from robert_agent.execution import rounds as native_rounds
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
-import json
-import subprocess
 
 
 def prepare_detected_local_tasks(
@@ -44,24 +56,7 @@ def prepare_detected_local_tasks(
     prompt_paths,
     config_result=None,
 ):
-    rows = conn.execute(
-        """
-        SELECT
-          t.task_id, t.workstream_id, t.parent_task_id, t.priority,
-          t.routing_mode, t.requested_worker, t.metadata_json,
-          wi.work_item_id, wi.title, wi.description, wi.created_by
-        FROM tasks t
-        JOIN work_items wi ON wi.workstream_id = t.workstream_id
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        WHERE w.repo_id = ?
-          AND wi.origin_type = 'web'
-          AND wi.canceled_at IS NULL AND wi.completed_at IS NULL
-          AND t.lifecycle = 'detected'
-          AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = t.task_id)
-        ORDER BY t.created_at, t.task_id
-        """,
-        (repo_id,),
-    ).fetchall()
+    rows = db_read_tasks.find_for_prepare_detected_local_tasks(conn, repo_id)
     prepared = 0
     for row in rows:
         (
@@ -77,16 +72,7 @@ def prepare_detected_local_tasks(
             description,
             created_by,
         ) = row
-        event_rows = conn.execute(
-            """
-            SELECT event_id, event_type, actor_kind, actor_identity, body,
-                   resolves_event_id, created_at, metadata_json
-            FROM work_item_events
-            WHERE work_item_id = ?
-            ORDER BY created_at, event_id
-            """,
-            (work_item_id,),
-        ).fetchall()
+        event_rows = db_read_work_item_events.find_for_prepare_detected_local_tasks(conn, work_item_id)
         local_events = [
             {
                 "work_item_event_id": event_row[0],
@@ -129,11 +115,7 @@ def prepare_detected_local_tasks(
                 or not set(supervision_repair.ACTIONS).issubset(route_result["allowed_github_actions"])
             ):
                 work_application_lifecycle.finalize_failed_task(
-                    conn,
-                    task_id,
-                    workstream_id,
-                    run_now,
-                    {"status": "maintenance_route_rejected"},
+                    conn, task_id, workstream_id, run_now, {"status": "maintenance_route_rejected"}
                 )
                 work_items.record_system_event(
                     conn,
@@ -144,10 +126,7 @@ def prepare_detected_local_tasks(
                     metadata={"task_id": task_id},
                     now=run_now,
                 )
-                conn.execute(
-                    "UPDATE wakeups SET status='consumed',updated_at=? WHERE task_id=? AND status='pending'",
-                    (run_now, task_id),
-                )
+                db_write_wakeups.update_for_prepare_detected_local_tasks_2(conn, run_now, task_id)
                 continue
             route_result["allowed_github_actions"] = list(supervision_repair.ACTIONS)
         source_reference = work_item_id.removeprefix("wi-")[:12]
@@ -168,11 +147,7 @@ def prepare_detected_local_tasks(
         except (OSError, subprocess.SubprocessError) as exc:
             reason = run_errors.safe_route_error(exc)["safe_error"]
             work_application_lifecycle.finalize_failed_task(
-                conn,
-                task_id,
-                workstream_id,
-                run_now,
-                {"status": "preparation_failed", "safe_error": reason},
+                conn, task_id, workstream_id, run_now, {"status": "preparation_failed", "safe_error": reason}
             )
             work_items.record_system_event(
                 conn,
@@ -183,10 +158,7 @@ def prepare_detected_local_tasks(
                 metadata={"task_id": task_id},
                 now=run_now,
             )
-            conn.execute(
-                "UPDATE wakeups SET status='consumed',updated_at=? WHERE task_id=? AND status='pending'",
-                (run_now, task_id),
-            )
+            db_write_wakeups.update_for_prepare_detected_local_tasks_2(conn, run_now, task_id)
             continue
         skill_status = route_result.get("skill_status") or {"runnable": True}
         if not skill_status["runnable"] or (worktree_result and not worktree_result.get("ok", True)):
@@ -196,9 +168,8 @@ def prepare_detected_local_tasks(
                 else worktree_result["status"]
             )
             preparation.upsert_route_decision(conn, task_id, route_result, run_now)
-            conn.execute(
-                "UPDATE tasks SET route_id = ?, expected_output = ? WHERE task_id = ?",
-                (route_result["route_id"], route_result["expected_output"], task_id),
+            db_write_tasks.set_route_id_and_expected_output_by_task_id(
+                conn, route_result["route_id"], route_result["expected_output"], task_id
             )
             work_application_lifecycle.finalize_failed_task(conn, task_id, workstream_id, run_now, {"status": reason})
             work_items.record_system_event(
@@ -273,66 +244,41 @@ def prepare_detected_local_tasks(
         task_metadata = values.json_object(task_metadata_json)
         task_metadata["local_source_reference"] = source_reference
         task_metadata["review_input_policy"] = route.review_input_policy(route_result["expected_output"], normalized)
-        conn.execute(
-            """
-            UPDATE tasks
-            SET lifecycle = 'queued', route_id = ?, expected_output = ?,
-                priority = ?, routing_mode = ?, requested_worker = ?,
-                updated_at = ?, metadata_json = ?
-            WHERE task_id = ?
-            """,
-            (
-                route_result["route_id"],
-                route_result["expected_output"],
-                priority,
-                routing_mode,
-                requested_worker,
-                run_now,
-                json.dumps(task_metadata, ensure_ascii=False, sort_keys=True),
-                task_id,
-            ),
+        db_write_tasks.update_for_prepare_detected_local_tasks(
+            conn,
+            route_result["route_id"],
+            route_result["expected_output"],
+            priority,
+            routing_mode,
+            requested_worker,
+            run_now,
+            json.dumps(task_metadata, ensure_ascii=False, sort_keys=True),
+            task_id,
         )
-        conn.execute(
-            """
-            INSERT INTO attempts(
-              attempt_id, task_id, attempt_no, status, worktree_path, branch_name,
-              started_at, heartbeat_at, metadata_json
-            ) VALUES (?, ?, 1, 'prepared', ?, ?, ?, ?, ?)
-            """,
-            (
-                attempt_id,
-                task_id,
-                (worktree_result or {}).get("worktree_path"),
-                (worktree_result or {}).get("branch_name"),
-                run_now,
-                run_now,
-                json.dumps(
-                    {
-                        "origin_type": "web",
-                        "work_item_id": work_item_id,
-                        "result_contract": result_contract.CONTRACT_ID,
-                        **(
-                            {"repair_git": worktree_result["repair_git"]}
-                            if worktree_result and "repair_git" in worktree_result
-                            else {}
-                        ),
-                    }
-                ),
+        db_write_attempts.insert_for_prepare_detected_local_tasks(
+            conn,
+            attempt_id,
+            task_id,
+            (worktree_result or {}).get("worktree_path"),
+            (worktree_result or {}).get("branch_name"),
+            run_now,
+            run_now,
+            json.dumps(
+                {
+                    "origin_type": "web",
+                    "work_item_id": work_item_id,
+                    "result_contract": result_contract.CONTRACT_ID,
+                    **(
+                        {"repair_git": worktree_result["repair_git"]}
+                        if worktree_result and "repair_git" in worktree_result
+                        else {}
+                    ),
+                }
             ),
         )
         preparation.insert_file_artifact(conn, task_id, attempt_id, "task_context", context_path, run_now)
         preparation.insert_file_artifact(conn, task_id, attempt_id, "prompt", prompt_path, run_now)
-        conn.execute(
-            """
-            UPDATE wakeups
-            SET status = 'consumed', consumed_run_id = ?, updated_at = ?
-            WHERE work_item_id = ?
-              AND task_id = ?
-              AND reason = 'manual_operator_request'
-              AND status = 'pending'
-            """,
-            (run_id, run_now, work_item_id, task_id),
-        )
+        db_write_wakeups.update_for_prepare_detected_local_tasks(conn, run_id, run_now, work_item_id, task_id)
         task_info = {
             "task_id": task_id,
             "attempt_id": attempt_id,
@@ -369,8 +315,8 @@ def prepare_github_operator_tasks(
     prompt_paths,
     config_result=None,
 ):
-    from robert_agent.work import operator_queries as github_operator
     from robert_agent.delivery.lock import task_publication_lock
+    from robert_agent.work import operator_queries as github_operator
 
     for pending in github_operator.pending_tasks(conn, [repo_id]):
         if dispatch_budget["remaining"] <= 0:
@@ -385,10 +331,7 @@ def prepare_github_operator_tasks(
         with task_publication_lock(db_path, task_id) as acquired:
             if not acquired:
                 continue
-            current = next(
-                iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)),
-                None,
-            )
+            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
             if not current or github_operator.blocked(conn, current):
                 continue
             context_task = current["parent_task_id"]
@@ -397,7 +340,7 @@ def prepare_github_operator_tasks(
             while context_task and context_task not in seen and not events:
                 seen.add(context_task)
                 events = work_queries.task_related_events(conn, context_task, include_consumed=True)
-                parent = conn.execute("SELECT parent_task_id FROM tasks WHERE task_id=?", (context_task,)).fetchone()
+                parent = db_records.first(db_read_tasks.find_parent_task_id_by_task_id(conn, context_task))
                 context_task = parent[0] if parent else None
             # Notification trust is derived from the current configuration,
             # never from a persisted boolean set by an earlier scanner.
@@ -424,10 +367,9 @@ def prepare_github_operator_tasks(
                 if authorize.authorize_event(event, repo, known_workstreams=set())["authorization_status"]
                 in {"authorized_trigger", "accepted_context"}
             ]
-            parent_row = conn.execute(
-                "SELECT task_kind,metadata_json FROM tasks WHERE task_id=?",
-                (current["parent_task_id"],),
-            ).fetchone()
+            parent_row = db_records.first(
+                db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, current["parent_task_id"])
+            )
             parent_episode = values.json_object(parent_row[1]).get("remediation_episode_id") if parent_row else None
             episode = remediation.load_episode(conn, parent_episode) if parent_episode else None
             operator_episode_reply = bool(
@@ -461,32 +403,13 @@ def prepare_github_operator_tasks(
                         metadata={"task_id": task_id, "reason_code": reason},
                         now=run_now,
                     )
-                    conn.execute(
-                        "UPDATE wakeups SET status='consumed',consumed_run_id=?,updated_at=? WHERE wakeup_id=?",
-                        (run_id, run_now, current["wakeup_id"]),
+                    db_write_wakeups.update_for_prepare_github_operator_tasks(
+                        conn, run_id, run_now, current["wakeup_id"]
                     )
                 continue
-            responses = conn.execute(
-                """SELECT event_id,event_type,actor_identity,body,created_at
-                FROM work_item_events WHERE work_item_id=? AND event_type IN
-                ('user_response','changes_requested','reopened','retry_requested')
-                ORDER BY created_at,event_id""",
-                (current["work_item_id"],),
-            ).fetchall()
+            responses = db_read_work_item_events.find_for_prepare_github_operator_tasks(conn, current["work_item_id"])
             operator_responses = [
-                dict(
-                    zip(
-                        (
-                            "event_id",
-                            "event_type",
-                            "actor_identity",
-                            "body",
-                            "created_at",
-                        ),
-                        row,
-                    )
-                )
-                for row in responses
+                dict(zip(("event_id", "event_type", "actor_identity", "body", "created_at"), row)) for row in responses
             ]
             refreshed = []
             trigger = authorized[0]
@@ -500,9 +423,7 @@ def prepare_github_operator_tasks(
                     )
                     if event["event_type"] in {"assigned", "notification", "mention"}:
                         updated.update(
-                            body=source["body"] or "",
-                            body_observed=True,
-                            body_updated_at=source.get("updated_at"),
+                            body=source["body"] or "", body_observed=True, body_updated_at=source.get("updated_at")
                         )
                 refreshed.append(updated)
             refreshed[0]["operator_responses"] = operator_responses
@@ -519,10 +440,7 @@ def prepare_github_operator_tasks(
                     "operator_responses": operator_responses,
                 }
             event = refreshed[0]
-            parent_route = conn.execute(
-                "SELECT route_id FROM tasks WHERE task_id=?",
-                (current["parent_task_id"],),
-            ).fetchone()
+            parent_route = db_records.first(db_read_tasks.find_route_id_by_task_id(conn, current["parent_task_id"]))
             route_id = parent_route[0] if parent_route else None
             if operator_episode_reply:
                 route_id = None
@@ -534,20 +452,10 @@ def prepare_github_operator_tasks(
                 worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
             except ControlDeadlineExceeded:
                 raise
-            except (
-                subprocess.CalledProcessError,
-                subprocess.TimeoutExpired,
-                FileNotFoundError,
-            ):
-                worktree_result = {
-                    "ok": False,
-                    "status": "github_operator_worktree_unavailable",
-                }
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+                worktree_result = {"ok": False, "status": "github_operator_worktree_unavailable"}
             # Cancellation and source reconciliation may run during Git I/O.
-            current = next(
-                iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)),
-                None,
-            )
+            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
             if (
                 not current
                 or github_operator.blocked(conn, current)
@@ -571,28 +479,17 @@ def prepare_github_operator_tasks(
             )
             if not info:
                 continue
-            conn.execute(
-                "UPDATE wakeups SET status='consumed',consumed_run_id=?,updated_at=? WHERE wakeup_id=?",
-                (run_id, run_now, current["wakeup_id"]),
-            )
+            db_write_wakeups.update_for_prepare_github_operator_tasks(conn, run_id, run_now, current["wakeup_id"])
             dispatcher.queue_dispatch(
-                dispatch_queue,
-                info,
-                worktree_result,
-                dispatch_budget,
-                repo_id=repo_id,
-                repo=repo,
+                dispatch_queue, info, worktree_result, dispatch_budget, repo_id=repo_id, repo=repo
             )
             prompt_paths.append(str(info["prompt_path"]))
 
 
 def _record_retrigger_preparation_failure(conn, wakeup_id, task_id, workstream_id, exc, now):
     if not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
-    row = conn.execute(
-        "SELECT metadata_json FROM wakeups WHERE wakeup_id=? AND status='pending'",
-        (wakeup_id,),
-    ).fetchone()
+        db_transactions.begin(conn, immediate=True)
+    row = db_records.first(db_read_wakeups.record_retrigger_preparation_failure(conn, wakeup_id))
     if not row or not execution_ownership.parent_allows_child(conn, task_id, retrigger_wakeup_id=wakeup_id):
         return
     metadata = values.json_object(row[0])
@@ -603,25 +500,18 @@ def _record_retrigger_preparation_failure(conn, wakeup_id, task_id, workstream_i
         retryable=not isinstance(exc, FileNotFoundError),
     )
     metadata["preparation_retry"] = failure
-    conn.execute(
-        """UPDATE wakeups SET status=?,not_before_at=?,attempt_count=?,metadata_json=?,updated_at=?
-        WHERE wakeup_id=? AND status='pending'""",
-        (
-            "pending" if failure["retryable"] else "canceled",
-            failure["next_retry_at"] or now,
-            failure["attempt_count"],
-            json.dumps(metadata),
-            now,
-            wakeup_id,
-        ),
+    db_write_wakeups.record_retrigger_preparation_failure(
+        conn,
+        "pending" if failure["retryable"] else "canceled",
+        failure["next_retry_at"] or now,
+        failure["attempt_count"],
+        json.dumps(metadata),
+        now,
+        wakeup_id,
     )
     if not failure["retryable"]:
         execution_notifications.insert(
-            conn,
-            "github_retrigger_failed",
-            "recorded",
-            now,
-            {"task_id": task_id, **failure},
+            conn, "github_retrigger_failed", "recorded", now, {"task_id": task_id, **failure}
         )
         item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
         if item:
@@ -650,33 +540,9 @@ def prepare_github_retrigger_tasks(
     prompt_paths,
     config_result=None,
 ):
-    rows = conn.execute(
-        """
-        SELECT wu.wakeup_id, wu.task_id, t.workstream_id, t.route_id, wu.metadata_json
-        FROM wakeups wu
-        JOIN tasks t ON t.task_id = wu.task_id
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        WHERE wu.repo_id = ?
-          AND wu.reason = 'manual_operator_request'
-          AND wu.status = 'pending'
-          AND julianday(wu.not_before_at)<=julianday(?)
-          AND (wu.expires_at IS NULL OR julianday(wu.expires_at)>julianday(?))
-          AND json_extract(wu.metadata_json, '$.kind') = 'github_retrigger'
-          AND t.lifecycle = 'failed'
-          AND w.lifecycle = 'failed'
-          AND w.active_task_id IS NULL
-        ORDER BY wu.created_at, wu.wakeup_id
-        """,
-        (repo_id, run_now, run_now),
-    ).fetchall()
+    rows = db_read_wakeups.find_for_prepare_github_retrigger_tasks(conn, repo_id, run_now, run_now)
     prepared_workstreams = set()
-    for (
-        wakeup_id,
-        parent_task_id,
-        workstream_id,
-        parent_route_id,
-        wakeup_metadata,
-    ) in rows:
+    for wakeup_id, parent_task_id, workstream_id, parent_route_id, wakeup_metadata in rows:
         if dispatch_budget["remaining"] <= 0:
             break
         related_events = json.loads(wakeup_metadata).get(
@@ -704,10 +570,7 @@ def prepare_github_retrigger_tasks(
                 )
                 continue
             route_result = workflow_routing.effective_route(
-                config_result,
-                repo,
-                task_event,
-                route_id="vote" if "source_type" in saved_review else "review-pr",
+                config_result, repo, task_event, route_id="vote" if "source_type" in saved_review else "review-pr"
             )
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
@@ -737,29 +600,16 @@ def prepare_github_retrigger_tasks(
             retrigger_wakeup_id=wakeup_id,
         )
         if task_info is None:
-            conn.execute(
-                "UPDATE wakeups SET status='canceled', updated_at=? WHERE wakeup_id=?",
-                (run_now, wakeup_id),
-            )
+            db_write_wakeups.update_for_prepare_github_retrigger_tasks_2(conn, run_now, wakeup_id)
             execution_notifications.insert(
                 conn,
                 "github_retrigger_blocked",
                 "recorded",
                 run_now,
-                {
-                    "task_id": parent_task_id,
-                    "reason": "workflow ownership or source no longer allows retrigger",
-                },
+                {"task_id": parent_task_id, "reason": "workflow ownership or source no longer allows retrigger"},
             )
             continue
-        conn.execute(
-            """
-            UPDATE wakeups
-            SET status = 'consumed', consumed_run_id = ?, updated_at = ?
-            WHERE wakeup_id = ? AND status = 'pending'
-            """,
-            (run_id, run_now, wakeup_id),
-        )
+        db_write_wakeups.update_for_prepare_github_retrigger_tasks(conn, run_id, run_now, wakeup_id)
         dispatcher.queue_dispatch(
             dispatch_queue,
             task_info,
@@ -786,50 +636,15 @@ def prepare_queued_reviews(
     round_store=review_store,
     config_result=None,
 ):
-    table = "vote_sessions" if round_store is vote_store else "review_sessions"
-    queued = conn.execute(
-        f"""SELECT round_id FROM {table} rs
-        WHERE rs.repo=? AND rs.task_id IS NULL AND rs.status='queued'
-        ORDER BY rs.created_at, rs.round_id""",
-        (repo["full_name"],),
-    ).fetchall()
-    for (round_id,) in queued:
+    kind = "vote" if round_store is vote_store else "review"
+    for round_id in scheduling.queued_round_ids(conn, kind, repo["full_name"]):
         entry = round_store.session(conn, round_id=round_id)
-        if (
-            round_store is review_store
-            and conn.execute(
-                "SELECT 1 FROM task_events WHERE event_id=? LIMIT 1",
-                (values.github_event_id(entry["trigger_fingerprint"]),),
-            ).fetchone()
-        ):
-            round_store.update(conn, round_id, status="canceled", error="trigger_already_processed")
-            continue
-        if conn.execute(
-            f"""SELECT 1 FROM {table} WHERE workstream_id=?
-            AND status='attention'""",
-            (entry["workstream_id"],),
-        ).fetchone():
-            continue
-        if conn.execute(
-            f"""SELECT 1 FROM {table} old
-            JOIN execution_subjects owner ON owner.subject_type='task' AND owner.subject_id=old.task_id
-            WHERE old.workstream_id=? AND owner.binding_status='attention'""",
-            (entry["workstream_id"],),
-        ).fetchone():
-            continue
-        if conn.execute(
-            """SELECT 1 FROM tasks WHERE workstream_id=?
-            AND lifecycle IN ('detected','authorized','classified','queued','running','waiting_for_user')""",
-            (entry["workstream_id"],),
-        ).fetchone():
-            continue
-        if any(
-            conn.execute(
-                f"SELECT 1 FROM {other} WHERE workstream_id=? AND status='attention'",
-                (entry["workstream_id"],),
-            ).fetchone()
-            for other in ("review_sessions", "vote_sessions")
-        ):
+        if round_store is review_store:
+            event_id = values.github_event_id(entry["trigger_fingerprint"])
+            if db_read_task_events.find_for_prepare_queued_reviews(conn, event_id):
+                round_store.update(conn, round_id, status="canceled", error="trigger_already_processed")
+                continue
+        if not scheduling.native_round_can_prepare(conn, kind, entry["workstream_id"]):
             continue
         event = entry["request"]["event"]
         if not workflow_routing.native_request_allowed(entry, repo, config_result):
@@ -844,11 +659,7 @@ def prepare_queued_reviews(
                 "native_request_canceled",
                 "recorded",
                 run_now,
-                {
-                    "round_id": round_id,
-                    "reason_code": "current_policy_rejected",
-                    "repo_id": repo_id,
-                },
+                {"round_id": round_id, "reason_code": "current_policy_rejected", "repo_id": repo_id},
             )
             continue
         if source_lifecycle.record_current_state_closed_source_if_needed(
@@ -874,11 +685,4 @@ def prepare_queued_reviews(
             native_round_id=round_id,
         )
         if task_info:
-            dispatcher.queue_dispatch(
-                dispatch_queue,
-                task_info,
-                None,
-                dispatch_budget,
-                repo_id=repo_id,
-                repo=repo,
-            )
+            dispatcher.queue_dispatch(dispatch_queue, task_info, None, dispatch_budget, repo_id=repo_id, repo=repo)

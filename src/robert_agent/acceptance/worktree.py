@@ -1,10 +1,14 @@
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
 import json
 import os
 import signal
-import sqlite3
 import subprocess
 import tempfile
 import time
@@ -27,10 +31,7 @@ def _acceptance_id():
 
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _workspace_dir(workspace_dir):
@@ -119,18 +120,8 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "data_dir": str(workspace_dir / "data"),
         "database": "dd.sqlite3",
         "github": {"account": repo["github_account"]},
-        "workers": {
-            "default": {
-                "adapter": "cbc",
-                "command": str(worker),
-                "model": "default",
-                "effort": "default",
-            }
-        },
-        "scheduler": {
-            "max_concurrency": 1,
-            "lease_ttl_seconds": source_config["lease_ttl_seconds"],
-        },
+        "workers": {"default": {"adapter": "cbc", "command": str(worker), "model": "default", "effort": "default"}},
+        "scheduler": {"max_concurrency": 1, "lease_ttl_seconds": source_config["lease_ttl_seconds"]},
         "supervision": {
             "startup_grace_seconds": 30,
             "heartbeat_stale_seconds": source_config["heartbeat_stale_seconds"],
@@ -153,11 +144,7 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "status": "prepared",
         "config_path": config_path,
         "db_path": workspace_dir / "data" / "dd.sqlite3",
-        "repo": repo
-        | {
-            "repo_root": str(checkout["repo_root"]),
-            "worktree_root": str(checkout["worktree_root"]),
-        },
+        "repo": repo | {"repo_root": str(checkout["repo_root"]), "worktree_root": str(checkout["worktree_root"])},
     }
 
 
@@ -197,34 +184,11 @@ def _json_load(value):
 
 
 def _attempt_evidence(db_path):
-    with closing(sqlite3.connect(db_path)) as conn:
-        row = conn.execute(
-            """
-            SELECT
-              t.route_id,
-              t.lifecycle,
-              a.attempt_id,
-              a.status,
-              a.worktree_path,
-              a.branch_name,
-              a.metadata_json
-            FROM attempts a
-            JOIN tasks t ON t.task_id = a.task_id
-            ORDER BY a.started_at DESC, a.attempt_id DESC
-            LIMIT 1
-            """
-        ).fetchone()
+    with closing(db_database.connect(db_path)) as conn:
+        row = db_records.first(db_read_attempts.find_for_attempt_evidence(conn))
     if not row:
         return {}
-    (
-        route_id,
-        task_lifecycle,
-        attempt_id,
-        attempt_status,
-        worktree_path,
-        branch_name,
-        metadata_json,
-    ) = row
+    route_id, task_lifecycle, attempt_id, attempt_status, worktree_path, branch_name, metadata_json = row
     metadata = _json_load(metadata_json)
     return {
         "route_id": route_id,

@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.acceptance import publish_dedupe as publish_dedupe_acceptance
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class DeliveryReceiptTests(unittest.TestCase):
@@ -42,11 +42,7 @@ class DeliveryReceiptTests(unittest.TestCase):
                 publication_receipts.mark_published(
                     conn,
                     action,
-                    {
-                        "deduplicated": True,
-                        "external_id": "987",
-                        "response": {"reconciliation": evidence},
-                    },
+                    {"deduplicated": True, "external_id": "987", "response": {"reconciliation": evidence}},
                     "2026-11-06T10:01:00+00:00",
                     intent=intent,
                 )

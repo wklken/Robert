@@ -17,7 +17,7 @@ class DaemonFixture(unittest.TestCase):
         self.db_path = self.root / "dd.sqlite3"
 
     def _init_db(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         storage.init_database(self.db_path)
         return self.db_path

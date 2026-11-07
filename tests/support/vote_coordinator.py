@@ -1,5 +1,6 @@
 """Shared fixtures for vote coordinator tests."""
 
+from tests.support import database as fixture_database
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +10,6 @@ import yaml
 from tests.support import review_coordinator as review_fixture
 from robert_agent.workflows.vote import coordinator as vote_coordinator
 from robert_agent.workflows.vote import files as vote_files
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
 from robert_agent.delivery.application import publish
 
 
@@ -22,10 +22,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         self.db = self.fixture.db
         config = yaml.safe_load(self.fixture.config_path.read_text())
         config["routes"] = {
-            "vote": {
-                "worker": "codex",
-                "multi_agent_vote": {"enabled": True, "workers": ["codex", "claude"]},
-            }
+            "vote": {"worker": "codex", "multi_agent_vote": {"enabled": True, "workers": ["codex", "claude"]}}
         }
         self.fixture.config_path.write_text(yaml.safe_dump(config))
         self.calls = []
@@ -45,12 +42,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         }
 
     def source(self, *args):
-        return {
-            **self.fixture.pr("example/backend", 42),
-            "title": "Decision",
-            "body": "A or B",
-            "discussion": [],
-        }
+        return {**self.fixture.pr("example/backend", 42), "title": "Decision", "body": "A or B", "discussion": []}
 
     def launcher(self, **kwargs):
         output = Path(kwargs["trusted_environment"]["ROBERT_VOTE_OUTPUT_DIR"])
@@ -67,11 +59,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         self.calls.append((stage, worker, prompt.read_bytes(), kwargs["model"]))
         if stage == "vote" and worker == self.fail_worker:
             return {"ok": False, "safe_error": "model unavailable"}
-        value = {
-            "schema_version": 1,
-            "round_id": manifest["round_id"],
-            "snapshot_id": manifest["snapshot_id"],
-        }
+        value = {"schema_version": 1, "round_id": manifest["round_id"], "snapshot_id": manifest["snapshot_id"]}
         if stage == "prepare":
             value.update(
                 status="ready",
@@ -131,11 +119,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         def transport(command, **kwargs):
             body = next((x[5:] for x in command if x.startswith("body=")), None)
             if body is not None:
-                value = {
-                    "id": len(comments) + 1,
-                    "body": body,
-                    "user": {"login": "robert-bot"},
-                }
+                value = {"id": len(comments) + 1, "body": body, "user": {"login": "robert-bot"}}
                 comments.append(value)
             elif "comments?" in command[2]:
                 value = [comments]
@@ -151,7 +135,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         driver = self.start()
         driver.run()
         self.fixture.cycle([])
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             action = dict(
                 zip(
                     [d[0] for d in conn.execute("SELECT * FROM github_actions").description],

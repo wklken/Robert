@@ -1,5 +1,20 @@
 """Policy-bound engineering work items and separate repair evidence milestones."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import origins as db_read_origins
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence.queries import daemon_runs as db_read_daemon_runs
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import repos as db_read_repos
+from robert_agent.persistence.queries import supervision_incidents as db_read_supervision_incidents
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import work_items as db_read_work_items
+
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -7,7 +22,6 @@ import json
 import os
 from pathlib import Path
 import re
-import sqlite3
 import stat
 import subprocess
 import sys
@@ -24,22 +38,13 @@ from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.work.application import commands as work_items
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.configuration.supervision import REPAIR_ACTIONS as ACTIONS
-from robert_agent.configuration.supervision import (
-    is_repair_argv,
-    normalize_diagnosis,
-    normalize_repair,
-)
+from robert_agent.configuration.supervision import is_repair_argv, normalize_diagnosis, normalize_repair
 
 
 ROUTE = "new-pr"
 OUTPUT_TYPE = "new_pr"
 _BUDGET = ("repair", "installation", "budget")
-_STAGES = (
-    "code_verified",
-    "mainline_verified",
-    "deployed_verified",
-    "original_progress",
-)
+_STAGES = ("code_verified", "mainline_verified", "deployed_verified", "original_progress")
 _ACTIVE_INCIDENTS = ("open", "needs_attention", "diagnosing")
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
@@ -58,9 +63,8 @@ def _path(config):
 
 def _connect(config, *, readonly=False):
     mode = "ro" if readonly else "rw"
-    conn = sqlite3.connect(f"{_path(config).as_uri()}?mode={mode}", uri=True, timeout=0.1)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn = db_database.connect(f"{_path(config).as_uri()}?mode={mode}", uri=True, timeout=0.1)
+    db_sqlite.configure(conn, foreign_keys=True)
     return conn
 
 
@@ -85,14 +89,7 @@ def _fingerprint_file(value):
     info = path.stat()
     if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or info.st_uid not in {0, os.geteuid()}:
         raise ValueError("maintenance executable is not a trusted regular file")
-    return [
-        str(path),
-        info.st_dev,
-        info.st_ino,
-        info.st_size,
-        info.st_mtime_ns,
-        info.st_ctime_ns,
-    ]
+    return [str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
 
 
 def _auto_authorization(config, policy, repo):
@@ -103,26 +100,16 @@ def _auto_authorization(config, policy, repo):
         or not policy["verification_commands"]
     ):
         return None
-    worker = next(
-        (item for item in config.get("workers", []) if item["name"] == policy["worker"]),
-        None,
-    )
+    worker = next((item for item in config.get("workers", []) if item["name"] == policy["worker"]), None)
     if not worker or worker["agent"] != "command" or not is_repair_argv(worker.get("command_argv")):
         return None
     try:
         profile = normalize_diagnosis(
-            {
-                "command": worker["command_argv"],
-                "environment_allowlist": worker.get("environment_allowlist", []),
-            }
+            {"command": worker["command_argv"], "environment_allowlist": worker.get("environment_allowlist", [])}
         )
         executable_ids = [
             _fingerprint_file(argv[0])
-            for argv in [
-                policy["launcher"],
-                worker["command_argv"],
-                *policy["verification_commands"],
-            ]
+            for argv in [policy["launcher"], worker["command_argv"], *policy["verification_commands"]]
         ]
         for argv in (policy["launcher"], worker["command_argv"]):
             executable_ids.extend(
@@ -134,33 +121,16 @@ def _auto_authorization(config, policy, repo):
         "policy": policy,
         "worker_profile": profile,
         "worker_timeout_seconds": worker.get("timeout_seconds"),
-        "repository": {
-            key: repo[key]
-            for key in (
-                "full_name",
-                "repo_root",
-                "worktree_root",
-                "default_base_branch",
-            )
-        },
+        "repository": {key: repo[key] for key in ("full_name", "repo_root", "worktree_root", "default_base_branch")},
         "executables": executable_ids,
         "route": ROUTE,
         "actions": ACTIONS,
     }
-    return {
-        "policy": policy,
-        "worker": worker,
-        "repo": repo,
-        "policy_digest": _digest(authority),
-    }
+    return {"policy": policy, "worker": worker, "repo": repo, "policy_digest": _digest(authority)}
 
 
 def repair_command(authorization):
-    return [
-        *authorization["policy"]["launcher"],
-        "--",
-        *authorization["worker"]["command_argv"],
-    ]
+    return [*authorization["policy"]["launcher"], "--", *authorization["worker"]["command_argv"]]
 
 
 def repair_environment(authorization, private_home):
@@ -367,14 +337,7 @@ def authorized_repair(conn, task_id, config, repo_id, action_type=None):
         return None
     if binding.get("policy_digest") != authorization["policy_digest"] or binding.get("worker") != policy["worker"]:
         return None
-    row = conn.execute(
-        """SELECT t.route_id,t.expected_output,t.routing_mode,t.requested_worker,
-            r.full_name,wi.created_by,wi.canceled_at,wi.metadata_json
-        FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id JOIN repos r ON r.repo_id=w.repo_id
-        JOIN work_items wi ON wi.workstream_id=t.workstream_id
-        WHERE t.task_id=? AND r.repo_id=? AND r.enabled=1 AND t.lifecycle NOT IN ('canceled','ignored')""",
-        (task_id, repo_id),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_for_authorized_repair(conn, task_id, repo_id))
     if (
         not row
         or row[0] not in (None, ROUTE)
@@ -390,7 +353,7 @@ def authorized_repair(conn, task_id, config, repo_id, action_type=None):
 
 
 def preparation_route(conn, task_id, config, repo):
-    row = conn.execute("SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)).fetchone()
+    row = db_records.first(db_read_repos.find_repo_id_by_full_name(conn, repo["full_name"]))
     return ROUTE if row and authorized_repair(conn, task_id, config, row[0]) else None
 
 
@@ -407,7 +370,7 @@ def _store(conn, key, metadata, now):
 
 
 def _incident(conn, incident_id):
-    return conn.execute("SELECT * FROM supervision_incidents WHERE incident_id=?", (incident_id,)).fetchone()
+    return db_records.first(db_read_supervision_incidents.find_record_by_incident_id(conn, incident_id))
 
 
 def _diagnosis(conn, incident):
@@ -430,25 +393,11 @@ def _diagnosis(conn, incident):
 def _repair_ancestor(conn, incident):
     if not incident or incident["scope_type"] != "task":
         return None
-    return conn.execute(
-        """WITH RECURSIVE origins(stream_id,depth) AS (
-            SELECT workstream_id,0 FROM tasks WHERE task_id=? UNION ALL
-            SELECT w.origin_workstream_id,o.depth+1 FROM origins o JOIN workstreams w ON w.workstream_id=o.stream_id
-            WHERE w.origin_workstream_id IS NOT NULL AND o.depth<16
-        ) SELECT wi.work_item_id,json_extract(wi.metadata_json,'$.supervision_repair.incident_id')
-        FROM origins o JOIN work_items wi ON wi.workstream_id=o.stream_id
-        WHERE wi.created_by='system:supervisor' AND json_type(wi.metadata_json,'$.supervision_repair')='object'
-        ORDER BY o.depth LIMIT 1""",
-        (incident["scope_id"],),
-    ).fetchone()
+    return db_records.first(db_read_origins.find_for_repair_ancestor(conn, incident["scope_id"]))
 
 
 def _proposal_status(status, **values):
-    return {
-        "ok": status not in ("unavailable", "maintenance_repository_unavailable"),
-        "status": status,
-        **values,
-    }
+    return {"ok": status not in ("unavailable", "maintenance_repository_unavailable"), "status": status, **values}
 
 
 def _repair_brief(conn, incident_id, diagnosis, base_branch):
@@ -484,10 +433,7 @@ def _repair_brief(conn, incident_id, diagnosis, base_branch):
     )
     if len(facts) > 9000:
         facts = _json(
-            {
-                "expected_progress": diagnosis["expected_progress"],
-                "omitted": "observation exceeded the handoff limit",
-            }
+            {"expected_progress": diagnosis["expected_progress"], "omitted": "observation exceeded the handoff limit"}
         )
     return (
         f"Investigate the suspected Robert defect linked to supervision incident {incident_id}.\n"
@@ -515,8 +461,7 @@ def propose(config, incident_id, *, now=None):
             linked = _state(conn, _link_key(incident_id))
             if linked:
                 return _proposal_status(
-                    linked["status"],
-                    **{key: item for key, item in linked.items() if key != "status"},
+                    linked["status"], **{key: item for key, item in linked.items() if key != "status"}
                 )
             incident = _incident(conn, incident_id)
             ancestor = _repair_ancestor(conn, incident)
@@ -533,37 +478,24 @@ def propose(config, incident_id, *, now=None):
             if not checked["ok"]:
                 authorization = None
         with closing(_connect(config)) as conn, conn:
-            conn.execute("BEGIN IMMEDIATE")
+            db_transactions.begin(conn, immediate=True)
             linked = _state(conn, _link_key(incident_id))
             if linked:
                 return _proposal_status(
-                    linked["status"],
-                    **{key: item for key, item in linked.items() if key != "status"},
+                    linked["status"], **{key: item for key, item in linked.items() if key != "status"}
                 )
             incident = _incident(conn, incident_id)
             if ancestor := _repair_ancestor(conn, incident):
-                blocked = {
-                    "status": "repair_recursion_blocked",
-                    "work_item_id": ancestor[0],
-                    "failure_of": ancestor[1],
-                }
+                blocked = {"status": "repair_recursion_blocked", "work_item_id": ancestor[0], "failure_of": ancestor[1]}
                 _store(conn, _link_key(incident_id), blocked, current)
                 origin = _state(conn, _link_key(ancestor[1]))
                 if origin:
-                    _store(
-                        conn,
-                        _link_key(ancestor[1]),
-                        {**origin, "repair_failure_incident_id": incident_id},
-                        current,
-                    )
+                    _store(conn, _link_key(ancestor[1]), {**origin, "repair_failure_incident_id": incident_id}, current)
                 return _proposal_status("repair_recursion_blocked", work_item_id=ancestor[0])
             diagnosis = _diagnosis(conn, incident)
             if not diagnosis:
                 return _proposal_status("no_current_repair_diagnosis")
-            row = conn.execute(
-                "SELECT repo_id FROM repos WHERE lower(full_name)=? AND enabled=1",
-                (policy["repository"],),
-            ).fetchone()
+            row = db_records.first(db_read_repos.find_for_propose(conn, policy["repository"]))
             if not row:
                 return _proposal_status("maintenance_repository_unavailable")
             if authorization:
@@ -576,10 +508,7 @@ def propose(config, incident_id, *, now=None):
             )
             root_key = _digest([policy["repository"], identity])
             idempotency = "supervision-repair:" + root_key
-            existing = conn.execute(
-                "SELECT 1 FROM work_items WHERE creation_idempotency_key=?",
-                (idempotency,),
-            ).fetchone()
+            existing = db_records.first(db_read_work_items.find_for_propose(conn, idempotency))
             prior = _state(conn, _BUDGET)
             recent = [
                 stamp
@@ -621,19 +550,11 @@ def propose(config, incident_id, *, now=None):
             }
             _store(conn, _link_key(incident_id), link, current)
             if is_new:
-                _store(
-                    conn,
-                    _BUDGET,
-                    {"created_at": [*recent, current.isoformat()]},
-                    current,
-                )
+                _store(conn, _BUDGET, {"created_at": [*recent, current.isoformat()]}, current)
         if task_id and is_new:
             wakeup_notifier.notify(_path(config))
-        return _proposal_status(
-            link["status"],
-            **{key: item for key, item in link.items() if key != "status"},
-        )
-    except (OSError, sqlite3.Error, ValueError, work_items.WorkItemConflictError):
+        return _proposal_status(link["status"], **{key: item for key, item in link.items() if key != "status"})
+    except (OSError, db_errors.Error, ValueError, work_items.WorkItemConflictError):
         return _proposal_status("unavailable")
 
 
@@ -643,20 +564,10 @@ def poll(config, *, now=None):
         return _proposal_status("disabled")
     try:
         with closing(_connect(config, readonly=True)) as conn:
-            rows = conn.execute("""SELECT i.incident_id FROM supervision_incidents i
-                JOIN supervision_checkpoints d ON d.scope_type='diagnosis' AND d.scope_id=i.incident_id AND d.rule_id='analysis'
-                LEFT JOIN supervision_checkpoints r ON r.scope_type='repair' AND r.scope_id=i.incident_id AND r.rule_id='engineering'
-                WHERE i.status IN ('open','needs_attention','diagnosing') AND r.scope_id IS NULL
-                  AND json_extract(d.metadata_json,'$.status')='succeeded'
-                  AND json_extract(d.metadata_json,'$.diagnosis.diagnosis_class')='product_defect'
-                  AND json_extract(d.metadata_json,'$.diagnosis.recommended_action')='repair_task'
-                ORDER BY d.updated_at,i.incident_id LIMIT 16""").fetchall()
-            candidate = next(
-                (row[0] for row in rows if _diagnosis(conn, _incident(conn, row[0]))),
-                None,
-            )
+            rows = db_read_supervision_incidents.find_for_poll(conn)
+            candidate = next((row[0] for row in rows if _diagnosis(conn, _incident(conn, row[0]))), None)
         return propose(config, candidate, now=now) if candidate else _proposal_status("idle")
-    except (OSError, sqlite3.Error, ValueError):
+    except (OSError, db_errors.Error, ValueError):
         return _proposal_status("unavailable")
 
 
@@ -678,28 +589,10 @@ def _revision(value):
 
 
 def _delivery(conn, work_item_id):
-    result = conn.execute(
-        """SELECT wr.result_id,wr.task_id,
-            json_extract(wr.metadata_json,'$.audit.action_scope.result_head_sha') AS revision
-        FROM work_items wi JOIN tasks t ON t.workstream_id=wi.workstream_id
-        JOIN worker_results wr ON wr.task_id=t.task_id JOIN attempts a ON a.attempt_id=wr.attempt_id
-        WHERE wi.work_item_id=? AND wr.output_type='new_pr' AND a.status='completed'
-          AND json_extract(wr.metadata_json,'$.audit.status')='accepted'
-          AND (json_type(a.metadata_json,'$.dispatch.pid') IS NOT 'integer'
-               OR json_extract(a.metadata_json,'$.process_stopped_at') IS NOT NULL)
-        ORDER BY wr.created_at DESC,wr.result_id DESC LIMIT 1""",
-        (work_item_id,),
-    ).fetchone()
+    result = db_records.first(db_read_work_items.find_for_delivery(conn, work_item_id))
     if not result or not _revision(result["revision"]):
         return None
-    actions = conn.execute(
-        """SELECT ga.action_id,ga.action_type,
-            json_extract(ga.metadata_json,'$.publish.receipt') AS receipt
-        FROM github_actions ga JOIN publication_intents pi ON pi.action_id=ga.action_id
-        WHERE ga.result_id=? AND ga.audit_status='accepted' AND ga.publish_status='published'
-          AND pi.status='published' ORDER BY ga.created_at,ga.action_id LIMIT 4""",
-        (result["result_id"],),
-    ).fetchall()
+    actions = db_read_github_actions.find_for_delivery(conn, result["result_id"])
     receipts = {}
     for action in actions:
         receipt = json.loads(action["receipt"] or "{}")
@@ -740,15 +633,7 @@ def _code_binding(config, checkout, delivery, policy, repo):
             "revision": delivery["revision"],
             "checkout": str(checkout),
             "policy": policy,
-            "repo": {
-                key: repo[key]
-                for key in (
-                    "full_name",
-                    "repo_root",
-                    "worktree_root",
-                    "default_base_branch",
-                )
-            },
+            "repo": {key: repo[key] for key in ("full_name", "repo_root", "worktree_root", "default_base_branch")},
             "db_path": str(_path(config)),
             "data_dir": str(config.get("data_dir", "")),
             "file_identities": [_fingerprint_file(path) for path in paths],
@@ -759,17 +644,10 @@ def _code_binding(config, checkout, delivery, policy, repo):
 def _code_proof(config, checkout, delivery, policy, repo):
     from robert_agent.supervision import git as supervision_git
 
-    unavailable = {
-        "status": "unobservable",
-        "reason_code": "verification_environment_unavailable",
-    }
+    unavailable = {"status": "unobservable", "reason_code": "verification_environment_unavailable"}
     if not policy["launcher"] or not policy["verification_commands"]:
         return unavailable
-    authorization = {
-        "policy": policy,
-        "repo": repo,
-        "worker": {"environment_allowlist": []},
-    }
+    authorization = {"policy": policy, "repo": repo, "worker": {"environment_allowlist": []}}
     revision = delivery["revision"]
     worktree_root = Path(repo["worktree_root"]).resolve()
     if checkout == worktree_root or not checkout.is_relative_to(worktree_root):
@@ -778,10 +656,7 @@ def _code_proof(config, checkout, delivery, policy, repo):
         for argv in [policy["launcher"], *policy["verification_commands"]]:
             _fingerprint_file(argv[0])
         if not _clean_revision(checkout, revision, config["data_dir"]):
-            return {
-                "status": "unobservable",
-                "reason_code": "checkout_revision_or_clean_state_mismatch",
-            }
+            return {"status": "unobservable", "reason_code": "checkout_revision_or_clean_state_mismatch"}
         deadline = time.monotonic() + 300
         tests = []
         with (
@@ -794,11 +669,7 @@ def _code_proof(config, checkout, delivery, policy, repo):
             for argv in policy["verification_commands"]:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return {
-                        "status": "failed",
-                        "revision": revision,
-                        "reason_code": "verification_deadline",
-                    }
+                    return {"status": "failed", "revision": revision, "reason_code": "verification_deadline"}
                 command = [*policy["launcher"], "--", *argv]
                 proc = None
                 group_stopped = False
@@ -821,11 +692,7 @@ def _code_proof(config, checkout, delivery, policy, repo):
                             "reason_code": "verification_group_still_alive",
                         }
                 except subprocess.TimeoutExpired:
-                    return {
-                        "status": "failed",
-                        "revision": revision,
-                        "reason_code": "verification_deadline",
-                    }
+                    return {"status": "failed", "revision": revision, "reason_code": "verification_deadline"}
                 finally:
                     if proc is not None and not group_stopped:
                         worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
@@ -833,11 +700,7 @@ def _code_proof(config, checkout, delivery, policy, repo):
                 if code != 0:
                     return {"status": "failed", "revision": revision, "commands": tests}
             if not _clean_revision(isolated, revision, config["data_dir"]):
-                return {
-                    "status": "failed",
-                    "revision": revision,
-                    "reason_code": "checkout_changed_during_verification",
-                }
+                return {"status": "failed", "revision": revision, "reason_code": "checkout_changed_during_verification"}
         return {"status": "verified", "revision": revision, "commands": tests}
     except (OSError, ValueError, subprocess.SubprocessError):
         return unavailable
@@ -886,9 +749,7 @@ def _target_contains(repo, repository, merged, tip):
 def _merged_on_target(delivery, policy, repo, branch):
     repository = policy["repository"]
     match = re.fullmatch(
-        r"https://github\.com/" + re.escape(repository) + r"/pull/([1-9][0-9]*)/?",
-        delivery.get("pr_url") or "",
-        re.I,
+        r"https://github\.com/" + re.escape(repository) + r"/pull/([1-9][0-9]*)/?", delivery.get("pr_url") or "", re.I
     )
     if not match:
         return {"status": "pending", "reason_code": "repair_pr_not_published"}
@@ -903,20 +764,11 @@ def _merged_on_target(delivery, policy, repo, branch):
             or pr.get("base_ref") != branch
             or str(pr.get("repository")).casefold() != repository
         ):
-            return {
-                "status": "pending",
-                "reason_code": "repair_merge_identity_mismatch",
-            }
+            return {"status": "pending", "reason_code": "repair_merge_identity_mismatch"}
         merged = pr.get("merge_commit_sha")
-        tip = _github(
-            f"repos/{repository}/git/ref/heads/{quote(branch, safe='')}",
-            "{sha:.object.sha}",
-        ).get("sha")
+        tip = _github(f"repos/{repository}/git/ref/heads/{quote(branch, safe='')}", "{sha:.object.sha}").get("sha")
         if not _target_contains(repo, repository, merged, tip):
-            return {
-                "status": "unobservable",
-                "reason_code": "target_branch_containment_unproven",
-            }
+            return {"status": "unobservable", "reason_code": "target_branch_containment_unproven"}
         return {
             "status": "verified",
             "revision": delivery["revision"],
@@ -926,10 +778,7 @@ def _merged_on_target(delivery, policy, repo, branch):
             "pr_url": delivery["pr_url"],
         }
     except (OSError, ValueError, subprocess.SubprocessError):
-        return {
-            "status": "unobservable",
-            "reason_code": "repair_mainline_observation_unavailable",
-        }
+        return {"status": "unobservable", "reason_code": "repair_mainline_observation_unavailable"}
 
 
 def _deployment(conn, runtime, mainline, repo, now):
@@ -942,12 +791,9 @@ def _deployment(conn, runtime, mainline, repo, now):
         or mainline["status"] != "verified"
     ):
         return reason
-    lease = conn.execute(
-        """SELECT 1 FROM daemon_runs d JOIN leases l ON l.owner_id=d.daemon_run_id
-        WHERE d.daemon_run_id=? AND d.status='running' AND d.started_at=?
-          AND l.resource_type='daemon' AND l.status='active' AND julianday(l.expires_at)>julianday(?)""",
-        (runtime.get("run_id"), runtime.get("started_at"), now.isoformat()),
-    ).fetchone()
+    lease = db_records.first(
+        db_read_daemon_runs.find_for_deployment(conn, runtime.get("run_id"), runtime.get("started_at"), now.isoformat())
+    )
     identity = runtime.get("process_identity")
     if (
         not lease
@@ -969,21 +815,11 @@ def _deployment(conn, runtime, mainline, repo, now):
 
 def _original_progress(conn, incident, deployment):
     if not incident:
-        return {
-            "status": "unobservable",
-            "reason_code": "original_incident_unavailable",
-        }
+        return {"status": "unobservable", "reason_code": "original_incident_unavailable"}
     if incident["status"] == "dismissed":
-        return {
-            "status": "not_applicable",
-            "reason_code": "original_incident_dismissed",
-        }
+        return {"status": "not_applicable", "reason_code": "original_incident_dismissed"}
     if incident["scope_type"] == "task":
-        canceled = conn.execute(
-            """SELECT 1 FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-            WHERE t.task_id=? AND (t.lifecycle IN ('canceled','ignored') OR w.lifecycle='canceled')""",
-            (incident["scope_id"],),
-        ).fetchone()
+        canceled = db_records.first(db_read_tasks.find_for_original_progress(conn, incident["scope_id"]))
         if canceled:
             return {"status": "not_applicable", "reason_code": "original_task_canceled"}
     progress = json.loads(incident["resolution_evidence_json"])
@@ -1011,19 +847,11 @@ def _original_progress(conn, incident, deployment):
             "observed_at": incident["resolved_at"],
             "evidence": progress,
         }
-    return {
-        "status": "pending",
-        "reason_code": "original_post_deployment_progress_unverified",
-    }
+    return {"status": "pending", "reason_code": "original_post_deployment_progress_unverified"}
 
 
 def _verification_owner(conn, item_id, repository):
-    return conn.execute(
-        """SELECT 1 FROM work_items wi JOIN repos r ON r.repo_id=wi.repo_id
-        WHERE wi.work_item_id=? AND wi.created_by='system:supervisor' AND wi.canceled_at IS NULL
-          AND r.enabled=1 AND lower(r.full_name)=?""",
-        (item_id, repository),
-    ).fetchone()
+    return db_records.first(db_read_work_items.find_for_verification_owner(conn, item_id, repository))
 
 
 def verify(config, incident_id, *, checkout, runtime=None, now=None, expected_delivery=None):
@@ -1063,10 +891,7 @@ def verify(config, incident_id, *, checkout, runtime=None, now=None, expected_de
             code = _code_proof(config, checkout, delivery, policy, repo)
             if code["status"] == "verified":
                 if not binding or _code_binding(config, checkout, delivery, policy, repo) != binding:
-                    code = {
-                        "status": "unobservable",
-                        "reason_code": "verification_inputs_changed",
-                    }
+                    code = {"status": "unobservable", "reason_code": "verification_inputs_changed"}
                 else:
                     code = {**code, "verification_key": binding}
         mainline = (
@@ -1084,7 +909,7 @@ def verify(config, incident_id, *, checkout, runtime=None, now=None, expected_de
         ):
             return _proposal_status("repair_evidence_changed")
         with closing(_connect(config)) as conn, conn:
-            conn.execute("BEGIN IMMEDIATE")
+            db_transactions.begin(conn, immediate=True)
             if (
                 _state(conn, _link_key(incident_id)) != link
                 or _delivery(conn, link["work_item_id"]) != delivery
@@ -1106,5 +931,5 @@ def verify(config, incident_id, *, checkout, runtime=None, now=None, expected_de
             else "verification_pending",
             verification=verification,
         )
-    except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+    except (OSError, ValueError, db_errors.Error, subprocess.SubprocessError):
         return _proposal_status("unavailable")

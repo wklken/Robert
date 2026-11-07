@@ -46,6 +46,22 @@ repos:
             encoding="utf-8",
         )
 
+    def test_result_receipt_waits_for_process_exit_before_followup_cycle(self):
+        from robert_agent.acceptance import controlled_e2e as acceptance
+        from robert_agent.adapters.processes import attempt
+
+        with (
+            patch.object(
+                acceptance.db_read_worker_results, "find_for_wait_for_result", return_value=[("result", "new_pr", "{}")]
+            ) as read_result,
+            patch.object(attempt, "dispatch_status", side_effect=[{"status": "alive_same"}, {"status": "dead"}]),
+            patch.object(acceptance.time, "sleep") as sleep,
+        ):
+            result = acceptance._wait_for_result(self.root / "result.sqlite3", 5, 0.05)
+        self.assertEqual(result, {"result_id": "result", "output_type": "new_pr"})
+        self.assertEqual(read_result.call_count, 2)
+        sleep.assert_called_once_with(0.05)
+
     def test_controlled_worker_uses_the_running_package_interpreter(self):
         from robert_agent.acceptance import controlled_e2e as controlled_e2e_acceptance
 
@@ -87,10 +103,7 @@ repos:
         self.assertEqual(result["publish_result"]["finalized_task_count"], 1)
         self.assertEqual(
             result["github_actions"],
-            [
-                ("push_existing_pr", "accepted", "published"),
-                ("open_pr", "accepted", "published"),
-            ],
+            [("push_existing_pr", "accepted", "published"), ("open_pr", "accepted", "published")],
         )
         self.assertEqual(result["published_pr_url"], "https://github.com/example/repo/pull/42")
         self.assertTrue(Path(result["worktree_path"]).is_dir())

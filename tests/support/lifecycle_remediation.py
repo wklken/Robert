@@ -10,7 +10,7 @@ import time
 import unittest
 from tests.support import durable_result as result_fixture
 from robert_agent.adapters.processes import worker as dispatch
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.adapters.processes import identity as worker_identity
 
 

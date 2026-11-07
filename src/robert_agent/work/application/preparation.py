@@ -1,5 +1,23 @@
 """Prepare an attempt with durable inputs, a workspace and a prompt."""
 
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import repos as db_read_repos
+from robert_agent.persistence.queries import route_decisions as db_read_route_decisions
+from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import wakeups as db_read_wakeups
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
+from robert_agent.persistence.stores import artifacts as db_write_artifacts
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import route_decisions as db_write_route_decisions
+from robert_agent.persistence.stores import task_events as db_write_task_events
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import work_items as db_write_work_items
+from robert_agent.persistence.stores import workstream_sources as db_write_workstream_sources
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from datetime import timedelta
 from pathlib import Path
 from robert_agent.execution import retry as retry_policy
@@ -21,72 +39,26 @@ from robert_agent.work import streams as workstream
 from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import vote as vote_store
 import json
 
 
 def insert_file_artifact(conn, task_id, attempt_id, artifact_type, path, run_now):
     path_obj = Path(path)
     bytes_size = path_obj.stat().st_size if path_obj.exists() else None
-    conn.execute(
-        """
-        INSERT INTO artifacts(
-          artifact_id, task_id, attempt_id, artifact_type, path, bytes, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            values.new_id("artifact"),
-            task_id,
-            attempt_id,
-            artifact_type,
-            str(path_obj),
-            bytes_size,
-            run_now,
-        ),
+    db_write_artifacts.record_dispatch_artifacts(
+        conn, values.new_id("artifact"), task_id, attempt_id, artifact_type, str(path_obj), bytes_size, run_now
     )
 
 
 def upsert_route_decision(conn, task_id, route_result, run_now):
     required_skills = route_result.get("required_skills", [])
     recommended_skills = route_result.get("recommended_skills", [])
-    row = conn.execute(
-        "SELECT route_decision_id FROM route_decisions WHERE task_id = ? LIMIT 1",
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_route_decisions.find_route_decision_id_by_task_id(conn, task_id))
     if row:
-        conn.execute(
-            """
-            UPDATE route_decisions
-            SET route_id = ?, expected_output = ?, allowed_github_actions_json = ?,
-                required_skills_json = ?, recommended_skills_json = ?, confidence = ?, created_at = ?
-            WHERE route_decision_id = ?
-            """,
-            (
-                route_result["route_id"],
-                route_result["expected_output"],
-                json.dumps(route_result["allowed_github_actions"], sort_keys=True),
-                json.dumps(required_skills, sort_keys=True),
-                json.dumps(recommended_skills, sort_keys=True),
-                route_result["confidence"],
-                run_now,
-                row[0],
-            ),
-        )
-        return
-    conn.execute(
-        """
-        INSERT INTO route_decisions(
-          route_decision_id, task_id, route_id, expected_output,
-          allowed_github_actions_json, required_skills_json, recommended_skills_json,
-          confidence, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            values.new_id("route"),
-            task_id,
+        db_write_route_decisions.update_for_upsert_route_decision(
+            conn,
             route_result["route_id"],
             route_result["expected_output"],
             json.dumps(route_result["allowed_github_actions"], sort_keys=True),
@@ -94,7 +66,20 @@ def upsert_route_decision(conn, task_id, route_result, run_now):
             json.dumps(recommended_skills, sort_keys=True),
             route_result["confidence"],
             run_now,
-        ),
+            row[0],
+        )
+        return
+    db_write_route_decisions.insert_for_upsert_route_decision(
+        conn,
+        values.new_id("route"),
+        task_id,
+        route_result["route_id"],
+        route_result["expected_output"],
+        json.dumps(route_result["allowed_github_actions"], sort_keys=True),
+        json.dumps(required_skills, sort_keys=True),
+        json.dumps(recommended_skills, sort_keys=True),
+        route_result["confidence"],
+        run_now,
     )
 
 
@@ -109,10 +94,7 @@ def refresh_prepared_task(conn, data_dir, db_path, repo, event, run_now, dry_run
         if not acquired:
             return None
         current = source_events.active_task_state(conn, event["workstream_id"])
-        owner = conn.execute(
-            "SELECT active_task_id FROM workstreams WHERE workstream_id=?",
-            (event["workstream_id"],),
-        ).fetchone()
+        owner = db_records.first(db_read_workstreams.find_active_task_id_by_workstream_id(conn, event["workstream_id"]))
         if (
             current != state
             or not owner
@@ -198,10 +180,7 @@ def _refresh_prepared_task_locked(
     # Recheck after external preparation as well. Execution control can revoke
     # ownership while Git is running; no stale input may be installed afterward.
     current = source_events.active_task_state(conn, event["workstream_id"])
-    owner = conn.execute(
-        "SELECT active_task_id FROM workstreams WHERE workstream_id=?",
-        (event["workstream_id"],),
-    ).fetchone()
+    owner = db_records.first(db_read_workstreams.find_active_task_id_by_workstream_id(conn, event["workstream_id"]))
     if (
         current != state
         or not owner
@@ -259,63 +238,29 @@ def _refresh_prepared_task_locked(
         ("github_context_json", github_context["json_path"]),
         ("github_context_md", github_context["md_path"]),
     ]:
-        updated = conn.execute(
-            "UPDATE artifacts SET bytes=?, created_at=? WHERE attempt_id=? AND artifact_type=? AND path=?",
-            (
-                Path(path).stat().st_size,
-                run_now,
-                state["attempt_id"],
-                artifact_type,
-                path,
-            ),
+        updated = db_write_artifacts.update_for_refresh_prepared_task_locked(
+            conn, Path(path).stat().st_size, run_now, state["attempt_id"], artifact_type, path
         )
-        if not updated.rowcount:
-            insert_file_artifact(
-                conn,
-                state["task_id"],
-                state["attempt_id"],
-                artifact_type,
-                path,
-                run_now,
-            )
-    conn.execute(
-        """
-        UPDATE tasks
-        SET route_id = ?, expected_output = ?, updated_at = ?
-        WHERE task_id = ?
-        """,
-        (
-            route_result["route_id"],
-            route_result["expected_output"],
-            run_now,
-            state["task_id"],
-        ),
+        if not updated:
+            insert_file_artifact(conn, state["task_id"], state["attempt_id"], artifact_type, path, run_now)
+    db_write_tasks.update_for_refresh_prepared_task_locked(
+        conn, route_result["route_id"], route_result["expected_output"], run_now, state["task_id"]
     )
-    conn.execute(
-        "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.review_input_policy',?) WHERE task_id=?",
-        (input_policy, state["task_id"]),
-    )
+    db_write_tasks.update_for_refresh_prepared_task_locked_2(conn, input_policy, state["task_id"])
     upsert_route_decision(conn, state["task_id"], route_result, run_now)
-    attempt_metadata_row = conn.execute(
-        "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
-        (state["attempt_id"],),
-    ).fetchone()
+    attempt_metadata_row = db_records.first(
+        db_read_attempts.find_metadata_json_by_attempt_id(conn, state["attempt_id"])
+    )
     attempt_metadata = values.json_object(attempt_metadata_row[0] if attempt_metadata_row else None)
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     if existing_pr_head_sha:
         attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
-    conn.execute(
-        """
-        UPDATE attempts
-        SET worktree_path = ?, branch_name = ?, metadata_json = ?
-        WHERE attempt_id = ?
-        """,
-        (
-            (worktree_result or {}).get("worktree_path"),
-            (worktree_result or {}).get("branch_name"),
-            json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
-            state["attempt_id"],
-        ),
+    db_write_attempts.update_for_refresh_prepared_task_locked(
+        conn,
+        (worktree_result or {}).get("worktree_path"),
+        (worktree_result or {}).get("branch_name"),
+        json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
+        state["attempt_id"],
     )
     skill_status = route_result.get("skill_status") or {"runnable": True}
     workspace_blocked = bool(worktree_result and not worktree_result.get("ok", True))
@@ -325,19 +270,12 @@ def _refresh_prepared_task_locked(
             if workspace_blocked
             else "required_route_skills_missing"
         )
-        conn.execute(
-            "UPDATE attempts SET status='failed', finished_at=? WHERE attempt_id=?",
-            (run_now, state["attempt_id"]),
-        )
+        db_write_attempts.update_for_refresh_prepared_task_locked_2(conn, run_now, state["attempt_id"])
         work_application_lifecycle.finalize_failed_task(
             conn, state["task_id"], event["workstream_id"], run_now, {"status": reason}
         )
         execution_notifications.insert(
-            conn,
-            reason,
-            "recorded",
-            run_now,
-            metadata={"task_id": state["task_id"], "safe_error": reason},
+            conn, reason, "recorded", run_now, metadata={"task_id": state["task_id"], "safe_error": reason}
         )
     return prompt_path
 
@@ -361,7 +299,7 @@ def create_task_attempt_and_prompt(
     native_round_id=None,
 ):
     if not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
+        db_transactions.begin(conn, immediate=True)
     remediation_context = (event.get("metadata") or {}).get("remediation") or {}
     selected_round = None
     if native_round_id:
@@ -377,14 +315,9 @@ def create_task_attempt_and_prompt(
             return None
     existing = None
     if existing_task_id:
-        existing = conn.execute(
-            """SELECT t.metadata_json FROM tasks t
-            JOIN workstreams w ON w.active_task_id=t.task_id
-            WHERE t.task_id=? AND t.workstream_id=? AND t.lifecycle='detected'
-              AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.task_id)
-              AND json_extract(t.metadata_json,'$.trigger_work_item_event_id') IS NOT NULL""",
-            (existing_task_id, stream["workstream_id"]),
-        ).fetchone()
+        existing = db_records.first(
+            db_read_tasks.find_for_create_task_attempt_and_prompt(conn, existing_task_id, stream["workstream_id"])
+        )
         if not existing or not execution_ownership.claim_task(conn, existing_task_id, run_now):
             return None
     if existing_task_id:
@@ -422,10 +355,9 @@ def create_task_attempt_and_prompt(
             and (new_request_event is None or source_events.operator_canceled_item(conn, item))
         ):
             return None
-        current_stream = conn.execute(
-            "SELECT lifecycle FROM workstreams WHERE workstream_id=?",
-            (stream["workstream_id"],),
-        ).fetchone()
+        current_stream = db_records.first(
+            db_read_workstreams.find_lifecycle_by_workstream_id(conn, stream["workstream_id"])
+        )
         if current_stream and current_stream[0] == "canceled" and new_request_event is None:
             return None
     if remediation_context.get("episode_id") and not execution_ownership.claim_episode(
@@ -449,13 +381,10 @@ def create_task_attempt_and_prompt(
         related_events = [event]
     refreshed_context = None
     if retrigger_wakeup_id:
-        saved = conn.execute(
-            "SELECT metadata_json FROM wakeups WHERE wakeup_id=?",
-            (retrigger_wakeup_id,),
-        ).fetchone()
+        saved = db_records.first(db_read_wakeups.find_metadata_json_by_wakeup_id(conn, retrigger_wakeup_id))
         refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
     elif parent_task_id and new_request_event is None:
-        saved = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (parent_task_id,)).fetchone()
+        saved = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
         refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
     workstream_id = stream["workstream_id"]
     source_id = values.github_source_id(event["source_key"])
@@ -490,27 +419,8 @@ def create_task_attempt_and_prompt(
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
 
-    conn.execute(
-        """
-        INSERT INTO workstreams(
-          workstream_id, repo_id, primary_source_id, lifecycle, active_task_id,
-          created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(workstream_id) DO UPDATE SET
-          lifecycle = excluded.lifecycle,
-          active_task_id = excluded.active_task_id,
-          updated_at = excluded.updated_at
-        """,
-        (
-            workstream_id,
-            repo_id,
-            source_id,
-            lifecycle,
-            task_id,
-            run_now,
-            run_now,
-        ),
+    db_write_workstreams.insert_for_create_task_attempt_and_prompt(
+        conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now
     )
     item = work_items.ensure_github_work_item(
         conn,
@@ -522,31 +432,14 @@ def create_task_attempt_and_prompt(
         now=run_now,
     )
     if item["origin_type"] == "github" and item["canceled_at"] and new_request_event is not None:
-        conn.execute(
-            "UPDATE work_items SET canceled_at=NULL,completed_at=NULL,updated_at=?,version=version+1 WHERE work_item_id=?",
-            (run_now, item["work_item_id"]),
-        )
+        db_write_work_items.update_for_create_task_attempt_and_prompt(conn, run_now, item["work_item_id"])
     if item["origin_type"] == "github" and item["completed_at"] and not item["canceled_at"]:
-        conn.execute(
-            """UPDATE work_items SET completed_at=NULL, updated_at=?, version=version+1
-            WHERE work_item_id=? AND completed_at IS NOT NULL AND canceled_at IS NULL""",
-            (run_now, item["work_item_id"]),
-        )
+        db_write_work_items.update_for_create_task_attempt_and_prompt_2(conn, run_now, item["work_item_id"])
     participants.record_review_participant(conn, workstream_id, event, route_result, run_now)
     for related_event in related_events:
         related_source_id = values.github_source_id(related_event["source_key"])
-        conn.execute(
-            """
-            INSERT INTO workstream_sources(workstream_id, source_id, relationship, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(workstream_id, source_id) DO NOTHING
-            """,
-            (
-                workstream_id,
-                related_source_id,
-                workstream.source_relationship(related_event),
-                run_now,
-            ),
+        db_write_workstream_sources.insert_for_create_task_attempt_and_prompt(
+            conn, workstream_id, related_source_id, workstream.source_relationship(related_event), run_now
         )
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
@@ -588,55 +481,39 @@ def create_task_attempt_and_prompt(
         ),
     }
     if existing:
-        conn.execute(
-            """UPDATE tasks SET lifecycle=?,route_id=?,expected_output=?,updated_at=?,metadata_json=?
-            WHERE task_id=?""",
-            (
-                task_lifecycle,
-                route_result["route_id"],
-                route_result["expected_output"],
-                run_now,
-                json.dumps(task_metadata, ensure_ascii=False),
-                task_id,
-            ),
+        db_write_tasks.update_for_create_task_attempt_and_prompt(
+            conn,
+            task_lifecycle,
+            route_result["route_id"],
+            route_result["expected_output"],
+            run_now,
+            json.dumps(task_metadata, ensure_ascii=False),
+            task_id,
         )
     else:
-        conn.execute(
-            """
-            INSERT INTO tasks(
-              task_id, workstream_id, task_kind, lifecycle, parent_task_id,
-              priority, route_id, expected_output, created_at, updated_at,
-              metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, 'P1', ?, ?, ?, ?, ?)
-            """,
-            (
-                task_id,
-                workstream_id,
-                event.get("task_kind", "human_request"),
-                (
-                    "queued"
-                    if blocked and event.get("task_kind", "human_request") == "human_request"
-                    else task_lifecycle
-                ),
-                parent_task_id,
-                route_result["route_id"],
-                route_result["expected_output"],
-                run_now,
-                run_now,
-                json.dumps(task_metadata, ensure_ascii=False, sort_keys=True),
-            ),
+        db_write_tasks.insert_for_create_task_attempt_and_prompt(
+            conn,
+            task_id,
+            workstream_id,
+            event.get("task_kind", "human_request"),
+            "queued" if blocked and event.get("task_kind", "human_request") == "human_request" else task_lifecycle,
+            parent_task_id,
+            route_result["route_id"],
+            route_result["expected_output"],
+            run_now,
+            run_now,
+            json.dumps(task_metadata, ensure_ascii=False, sort_keys=True),
         )
     if not execution_ownership.claim_task(conn, task_id, run_now):
         if not existing:
-            conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+            db_write_tasks.delete_for_create_task_attempt_and_prompt(conn, task_id)
         return None
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         round_store = vote_store if route_result.get("native_vote_workers") else review_store
         workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
         recovery_key = None
         if retrigger_wakeup_id and parent_task_id:
-            parent = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (parent_task_id,)).fetchone()
+            parent = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
             previous_round = round_store.session(conn, task_id=parent_task_id)
             if (previous_round and previous_round["status"] == "superseded") or (
                 parent
@@ -658,67 +535,38 @@ def create_task_attempt_and_prompt(
         )
         round_store.update(conn, entry["round_id"], task_id=task_id, status="queued", error=None)
     if blocked and event.get("task_kind", "human_request") == "human_request":
-        conn.execute(
-            "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
-            (run_now, task_id),
-        )
+        db_write_tasks.update_for_supervise_running_attempts(conn, run_now, task_id)
         execution_ownership.close_terminal_task(conn, task_id, run_now)
     for index, related_event in enumerate(related_events):
         relationship = "trigger" if index == 0 else "context"
-        conn.execute(
-            """
-            INSERT INTO task_events(task_id, event_id, relationship, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                task_id,
-                values.github_event_id(related_event["event_fingerprint"]),
-                relationship,
-                run_now,
-            ),
+        db_write_task_events.insert_for_create_task_attempt_and_prompt(
+            conn, task_id, values.github_event_id(related_event["event_fingerprint"]), relationship, run_now
         )
-    conn.execute(
-        """
-        INSERT INTO route_decisions(
-          route_decision_id, task_id, route_id, expected_output,
-          allowed_github_actions_json, required_skills_json, recommended_skills_json,
-          confidence, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            values.new_id("route"),
-            task_id,
-            route_result["route_id"],
-            route_result["expected_output"],
-            json.dumps(route_result["allowed_github_actions"], sort_keys=True),
-            json.dumps(route_result.get("required_skills", []), sort_keys=True),
-            json.dumps(route_result.get("recommended_skills", []), sort_keys=True),
-            route_result["confidence"],
-            run_now,
-        ),
+    db_write_route_decisions.insert_for_upsert_route_decision(
+        conn,
+        values.new_id("route"),
+        task_id,
+        route_result["route_id"],
+        route_result["expected_output"],
+        json.dumps(route_result["allowed_github_actions"], sort_keys=True),
+        json.dumps(route_result.get("required_skills", []), sort_keys=True),
+        json.dumps(route_result.get("recommended_skills", []), sort_keys=True),
+        route_result["confidence"],
+        run_now,
     )
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     attempt_metadata = {"existing_pr_head_sha": existing_pr_head_sha} if existing_pr_head_sha else {}
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
-    conn.execute(
-        """
-        INSERT INTO attempts(
-          attempt_id, task_id, attempt_no, status, worktree_path, branch_name,
-          started_at, heartbeat_at, metadata_json
-        )
-        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            attempt_id,
-            task_id,
-            attempt_status,
-            (worktree_result or {}).get("worktree_path"),
-            (worktree_result or {}).get("branch_name"),
-            run_now,
-            run_now,
-            json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
-        ),
+    db_write_attempts.insert_for_create_task_attempt_and_prompt(
+        conn,
+        attempt_id,
+        task_id,
+        attempt_status,
+        (worktree_result or {}).get("worktree_path"),
+        (worktree_result or {}).get("branch_name"),
+        run_now,
+        run_now,
+        json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
     )
     for artifact_type, path in [
         ("prompt", prompt_path),
@@ -766,17 +614,7 @@ def create_task_attempt_and_prompt(
 
 
 def _latest_route_result_for_task(conn, task_id):
-    row = conn.execute(
-        """
-        SELECT route_id, expected_output, allowed_github_actions_json,
-               required_skills_json, recommended_skills_json, confidence
-        FROM route_decisions
-        WHERE task_id = ?
-        ORDER BY created_at DESC, route_decision_id DESC
-        LIMIT 1
-        """,
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_route_decisions.find_for_latest_route_result_for_task(conn, task_id))
     if not row:
         return None
     (
@@ -800,23 +638,7 @@ def _latest_route_result_for_task(conn, task_id):
 
 
 def _events_for_task(conn, task_id):
-    rows = conn.execute(
-        """
-        SELECT te.relationship, ge.payload_json
-        FROM task_events te
-        JOIN github_events ge ON ge.event_id = te.event_id
-        WHERE te.task_id = ?
-        ORDER BY CASE te.relationship
-            WHEN 'trigger' THEN 0
-            WHEN 'context' THEN 1
-            WHEN 'pending' THEN 2
-            ELSE 3
-          END,
-          ge.event_at,
-          ge.event_id
-        """,
-        (task_id,),
-    ).fetchall()
+    rows = db_read_task_events.find_for_events_for_task(conn, task_id)
     return [json.loads(payload) for _relationship, payload in rows]
 
 
@@ -832,20 +654,14 @@ def create_resume_attempt_and_prompt(
     run_now,
     recovery_context,
 ):
-    previous = conn.execute(
-        """
-        SELECT attempt_no, worktree_path, branch_name, metadata_json
-        FROM attempts
-        WHERE attempt_id = ?
-        """,
-        (previous_attempt_id,),
-    ).fetchone()
+    previous = db_records.first(
+        db_read_attempts.find_attempt_no_and_worktree_path_and_branch_name_and_metadata_json_by_attempt_id(
+            conn, previous_attempt_id
+        )
+    )
     if not previous:
         return None
-    max_attempt_no = conn.execute(
-        "SELECT COALESCE(MAX(attempt_no), 0) FROM attempts WHERE task_id = ?",
-        (task_id,),
-    ).fetchone()[0]
+    max_attempt_no = db_records.first(db_read_attempts.find_for_create_resume_attempt_and_prompt(conn, task_id))[0]
     attempt_id = values.new_id("attempt")
     attempt_no = max_attempt_no + 1
     _previous_attempt_no, worktree_path, branch_name, previous_metadata_json = previous
@@ -898,7 +714,7 @@ def create_resume_attempt_and_prompt(
     prompt_path = prompt_dir / f"{attempt_id}.prompt.md"
     github_context = attempt_context.write_github_context_artifacts(prompt_dir, attempt_id, events)
     runtime_context["github_context"] = github_context
-    repo_full_name = conn.execute("SELECT full_name FROM repos WHERE repo_id=?", (repo_id,)).fetchone()[0]
+    repo_full_name = db_records.first(db_read_repos.find_full_name_by_repo_id(conn, repo_id))[0]
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo_full_name,
@@ -939,24 +755,16 @@ def create_resume_attempt_and_prompt(
     if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
         attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
-    conn.execute(
-        """
-        INSERT INTO attempts(
-          attempt_id, task_id, attempt_no, status, worktree_path, branch_name,
-          started_at, heartbeat_at, metadata_json
-        )
-        VALUES (?, ?, ?, 'prepared', ?, ?, ?, ?, ?)
-        """,
-        (
-            attempt_id,
-            task_id,
-            attempt_no,
-            worktree_path,
-            branch_name,
-            run_now,
-            run_now,
-            json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
-        ),
+    db_write_attempts.insert_for_create_resume_attempt_and_prompt(
+        conn,
+        attempt_id,
+        task_id,
+        attempt_no,
+        worktree_path,
+        branch_name,
+        run_now,
+        run_now,
+        json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
     )
     for artifact_type, path in [
         ("recovery_context", recovery_path),
@@ -965,18 +773,8 @@ def create_resume_attempt_and_prompt(
         ("github_context_md", github_context["md_path"]),
     ]:
         insert_file_artifact(conn, task_id, attempt_id, artifact_type, path, run_now)
-    conn.execute(
-        "UPDATE tasks SET lifecycle = 'running', updated_at = ? WHERE task_id = ?",
-        (run_now, task_id),
-    )
-    conn.execute(
-        """
-        UPDATE workstreams
-        SET lifecycle = 'active', active_task_id = ?, updated_at = ?
-        WHERE workstream_id = ?
-        """,
-        (task_id, run_now, workstream_id),
-    )
+    db_write_tasks.mark_task_waiting_for_publish(conn, run_now, task_id)
+    db_write_workstreams.update_for_create_task(conn, task_id, run_now, workstream_id)
     return {
         "attempt_id": attempt_id,
         "attempt_no": attempt_no,

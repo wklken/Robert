@@ -1,5 +1,14 @@
 """Shared supervised model stages for review and vote rounds."""
 
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.stores import artifacts as db_write_artifacts
+from robert_agent.persistence.stores import attempts as db_write_attempts
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from datetime import datetime, timezone
@@ -8,13 +17,12 @@ import json
 import os
 from pathlib import Path
 import stat
-import sqlite3
 import threading
 import time
 from typing import Any, ContextManager, Protocol
 
 from robert_agent.adapters.processes import worker as dispatch
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.adapters.processes import environment as model_environment
 from robert_agent.execution import retry as retry_policy
 from robert_agent.adapters.processes import identity as worker_identity
@@ -23,15 +31,15 @@ from robert_agent.execution import progress as snapshot
 
 
 class StageStore(Protocol):
-    def connect(self, db_path: str) -> ContextManager[sqlite3.Connection]: ...
-    def session(self, conn: sqlite3.Connection, *, task_id: str) -> dict[str, Any] | None: ...
+    def connect(self, db_path: str) -> ContextManager[db_database.DatabaseConnection]: ...
+    def session(self, conn: db_database.DatabaseConnection, *, task_id: str) -> dict[str, Any] | None: ...
     def now(self) -> str: ...
     def digest(self, path: str | Path) -> str: ...
-    def update(self, conn: sqlite3.Connection, round_id: str, **fields: Any) -> None: ...
-    def runs(self, conn: sqlite3.Connection, round_id: str) -> list[dict[str, Any]]: ...
+    def update(self, conn: db_database.DatabaseConnection, round_id: str, **fields: Any) -> None: ...
+    def runs(self, conn: db_database.DatabaseConnection, round_id: str) -> list[dict[str, Any]]: ...
     def new_run(
         self,
-        conn: sqlite3.Connection,
+        conn: db_database.DatabaseConnection,
         round_id: str,
         stage: str,
         worker_id: str,
@@ -40,11 +48,11 @@ class StageStore(Protocol):
         prompt_sha256: str,
         model: str | None = None,
     ) -> dict[str, Any]: ...
-    def update_run(self, conn: sqlite3.Connection, run_id: str, **fields: Any) -> None: ...
-    def reserve_slot(self, conn: sqlite3.Connection, run_id: str) -> bool: ...
-    def release_slot(self, conn: sqlite3.Connection, run_id: str) -> None: ...
-    def reserved_runs(self, conn: sqlite3.Connection) -> list[dict[str, Any]]: ...
-    def release_finished_slot(self, conn: sqlite3.Connection, run: dict[str, Any]) -> None: ...
+    def update_run(self, conn: db_database.DatabaseConnection, run_id: str, **fields: Any) -> None: ...
+    def reserve_slot(self, conn: db_database.DatabaseConnection, run_id: str) -> bool: ...
+    def release_slot(self, conn: db_database.DatabaseConnection, run_id: str) -> None: ...
+    def reserved_runs(self, conn: db_database.DatabaseConnection) -> list[dict[str, Any]]: ...
+    def release_finished_slot(self, conn: db_database.DatabaseConnection, run: dict[str, Any]) -> None: ...
 
 
 class StageWorkspace(Protocol):
@@ -123,12 +131,7 @@ def _wait_for_group_exit(recorded, timeout=2):
 
 
 def attempt_is_active(conn, task_id, attempt_id):
-    row = conn.execute(
-        """SELECT t.lifecycle,a.status FROM tasks t JOIN attempts a ON a.task_id=t.task_id
-        WHERE t.task_id=? AND a.attempt_id=? AND a.attempt_no=(
-            SELECT MAX(attempt_no) FROM attempts WHERE task_id=t.task_id)""",
-        (task_id, attempt_id),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_for_attempt_is_active(conn, task_id, attempt_id))
     binding = execution_store.get_binding(conn, "task", task_id)
     return bool(
         row
@@ -148,15 +151,7 @@ def terminate_children(conn, task_id, *, store: StageStore):
     updates: list[tuple[str, dict[str, Any]]] = []
     for run in store.runs(conn, review["round_id"]):
         if run["status"] in {"prepared", "waiting"} and not run["slot_reserved"]:
-            updates.append(
-                (
-                    run["run_id"],
-                    {
-                        "status": "interrupted",
-                        "error": "coordinator stopped before launch",
-                    },
-                )
-            )
+            updates.append((run["run_id"], {"status": "interrupted", "error": "coordinator stopped before launch"}))
             continue
         if run["status"] not in {"starting", "running", "failed"}:
             continue
@@ -190,14 +185,7 @@ def terminate_children(conn, task_id, *, store: StageStore):
         outcomes.append(result["status"])
         if result["status"] != "attention":
             updates.append(
-                (
-                    run["run_id"],
-                    {
-                        "status": "interrupted",
-                        "slot_reserved": 0,
-                        "error": "coordinator stopped",
-                    },
-                )
+                (run["run_id"], {"status": "interrupted", "slot_reserved": 0, "error": "coordinator stopped"})
             )
     # Observe/stop every child before opening our write transaction. In
     # particular, stopping the second child must not hold the first's update.
@@ -218,15 +206,7 @@ class StageCoordinator:
     artifact_kinds: tuple[str, ...]
     workflow_name: str
 
-    def __init__(
-        self,
-        db_path,
-        task_id,
-        attempt_id,
-        *,
-        launcher=dispatch.dispatch_worker,
-        poll_seconds=1,
-    ):
+    def __init__(self, db_path, task_id, attempt_id, *, launcher=dispatch.dispatch_worker, poll_seconds=1):
         store = self.store
         self.db_path, self.task_id, self.attempt_id = str(db_path), task_id, attempt_id
         self.launcher = launcher
@@ -261,14 +241,11 @@ class StageCoordinator:
             if now < self._next_heartbeat_at:
                 return
             try:
-                with closing(sqlite3.connect(self.db_path, timeout=0.1)) as conn, conn:
+                with closing(db_database.connect(self.db_path, timeout=0.1)) as conn, conn:
                     if not attempt_is_active(conn, self.task_id, self.attempt_id):
                         raise StageStopped("review attempt is no longer current")
-                    conn.execute(
-                        "UPDATE attempts SET heartbeat_at=? WHERE attempt_id=?",
-                        (store.now(), self.attempt_id),
-                    )
-            except sqlite3.OperationalError as exc:
+                    db_write_attempts.set_heartbeat_at_by_attempt_id(conn, store.now(), self.attempt_id)
+            except db_errors.OperationalError as exc:
                 message = str(exc)
                 if message not in {
                     "database is locked",
@@ -299,15 +276,8 @@ class StageCoordinator:
     def save_manifest(self):
         store = self.store
         with store.connect(self.db_path) as conn:
-            store.update(
-                conn,
-                self.round_id,
-                manifest_json=json.dumps(self.manifest, ensure_ascii=False),
-            )
-            conn.execute(
-                "UPDATE attempts SET worktree_path=? WHERE attempt_id=?",
-                (self.manifest["worktree_path"], self.attempt_id),
-            )
+            store.update(conn, self.round_id, manifest_json=json.dumps(self.manifest, ensure_ascii=False))
+            db_write_attempts.set_worktree_path_by_attempt_id(conn, self.manifest["worktree_path"], self.attempt_id)
 
     def reconcile_running(self):
         """Finish previous model processes before scheduling any new phase."""
@@ -363,7 +333,7 @@ class StageCoordinator:
         reserved = []
         with self.store.connect(self.db_path) as conn:
             for run_store, table in self.slot_stores:
-                if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
+                if db_read_sqlite_master.object_exists(conn, table):
                     reserved.extend((run_store, run) for run in run_store.reserved_runs(conn))
         for run_store, run in reserved:
             if _launch_failed_without_process(run["dispatch"]) or (
@@ -384,7 +354,7 @@ class StageCoordinator:
                 if locked:
                     self.check_active()
                     with store.connect(self.db_path) as conn:
-                        conn.execute("BEGIN IMMEDIATE")
+                        db_transactions.begin(conn, immediate=True)
                         if not attempt_is_active(conn, self.task_id, self.attempt_id):
                             raise StageStopped("review attempt is no longer current")
                         acquired = store.reserve_slot(conn, run["run_id"])
@@ -422,30 +392,21 @@ class StageCoordinator:
         store = self.store
         self.check_active()
         with store.connect(self.db_path) as conn:
-            store.update_run(
-                conn,
-                run["run_id"],
-                status="succeeded",
-                artifact_json=json.dumps(artifact),
-                error=None,
-            )
+            store.update_run(conn, run["run_id"], status="succeeded", artifact_json=json.dumps(artifact), error=None)
             for kind in self.artifact_kinds:
                 path = artifact.get(kind + "_path")
                 if not path:
                     continue
-                conn.execute(
-                    """INSERT OR IGNORE INTO artifacts(artifact_id,task_id,attempt_id,
-                    artifact_type,path,sha256,bytes,created_at) VALUES (?,?,?,?,?,?,?,?)""",
-                    (
-                        f"{run['run_id']}:{kind}",
-                        self.task_id,
-                        self.attempt_id,
-                        f"{self.workflow_name}_{kind}",
-                        path,
-                        artifact[kind + "_sha256"],
-                        Path(path).stat().st_size,
-                        store.now(),
-                    ),
+                db_write_artifacts.insert_for_register(
+                    conn,
+                    f"{run['run_id']}:{kind}",
+                    self.task_id,
+                    self.attempt_id,
+                    f"{self.workflow_name}_{kind}",
+                    path,
+                    artifact[kind + "_sha256"],
+                    Path(path).stat().st_size,
+                    store.now(),
                 )
         return {**artifact, "run_id": run["run_id"], "worker_id": run["worker_id"]}
 
@@ -472,11 +433,7 @@ class StageCoordinator:
                 for name in names:
                     # Anchor the open directory too: replacing the producer
                     # directory with a symlink cannot redirect this read.
-                    fd = os.open(
-                        name,
-                        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                        dir_fd=directory_fd,
-                    )
+                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
                     with os.fdopen(fd, "rb") as stream:
                         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                             raise ValueError("review handoff must be a regular file")
@@ -555,22 +512,14 @@ class StageCoordinator:
         for run in reversed(prior):
             if run["status"] in {"prepared", "waiting"} and not run["slot_reserved"]:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(
-                        conn,
-                        run["run_id"],
-                        status="interrupted",
-                        error="recovered before launch",
-                    )
+                    store.update_run(conn, run["run_id"], status="interrupted", error="recovered before launch")
                 continue
             if run["prompt_sha256"] != prompt_hash:
                 if stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen")):
                     if run["status"] in {"running", "succeeded"}:
                         with store.connect(self.db_path) as conn:
                             store.update_run(
-                                conn,
-                                run["run_id"],
-                                status="superseded",
-                                error="synthesis input set changed",
+                                conn, run["run_id"], status="superseded", error="synthesis input set changed"
                             )
                     continue
                 raise ValueError("same-round prompt changed")
@@ -633,10 +582,7 @@ class StageCoordinator:
             store.update_run(conn, run["run_id"], status="waiting")
         try:
             environment = model_environment.stage_environment(
-                self.manifest,
-                run["output_dir"],
-                self.data_dir,
-                workflow_name=self.workflow_name,
+                self.manifest, run["output_dir"], self.data_dir, workflow_name=self.workflow_name
             )
             launched = self.launch_with_slot(run, worker, prompt_path, environment)
             if not launched.get("ok"):

@@ -58,16 +58,13 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         self.assertEqual(payload["status"], "queued")
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT status FROM wakeups WHERE task_id = ?",
-                    (payload["task_id"],),
-                ).fetchone()[0],
+                conn.execute("SELECT status FROM wakeups WHERE task_id = ?", (payload["task_id"],)).fetchone()[0],
                 "pending",
             )
 
     def test_board_api_session_create_read_and_conflict_contract(self):
         from robert_agent.interfaces.web import server as web
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.root / "board-api.sqlite3"
         storage.init_database(db_path)
@@ -169,7 +166,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
 
     def test_board_api_rejects_bad_filters_and_read_only_writes(self):
         from robert_agent.interfaces.web import server as web
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.root / "board-readonly.sqlite3"
         storage.init_database(db_path)
@@ -306,7 +303,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         import threading
 
         from robert_agent.interfaces.web import server as web
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.root / "handler.sqlite3"
         storage.init_database(db_path)

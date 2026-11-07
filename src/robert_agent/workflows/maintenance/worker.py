@@ -4,6 +4,12 @@ The inner agent receives a prompt and returns a compact submission. Only this
 outer process can call Robert's ordinary result validation and durable spool.
 """
 
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+
 import argparse
 from contextlib import closing
 import json
@@ -11,7 +17,6 @@ import os
 from pathlib import Path
 import selectors
 import signal
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -61,11 +66,7 @@ def _object(pairs):
 
 def _live_children():
     result = subprocess.run(
-        ["ps", "-axo", "pid=,pgid=,stat="],
-        capture_output=True,
-        text=True,
-        timeout=1,
-        start_new_session=True,
+        ["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, timeout=1, start_new_session=True
     )
     if result.returncode:
         raise OSError("repair process group unavailable")
@@ -114,13 +115,8 @@ def _cleanup_group(proc):
 def run(config, task_id, attempt_id, prompt):
     if os.getpgrp() != os.getpid():
         return {"ok": False, "status": "repair_broker_group_not_isolated"}
-    with closing(sqlite3.connect(config["db_path"])) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """SELECT w.repo_id,a.worktree_path,a.branch_name,a.metadata_json FROM attempts a JOIN tasks t ON t.task_id=a.task_id
-            JOIN workstreams w ON w.workstream_id=t.workstream_id WHERE a.task_id=? AND a.attempt_id=?""",
-            (task_id, attempt_id),
-        ).fetchone()
+    with closing(db_database.connect(config["db_path"])) as conn:
+        row = db_records.first(db_read_attempts.find_for_run(conn, task_id, attempt_id))
         if not row or not row["worktree_path"]:
             return {"ok": False, "status": "repair_target_missing"}
         authorization = supervision_repair.authorized_repair(conn, task_id, config, row["repo_id"])
@@ -197,7 +193,7 @@ def run(config, task_id, attempt_id, prompt):
                                 "running",
                                 "Restricted repair agent executing",
                             )
-                        except sqlite3.Error:
+                        except db_errors.Error:
                             pass
                         heartbeat_due = now + 10
                     if eof:
@@ -205,17 +201,11 @@ def run(config, task_id, attempt_id, prompt):
                             break
                         time.sleep(0.05)
                     elif reader.select(0.1):
-                        chunk = os.read(
-                            proc.stdout.fileno(),
-                            min(8192, MAX_OUTPUT + 1 - len(output)),
-                        )
+                        chunk = os.read(proc.stdout.fileno(), min(8192, MAX_OUTPUT + 1 - len(output)))
                         if chunk:
                             output.extend(chunk)
                             if len(output) > MAX_OUTPUT:
-                                return {
-                                    "ok": False,
-                                    "status": "repair_result_too_large",
-                                }
+                                return {"ok": False, "status": "repair_result_too_large"}
                         else:
                             eof = True
             if stop_requested:
@@ -232,20 +222,14 @@ def run(config, task_id, attempt_id, prompt):
             current = validate_config.validate_config(config["config_path"], skip_external=True)
             if not current.get("ok"):
                 return {"ok": False, "status": "repair_policy_rejected"}
-            with closing(sqlite3.connect(config["db_path"])) as conn:
-                conn.row_factory = sqlite3.Row
+            with closing(db_database.connect(config["db_path"])) as conn:
                 if not supervision_repair.authorized_repair(conn, task_id, current, row["repo_id"]):
                     return {"ok": False, "status": "repair_policy_rejected"}
             return result.record_result(
                 config["db_path"],
-                {
-                    "task_id": task_id,
-                    "attempt_id": attempt_id,
-                    "output_type": "new_pr",
-                    "submission": submission,
-                },
+                {"task_id": task_id, "attempt_id": attempt_id, "output_type": "new_pr", "submission": submission},
             )
-    except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+    except (OSError, ValueError, db_errors.Error, subprocess.SubprocessError):
         return {"ok": False, "status": "repair_broker_failed"}
     finally:
         if proc is not None:

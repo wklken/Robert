@@ -1,11 +1,11 @@
 """Owned asynchronous control children with a durable startup handshake."""
 
+from robert_agent.persistence import database as db_database
 import argparse
 from contextlib import closing
 import json
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 from robert_agent.execution import runtime_state as daemon_state
 from robert_agent.execution import control_children
-from robert_agent.adapters.sqlite import transactions
+from robert_agent.persistence import transactions as transactions
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.foundation.commands import emit
 
@@ -34,11 +34,7 @@ def _boot_context():
                 }
         elif sys.platform == "darwin":
             result = subprocess.run(
-                ["sysctl", "-n", "kern.bootsessionuuid"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
+                ["sysctl", "-n", "kern.bootsessionuuid"], capture_output=True, text=True, timeout=2, check=False
             )
             if result.returncode == 0:
                 return {
@@ -86,16 +82,11 @@ def _retire(conn, child, *, resolution, current_context=None):
     if resolution == "operator_acknowledged_stopped":
         evidence["acknowledged_by_uid"] = os.getuid()
     daemon_state.record_event(conn, owner, "control_child_retired", "ok", evidence)
-    return {
-        "ok": True,
-        "status": "retired",
-        "child_id": identifier,
-        "resolution": resolution,
-    }
+    return {"ok": True, "status": "retired", "child_id": identifier, "resolution": resolution}
 
 
 def list_children(db_path):
-    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+    with closing(db_database.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as conn:
         rows = control_children.list_children(conn)
         return {
             "ok": True,
@@ -115,10 +106,7 @@ def list_children(db_path):
 
 def acknowledge_stopped(db_path, identifier):
     """Record an operator assertion; this operation never signals a process."""
-    with (
-        closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=rw", uri=True, timeout=5)) as conn,
-        conn,
-    ):
+    with closing(db_database.connect(Path(db_path).resolve().as_uri() + "?mode=rw", uri=True, timeout=5)) as conn, conn:
         transactions.begin_immediate(conn)
         child = control_children.child(conn, identifier)
         if child is None:
@@ -141,7 +129,7 @@ class ControlLane:
         self.attention_reported = False
 
     def _state(self):
-        with closing(sqlite3.connect(self.db_path, timeout=5)) as conn:
+        with closing(db_database.connect(self.db_path, timeout=5)) as conn:
             row = control_children.state(conn, self.identifier)
         if row:
             self.recorded = json.loads(row[1]) or None
@@ -156,7 +144,7 @@ class ControlLane:
         self.identifier = uuid4().hex
         # The wrapper cannot execute any remote work until it atomically saves
         # its own identity. Recovery can cancel an unclaimed starting row.
-        with closing(sqlite3.connect(self.db_path, timeout=5)) as conn, conn:
+        with closing(db_database.connect(self.db_path, timeout=5)) as conn, conn:
             control_children.record_starting(conn, self.identifier, self.owner, self.lane)
         try:
             self.output = tempfile.TemporaryFile(mode="w+t")
@@ -179,12 +167,7 @@ class ControlLane:
                 *command,
             ]
             self.process = subprocess.Popen(
-                wrapper,
-                stdout=self.output,
-                stderr=self.error,
-                text=True,
-                start_new_session=True,
-                env=environment,
+                wrapper, stdout=self.output, stderr=self.error, text=True, start_new_session=True, env=environment
             )
         except Exception:
             self._finish()
@@ -223,7 +206,7 @@ class ControlLane:
         return {"ok": False, "status": "attention", "safe_error": reason}
 
     def _finish(self):
-        with closing(sqlite3.connect(self.db_path, timeout=5)) as conn, conn:
+        with closing(db_database.connect(self.db_path, timeout=5)) as conn, conn:
             control_children.mark_stopped(conn, self.identifier)
             control_children.prune_stopped(conn, self.owner, keep=self.identifier)
         if self.output is not None:
@@ -237,7 +220,7 @@ class ControlLane:
         if self.process is None:
             return True
         if self.process.poll() is None:
-            with closing(sqlite3.connect(self.db_path, timeout=5)) as conn, conn:
+            with closing(db_database.connect(self.db_path, timeout=5)) as conn, conn:
                 canceled = control_children.cancel_starting(conn, self.identifier)
             self._state()
             if canceled:
@@ -263,20 +246,20 @@ class ControlLane:
 
 
 def recover(db_path, *, scope_key, current_owner):
-    with closing(sqlite3.connect(db_path, timeout=5)) as conn:
+    with closing(db_database.connect(db_path, timeout=5)) as conn:
         rows = control_children.previous_owner_children(conn, scope_key=scope_key, current_owner=current_owner)
     safe = True
     current_context = _boot_context() if rows else None
     for identifier, encoded, status, owner, lane in rows:
         if status == "starting":
-            with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
+            with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
                 canceled = control_children.cancel_starting(conn, identifier)
             if canceled:
                 continue
             return False  # The wrapper claimed concurrently; reobserve later.
         recorded = json.loads(encoded)
         if _different_boot(recorded, current_context):
-            with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
+            with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
                 transactions.begin_immediate(conn)
                 try:
                     _retire(
@@ -294,7 +277,7 @@ def recover(db_path, *, scope_key, current_owner):
         if result["status"] == "attention" or not group_stopped(recorded.get("pid", 0)):
             safe = False
             continue
-        with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
+        with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
             control_children.mark_stopped(conn, identifier)
     return safe
 
@@ -304,9 +287,7 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--child", action="store_true")
     mode.add_argument(
-        "--list",
-        action="store_true",
-        help="List child records and owner lease state without changing them",
+        "--list", action="store_true", help="List child records and owner lease state without changing them"
     )
     mode.add_argument(
         "--acknowledge-stopped",
@@ -332,7 +313,7 @@ def main(argv=None):
     context = _boot_context()
     if context is not None:
         identity["execution_context"] = context
-    with closing(sqlite3.connect(args.db, timeout=5)) as conn, conn:
+    with closing(db_database.connect(args.db, timeout=5)) as conn, conn:
         claimed = control_children.claim_starting(conn, args.id, identity)
     if not claimed:
         return 3

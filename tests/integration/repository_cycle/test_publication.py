@@ -350,9 +350,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertEqual(step_statuses["summarize"], "succeeded")
         self.assertEqual(task_count, 1)
 
-    def test_open_pr_result_materializes_published_pr_target_linked_to_origin_issue(
-        self,
-    ):
+    def test_open_pr_result_materializes_published_pr_target_linked_to_origin_issue(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
 
@@ -426,10 +424,8 @@ class CyclePublicationTests(RepositoryCycleFixture):
             ),
         )
 
-    def test_run_once_publish_filters_single_config_repo_when_db_has_other_repo_actions(
-        self,
-    ):
-        from robert_agent.adapters.sqlite import database as storage
+    def test_run_once_publish_filters_single_config_repo_when_db_has_other_repo_actions(self):
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)

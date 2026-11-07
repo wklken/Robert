@@ -122,7 +122,7 @@ repos:
 
     def test_sqlite_execution_is_scoped_to_configured_repo(self):
         from robert_agent.runtime import loop as loop_engine
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = "2026-08-02T00:00:00+00:00"
@@ -196,11 +196,7 @@ repos:
                     """,
                     (datetime.now(timezone.utc).isoformat(),),
                 )
-            return {
-                "ok": True,
-                "status": "completed",
-                "run_id": "run-no-business-progress",
-            }
+            return {"ok": True, "status": "completed", "run_id": "run-no-business-progress"}
 
         result = loop_engine.run_loop(
             self.config_path,
@@ -328,11 +324,7 @@ repos:
         self._init_runnable_db()
 
         def runner(*_args, **_kwargs):
-            return {
-                "ok": False,
-                "status": "failed_dispatch",
-                "safe_error": "worker failed",
-            }
+            return {"ok": False, "status": "failed_dispatch", "safe_error": "worker failed"}
 
         result = loop_engine.run_loop(
             self.config_path,
@@ -353,11 +345,7 @@ repos:
 
         def runner(*_args, **kwargs):
             runner_kwargs.append(kwargs)
-            return {
-                "ok": False,
-                "status": "failed_dispatch",
-                "safe_error": "worker failed",
-            }
+            return {"ok": False, "status": "failed_dispatch", "safe_error": "worker failed"}
 
         result = loop_engine.run_loop(
             self.config_path,

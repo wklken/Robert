@@ -8,7 +8,7 @@ from pathlib import Path
 from robert_agent.delivery import values as publication_values
 from robert_agent.delivery.application import reconcile as publication_reconcile
 from robert_agent.delivery.application import publish
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from tests.support.publication_reconcile import Completed, PublicationReconcileFixture
 
 
@@ -21,13 +21,9 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             metadata = json.loads(
                 conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
             )
-            metadata["publish"] = {
-                "attempt_count": retry_policy.MAX_ATTEMPTS - 1,
-                "first_failed_at": now,
-            }
+            metadata["publish"] = {"attempt_count": retry_policy.MAX_ATTEMPTS - 1, "first_failed_at": now}
             conn.execute(
-                "UPDATE github_actions SET metadata_json=? WHERE action_id='action-1'",
-                (json.dumps(metadata),),
+                "UPDATE github_actions SET metadata_json=? WHERE action_id='action-1'", (json.dumps(metadata),)
             )
         writes = []
 
@@ -41,22 +37,13 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             first = publish.publish_ready_actions(self.db_path, run_command=ambiguous)
             self.assertFalse(first["ok"])
             with closing(sqlite3.connect(self.db_path)) as conn:
-                self.assertEqual(
-                    conn.execute("SELECT status FROM publication_intents").fetchone()[0],
-                    "executing",
-                )
+                self.assertEqual(conn.execute("SELECT status FROM publication_intents").fetchone()[0], "executing")
 
             def reconcile(command, **kwargs):
                 self.assertNotIn("-f", command)
                 return Completed(
                     json.dumps(
-                        [
-                            {
-                                "id": 7,
-                                "body": self.body,
-                                "html_url": "https://github.com/x/y/issues/1#issuecomment-7",
-                            }
-                        ]
+                        [{"id": 7, "body": self.body, "html_url": "https://github.com/x/y/issues/1#issuecomment-7"}]
                     )
                 )
 
@@ -90,14 +77,8 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         self.assertFalse(result["ok"])
         self.assertTrue(reads)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM publication_intents").fetchone()[0],
-                "attention",
-            )
-        self.assertEqual(
-            publish.publish_ready_actions(self.db_path, run_command=absent)["pending_count"],
-            0,
-        )
+            self.assertEqual(conn.execute("SELECT status FROM publication_intents").fetchone()[0], "attention")
+        self.assertEqual(publish.publish_ready_actions(self.db_path, run_command=absent)["pending_count"], 0)
 
     def test_comment_crash_backfills_without_duplicate_write(self):
         calls = []
@@ -308,30 +289,11 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') WHERE result_id = 'result-1'",
-                (
-                    json.dumps(
-                        {
-                            "audit": {
-                                "status": "accepted",
-                                "action_scope": {"repo": "x/y", "sources": []},
-                            }
-                        }
-                    ),
-                ),
+                (json.dumps({"audit": {"status": "accepted", "action_scope": {"repo": "x/y", "sources": []}}}),),
             )
             conn.execute(
                 "UPDATE github_actions SET action_type = 'open_pr', target_url = NULL, metadata_json = ? WHERE action_id = 'action-1'",
-                (
-                    json.dumps(
-                        {
-                            "repo": "x/y",
-                            "head": "feature",
-                            "base": "main",
-                            "body": body,
-                            "title": "Fix",
-                        }
-                    ),
-                ),
+                (json.dumps({"repo": "x/y", "head": "feature", "base": "main", "body": body, "title": "Fix"}),),
             )
         calls = []
 
@@ -517,15 +479,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             )
             conn.execute(
                 "UPDATE github_actions SET action_type = 'push_existing_pr', metadata_json = ? WHERE action_id = 'action-1'",
-                (
-                    json.dumps(
-                        {
-                            "worktree_path": str(worktree),
-                            "branch": "feature",
-                            "remote": "origin",
-                        }
-                    ),
-                ),
+                (json.dumps({"worktree_path": str(worktree), "branch": "feature", "remote": "origin"}),),
             )
         calls = []
 
@@ -649,15 +603,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             )
             conn.execute(
                 "UPDATE github_actions SET action_type = 'push_existing_pr', target_url = 'https://github.com/x/y/pull/4', metadata_json = ? WHERE action_id = 'action-1'",
-                (
-                    json.dumps(
-                        {
-                            "worktree_path": str(worktree),
-                            "branch": "feature",
-                            "remote": "origin",
-                        }
-                    ),
-                ),
+                (json.dumps({"worktree_path": str(worktree), "branch": "feature", "remote": "origin"}),),
             )
         calls = []
         phase = {"run": 0}
@@ -667,12 +613,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             if command == ["gh", "api", "repos/x/y/pulls/4"]:
                 return Completed(
                     json.dumps(
-                        {
-                            "state": "open",
-                            "merged": False,
-                            "head": {"sha": original_sha},
-                            "base": {"sha": "c" * 40},
-                        }
+                        {"state": "open", "merged": False, "head": {"sha": original_sha}, "base": {"sha": "c" * 40}}
                     )
                 )
             if command[:3] == ["git", "ls-remote", "--heads"]:
@@ -724,10 +665,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             execution_store.close_binding(conn, "task", "task-1", "now")
             execution_store.prepare_publication_intent(conn, "action-1", "k", "f", "now")
             execution_store.transition_publication_intent(
-                conn,
-                binding["workflow_id"] or "publication-" + "0" * 24,
-                "executing",
-                "now",
+                conn, binding["workflow_id"] or "publication-" + "0" * 24, "executing", "now"
             ) if False else None
             publication_id = conn.execute(
                 "SELECT publication_id FROM publication_intents WHERE action_id='action-1'"
@@ -735,14 +673,13 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             execution_store.transition_publication_intent(conn, publication_id, "executing", "now")
         calls = []
         result = publish.publish_ready_actions(
-            self.db_path,
-            run_command=lambda command, **kwargs: calls.append(command) or Completed(""),
+            self.db_path, run_command=lambda command, **kwargs: calls.append(command) or Completed("")
         )
         self.assertFalse(result["ok"])
         self.assertEqual(calls, [["git", "ls-remote", "--heads", "origin", "feature"]])
 
     def test_missing_or_malformed_scope_performs_zero_writes(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             execution_store.ensure_subject(conn, "task", "task-1", "human_request", "2026-08-02T00:00:00+00:00")
@@ -772,7 +709,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         self.assertEqual(binding_status, "attention")
 
     def test_empty_accepted_scope_performs_zero_remote_calls(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             execution_store.ensure_subject(conn, "task", "task-1", "human_request", "2026-08-02T00:00:00+00:00")

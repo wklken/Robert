@@ -4,6 +4,12 @@ Cached events are observations, never proof that local routing succeeded. Every
 cache hit is returned to the caller for current authorization and routing.
 """
 
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_read_cache as db_read_github_read_cache
+from robert_agent.persistence.stores import github_read_cache as db_write_github_read_cache
 from robert_agent.adapters.github import client as github_client
 
 from contextlib import closing
@@ -12,7 +18,6 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import subprocess
 import time
 from urllib.parse import urlsplit
@@ -45,26 +50,16 @@ class GitHubReadSession:
         self.search_allowed = True
         self.failed_sources = set()
         self._memo = {}
-        self._stats = {
-            "calls": 0,
-            "cache_hits": 0,
-            "errors": 0,
-            "duration_seconds": 0.0,
-            "endpoints": {},
-        }
+        self._stats = {"calls": 0, "cache_hits": 0, "errors": 0, "duration_seconds": 0.0, "endpoints": {}}
 
     def _connect(self):
-        conn = sqlite3.connect(self.db_path, timeout=5)
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn = db_database.connect(self.db_path, timeout=5)
+        db_sqlite.configure(conn, busy_timeout_ms=5000)
         return conn
 
     def _get(self, key, version=None):
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                """SELECT version,payload_json,expires_at FROM github_read_cache
-                WHERE scope=? AND cache_key=?""",
-                (self.scope, key),
-            ).fetchone()
+            row = db_records.first(db_read_github_read_cache.find_for_get(conn, self.scope, key))
         if row and row[2] > self.now() and (version is None or row[0] == version):
             return json.loads(row[1])
         return None
@@ -72,26 +67,17 @@ class GitHubReadSession:
     def _put(self, key, version, payload, ttl):
         now = self.now()
         with closing(self._connect()) as conn, conn:
-            conn.execute(
-                """INSERT INTO github_read_cache(scope,cache_key,version,payload_json,expires_at)
-                VALUES (?,?,?,?,?) ON CONFLICT(scope,cache_key) DO UPDATE SET
-                version=excluded.version,payload_json=excluded.payload_json,expires_at=excluded.expires_at""",
-                (self.scope, key, version, json.dumps(payload), now + ttl),
-            )
+            db_write_github_read_cache.insert_for_put(conn, self.scope, key, version, json.dumps(payload), now + ttl)
             # Cache history is expendable. Keep no superseded versions and remove
             # stale entries without touching durable task/event observations.
-            conn.execute("DELETE FROM github_read_cache WHERE expires_at < ?", (now,))
+            db_write_github_read_cache.delete_for_put(conn, now)
 
     def __call__(self, args, **kwargs):
         args = list(args)
         if args[:2] == ["gh", "api"] and "--hostname" not in args:
             args.extend(["--hostname", self.host])
         if args[:3] == ["gh", "search", "issues"]:
-            kwargs["env"] = {
-                **os.environ,
-                **(kwargs.get("env") or {}),
-                "GH_HOST": self.host,
-            }
+            kwargs["env"] = {**os.environ, **(kwargs.get("env") or {}), "GH_HOST": self.host}
         method = None
         for flag in ("-X", "--method"):
             if flag in args:
@@ -163,14 +149,7 @@ class GitHubReadSession:
         return copy.deepcopy(payload)
 
     def source_events(
-        self,
-        repo,
-        raw,
-        load,
-        *,
-        known_workstreams=None,
-        review_author_allowlist=None,
-        notification_hints=(),
+        self, repo, raw, load, *, known_workstreams=None, review_author_allowlist=None, notification_hints=()
     ):
         from robert_agent.adapters.github import discovery as discover
 
@@ -203,16 +182,7 @@ class GitHubReadSession:
         return discover.collect_live_events(repo_config, runner=self, read_session=self, **kwargs)
 
     def _page(self, endpoint, marker=None):
-        args = [
-            "gh",
-            "api",
-            endpoint,
-            "--hostname",
-            self.host,
-            "--include",
-            "--method",
-            "GET",
-        ]
+        args = ["gh", "api", endpoint, "--hostname", self.host, "--include", "--method", "GET"]
         if marker:
             args.extend(["-H", "If-Modified-Since: " + marker])
         # gh exits 1 on HTTP304. Parse the HTTP status before interpreting the
@@ -285,12 +255,7 @@ class GitHubReadSession:
                 notifications.extend(page)
                 link = next_headers.get("link", "")
             hints = [raw for item in notifications if (raw := discover._notification_to_raw(item))]
-            self._put(
-                key,
-                "",
-                {"hints": hints, "last_modified": headers.get("last-modified")},
-                self.refresh_seconds,
-            )
+            self._put(key, "", {"hints": hints, "last_modified": headers.get("last-modified")}, self.refresh_seconds)
         configured = {repo["full_name"] for repo in repo_configs}
         buckets = {}
         for hint in hints:

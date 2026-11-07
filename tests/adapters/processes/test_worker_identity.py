@@ -73,11 +73,7 @@ class WorkerIdentityTests(unittest.TestCase):
             "command_fingerprint": "f" * 64,
             "identity_source": "proc",
         }
-        for states, expected in (
-            (["Z"], "dead"),
-            (["S", "Z"], "dead"),
-            (["S", "S"], "unknown"),
-        ):
+        for states, expected in ((["Z"], "dead"), (["S", "Z"], "dead"), (["S", "S"], "unknown")):
             with self.subTest(states=states):
                 stats = ["77 (worker) " + " ".join([state, "1", "77"] + ["0"] * 16 + ["123"]) for state in states]
                 with (
@@ -92,14 +88,10 @@ class WorkerIdentityTests(unittest.TestCase):
         from robert_agent.adapters.processes import identity as worker_identity
 
         stat = "77 (worker) " + " ".join(["Z", "1", "77"] + ["0"] * 16 + ["123"])
-        with (
-            patch.object(Path, "read_text", return_value=stat),
-            patch.object(Path, "read_bytes", return_value=b""),
-        ):
+        with patch.object(Path, "read_text", return_value=stat), patch.object(Path, "read_bytes", return_value=b""):
             with self.assertRaises(worker_identity.ZombieProcess):
                 worker_identity.capture_process_identity(
-                    77,
-                    ps_runner=lambda *_args, **_kwargs: self.fail("must not capture a zombie"),
+                    77, ps_runner=lambda *_args, **_kwargs: self.fail("must not capture a zombie")
                 )
 
     def test_proc_disappearance_rechecks_pid_before_calling_it_dead(self):
@@ -260,9 +252,9 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed[0], 0.1)
 
     def test_terminate_worker_persists_redacted_result_once_and_marks_attention(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
         from robert_agent.execution import operations as execution_operations
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "robert.sqlite3"

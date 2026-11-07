@@ -1,5 +1,9 @@
 """Translate observed pull request failures into remediation work."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.work.application import source_events
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.workflows import pr_health
@@ -103,20 +107,7 @@ def collect_pr_remediation_decisions(
     if not conflict_policy.get("enabled") and not ci_policy.get("enabled"):
         return []
 
-    rows = conn.execute(
-        """
-        SELECT w.workstream_id, w.origin_workstream_id, gs.source_key,
-               gs.number
-        FROM workstreams w
-        JOIN github_sources gs ON gs.source_id = w.primary_source_id
-        WHERE w.repo_id = ?
-          AND w.origin_workstream_id IS NOT NULL
-          AND gs.source_type = 'pull_request'
-          AND gs.state = 'open'
-        ORDER BY w.created_at, w.workstream_id
-        """,
-        (repo_id,),
-    ).fetchall()
+    rows = db_read_workstreams.find_for_collect_pr_remediation_decisions(conn, repo_id)
     event_by_episode = {}
     snapshot_by_episode = {}
     for workstream_id, origin_workstream_id, source_key, number in rows:
@@ -150,12 +141,7 @@ def collect_pr_remediation_decisions(
             "repo_id": repo_id,
             "number": number,
         }
-        if conn.execute(
-            """SELECT 1 FROM tasks t JOIN worker_results wr ON wr.task_id=t.task_id
-                WHERE t.workstream_id=? AND t.task_kind IN ('ci_remediation','merge_conflict_remediation')
-                  AND t.lifecycle IN ('queued','running','waiting_for_user') AND wr.output_type='waiting_for_user' LIMIT 1""",
-            (workstream_id,),
-        ).fetchone():
+        if db_records.first(db_read_tasks.find_for_collect_pr_remediation_decisions(conn, workstream_id)):
             continue  # Deliver and resolve this question before admitting more automatic repair.
         remediation.upsert_health_episodes(
             conn,
@@ -167,18 +153,8 @@ def collect_pr_remediation_decisions(
         )
         episodes = {
             row[1]: remediation._load_episode(conn, row[0])
-            for row in conn.execute(
-                """
-                SELECT episode_id, episode_kind
-                FROM pr_remediation_episodes
-                WHERE workstream_id = ?
-                  AND subject_key = ?
-                  AND status = 'open'
-                """,
-                (
-                    workstream_id,
-                    f"{snapshot['head_sha']}:{snapshot['base_sha']}",
-                ),
+            for row in db_read_pr_remediation_episodes.find_for_collect_pr_remediation_decisions_2(
+                conn, workstream_id, f"{snapshot['head_sha']}:{snapshot['base_sha']}"
             )
         }
         conflict_episode = episodes.get("merge_conflict")
@@ -243,17 +219,7 @@ def collect_pr_remediation_decisions(
             "usage": decision["budget"],
         }
         events.append(event)
-    for (episode_id,) in conn.execute(
-        """
-        SELECT episode_id
-        FROM pr_remediation_episodes
-        WHERE workstream_id IN (
-          SELECT workstream_id FROM workstreams WHERE repo_id = ?
-        )
-          AND status IN ('resolved', 'exhausted', 'superseded', 'canceled')
-        """,
-        (repo_id,),
-    ):
+    for (episode_id,) in db_read_pr_remediation_episodes.find_for_collect_pr_remediation_decisions(conn, repo_id):
         execution_ownership.close_subject(conn, "remediation_episode", episode_id, run_now)
     return [
         event

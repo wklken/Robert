@@ -60,7 +60,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
 
     def test_live_run_prioritizes_existing_pr_updates_over_older_prepared_work(self):
         from robert_agent.runtime import cycle as run_once
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -158,16 +158,8 @@ class DispatchOrderingTests(RepositoryCycleFixture):
             )
 
             for task, stream, source in [
-                (
-                    "task-pr",
-                    "github:example/backend!2886",
-                    "source:github:example/backend!2886",
-                ),
-                (
-                    "task-older",
-                    "github:example/backend#2878",
-                    "source:github:example/backend#2878",
-                ),
+                ("task-pr", "github:example/backend!2886", "source:github:example/backend!2886"),
+                ("task-older", "github:example/backend#2878", "source:github:example/backend#2878"),
             ]:
                 event = {
                     "event_type": "comment",

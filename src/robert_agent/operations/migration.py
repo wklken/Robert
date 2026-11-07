@@ -4,15 +4,31 @@ This module never loads a DBOS SDK or performs Worker/GitHub effects. DBOS's
 system database and worktrees must be retained as backup evidence by operators.
 """
 
+from robert_agent.persistence.schema import execution_control as execution_schema
+
+from robert_agent.persistence.queries import legacy_inventory
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import execution_migrations as db_read_execution_migrations
+from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
+from robert_agent.persistence.stores import execution_migrations as db_write_execution_migrations
+from robert_agent.persistence.stores import execution_pending_facts as db_write_execution_pending_facts
+from robert_agent.persistence.stores import execution_subjects as db_write_execution_subjects
+from robert_agent.persistence.stores import workflow_bindings as db_write_workflow_bindings
+
 from contextlib import ExitStack, closing
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
-import sqlite3
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.work import wakeup
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.delivery.lock import task_publication_lock
@@ -51,19 +67,15 @@ def _digest(value):
 
 def _connect(path, write=False):
     path = Path(path).expanduser().resolve(strict=True)
-    conn = sqlite3.connect(path.as_uri() + ("?mode=rw" if write else "?mode=ro"), uri=True, timeout=0.1)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn = db_database.connect(path.as_uri() + ("?mode=rw" if write else "?mode=ro"), uri=True, timeout=0.1)
+    db_sqlite.configure(conn, foreign_keys=True)
     if not write:
-        conn.execute("PRAGMA query_only=ON")
+        db_sqlite.configure(conn, query_only=True)
     return conn
 
 
 def _rows(conn, table):
-    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-    if not exists:
-        return []
-    return sorted((dict(row) for row in conn.execute("SELECT * FROM " + table)), key=_json)
+    return sorted((dict(row) for row in legacy_inventory.rows(conn, table)), key=_json)
 
 
 def _inventory(conn, path):
@@ -273,7 +285,7 @@ def _inventory(conn, path):
 def preview(db_path):
     path = Path(db_path).expanduser().resolve(strict=True)
     with closing(_connect(path)) as conn:
-        conn.execute("BEGIN")
+        db_transactions.begin(conn, immediate=False)
         plan, _ = _inventory(conn, path)
         return plan
 
@@ -284,14 +296,11 @@ def apply(db_path, plan):
         return {"ok": False, "status": "invalid_plan"}
     with closing(_connect(path, write=True)) as conn, conn, ExitStack() as locks:
         try:
-            conn.execute("BEGIN EXCLUSIVE")
-        except sqlite3.OperationalError:
+            db_transactions.begin_exclusive(conn)
+        except db_errors.OperationalError:
             return {"ok": False, "status": "database_busy"}
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='execution_migrations'").fetchone():
-            done = conn.execute(
-                "SELECT 1 FROM execution_migrations WHERE source_fingerprint=?",
-                (plan.get("fingerprint"),),
-            ).fetchone()
+        if db_read_sqlite_master.object_exists(conn, "execution_migrations"):
+            done = db_records.first(db_read_execution_migrations.find_for_apply(conn, plan.get("fingerprint")))
             if done:
                 return {"ok": True, "status": "already_applied"}
         current, snapshot = _inventory(conn, path)
@@ -313,7 +322,7 @@ def apply(db_path, plan):
         for notice in snapshot["notifications"]:
             if not locks.enter_context(task_publication_lock(path, "notify-" + notice["notification_id"])):
                 return {"ok": False, "status": "notification_in_progress"}
-        execution_store.initialize(conn)
+        execution_schema.initialize(conn)
         execution_store.import_legacy_controls(conn)
         now = datetime.now(timezone.utc).isoformat()
         for binding in snapshot["workflow_bindings"]:
@@ -322,51 +331,50 @@ def apply(db_path, plan):
                 or (binding["subject_type"], binding["subject_id"]) in covered_subjects
             ):
                 continue
-            conn.execute(
-                """INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,
-                binding_status,recovery_attempts,created_at,updated_at,terminal_at,metadata_json)
-                VALUES (?,?,?,?,?,?,?,?,?)""",
-                tuple(
-                    binding[k]
-                    for k in (
-                        "subject_type",
-                        "subject_id",
-                        "workflow_kind",
-                        "binding_status",
-                        "recovery_attempts",
-                        "created_at",
-                        "updated_at",
-                        "terminal_at",
-                        "metadata_json",
+            db_write_execution_subjects.insert_for_apply(
+                conn,
+                *tuple(
+                    (
+                        binding[k]
+                        for k in (
+                            "subject_type",
+                            "subject_id",
+                            "workflow_kind",
+                            "binding_status",
+                            "recovery_attempts",
+                            "created_at",
+                            "updated_at",
+                            "terminal_at",
+                            "metadata_json",
+                        )
                     )
                 ),
             )
             execution_store.record_historical_facts(conn, binding, snapshot["workflow_outbox"])
             # Original binding is archived in the journal, then fenced from old
             # controllers. This does not change Task/Episode lifecycle.
-            conn.execute(
-                "UPDATE workflow_bindings SET binding_status='terminal',terminal_at=?,updated_at=? WHERE subject_type=? AND subject_id=?",
-                (now, now, binding["subject_type"], binding["subject_id"]),
-            )
+            db_write_workflow_bindings.update_for_apply(conn, now, now, binding["subject_type"], binding["subject_id"])
         for mapping in current["signals"]:
             if mapping["disposition"] == "already_consumed":
                 continue
-            conn.execute(
-                "INSERT INTO execution_pending_facts(source_signal_id,subject_type,subject_id,topic,dedupe_key,fact_id,disposition,repo_id,task_id,payload_json,not_before_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                tuple(
-                    mapping[k]
-                    for k in (
-                        "signal_id",
-                        "subject_type",
-                        "subject_id",
-                        "topic",
-                        "dedupe_key",
-                        "fact_id",
-                        "disposition",
-                        "repo_id",
-                        "task_id",
-                        "payload_json",
-                        "not_before_at",
+            db_write_execution_pending_facts.insert_for_apply(
+                conn,
+                *tuple(
+                    (
+                        mapping[k]
+                        for k in (
+                            "signal_id",
+                            "subject_type",
+                            "subject_id",
+                            "topic",
+                            "dedupe_key",
+                            "fact_id",
+                            "disposition",
+                            "repo_id",
+                            "task_id",
+                            "payload_json",
+                            "not_before_at",
+                        )
                     )
                 ),
             )
@@ -386,15 +394,13 @@ def apply(db_path, plan):
                 not_before_at=mapping["not_before_at"],
                 now=now,
             )
-        conn.execute(
-            "INSERT INTO execution_migrations VALUES (?,?,?,?,?)",
-            (
-                "dbos-to-sqlite:" + current["fingerprint"][:24],
-                current["fingerprint"],
-                now,
-                _json(snapshot),
-                _json(current["signals"]),
-            ),
+        db_write_execution_migrations.insert_for_apply(
+            conn,
+            "dbos-to-sqlite:" + current["fingerprint"][:24],
+            current["fingerprint"],
+            now,
+            _json(snapshot),
+            _json(current["signals"]),
         )
         return {
             "ok": True,

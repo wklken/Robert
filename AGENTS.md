@@ -45,7 +45,9 @@ Paths below are relative to `src/robert_agent/`.
 | `workflows/` | Concrete review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
 | `configuration/` | v2 loading, normalization, schema validation and route/supervision settings | Boundary parsing only; no execution or workflow imports |
 | `readmodels/` | Read-only dashboard, board, status, execution, usage and history projections | No HTTP dependency and no lifecycle mutations |
-| `adapters/` | GitHub, Git, processes, SQLite, notifications and native services | External protocols and persistence details; no reverse imports of their application callers |
+| `models/` | Static SQLAlchemy table mappings preserving existing storage encodings | No I/O or imports of persistence or domain callers |
+| `persistence/` | Shared queries, writes, conditional mutations, transactions, schema and SQLite dialect mechanics | No reverse imports of domain/use-case callers; return materialized records or affected counts |
+| `adapters/` | GitHub, Git, processes, notifications and native services | External protocols; no reverse imports of their application callers |
 | `runtime/` | Cycle, loop, daemon, scanner, supervisor and child entrypoints | Scheduling, resource lifetime and invoking use cases; no business SQL |
 | `application/` | Cross-domain repository-cycle composition | Explicit coordination only; domain-owned use cases live under their own domain |
 | `interfaces/web/`, `cli/`, `worker/`, `integrations/` | HTTP/CLI/Worker/OpenClaw input and output contracts | Translate input, authenticate and call use cases; no business SQL in HTTP |
@@ -77,7 +79,11 @@ Paths below are relative to `src/robert_agent/`.
   Shared progress/command execution belongs to `execution/`; durable result
   submission belongs to `delivery/application/submission.py`. Lower layers must
   never import Worker entrypoints, including for a helper or constant.
-- SQLite execution controls and shared model slots belong to `adapters/sqlite/`.
+- Database expressions and operations belong to `persistence/`; mapped tables belong to `models/`.
+  Business callers must not import SQLAlchemy or sqlite3, build SQL fragments, or execute SQL.
+  Share query and mutation capabilities across callers. SQL text is limited to existing schema
+  upgrades and SQLite-specific controls inside persistence.
+- Execution controls and shared model slots belong to `persistence/`.
   Adapters cannot import their domain/use-case callers. Database upgrades belong
   to `operations/migration.py`, which coordinates stable persistence and work facts.
   Public process-handle capabilities own access to the dispatch registry.
@@ -87,7 +93,7 @@ Paths below are relative to `src/robert_agent/`.
 - Keep `execution.stages` independent of concrete review/vote implementations.
   Workflows supply store/workspace/artifact capabilities. Keep model table/store
   pairings consistent; ordinary Worker capacity and model subprocess capacity
-  remain distinct. Persistence adapters may share stable schema mechanics.
+  remain distinct. Persistence operations share stable schema mechanics and ownership predicates.
 - Prefer normal Python functions, small values and protocols where they express
   real contracts. No required class/service/repository hierarchy, generic event
   bus, plugin registry or empty layer scaffold for hypothetical use cases.
@@ -96,7 +102,7 @@ Paths below are relative to `src/robert_agent/`.
   Configuration may depend on resource access and Worker adapter capabilities,
   not application execution. Pure policies must not gain I/O.
 - [Architecture tests](tests/architecture/test_architecture_boundaries.py) enforce dependency
-  direction, import acyclicity, the package root allowlist and the runtime/HTTP SQL
+  direction, import acyclicity, the package root allowlist and the business-caller SQL
   boundary. Do not add broad package exceptions to make a failing check pass.
   Document and test the actual dependency contract when introducing a capability.
 

@@ -1,9 +1,21 @@
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
+from robert_agent.persistence.stores import github_sources as db_write_github_sources
+from robert_agent.persistence.stores import repos as db_write_repos
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import worker_results as db_write_worker_results
+from robert_agent.persistence.stores import workstream_sources as db_write_workstream_sources
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
+
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
 import json
 import re
-import sqlite3
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -12,7 +24,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from robert_agent.foundation.commands import emit
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.delivery.application import publish
 
 
@@ -65,127 +77,43 @@ def _insert_canary_fixture(db_path, target, marker_id):
     storage.init_database(db_path)
     now = _now()
     body = comment_body(marker_id)
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.execute(
-            """
-            INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root)
-            VALUES ('repo-production-canary', ?, 'robert', 'main', '', '')
-            """,
-            (target["repo"],),
+    with closing(db_database.connect(db_path)) as conn, conn:
+        db_write_repos.insert_canary_fixture(conn, target["repo"])
+        db_write_github_sources.insert_canary_fixture(
+            conn, target["source_key"], target["source_type"], target["number"], target["html_url"]
         )
-        conn.execute(
-            """
-            INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url)
-            VALUES ('source-production-canary', 'repo-production-canary', ?, ?, ?, ?)
-            """,
-            (
-                target["source_key"],
-                target["source_type"],
-                target["number"],
-                target["html_url"],
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, lifecycle, created_at, updated_at)
-            VALUES (?, 'repo-production-canary', 'source-production-canary', 'completed', ?, ?)
-            """,
-            (target["source_key"], now, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO workstream_sources(workstream_id, source_id, relationship, created_at)
-            VALUES (?, 'source-production-canary', 'primary', ?)
-            """,
-            (target["source_key"], now),
-        )
-        conn.execute(
-            """
-            INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, route_id, expected_output, created_at, updated_at)
-            VALUES (
-              'task-production-canary', ?, 'completed', 'P2',
-              'production-write-canary', 'comment_analysis', ?, ?
-            )
-            """,
-            (target["source_key"], now, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at, finished_at)
-            VALUES (
-              ?, 'task-production-canary', 1,
-              'completed', ?, ?, ?
-            )
-            """,
-            (f"attempt-production-canary-{marker_id}", now, now, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO worker_results(
-              result_id, task_id, attempt_id, output_type,
-              consumed_event_fingerprints_json, verification_json, handoff,
-              created_at, metadata_json
-            )
-            VALUES (
-              'result-production-canary', 'task-production-canary',
-              ?, 'comment_analysis',
-              ?, '[]', 'production write canary', ?, ?
-            )
-            """,
-            (
-                f"attempt-production-canary-{marker_id}",
-                json.dumps([f"production-canary:{marker_id}"]),
-                now,
-                json.dumps(
-                    {
-                        "result_contract": "compact-v1",
-                        "audit": {
-                            "status": "accepted",
-                            "action_scope": {
-                                "repo": target["repo"],
-                                "sources": [
-                                    {
-                                        "source_type": target["source_type"],
-                                        "number": target["number"],
-                                    }
-                                ],
-                            },
+        db_write_workstreams.insert_canary_fixture(conn, target["source_key"], now, now)
+        db_write_workstream_sources.insert_canary_fixture(conn, target["source_key"], now)
+        db_write_tasks.insert_canary_fixture(conn, target["source_key"], now, now)
+        db_write_attempts.insert_canary_fixture(conn, f"attempt-production-canary-{marker_id}", now, now, now)
+        db_write_worker_results.insert_canary_fixture(
+            conn,
+            f"attempt-production-canary-{marker_id}",
+            json.dumps([f"production-canary:{marker_id}"]),
+            now,
+            json.dumps(
+                {
+                    "result_contract": "compact-v1",
+                    "audit": {
+                        "status": "accepted",
+                        "action_scope": {
+                            "repo": target["repo"],
+                            "sources": [{"source_type": target["source_type"], "number": target["number"]}],
                         },
                     },
-                    sort_keys=True,
-                ),
+                },
+                sort_keys=True,
             ),
         )
-        conn.execute(
-            """
-            INSERT INTO github_actions(
-              action_id, result_id, task_id, action_type, target_url,
-              audit_status, publish_status, created_at, metadata_json
-            )
-            VALUES (
-              'action-production-canary', 'result-production-canary',
-              'task-production-canary', 'comment', ?,
-              'accepted', 'not_published', ?, ?
-            )
-            """,
-            (
-                target["html_url"],
-                now,
-                json.dumps({"body": body, "marker_id": marker_id}, sort_keys=True),
-            ),
+        db_write_github_actions.insert_canary_fixture(
+            conn, target["html_url"], now, json.dumps({"body": body, "marker_id": marker_id}, sort_keys=True)
         )
     return body
 
 
 def _action_state(db_path):
-    with closing(sqlite3.connect(db_path)) as conn:
-        row = conn.execute(
-            """
-            SELECT publish_status, external_id, target_url, metadata_json
-            FROM github_actions
-            WHERE action_id = 'action-production-canary'
-            """
-        ).fetchone()
+    with closing(db_database.connect(db_path)) as conn:
+        row = db_records.first(db_read_github_actions.find_for_action_state(conn))
     if not row:
         return {}
     metadata = json.loads(row[3] or "{}")

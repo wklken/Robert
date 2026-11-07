@@ -1,3 +1,4 @@
+from tests.support import database as fixture_database
 from contextlib import closing
 from datetime import datetime, timezone
 import json
@@ -21,7 +22,7 @@ from robert_agent.delivery.application import notifications as notify
 from robert_agent.delivery.application import publish
 from robert_agent.execution import spool as result_spool
 from robert_agent.workflows import routes as route
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from tests.support import DAEMON_DEFAULTS
 from robert_agent.delivery.application import scope
 from robert_agent.execution.application import evidence
@@ -38,17 +39,8 @@ class ControlplaneRemediationTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"_ROBERT_CONTROL_DEADLINE": "0"}):
             with closing(sqlite3.connect(db)) as conn:
                 with self.assertRaises(subprocess.TimeoutExpired):
-                    scope.for_result(
-                        conn,
-                        "task-1",
-                        "attempt-1",
-                        "ws-1",
-                        command_runner=control_commands.run_command,
-                    )
-                self.assertEqual(
-                    conn.execute("SELECT audit_status FROM github_actions").fetchone()[0],
-                    "accepted",
-                )
+                    scope.for_result(conn, "task-1", "attempt-1", "ws-1", command_runner=control_commands.run_command)
+                self.assertEqual(conn.execute("SELECT audit_status FROM github_actions").fetchone()[0], "accepted")
 
     def test_expired_control_deadline_prevents_audit_and_recovery_git_calls(self):
         fixture = publication_fixture.SummaryFixture()
@@ -58,20 +50,14 @@ class ControlplaneRemediationTests(unittest.TestCase):
         fixture._init_summary_db(db)
         with mock.patch.dict(os.environ, {"_ROBERT_CONTROL_DEADLINE": "0"}):
             with mock.patch.object(
-                subprocess,
-                "run",
-                return_value=subprocess.CompletedProcess([], 0, "", ""),
+                subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
             ) as runner:
                 with self.assertRaises(subprocess.TimeoutExpired):
                     evidence.run_inspection_command(["git", "status", "--short"], fixture.root)
                 with closing(sqlite3.connect(db)) as conn:
                     with self.assertRaises(subprocess.TimeoutExpired):
                         scope.for_result(
-                            conn,
-                            "task-1",
-                            "attempt-1",
-                            "ws-1",
-                            command_runner=control_commands.run_command,
+                            conn, "task-1", "attempt-1", "ws-1", command_runner=control_commands.run_command
                         )
                 runner.assert_not_called()
 
@@ -119,41 +105,23 @@ class ControlplaneRemediationTests(unittest.TestCase):
                 received.append(json.loads(kwargs["input"]))
                 return subprocess.CompletedProcess(args, 0, "", "")
 
-            self.assertEqual(
-                notify.deliver_pending(db, command=["receiver"], runner=receiver, now=now)["sent"],
-                1,
-            )
+            self.assertEqual(notify.deliver_pending(db, command=["receiver"], runner=receiver, now=now)["sent"], 1)
             self.assertEqual(len(received), 1)
             with closing(sqlite3.connect(db)) as conn:
                 self.assertEqual(conn.execute(sql).fetchall(), [])
-                self.assertEqual(
-                    conn.execute("SELECT count(*) FROM notifications").fetchone()[0],
-                    1001,
-                )
+                self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 1001)
 
     def test_analysis_and_implementation_intents_do_not_match_substrings(self):
-        for body in [
-            "分析一下为什么失败",
-            "please explain this bug",
-            "analyze fixture behavior",
-        ]:
+        for body in ["分析一下为什么失败", "please explain this bug", "analyze fixture behavior"]:
             with self.subTest(body=body):
                 self.assertEqual(discover.infer_intent("", body, "comment"), "analysis")
         for body in ["prefix", "fixture", "suffix", "debug information"]:
             with self.subTest(body=body):
                 self.assertNotEqual(discover.infer_intent("", body, "comment"), "bug_fix")
-        for body in [
-            "实现用户登录",
-            "支持增量同步",
-            "add a feature",
-            "implement pagination",
-        ]:
+        for body in ["实现用户登录", "支持增量同步", "add a feature", "implement pagination"]:
             with self.subTest(body=body):
                 intent = discover.infer_intent("", body, "comment")
-                self.assertEqual(
-                    route.route_task({"intent": intent, "source_type": "issue"})["route_id"],
-                    "new-pr",
-                )
+                self.assertEqual(route.route_task({"intent": intent, "source_type": "issue"})["route_id"], "new-pr")
 
     def test_search_floor_does_not_disable_core_only_publication(self):
         fixture = daemon_fixture.DaemonFixture()
@@ -178,17 +146,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
 
         def rates(*args, **kwargs):
             return subprocess.CompletedProcess(
-                args,
-                0,
-                json.dumps(
-                    {
-                        "resources": {
-                            "core": {"remaining": 5000},
-                            "search": {"remaining": 0},
-                        }
-                    }
-                ),
-                "",
+                args, 0, json.dumps({"resources": {"core": {"remaining": 5000}, "search": {"remaining": 0}}}), ""
             )
 
         daemon.run_daemon(config, once=True, child_runner=child, rate_limit_runner=rates, now=now)
@@ -222,8 +180,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
             for _ in range(3):
                 with mock.patch.object(result_spool.time, "monotonic", side_effect=[0, 0, 3]):
                     result_spool.replay(
-                        db,
-                        lambda *args, **kwargs: received.append(True) or {"ok": True, "status": "recorded"},
+                        db, lambda *args, **kwargs: received.append(True) or {"ok": True, "status": "recorded"}
                     )
             self.assertEqual(received, [True])
             self.assertEqual(len(list(directory.glob("*.invalid"))), 2)
@@ -246,11 +203,10 @@ class ControlplaneRemediationTests(unittest.TestCase):
             ready = Path(tmp) / "child-ready"
             storage.init_database(db)
             now = datetime.now(timezone.utc).isoformat()
-            with closing(daemon_state.connect(db)) as conn, conn:
+            with fixture_database.connect(db) as conn, conn:
                 daemon_state.start_daemon_run(conn, config_path="/config", owner_id="daemon", now=now)
                 conn.execute(
-                    "INSERT INTO agent_runs(run_id,status,started_at) VALUES ('unrelated','running',?)",
-                    (now,),
+                    "INSERT INTO agent_runs(run_id,status,started_at) VALUES ('unrelated','running',?)", (now,)
                 )
             program = """import json,os,sqlite3,sys,time
 from datetime import datetime,timezone
@@ -310,16 +266,13 @@ time.sleep(30)
             self.assertTrue(response["child"]["process_group_stopped"])
             with closing(sqlite3.connect(db)) as conn:
                 self.assertEqual(
-                    conn.execute("SELECT status FROM agent_runs WHERE run_id='timed'").fetchone()[0],
-                    "failed",
+                    conn.execute("SELECT status FROM agent_runs WHERE run_id='timed'").fetchone()[0], "failed"
                 )
                 self.assertEqual(
-                    conn.execute("SELECT status FROM leases WHERE owner_id='timed'").fetchone()[0],
-                    "released",
+                    conn.execute("SELECT status FROM leases WHERE owner_id='timed'").fetchone()[0], "released"
                 )
                 self.assertEqual(
-                    conn.execute("SELECT status FROM agent_runs WHERE run_id='unrelated'").fetchone()[0],
-                    "running",
+                    conn.execute("SELECT status FROM agent_runs WHERE run_id='unrelated'").fetchone()[0], "running"
                 )
 
 

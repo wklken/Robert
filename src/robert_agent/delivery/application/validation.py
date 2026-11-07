@@ -1,27 +1,27 @@
 """Pre-submit checks; diagnostics never reserve a final result slot."""
 
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.stores import attempts as db_write_attempts
 from contextlib import closing
 import json
-import sqlite3
 
 from robert_agent.delivery.application import scope as action_scope
 from robert_agent.delivery.application import audit as audit_result
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
 from robert_agent.delivery import contract as result_contract
 
 
 def context(conn, task_id, attempt_id, *, include_scope=True):
-    row = conn.execute(
-        """SELECT t.workstream_id,t.task_kind,t.metadata_json,t.lifecycle,
-                  a.status, a.metadata_json,rd.allowed_github_actions_json,
-                  rd.expected_output,rd.required_skills_json,rd.recommended_skills_json,rd.route_id
-           FROM tasks t JOIN attempts a ON a.task_id=t.task_id
-           JOIN route_decisions rd ON rd.task_id=t.task_id
-           WHERE t.task_id=? AND a.attempt_id=?""",
-        (task_id, attempt_id),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_for_context(conn, task_id, attempt_id))
     if not row:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     attempt_metadata = json.loads(row[5] or "{}")
@@ -33,25 +33,17 @@ def context(conn, task_id, attempt_id, *, include_scope=True):
             "safe_error": "This attempt has no supported submission contract; prepare a new attempt.",
         }
     metadata = json.loads(row[2] or "{}")
-    if row[3] in {"canceled", "failed", "ignored"} or row[4] not in {
-        "prepared",
-        "running",
-        "stale",
-        "completed",
-    }:
+    if row[3] in {"canceled", "failed", "ignored"} or row[4] not in {"prepared", "running", "stale", "completed"}:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     if json.loads(row[5] or "{}").get("result_validation"):
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     subject_type, subject_id = "task", task_id
     if row[1] in audit_result.REMEDIATION_TASK_KINDS and metadata.get("remediation_episode_id"):
-        subject_type, subject_id = (
-            "remediation_episode",
-            metadata["remediation_episode_id"],
-        )
+        subject_type, subject_id = "remediation_episode", metadata["remediation_episode_id"]
     owner = execution_store.get_binding(conn, subject_type, subject_id)
     if owner and owner["binding_status"] != "active":
         return None, {"ok": False, "status": "rejected_by_workflow_owner"}
-    origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=?", (row[0],)).fetchone()
+    origin = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, row[0]))
     episode = (
         remediation.load_episode(conn, metadata.get("remediation_episode_id"))
         if row[1] in audit_result.REMEDIATION_TASK_KINDS
@@ -158,24 +150,18 @@ def failure(audit):
 def record_diagnostic(db_path, payload, reason_code):
     """Best-effort counts only; no submitted text or final-slot side effects."""
     try:
-        with closing(sqlite3.connect(db_path, timeout=0.05)) as conn, conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT json_extract(metadata_json,'$.submission_validation_counts') FROM attempts WHERE attempt_id=? AND task_id=?",
-                (payload.get("attempt_id"), payload.get("task_id")),
-            ).fetchone()
+        with closing(db_database.connect(db_path, timeout=0.05)) as conn, conn:
+            db_transactions.begin(conn, immediate=True)
+            row = db_records.first(
+                db_read_attempts.record_diagnostic(conn, payload.get("attempt_id"), payload.get("task_id"))
+            )
             if not row:
                 return
             counts = json.loads(row[0] or "{}")
             counts[reason_code] = int(counts.get(reason_code, 0)) + 1
-            conn.execute(
-                "UPDATE attempts SET metadata_json=json_set(metadata_json,'$.submission_validation_counts',json(?)) WHERE attempt_id=? AND task_id=?",
-                (
-                    json.dumps(counts, sort_keys=True),
-                    payload.get("attempt_id"),
-                    payload.get("task_id"),
-                ),
+            db_write_attempts.record_diagnostic(
+                conn, json.dumps(counts, sort_keys=True), payload.get("attempt_id"), payload.get("task_id")
             )
-    except (sqlite3.Error, ValueError, TypeError):
+    except (db_errors.Error, ValueError, TypeError):
         # A busy/unavailable diagnostics sink must not change the submission result.
         return

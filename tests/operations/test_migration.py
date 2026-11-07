@@ -6,7 +6,7 @@ import unittest
 
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.delivery.application import effects as publication_effects
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class MigrationTests(unittest.TestCase):
@@ -50,9 +50,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(event_columns["actor_kind"], "'github_user'")
         self.assertEqual(task_columns["task_kind"], "'human_request'")
 
-    def test_database_init_marks_dbos_workflow_migration_and_detects_checksum_drift(
-        self,
-    ):
+    def test_database_init_marks_dbos_workflow_migration_and_detects_checksum_drift(self):
         db_path = self.root / "workflow.sqlite3"
         storage.init_database(db_path)
 
@@ -88,10 +86,7 @@ class MigrationTests(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO schema_migrations VALUES (3, ?, ?, '2026-07-23')",
-                (
-                    storage.WORK_ITEM_MIGRATION_NAME,
-                    storage.WORK_ITEM_MIGRATION_CHECKSUM,
-                ),
+                (storage.WORK_ITEM_MIGRATION_NAME, storage.WORK_ITEM_MIGRATION_CHECKSUM),
             )
 
         storage.init_database(db_path)
@@ -101,10 +96,7 @@ class MigrationTests(unittest.TestCase):
             markers = conn.execute("SELECT version, name, checksum FROM schema_migrations ORDER BY version").fetchall()
         self.assertEqual(markers[1], (2, "dd-github-agent-work-item-control-v1", "legacy-checksum"))
         self.assertEqual(markers[2][0], 3)
-        self.assertEqual(
-            markers[3],
-            (4, storage.WORKFLOW_MIGRATION_NAME, storage.WORKFLOW_MIGRATION_CHECKSUM),
-        )
+        self.assertEqual(markers[3], (4, storage.WORKFLOW_MIGRATION_NAME, storage.WORKFLOW_MIGRATION_CHECKSUM))
         self.assertEqual(len(markers), 7)
         self.assertEqual(
             {row[1] for row in markers[4:]},
@@ -114,10 +106,4 @@ class MigrationTests(unittest.TestCase):
                 storage.SUPERVISION_MIGRATION_NAME,
             },
         )
-        self.assertEqual(
-            markers[-1][1:],
-            (
-                storage.SUPERVISION_MIGRATION_NAME,
-                storage.SUPERVISION_MIGRATION_CHECKSUM,
-            ),
-        )
+        self.assertEqual(markers[-1][1:], (storage.SUPERVISION_MIGRATION_NAME, storage.SUPERVISION_MIGRATION_CHECKSUM))

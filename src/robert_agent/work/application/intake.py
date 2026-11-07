@@ -1,5 +1,6 @@
 """Admit ordered requests and prepare available work under existing task fences."""
 
+from robert_agent.persistence import transactions as db_transactions
 from robert_agent.execution.application import replay as execution_replay
 from robert_agent.execution.application import dispatch as dispatcher
 from robert_agent.adapters.github import discovery as discover
@@ -25,8 +26,8 @@ from robert_agent.work import queries as work_queries
 from robert_agent.work import streams as workstream
 from robert_agent.work import task_state
 from robert_agent.workflows import routing as workflow_routing
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import vote as vote_store
 import subprocess
 
 
@@ -150,14 +151,7 @@ def admit_requests(
             vote_route = workflow_routing.effective_route(config_result, repo, event)
             if vote_route.get("native_vote_workers"):
                 github_requests.enqueue_native_request(
-                    conn,
-                    vote_store,
-                    repo,
-                    event,
-                    vote_route,
-                    vote_route["native_vote_workers"],
-                    admission,
-                    run_now,
+                    conn, vote_store, repo, event, vote_route, vote_route["native_vote_workers"], admission, run_now
                 )
                 continue
         if github_requests.resume_waiting_vote(conn, repo, event, run_now, admission):
@@ -222,11 +216,7 @@ def admit_requests(
             continue
         if source_events.should_skip_terminal_trigger(conn, event):
             supervision_lineage.record_disposition(
-                conn,
-                admission,
-                disposition="explicitly_ignored",
-                now=run_now,
-                reason_code="trigger_already_processed",
+                conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="trigger_already_processed"
             )
             continue
         if work_policies.is_driving_context_event(event):
@@ -265,11 +255,7 @@ def admit_requests(
                     worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
                 except ControlDeadlineExceeded:
                     raise
-                except (
-                    subprocess.CalledProcessError,
-                    subprocess.TimeoutExpired,
-                    FileNotFoundError,
-                ) as exc:
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
                     route_failures.append(
                         {
                             **run_errors.safe_route_error(exc),
@@ -289,7 +275,7 @@ def admit_requests(
                 # Cancellation or a different reply can win while Git I/O
                 # releases the writer. Never rewrite that stopped parent.
                 if not conn.in_transaction:
-                    conn.execute("BEGIN IMMEDIATE")
+                    db_transactions.begin(conn, immediate=True)
                 current_waiting = source_events.waiting_task_state(conn, event["workstream_id"])
                 if (
                     not current_waiting
@@ -360,11 +346,7 @@ def admit_requests(
                         )
                     except ControlDeadlineExceeded:
                         raise
-                    except (
-                        subprocess.CalledProcessError,
-                        subprocess.TimeoutExpired,
-                        FileNotFoundError,
-                    ) as exc:
+                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
                         route_failures.append(
                             {
                                 **run_errors.safe_route_error(exc),
@@ -393,11 +375,7 @@ def admit_requests(
             ):
                 summary["current_state_closed_skip_count"] += 1
                 supervision_lineage.record_disposition(
-                    conn,
-                    admission,
-                    disposition="explicitly_ignored",
-                    now=run_now,
-                    reason_code="source_closed",
+                    conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="source_closed"
                 )
                 continue
             retry_parent_id = work_queries.latest_task_id(conn, event["workstream_id"])
@@ -415,10 +393,7 @@ def admit_requests(
                 else {
                     **event,
                     "intent": discover.infer_intent(
-                        None,
-                        event.get("body"),
-                        event["event_type"],
-                        repo["github_account"],
+                        None, event.get("body"), event["event_type"], repo["github_account"]
                     ),
                 }
             )
@@ -436,11 +411,7 @@ def admit_requests(
                 worktree_result = assigned_workspace.prepare_worktree(repo, task_event, route_result, dry_run)
             except ControlDeadlineExceeded:
                 raise
-            except (
-                subprocess.CalledProcessError,
-                subprocess.TimeoutExpired,
-                FileNotFoundError,
-            ) as exc:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
                 route_failures.append(
                     {
                         **run_errors.safe_route_error(exc),
@@ -497,11 +468,7 @@ def admit_requests(
             appended = work_admission.append_event_to_active_task(conn, event, "pending", run_now)
             if appended and admission is not None:
                 supervision_lineage.record_task_disposition(
-                    conn,
-                    admission,
-                    work_queries.active_task_id(conn, event["workstream_id"]),
-                    run_now,
-                    pending=True,
+                    conn, admission, work_queries.active_task_id(conn, event["workstream_id"]), run_now, pending=True
                 )
             continue
         if source_lifecycle.record_current_state_closed_source_if_needed(
@@ -514,11 +481,7 @@ def admit_requests(
         ):
             summary["current_state_closed_skip_count"] += 1
             supervision_lineage.record_disposition(
-                conn,
-                admission,
-                disposition="explicitly_ignored",
-                now=run_now,
-                reason_code="source_closed",
+                conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="source_closed"
             )
             continue
         route_result = workflow_routing.effective_route(
@@ -531,11 +494,7 @@ def admit_requests(
             worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
         except ControlDeadlineExceeded:
             raise
-        except (
-            subprocess.CalledProcessError,
-            subprocess.TimeoutExpired,
-            FileNotFoundError,
-        ) as exc:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
             route_failures.append(
                 {
                     **run_errors.safe_route_error(exc),

@@ -14,7 +14,7 @@ import unittest
 from tests import support  # noqa: F401
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.runtime import cycle as run_once
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.work import repositories as work_repositories
 from robert_agent.adapters.github.read import GitHubReadSession, _digest
 from robert_agent.work.application import source_events
@@ -76,24 +76,14 @@ class SourceContextTests(unittest.TestCase):
             )
 
     def test_pre_upgrade_source_cache_is_refetched_even_before_expiry(self):
-        raw = {
-            "number": 70,
-            "source_type": "issue",
-            "event_type": "notification",
-            "event_at": OLD,
-        }
+        raw = {"number": 70, "source_type": "issue", "event_type": "notification", "event_at": OLD}
         session = GitHubReadSession(self.db, account="robot", now=lambda: 1000)
         context = ["robot", ["human"], [], False]
         legacy_version = _digest([raw, context, ()])
         session._put(
             "source:github:example/backend#70:notification",
             legacy_version,
-            [
-                {
-                    "event_fingerprint": "assigned:70",
-                    "authorization_lookup_complete": True,
-                }
-            ],
+            [{"event_fingerprint": "assigned:70", "authorization_lookup_complete": True}],
             1800,
         )
         calls = []
@@ -149,10 +139,7 @@ class SourceContextTests(unittest.TestCase):
         self.assertEqual(self.persist(assignment, rejected), assignment)
 
     def test_newer_complete_body_replaces_previous_content(self):
-        stored = self.persist(
-            self.event(),
-            self.event(body="Updated drawing scope", source_updated_at=NEW),
-        )
+        stored = self.persist(self.event(), self.event(body="Updated drawing scope", source_updated_at=NEW))
         self.assertEqual(stored["body"], "Updated drawing scope")
 
     def test_merged_body_keeps_its_timestamp_across_incomplete_observations(self):
@@ -177,9 +164,7 @@ class SourceContextTests(unittest.TestCase):
 
     def test_comment_body_uses_comment_timestamp_instead_of_issue_timestamp(self):
         comment = discover._comment_to_raw(
-            self.event(source_updated_at=NEW),
-            {"id": 12, "body": "Comment instructions", "created_at": OLD},
-            "comment",
+            self.event(source_updated_at=NEW), {"id": 12, "body": "Comment instructions", "created_at": OLD}, "comment"
         )
         normalized = discover.normalize_events([comment], REPO)[0]
         self.assertEqual(normalized["body_updated_at"], OLD)
@@ -203,19 +188,13 @@ class SourceContextTests(unittest.TestCase):
             with self.subTest(rejected=rejected):
                 self.assertEqual(discover.merge_event_body(preferred, rejected), preferred)
 
-    def test_stored_complete_body_reaches_prompt_when_next_observation_is_incomplete(
-        self,
-    ):
+    def test_stored_complete_body_reaches_prompt_when_next_observation_is_incomplete(self):
         from tests.support.repository_cycle import RepositoryCycleFixture
 
         fixture = RepositoryCycleFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        assignment = self.event(
-            assigned_to="robert-bot",
-            assignment_actor_login="wklken",
-            actor_login="wklken",
-        )
+        assignment = self.event(assigned_to="robert-bot", assignment_actor_login="wklken", actor_login="wklken")
         db = fixture.data_dir / "dd.sqlite3"
         storage.init_database(db)
         with closing(sqlite3.connect(db)) as conn, conn:
@@ -225,10 +204,7 @@ class SourceContextTests(unittest.TestCase):
         incomplete.pop("body")
         fixture.fixture_path.write_text(json.dumps({"events": [incomplete]}))
         result = run_once.run_once(
-            fixture.config_path,
-            fixture_path=fixture.fixture_path,
-            dry_run=True,
-            skip_external=True,
+            fixture.config_path, fixture_path=fixture.fixture_path, dry_run=True, skip_external=True
         )
         self.assertTrue(result["ok"], result)
         self.assertIn(BODY, Path(result["prompt_paths"][0]).read_text())
@@ -239,11 +215,7 @@ class SourceContextTests(unittest.TestCase):
         fixture = RepositoryCycleFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        assignment = self.event(
-            assigned_to="robert-bot",
-            assignment_actor_login="wklken",
-            actor_login="wklken",
-        )
+        assignment = self.event(assigned_to="robert-bot", assignment_actor_login="wklken", actor_login="wklken")
         assignment.pop("body")
         notification = self.event(
             event_type="notification",
@@ -253,10 +225,7 @@ class SourceContextTests(unittest.TestCase):
         )
         fixture.fixture_path.write_text(json.dumps({"events": [assignment, notification]}))
         result = run_once.run_once(
-            fixture.config_path,
-            fixture_path=fixture.fixture_path,
-            dry_run=True,
-            skip_external=True,
+            fixture.config_path, fixture_path=fixture.fixture_path, dry_run=True, skip_external=True
         )
         self.assertTrue(result["ok"], result)
         prompt = Path(result["prompt_paths"][0]).read_text()

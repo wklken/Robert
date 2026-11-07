@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import store as supervision_store
 from robert_agent.adapters.processes import identity as worker_identity
 
@@ -50,11 +50,7 @@ class DiagnosisTests(unittest.TestCase):
         self.db = self.root / "state.sqlite3"
         storage.init_database(self.db)
         self.when = datetime.now(timezone.utc)
-        self.config = {
-            "db_path": str(self.db),
-            "data_dir": str(self.root),
-            "supervision": {"mode": "observe"},
-        }
+        self.config = {"db_path": str(self.db), "data_dir": str(self.root), "supervision": {"mode": "observe"}}
         self.addCleanup(self.diagnose.shutdown, self.config)
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
@@ -131,9 +127,7 @@ class DiagnosisTests(unittest.TestCase):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
                 self.diagnose.normalize_diagnosis(profile)
 
-    def test_real_wrapper_receives_only_scoped_redacted_input_and_minimal_environment(
-        self,
-    ):
+    def test_real_wrapper_receives_only_scoped_redacted_input_and_minimal_environment(self):
         self.set_wrapper(VALID_WRAPPER)
         with mock.patch.dict(
             os.environ,
@@ -151,8 +145,7 @@ class DiagnosisTests(unittest.TestCase):
         self.assertEqual(recorded["diagnosis"]["expected_progress"], "Observe a matching receipt")
         with closing(sqlite3.connect(self.db)) as conn:
             status, evidence = conn.execute(
-                "SELECT status,evidence_json FROM supervision_incidents WHERE incident_id=?",
-                (self.incident_id,),
+                "SELECT status,evidence_json FROM supervision_incidents WHERE incident_id=?", (self.incident_id,)
             ).fetchone()
         self.assertEqual(status, "open")
         self.assertEqual(json.loads(evidence), {"action_id": "action-1"})
@@ -164,10 +157,7 @@ class DiagnosisTests(unittest.TestCase):
             VALID_WRAPPER.replace("'bundle_sha256': digest", "'bundle_sha256': 'wrong'"),
         )
         for index, wrapper in enumerate(variants):
-            with (
-                self.subTest(index=index),
-                mock.patch.dict(os.environ, {"MODEL_FIXTURE": "allowed-for-test"}),
-            ):
+            with self.subTest(index=index), mock.patch.dict(os.environ, {"MODEL_FIXTURE": "allowed-for-test"}):
                 self.set_wrapper(wrapper, cooldown_seconds=1)
                 self.poll("invalid_output", now=self.when + timedelta(seconds=index * 10))
                 self.assertNotIn("diagnosis", self.metadata())
@@ -223,8 +213,7 @@ class DiagnosisTests(unittest.TestCase):
                 when = self.when + timedelta(seconds=index * 10)
                 with (
                     mock.patch(
-                        "robert_agent.supervision.diagnosis." + target,
-                        side_effect=OSError("fixture unavailable"),
+                        "robert_agent.supervision.diagnosis." + target, side_effect=OSError("fixture unavailable")
                     ),
                     mock.patch.object(self.diagnose, "_complete", side_effect=complete),
                 ):
@@ -237,9 +226,7 @@ class DiagnosisTests(unittest.TestCase):
                 self.assertIsNone(runner["claim"])
                 self.assertEqual(len(runner["hourly_calls"]), index + 1)
 
-    def test_oversized_utf8_evidence_is_checkpointed_without_blocking_same_lineage(
-        self,
-    ):
+    def test_oversized_utf8_evidence_is_checkpointed_without_blocking_same_lineage(self):
         self.set_wrapper(
             """import json,sys
 raw = sys.stdin.buffer.read()
@@ -257,10 +244,7 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "UPDATE supervision_incidents SET evidence_json=? WHERE incident_id=?",
-                (
-                    json.dumps({f"k{i}": text for i in range(6)}, ensure_ascii=False),
-                    self.incident_id,
-                ),
+                (json.dumps({f"k{i}": text for i in range(6)}, ensure_ascii=False), self.incident_id),
             )
             conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','target',1,'running')")
             conn.executemany(
@@ -270,11 +254,7 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
             )
         self.assertEqual(
             self.diagnose.poll(self.config, now=self.when),
-            {
-                "ok": False,
-                "status": "evidence_too_large",
-                "incident_id": self.incident_id,
-            },
+            {"ok": False, "status": "evidence_too_large", "incident_id": self.incident_id},
         )
         with closing(sqlite3.connect(self.db)) as conn, conn:
             small = supervision_store.apply_observations(
@@ -317,16 +297,10 @@ while True:
             check=True,
             timeout=8,
         )
-        self.assertEqual(
-            json.loads(restarted.stdout),
-            {"ok": True, "status": "succeeded", "incident_id": small},
-        )
+        self.assertEqual(json.loads(restarted.stdout), {"ok": True, "status": "succeeded", "incident_id": small})
         record = self.metadata()
         self.assertEqual(record["status"], "evidence_too_large")
-        self.assertEqual(
-            datetime.fromisoformat(record["evidence_retry_at"]),
-            self.when + timedelta(seconds=60),
-        )
+        self.assertEqual(datetime.fromisoformat(record["evidence_retry_at"]), self.when + timedelta(seconds=60))
         self.assertGreater(record["bundle_bytes"], record["byte_limit"])
         self.assertLess(len(json.dumps(record)), 512)
         with closing(sqlite3.connect(self.db)) as conn:
@@ -334,9 +308,7 @@ while True:
         self.assertEqual(len(runner["hourly_calls"]), 1)
         self.assertIsNone(runner["claim"])
 
-    def test_oversized_incident_cannot_starve_suspect_candidate_at_cooldown_expiry(
-        self,
-    ):
+    def test_oversized_incident_cannot_starve_suspect_candidate_at_cooldown_expiry(self):
         self.set_wrapper(
             """import json,sys
 p=json.load(sys.stdin)
@@ -356,10 +328,7 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
                     self.incident_id,
                 ),
             )
-        self.assertEqual(
-            self.diagnose.poll(self.config, now=self.when)["status"],
-            "evidence_too_large",
-        )
+        self.assertEqual(self.diagnose.poll(self.config, now=self.when)["status"], "evidence_too_large")
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('small','other','running',?,?)",
@@ -434,14 +403,10 @@ sys.exit(75)
         self.assertEqual(json.loads(restarted.stdout)["status"], "provider_cooldown")
         self.poll("provider_rate_limited", now=self.when + timedelta(seconds=121))
         self.assertEqual(
-            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=243))["status"],
-            "rate_limited",
+            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=243))["status"], "rate_limited"
         )
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM supervision_recovery_actions").fetchone()[0],
-                0,
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM supervision_recovery_actions").fetchone()[0], 0)
             runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
             self.assertEqual(len(runner["hourly_calls"]), 2)
             self.assertIsNone(runner["claim"])
@@ -492,18 +457,12 @@ sys.exit(75)
             self.assertNotIn("provider_not_before", runner)
 
     def test_timeout_reaps_process_and_cooldown_and_hourly_budget_persist(self):
-        self.set_wrapper(
-            "import time; time.sleep(30)",
-            timeout_seconds=1,
-            cooldown_seconds=2,
-            max_calls_per_hour=1,
-        )
+        self.set_wrapper("import time; time.sleep(30)", timeout_seconds=1, cooldown_seconds=2, max_calls_per_hour=1)
         self.poll("timed_out")
         self.assertEqual(self.metadata()["status"], "timed_out")
         self.diagnose.shutdown(self.config)
         self.assertEqual(
-            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=5))["status"],
-            "rate_limited",
+            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=5))["status"], "rate_limited"
         )
 
     def test_restart_observes_existing_group_before_starting_a_second_wrapper(self):
@@ -527,13 +486,7 @@ while time.monotonic() < deadline:
 raise RuntimeError('missing persisted child identity')
 """
         started = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                launcher,
-                json.dumps(self.config),
-                self.when.isoformat(),
-            ],
+            [sys.executable, "-c", launcher, json.dumps(self.config), self.when.isoformat()],
             text=True,
             capture_output=True,
             check=True,
@@ -545,7 +498,4 @@ raise RuntimeError('missing persisted child identity')
         result = self.poll("timed_out", now=self.when + timedelta(seconds=31))
         self.assertEqual(result["incident_id"], self.incident_id)
         self.assertFalse(worker_identity.live_process_group(identity["process_group_id"]))
-        self.assertEqual(
-            self.diagnose.poll(self.config, now=self.when + timedelta(seconds=32))["status"],
-            "cooldown",
-        )
+        self.assertEqual(self.diagnose.poll(self.config, now=self.when + timedelta(seconds=32))["status"], "cooldown")

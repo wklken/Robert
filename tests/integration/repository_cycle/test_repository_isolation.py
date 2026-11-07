@@ -12,7 +12,7 @@ from tests.support.repository_cycle import (
 
 class RepositoryIsolationTests(RepositoryCycleFixture):
     def test_repo_run_steps_can_record_same_step_for_different_repos(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -24,25 +24,11 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    "repo:a",
-                    "Org/a",
-                    "robot",
-                    "main",
-                    str(self.repo_root),
-                    str(self.worktree_root),
-                ),
+                ("repo:a", "Org/a", "robot", "main", str(self.repo_root), str(self.worktree_root)),
             )
             conn.execute(
                 "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    "repo:b",
-                    "Org/b",
-                    "robot",
-                    "main",
-                    str(self.repo_root),
-                    str(self.worktree_root),
-                ),
+                ("repo:b", "Org/b", "robot", "main", str(self.repo_root), str(self.worktree_root)),
             )
 
             run_journal._insert_repo_run_step(conn, "run-test", "repo:a", "discover")
@@ -221,9 +207,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
         self.assertEqual(json.loads(run[1])["overall_status"], "partial_failure")
         self.assertEqual(active_leases, 0)
 
-    def test_run_once_multi_repo_top_level_notifications_disable_repo_notification_polling(
-        self,
-    ):
+    def test_run_once_multi_repo_top_level_notifications_disable_repo_notification_polling(self):
         from robert_agent.runtime import cycle as run_once
 
         repo_b = self.root / "repo-b"
@@ -332,9 +316,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             ],
         )
 
-    def test_run_once_single_repo_empty_top_level_notifications_disable_repo_polling(
-        self,
-    ):
+    def test_run_once_single_repo_empty_top_level_notifications_disable_repo_polling(self):
         from robert_agent.runtime import cycle as run_once
 
         discovery_calls = []
@@ -390,9 +372,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             ],
         )
 
-    def test_run_once_multi_repo_notification_collection_failure_falls_back_per_repo(
-        self,
-    ):
+    def test_run_once_multi_repo_notification_collection_failure_falls_back_per_repo(self):
         from robert_agent.runtime import cycle as run_once
 
         repo_b = self.root / "repo-b"

@@ -1,5 +1,9 @@
 """Trusted result targets shared by submission and final controller audit."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.work import queries as work_queries
 from robert_agent.adapters.git.remotes import github_owner
 from robert_agent.delivery import values as publication_values
@@ -8,9 +12,9 @@ from pathlib import Path
 import subprocess
 
 from robert_agent.workflows import pr_remediation as remediation
-from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.persistence.rounds import review as review_store
 from robert_agent.supervision import git as supervision_git
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import vote as vote_store
 
 
 def _object(value):
@@ -19,19 +23,7 @@ def _object(value):
 
 def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, command_runner=None):
     command_runner = command_runner or subprocess.run
-    row = conn.execute(
-        """
-        SELECT r.full_name, r.default_base_branch, a.worktree_path, a.branch_name,
-               a.metadata_json, t.task_kind, t.metadata_json
-        FROM tasks t
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        JOIN repos r ON r.repo_id = w.repo_id
-        JOIN attempts a ON a.attempt_id = ? AND a.task_id = t.task_id
-        WHERE t.task_id = ?
-          AND t.workstream_id = ?
-        """,
-        (attempt_id, task_id, workstream_id),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_for_for_result(conn, attempt_id, task_id, workstream_id))
     if not row:
         return None
     sources = work_queries.sources_for_workstream(conn, workstream_id)
@@ -45,11 +37,7 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
         "sources": sources,
     }
     authors = {}
-    for (payload_json,) in conn.execute(
-        """SELECT ge.payload_json FROM task_events te JOIN github_events ge ON ge.event_id=te.event_id
-           WHERE te.task_id=? ORDER BY ge.event_at, ge.event_id""",
-        (task_id,),
-    ):
+    for (payload_json,) in db_read_task_events.find_for_for_result(conn, task_id):
         event = _object(payload_json)
         if event.get("source_type") == "pull_request" and event.get("pr_author_login"):
             authors[f"https://github.com/{row[0]}/pull/{event.get('number')}"] = event["pr_author_login"]
@@ -77,11 +65,7 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
         ):
             try:
                 inspected = command_runner(
-                    command,
-                    cwd=action_scope["worktree_path"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
+                    command, cwd=action_scope["worktree_path"], capture_output=True, text=True, timeout=5
                 )
             except OSError:
                 continue
@@ -152,11 +136,7 @@ def observe_head(scope, *, command_runner=None):
             raise OSError("Cannot observe maintenance submission HEAD") from exc
     try:
         inspected = command_runner(
-            ["git", "rev-parse", "HEAD"],
-            cwd=scope["worktree_path"],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            ["git", "rev-parse", "HEAD"], cwd=scope["worktree_path"], capture_output=True, text=True, timeout=5
         )
     except subprocess.TimeoutExpired as exc:
         raise OSError("Cannot observe submission HEAD") from exc
@@ -178,13 +158,7 @@ def observe_worktree_status(scope, *, command_runner=None):
             raise OSError("Cannot inspect maintenance submission worktree") from exc
     try:
         inspected = command_runner(
-            [
-                "git",
-                "--no-optional-locks",
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=normal",
-            ],
+            ["git", "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=normal"],
             cwd=scope["worktree_path"],
             capture_output=True,
             text=True,
@@ -200,13 +174,7 @@ def observe_worktree_status(scope, *, command_runner=None):
 def trusted_action_scope(conn, action):
     if not conn or not action.get("result_id"):
         return None
-    row = conn.execute(
-        """SELECT wr.metadata_json, t.metadata_json, a.metadata_json
-           FROM worker_results wr LEFT JOIN tasks t ON t.task_id = wr.task_id
-           LEFT JOIN attempts a ON a.attempt_id = wr.attempt_id AND a.task_id = wr.task_id
-           WHERE wr.result_id = ?""",
-        (action["result_id"],),
-    ).fetchone()
+    row = db_records.first(db_read_worker_results.find_for_trusted_action_scope(conn, action["result_id"]))
     metadata = publication_values.decode_json(row[0] if row else None)
     audit = metadata.get("audit")
     if not isinstance(audit, dict) or audit.get("status") != "accepted":

@@ -11,7 +11,7 @@ import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.delivery.application import publish
 from robert_agent.delivery.application import audit as audit_result
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 def completed(stdout=""):
@@ -101,11 +101,7 @@ class PublicationRecoveryTests(unittest.TestCase):
                     (json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),),
                 )
                 for aid, kind, payload in [
-                    (
-                        "1",
-                        "push_existing_pr",
-                        {"worktree_path": tmp, "branch": "codex/fix"},
-                    ),
+                    ("1", "push_existing_pr", {"worktree_path": tmp, "branch": "codex/fix"}),
                     (
                         "2",
                         "comment",
@@ -160,10 +156,7 @@ class PublicationRecoveryTests(unittest.TestCase):
             self.assertEqual(result["published_count"], 2)
             self.assertEqual(result["deduplicated_count"], 1)
             self.assertEqual(len(pushes), 1)
-            self.assertEqual(
-                pushes[0][-1],
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/codex/fix",
-            )
+            self.assertEqual(pushes[0][-1], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/codex/fix")
 
     def test_leased_push_without_result_revision_fails_before_writing(self):
         scope = {"existing_pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}

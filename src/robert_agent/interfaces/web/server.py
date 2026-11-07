@@ -1,3 +1,4 @@
+from robert_agent.persistence import errors as db_errors
 from robert_agent.interfaces.web.templates import render_dashboard_html
 from robert_agent.context.application import knowledge_review
 from robert_agent.work.application import web_setup
@@ -11,7 +12,6 @@ from importlib.resources import files
 import ipaddress
 import json
 import secrets
-import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -147,23 +147,19 @@ def build_http_response(path, db_path, control_context=None):
                 )
             except board.BoardQueryError as exc:
                 return _json_response(
-                    {
-                        "ok": False,
-                        "status": "failed_validation",
-                        "safe_error": str(exc),
-                    },
+                    {"ok": False, "status": "failed_validation", "safe_error": str(exc)},
                     422,
                 )
             return _json_response(payload)
         try:
             payload = board.get_work_item_detail(db_path, work_item_id)
-        except sqlite3.OperationalError:
+        except db_errors.OperationalError:
             payload = None
         if payload is not None:
             return _json_response(payload)
         try:
             payload = workbench.get_work_item(db_path, work_item_id)
-        except sqlite3.OperationalError:
+        except db_errors.OperationalError:
             return _json_response(
                 {
                     "ok": False,
@@ -174,11 +170,7 @@ def build_http_response(path, db_path, control_context=None):
             )
         if payload is None:
             return _json_response(
-                {
-                    "ok": False,
-                    "status": "not_found",
-                    "safe_error": "work item not found",
-                },
+                {"ok": False, "status": "not_found", "safe_error": "work item not found"},
                 404,
             )
         return _json_response(payload)
@@ -210,7 +202,7 @@ def build_http_response(path, db_path, control_context=None):
                 {"ok": False, "status": "invalid_query", "safe_error": str(exc)},
                 400,
             )
-        except sqlite3.OperationalError:
+        except db_errors.OperationalError:
             return _json_response(
                 {
                     "ok": False,
@@ -232,22 +224,10 @@ def build_http_response(path, db_path, control_context=None):
             artifact_id=(query.get("artifact_id") or [None])[0],
         )
         if not preview:
-            return (
-                404,
-                {"content-type": "text/plain; charset=utf-8"},
-                b"artifact not found\n",
-            )
+            return 404, {"content-type": "text/plain; charset=utf-8"}, b"artifact not found\n"
         if preview.get("missing"):
-            return (
-                404,
-                {"content-type": "text/plain; charset=utf-8"},
-                dashboard.render_artifact_preview_text(preview),
-            )
-        return (
-            200,
-            {"content-type": "text/plain; charset=utf-8"},
-            dashboard.render_artifact_preview_text(preview),
-        )
+            return 404, {"content-type": "text/plain; charset=utf-8"}, dashboard.render_artifact_preview_text(preview)
+        return 200, {"content-type": "text/plain; charset=utf-8"}, dashboard.render_artifact_preview_text(preview)
     return 404, {"content-type": "text/plain; charset=utf-8"}, b"not found\n"
 
 
@@ -291,11 +271,7 @@ def _control_request_error(control_context, headers, *, json_required):
     expected = "application/json" if json_required else "application/x-www-form-urlencoded"
     if content_type != expected:
         return _json_response(
-            {
-                "ok": False,
-                "status": "unsupported_media_type",
-                "safe_error": f"content-type must be {expected}",
-            },
+            {"ok": False, "status": "unsupported_media_type", "safe_error": f"content-type must be {expected}"},
             415,
         )
     return None
@@ -326,31 +302,19 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
     idempotency_key = headers.get("x-idempotency-key")
     if not idempotency_key:
         return _json_response(
-            {
-                "ok": False,
-                "status": "failed_validation",
-                "safe_error": "X-Idempotency-Key is required",
-            },
+            {"ok": False, "status": "failed_validation", "safe_error": "X-Idempotency-Key is required"},
             422,
         )
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return _json_response(
-            {
-                "ok": False,
-                "status": "failed_validation",
-                "safe_error": "invalid JSON body",
-            },
+            {"ok": False, "status": "failed_validation", "safe_error": "invalid JSON body"},
             422,
         )
     if not isinstance(payload, dict):
         return _json_response(
-            {
-                "ok": False,
-                "status": "failed_validation",
-                "safe_error": "JSON body must be an object",
-            },
+            {"ok": False, "status": "failed_validation", "safe_error": "JSON body must be an object"},
             422,
         )
     try:
@@ -408,12 +372,7 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
             work_item_id = unquote(route[len("/api/work-items/") :]).removesuffix("/commands")
             current = board.get_work_item_detail(db_path, work_item_id)
         return _json_response(
-            {
-                "ok": False,
-                "status": "conflict",
-                "safe_error": str(exc),
-                "current": current,
-            },
+            {"ok": False, "status": "conflict", "safe_error": str(exc), "current": current},
             409,
         )
 
@@ -434,31 +393,19 @@ def _handle_task_retrigger_post(route, body, db_path, control_context, headers):
     idempotency_key = headers.get("x-idempotency-key")
     if not idempotency_key:
         return _json_response(
-            {
-                "ok": False,
-                "status": "failed_validation",
-                "safe_error": "X-Idempotency-Key is required",
-            },
+            {"ok": False, "status": "failed_validation", "safe_error": "X-Idempotency-Key is required"},
             422,
         )
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return _json_response(
-            {
-                "ok": False,
-                "status": "failed_validation",
-                "safe_error": "invalid JSON body",
-            },
+            {"ok": False, "status": "failed_validation", "safe_error": "invalid JSON body"},
             422,
         )
     if not isinstance(payload, dict):
         return _json_response(
-            {
-                "ok": False,
-                "status": "failed_validation",
-                "safe_error": "JSON body must be an object",
-            },
+            {"ok": False, "status": "failed_validation", "safe_error": "JSON body must be an object"},
             422,
         )
     task_id = unquote(route[len("/api/tasks/") : -len("/retrigger")])
@@ -488,11 +435,7 @@ def handle_dashboard_post(path, body, db_path, control_context=None, request_hea
     route = urlsplit(path).path
     if len(body) > 64 * 1024:
         return _json_response(
-            {
-                "ok": False,
-                "status": "payload_too_large",
-                "safe_error": "request body exceeds 64 KiB",
-            },
+            {"ok": False, "status": "payload_too_large", "safe_error": "request body exceeds 64 KiB"},
             413,
         )
     headers = _lower_headers(request_headers)
@@ -840,13 +783,7 @@ def main(argv=None):
             3,
         )
     if args.json:
-        return emit(
-            {
-                "ok": True,
-                "status": "ready",
-                "data": dashboard.build_dashboard_data(db_path),
-            }
-        )
+        return emit({"ok": True, "status": "ready", "data": dashboard.build_dashboard_data(db_path)})
     serve(db_path, args.host, args.port, control_context=control_context)
     return 0
 

@@ -16,7 +16,7 @@ from robert_agent.runtime import daemon
 from robert_agent.execution import runtime_state as daemon_state
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.workflows import routes as route
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.execution import leases as execution_leases
 from tests.support import DAEMON_DEFAULTS
 
@@ -62,16 +62,7 @@ Path(sys.argv[2]).touch()
 if sys.argv[4]=='slow': time.sleep(30)
 print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
 """
-            command = [
-                sys.executable,
-                "-B",
-                "-c",
-                program,
-                str(db),
-                str(ready),
-                now,
-                "slow" if slow else "fast",
-            ]
+            command = [sys.executable, "-B", "-c", program, str(db), str(ready), now, "slow" if slow else "fast"]
             original_popen = subprocess.Popen
             processes = []
 
@@ -107,11 +98,7 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
             with (
                 mock.patch.object(daemon, "build_loop_command", return_value=command),
                 mock.patch.object(daemon.subprocess, "Popen", side_effect=launch),
-                mock.patch.object(
-                    worker_identity,
-                    "live_process_group",
-                    side_effect=self._group_probe(mode),
-                ),
+                mock.patch.object(worker_identity, "live_process_group", side_effect=self._group_probe(mode)),
             ):
                 result = daemon._run_local_drain(context)
             self.assertEqual(len(processes), 1)
@@ -129,12 +116,10 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                 self.assertEqual(result["child"]["returncode"], 0)
             with closing(sqlite3.connect(db)) as conn:
                 self.assertEqual(
-                    conn.execute("SELECT status FROM agent_runs WHERE run_id='owned'").fetchone()[0],
-                    "running",
+                    conn.execute("SELECT status FROM agent_runs WHERE run_id='owned'").fetchone()[0], "running"
                 )
                 self.assertEqual(
-                    conn.execute("SELECT status FROM leases WHERE owner_id='owned'").fetchone()[0],
-                    "active",
+                    conn.execute("SELECT status FROM leases WHERE owner_id='owned'").fetchone()[0], "active"
                 )
 
     def test_group_observation_failure_preserves_real_success_and_ownership(self):
@@ -165,24 +150,12 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                 with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
                     conn.execute(
                         "INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('abandoned','running',?,?)",
-                        (
-                            now,
-                            json.dumps(
-                                {
-                                    "executor_id": "executor",
-                                    "executor_identity": identity,
-                                }
-                            ),
-                        ),
+                        (now, json.dumps({"executor_id": "executor", "executor_identity": identity})),
                     )
                     execution_leases.acquire(conn, "repo:x", "abandoned", now, 90)
                 probe = (lambda _pid: False) if mode == "stopped" else self._group_probe(mode)
                 with (
-                    mock.patch.object(
-                        daemon.worker_identity,
-                        "inspect_recorded_identity",
-                        return_value="dead",
-                    ),
+                    mock.patch.object(daemon.worker_identity, "inspect_recorded_identity", return_value="dead"),
                     mock.patch.object(worker_identity, "live_process_group", side_effect=probe),
                 ):
                     result = daemon.run_daemon(config, once=True)
@@ -197,13 +170,9 @@ print(json.dumps({'ok':True,'status':'completed','marker':'real-child'}))
                         conn.execute("SELECT status FROM leases WHERE owner_id='abandoned'").fetchone()[0],
                         "released" if mode == "stopped" else "active",
                     )
+                    self.assertEqual(conn.execute("SELECT status FROM daemon_runs").fetchone()[0], "stopped")
                     self.assertEqual(
-                        conn.execute("SELECT status FROM daemon_runs").fetchone()[0],
-                        "stopped",
-                    )
-                    self.assertEqual(
-                        conn.execute("SELECT status FROM leases WHERE resource_type='daemon'").fetchone()[0],
-                        "released",
+                        conn.execute("SELECT status FROM leases WHERE resource_type='daemon'").fetchone()[0], "released"
                     )
 
 
@@ -216,14 +185,7 @@ class FollowupIntentTests(unittest.TestCase):
         ]:
             with self.subTest(title=title):
                 event = discover._issue_search_to_raw(
-                    {
-                        "number": 1,
-                        "title": title,
-                        "body": body,
-                        "author": {"login": "wklken"},
-                    },
-                    "issue",
-                    "robot",
+                    {"number": 1, "title": title, "body": body, "author": {"login": "wklken"}}, "issue", "robot"
                 )
                 self.assertEqual(event["intent"], "bug_fix")
                 policy = route.route_task({"intent": event["intent"], "source_type": "issue"})
@@ -235,12 +197,7 @@ class FollowupIntentTests(unittest.TestCase):
             ("Bug: login failed", "分析一下为什么失败", "issue", "analysis"),
             ("", "please explain this bug", "comment", "analysis"),
             ("", "analyze fixture behavior", "comment", "analysis"),
-            (
-                "",
-                "Please fix this bug; discuss the root cause afterward.",
-                "issue",
-                "bug_fix",
-            ),
+            ("", "Please fix this bug; discuss the root cause afterward.", "issue", "bug_fix"),
             ("", "prefix", "issue", "unclear"),
             ("", "fixture", "issue", "unclear"),
             ("", "suffix", "issue", "unclear"),
@@ -248,18 +205,8 @@ class FollowupIntentTests(unittest.TestCase):
             ("", "do not fix this bug", "comment", "unclear"),
             ("", "不要修复这个失败，讨论一下方案", "comment", "analysis"),
             ("Bug: login failed", "@robot 投票：选择方案 A 或 B", "comment", "vote"),
-            (
-                "Bug: login failed",
-                "@robot please review this",
-                "comment",
-                "review_request",
-            ),
-            (
-                "Bug: login failed",
-                "please fix this",
-                "review_request",
-                "review_request",
-            ),
+            ("Bug: login failed", "@robot please review this", "comment", "review_request"),
+            ("Bug: login failed", "please fix this", "review_request", "review_request"),
         ]:
             with self.subTest(body=body):
                 self.assertEqual(discover.infer_intent(title, body, event_type, "robot"), expected)

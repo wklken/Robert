@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class Completed:

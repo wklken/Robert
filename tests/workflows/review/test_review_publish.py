@@ -11,7 +11,7 @@ from robert_agent.delivery.application import audit as audit_result
 from robert_agent.delivery.application import reconcile as publication_reconcile
 from robert_agent.delivery.application import publish
 from robert_agent.workflows.review import publish as review_publish
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class Completed:
@@ -92,10 +92,7 @@ class ReviewPublishTests(unittest.TestCase):
 
     def seed(self, suffix, action, scope):
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE task_id!=?",
-                ("task-" + suffix,),
-            )
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id!=?", ("task-" + suffix,))
             conn.execute(
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES (?,'ws','running',?,?)",
                 ("task-" + suffix, self.now, self.now),
@@ -112,10 +109,7 @@ class ReviewPublishTests(unittest.TestCase):
                     "attempt-" + suffix,
                     self.now,
                     json.dumps(
-                        {
-                            "result_contract": "compact-v1",
-                            "audit": {"status": "accepted", "action_scope": scope},
-                        }
+                        {"result_contract": "compact-v1", "audit": {"status": "accepted", "action_scope": scope}}
                     ),
                 ),
             )
@@ -142,10 +136,7 @@ class ReviewPublishTests(unittest.TestCase):
                     self.now,
                 ),
             )
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE task_id!=?",
-                ("task-" + suffix,),
-            )
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id!=?", ("task-" + suffix,))
 
     def runner(self, command, **kwargs):
         self.calls.append(command)
@@ -226,10 +217,7 @@ class ReviewPublishTests(unittest.TestCase):
         result = publish.publish_ready_actions(self.db, run_command=self.runner)
         self.assertEqual(result["skipped_count"], 1, result)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM review_sessions").fetchone()[0],
-                "superseded",
-            )
+            self.assertEqual(conn.execute("SELECT status FROM review_sessions").fetchone()[0], "superseded")
 
     def test_ambiguous_post_reconciles_later_page_even_after_head_advance(self):
         def crashed(command, **kwargs):
@@ -248,15 +236,11 @@ class ReviewPublishTests(unittest.TestCase):
 
     def test_read_error_conflicting_body_and_duplicate_markers_are_unknown(self):
         result = review_publish.reconcile(
-            self.table_action(),
-            self.scope,
-            lambda *_a, **_k: Completed({"message": "forbidden"}, 1),
+            self.table_action(), self.scope, lambda *_a, **_k: Completed({"message": "forbidden"}, 1)
         )
         self.assertEqual(result["status"], "unknown")
         malformed = review_publish.reconcile(
-            self.table_action(),
-            self.scope,
-            lambda *_a, **_k: Completed([{"message": "unexpected"}]),
+            self.table_action(), self.scope, lambda *_a, **_k: Completed([{"message": "unexpected"}])
         )
         self.assertEqual(malformed["status"], "unknown")
         self.runner(
@@ -277,10 +261,7 @@ class ReviewPublishTests(unittest.TestCase):
         self.assertEqual(result["status"], "unknown")
         self.remote_reviews[0]["body"] = self.action["body"]
         self.remote_reviews.append(dict(self.remote_reviews[0], id=2))
-        self.assertEqual(
-            review_publish.reconcile(self.table_action(), self.scope, self.runner)["status"],
-            "unknown",
-        )
+        self.assertEqual(review_publish.reconcile(self.table_action(), self.scope, self.runner)["status"], "unknown")
 
     def test_scope_hash_symlink_and_last_moment_tamper_are_rejected(self):
         with self.assertRaises(ValueError):
@@ -300,8 +281,5 @@ class ReviewPublishTests(unittest.TestCase):
                 report.write_text("tampered")
             return result
 
-        self.assertEqual(
-            review_publish.publish(self.table_action(), self.scope, changed)["status"],
-            "publish_failed",
-        )
+        self.assertEqual(review_publish.publish(self.table_action(), self.scope, changed)["status"], "publish_failed")
         self.assertFalse(any("--method" in call for call in self.calls))

@@ -1,5 +1,10 @@
 """Safe, bounded execution information for the operator board."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
 import json
 from pathlib import Path
 
@@ -8,11 +13,7 @@ from robert_agent.security.text import safe_text
 
 def publication_history(conn, task_id):
     actions = []
-    for row in conn.execute(
-        "SELECT action_id, action_type, audit_status, publish_status, created_at, metadata_json "
-        "FROM github_actions WHERE task_id=? ORDER BY created_at, action_id",
-        (task_id,),
-    ):
+    for row in db_read_github_actions.find_for_publication_history(conn, task_id):
         try:
             metadata = json.loads(row["metadata_json"] or "{}")
             publication = metadata.get("publish", {}) if isinstance(metadata, dict) else {}
@@ -48,21 +49,14 @@ def publication_history(conn, task_id):
 def execution_summary(conn, task_id):
     if not task_id:
         return None
-    attempt = conn.execute(
-        "SELECT * FROM attempts WHERE task_id = ? ORDER BY attempt_no DESC LIMIT 1",
-        (task_id,),
-    ).fetchone()
+    attempt = db_records.first(db_read_attempts.find_record_by_task_id_2(conn, task_id))
     if not attempt:
         return None
     return attempt_summary(conn, attempt)
 
 
 def attempt_summary(conn, attempt):
-    phase = conn.execute(
-        """SELECT phase, status, summary, next_step, created_at FROM worker_phases
-        WHERE attempt_id = ? ORDER BY created_at DESC, phase_id DESC LIMIT 1""",
-        (attempt["attempt_id"],),
-    ).fetchone()
+    phase = db_records.first(db_read_worker_phases.find_for_attempt_summary(conn, attempt["attempt_id"]))
     try:
         failure = json.loads(attempt["failure_json"] or "{}")
     except (TypeError, ValueError):
@@ -86,13 +80,7 @@ def attempt_summary(conn, attempt):
     reason = next(
         (
             failure[key]
-            for key in (
-                "safe_error",
-                "reason",
-                "original_status",
-                "status",
-                "error_type",
-            )
+            for key in ("safe_error", "reason", "original_status", "status", "error_type")
             if isinstance(failure.get(key), str)
         ),
         "",
@@ -124,9 +112,8 @@ def attempt_history(conn, attempt):
                 "bytes": row["bytes"],
                 "available": Path(row["path"]).expanduser().is_file(),
             }
-            for row in conn.execute(
-                "SELECT artifact_id,artifact_type,path,bytes FROM artifacts WHERE attempt_id=? ORDER BY created_at,artifact_id",
-                (attempt["attempt_id"],),
+            for row in db_read_artifacts.find_artifact_id_and_artifact_type_and_path_and_bytes_by_attempt_id(
+                conn, attempt["attempt_id"]
             )
         ],
         "phases": [
@@ -137,9 +124,6 @@ def attempt_history(conn, attempt):
                 "next_step": safe_text(row["next_step"]),
                 "created_at": row["created_at"],
             }
-            for row in conn.execute(
-                "SELECT * FROM worker_phases WHERE attempt_id=? ORDER BY created_at, phase_id",
-                (attempt["attempt_id"],),
-            )
+            for row in db_read_worker_phases.find_record_by_attempt_id(conn, attempt["attempt_id"])
         ],
     }

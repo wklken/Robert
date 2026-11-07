@@ -14,14 +14,12 @@ from tests.support import PACKAGE_ROOT  # noqa: F401
 
 from robert_agent.execution import operations as execution_operations
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 
 
 class RecoveryBudgetTests(unittest.TestCase):
     def test_authentication_failure_never_consumes_resume_quota(self):
-        from tests.support.worker_lifecycle_workflow import (
-            WorkerLifecycleWorkflowFixture,
-        )
+        from tests.support.worker_lifecycle_workflow import WorkerLifecycleWorkflowFixture
 
         fixture = WorkerLifecycleWorkflowFixture()
         self.addCleanup(fixture.doCleanups)

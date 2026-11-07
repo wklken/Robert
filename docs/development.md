@@ -75,7 +75,8 @@ production paths.
 
 Tests follow the owning domains under `tests/work/`, `tests/execution/`,
 `tests/delivery/`, `tests/supervision/` and the other source boundaries. Adapter
-tests live under the corresponding `tests/adapters/` protocol directory.
+tests live under the corresponding `tests/adapters/` protocol directory. Model
+and database contracts live in `tests/models/` and `tests/persistence/`.
 Repository-cycle scenarios stay under `tests/integration/repository_cycle/`;
 real-process simulations and browser tests have their own directories. Shared
 fixtures live in `tests/support/` and do not contain test methods. Each test
@@ -149,3 +150,19 @@ PyPI Trusted Publishing using repository `wklken/Robert`, workflow
 
 Never tag or publish until release evidence, secret scans, TestPyPI rehearsal,
 and explicit publication approval are complete.
+
+## Persistence dependency
+
+SQLAlchemy 2 supplies declarative table mappings, parameter binding, composable predicates,
+and atomic conditional updates through one persistence layer. The standard-library sqlite3
+module and the existing dependencies do not provide these mapping and query-building
+capabilities. The synchronous API supports the project's supported Python matrix; the
+runtime keeps sqlite3's existing transaction behavior and uses no ORM session identity map.
+The dependency range stays on the maintained 2.0 line. Its MIT license is compatible with
+this project; normal CI dependency audits include SQLAlchemy and its resolved dependencies.
+No additional database service, migration tool, or asynchronous driver is required.
+
+Hot read paths reuse immutable parameterized statement templates. A process-local cache
+retains at most eight engines, keyed by database path and connection options, to reuse
+SQLAlchemy compilation. Each engine uses `NullPool`: every `connect()` still opens a fresh
+physical connection and owns its transaction. Neither rows nor active connections are cached.

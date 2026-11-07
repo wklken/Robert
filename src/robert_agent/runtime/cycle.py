@@ -1,5 +1,6 @@
 """Compose the configured application use cases for a controller cycle."""
 
+from robert_agent.persistence import database as db_database
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.work.application import synchronization as synchronization
 from robert_agent.work import scan_batches as scan_batches
@@ -8,24 +9,23 @@ from robert_agent.execution.application import dispatch as dispatcher
 from pathlib import Path
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.adapters.processes import identity as worker_identity
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.application import repository_cycle
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution import journal as run_journal
 from robert_agent.execution.application import cutover as result_cutover
 from robert_agent.configuration import command as validate_config
 from robert_agent.execution import capacity
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.foundation.commands import emit
 from robert_agent.work import queries as work_queries
 from robert_agent.work import repositories as work_repositories
-from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.persistence.rounds import review as review_store
 import argparse
 import json
 import os
-import sqlite3
 import subprocess
 
 
@@ -60,9 +60,9 @@ def run_once(
     cutover = result_cutover.check(db_path) if dry_run else result_cutover.prepare(db_path)
     if not cutover["ok"]:
         return cutover
-    with closing(sqlite3.connect(db_path)) as pool_conn, pool_conn:
+    with closing(db_database.connect(db_path)) as pool_conn, pool_conn:
         review_store.configure_process_pool(pool_conn, config_result["model_max_concurrency"])
-    with closing(sqlite3.connect(db_path)) as guard:
+    with closing(db_database.connect(db_path)) as guard:
         execution_store.require_migrated(guard)
     from robert_agent.delivery.application.submission import replay_pending_results
 
@@ -177,8 +177,7 @@ def run_once(
             "remaining": capacity_remaining,
             "repo_remaining": {
                 rid: max(
-                    0,
-                    int(repo.get("max_concurrency", max_concurrency)) - capacity.running_attempt_count(conn, rid),
+                    0, int(repo.get("max_concurrency", max_concurrency)) - capacity.running_attempt_count(conn, rid)
                 )
                 for rid, repo in repos
             },
@@ -265,13 +264,11 @@ def run_once(
                     result.get("status") in {"running", "completed_by_worker_result"} for result in dispatch_results
                 )
                 dispatch_budget["remaining"] = max(
-                    0,
-                    max_concurrency - capacity.running_attempt_count_for_repos(conn, repo_ids),
+                    0, max_concurrency - capacity.running_attempt_count_for_repos(conn, repo_ids)
                 )
                 if max_dispatches is not None:
                     dispatch_budget["remaining"] = min(
-                        dispatch_budget["remaining"],
-                        max(0, max_dispatches - dispatched),
+                        dispatch_budget["remaining"], max(0, max_dispatches - dispatched)
                     )
                 dispatch_budget["repo_remaining"] = {
                     rid: max(

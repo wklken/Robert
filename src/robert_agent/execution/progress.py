@@ -1,6 +1,15 @@
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import worker_phases as db_write_worker_phases
+
 #!/usr/bin/env python3
 from contextlib import closing
-import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -23,43 +32,24 @@ def build_snapshot(task_id, attempt_id, phase, status, summary, next_step=""):
 
 def record_snapshot(db_path, task_id, attempt_id, phase, status, summary, next_step=""):
     row = build_snapshot(task_id, attempt_id, phase, status, summary, next_step)
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("BEGIN IMMEDIATE")
-        attempt = conn.execute(
-            "SELECT task_id FROM attempts WHERE attempt_id = ?",
-            (attempt_id,),
-        ).fetchone()
+    with closing(db_database.connect(db_path)) as conn, conn:
+        db_sqlite.configure(conn, foreign_keys=True)
+        db_sqlite.configure(conn, busy_timeout_ms=5000)
+        db_transactions.begin(conn, immediate=True)
+        attempt = db_records.first(db_read_attempts.find_task_id_by_attempt_id(conn, attempt_id))
         if not attempt:
             raise ValueError("attempt_id does not exist")
         if attempt[0] != task_id:
             raise ValueError("attempt_id does not belong to task_id")
         created_at = datetime.now(timezone.utc).isoformat()
-        previous = conn.execute(
-            """SELECT phase, status, summary, next_step FROM worker_phases
-            WHERE attempt_id = ? ORDER BY created_at DESC, phase_id DESC LIMIT 1""",
-            (attempt_id,),
-        ).fetchone()
+        previous = db_records.first(
+            db_read_worker_phases.find_phase_and_status_and_summary_and_next_step_by_attempt_id(conn, attempt_id)
+        )
         # Repeated liveness samples carry no new phase or command transition.
         # Serialize the comparison and insert with the heartbeat update.
         if previous != (phase, status, summary, next_step):
-            conn.execute(
-                """INSERT INTO worker_phases(
-                  phase_id, attempt_id, phase, status, summary, next_step, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    f"phase-{uuid4().hex[:12]}",
-                    attempt_id,
-                    phase,
-                    status,
-                    summary,
-                    next_step,
-                    created_at,
-                ),
+            db_write_worker_phases.record_snapshot(
+                conn, f"phase-{uuid4().hex[:12]}", attempt_id, phase, status, summary, next_step, created_at
             )
-        conn.execute(
-            "UPDATE attempts SET heartbeat_at = ? WHERE attempt_id = ? AND task_id = ?",
-            (created_at, attempt_id, task_id),
-        )
+        db_write_attempts.record_snapshot(conn, created_at, attempt_id, task_id)
     return {"ok": True, "status": "recorded", "snapshot": row}

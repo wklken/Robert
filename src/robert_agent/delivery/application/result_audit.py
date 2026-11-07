@@ -1,5 +1,14 @@
 """Audit saved results with fresh execution and publication evidence."""
 
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import worker_results as db_write_worker_results
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.delivery import results
 from robert_agent.delivery.application import scope as result_scope
@@ -24,38 +33,19 @@ import subprocess
 
 
 def _record_result_usage_status(conn, attempt_id, result_id):
-    attempt_row = conn.execute(
-        "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
-        (attempt_id,),
-    ).fetchone()
+    attempt_row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
     attempt_metadata = values.json_object(attempt_row[0] if attempt_row else None)
     usage_status = usage.extract_attempt_usage(attempt_metadata)
     if attempt_row and attempt_metadata.get("usage") != usage_status:
         attempt_metadata["usage"] = usage_status
-        conn.execute(
-            """
-            UPDATE attempts
-            SET metadata_json = ?
-            WHERE attempt_id = ?
-            """,
-            (
-                json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
-                attempt_id,
-            ),
+        db_write_attempts.set_metadata_json_by_attempt_id(
+            conn, json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True), attempt_id
         )
-    result_row = conn.execute(
-        "SELECT metadata_json FROM worker_results WHERE result_id = ?",
-        (result_id,),
-    ).fetchone()
+    result_row = db_records.first(db_read_worker_results.find_metadata_json_by_result_id(conn, result_id))
     result_metadata = values.json_object(result_row[0] if result_row else None)
     result_metadata["usage"] = usage_status
-    conn.execute(
-        """
-        UPDATE worker_results
-        SET metadata_json = ?
-        WHERE result_id = ?
-        """,
-        (json.dumps(result_metadata, ensure_ascii=False, sort_keys=True), result_id),
+    db_write_worker_results.set_metadata_json_by_result_id(
+        conn, json.dumps(result_metadata, ensure_ascii=False, sort_keys=True), result_id
     )
     return usage_status
 
@@ -64,16 +54,12 @@ def _revalidate_audit_claim(conn, claim, config, now):
     from robert_agent.supervision import actions as supervision_actions
 
     if not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
+        db_transactions.begin(conn, immediate=True)
     if supervision_actions.current(conn, claim, config=config, now=now):
         return True
     # Git inspection is read-only. A stale claim has not applied an audit.
     supervision_actions.finish(
-        conn,
-        claim,
-        outcome="rejected",
-        now=now,
-        receipt={"reason_code": "audit_target_changed_after_inspection"},
+        conn, claim, outcome="rejected", now=now, receipt={"reason_code": "audit_target_changed_after_inspection"}
     )
     return False
 
@@ -93,40 +79,7 @@ def audit_completed_results(
 ):
     from robert_agent.supervision import actions as supervision_actions
 
-    rows = conn.execute(
-        """
-        SELECT
-          wr.result_id,
-          wr.task_id,
-          wr.attempt_id,
-          wr.output_type,
-          wr.consumed_event_fingerprints_json,
-          wr.verification_json,
-          wr.handoff,
-          wr.metadata_json,
-          t.workstream_id,
-          rd.allowed_github_actions_json,
-          rd.expected_output,
-          rd.required_skills_json,
-          rd.recommended_skills_json,
-          rd.route_id,
-          t.task_kind,
-          t.metadata_json
-        FROM worker_results wr
-        JOIN tasks t ON t.task_id = wr.task_id
-        JOIN attempts a ON a.attempt_id = wr.attempt_id
-        JOIN route_decisions rd ON rd.task_id = wr.task_id
-        WHERE t.workstream_id IN (
-          SELECT workstream_id FROM workstreams WHERE repo_id = ?
-        )
-          AND t.lifecycle IN ('queued', 'running')
-          AND a.status = 'completed'
-          AND (json_type(a.metadata_json,'$.dispatch.pid') IS NOT 'integer'
-               OR json_extract(a.metadata_json,'$.process_stopped_at') IS NOT NULL)
-        ORDER BY wr.created_at, wr.result_id
-        """,
-        (repo_id,),
-    ).fetchall()
+    rows = db_read_worker_results.find_for_audit_completed_results(conn, repo_id)
     audited = 0
     for row in rows:
         result_row = row[:8]
@@ -150,14 +103,11 @@ def audit_completed_results(
         if not evidence.inspection_due(observation, run_now):
             continue
         payload = results.load_result_payload(conn, result_row)
-        origin_row = conn.execute(
-            "SELECT origin_type FROM work_items WHERE workstream_id = ?",
-            (workstream_id,),
-        ).fetchone()
+        origin_row = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, workstream_id))
         origin_type = origin_row[0] if origin_row else "github"
         recovery_config = None if dry_run else config_result
         if not conn.in_transaction:
-            conn.execute("BEGIN IMMEDIATE")
+            db_transactions.begin(conn, immediate=True)
         gate = supervision_actions.begin(
             conn,
             task_id=payload["task_id"],
@@ -191,15 +141,9 @@ def audit_completed_results(
                 "status": "inspection_timeout",
                 "timeout_seconds": exc.timeout,
             }
-            conn.execute(
-                "UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit_observation',json(?)) WHERE result_id=?",
-                (json.dumps(failure), payload["result_id"]),
-            )
+            db_write_worker_results.update_for_audit_completed_results(conn, json.dumps(failure), payload["result_id"])
             if not failure["retryable"]:
-                conn.execute(
-                    "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.audit_retry_required',?) WHERE task_id=?",
-                    (payload["result_id"], payload["task_id"]),
-                )
+                db_write_tasks.update_for_audit_completed_results(conn, payload["result_id"], payload["task_id"])
                 item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
                 if item:
                     work_items.record_system_event(
@@ -216,11 +160,7 @@ def audit_completed_results(
                         now=run_now,
                     )
                 execution_notifications.insert(
-                    conn,
-                    "audit_inspection_exhausted",
-                    "recorded",
-                    run_now,
-                    {"task_id": payload["task_id"], **failure},
+                    conn, "audit_inspection_exhausted", "recorded", run_now, {"task_id": payload["task_id"], **failure}
                 )
             if claim:
                 supervision_actions.finish(
@@ -281,10 +221,7 @@ def audit_completed_results(
             claim,
             now=checked_at,
             outcome="observing" if audit["status"] == "accepted" else "failed",
-            receipt={
-                "result_id": payload["result_id"],
-                "audit_status": audit["status"],
-            },
+            receipt={"result_id": payload["result_id"], "audit_status": audit["status"]},
         ):
             continue
         results.record_result_audit(conn, payload["result_id"], audit)

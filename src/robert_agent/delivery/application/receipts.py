@@ -1,9 +1,10 @@
 """application delivery receipts responsibilities."""
 
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
 import re
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 
 from robert_agent.delivery.application import effects as publication_effects
 from robert_agent.delivery.application import scope as publication_scope
@@ -28,8 +29,7 @@ def delivery_receipt(conn, action, result, now):
     reconciliation = response.get("reconciliation") or {}
     metadata = publication_values.decode_json(action.get("metadata_json"))
     marker = publication_effects.hidden_marker(
-        metadata.get("body", ""),
-        WORKSTREAM_MARKER_RE if action["action_type"] == "open_pr" else COMMENT_MARKER_RE,
+        metadata.get("body", ""), WORKSTREAM_MARKER_RE if action["action_type"] == "open_pr" else COMMENT_MARKER_RE
     )
     return {
         "schema_version": 1,
@@ -70,21 +70,12 @@ def mark_published(conn, action, result, now, intent=None):
         "response": result.get("response", {}),
         "deduplicated": bool(result.get("deduplicated")),
     }
-    conn.execute(
-        """
-        UPDATE github_actions
-        SET publish_status = 'published',
-            external_id = COALESCE(NULLIF(?, ''), external_id),
-            target_url = COALESCE(NULLIF(?, ''), target_url),
-            metadata_json = ?
-        WHERE action_id = ?
-        """,
-        (
-            result.get("external_id", ""),
-            result.get("target_url"),
-            publication_values.encode_json(metadata),
-            action["action_id"],
-        ),
+    db_write_github_actions.mark_published(
+        conn,
+        result.get("external_id", ""),
+        result.get("target_url"),
+        publication_values.encode_json(metadata),
+        action["action_id"],
     )
     publication_notifications.resolve_action_notification(conn, action, "github_publish_failed", result, now)
     if intent:

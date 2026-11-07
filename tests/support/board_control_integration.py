@@ -11,7 +11,7 @@ from tests.support import PACKAGE_ROOT
 
 class BoardControlIntegrationFixture(unittest.TestCase):
     def setUp(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
         from robert_agent.work.application import commands as work_items
 
         self.tmp = tempfile.TemporaryDirectory()
@@ -34,18 +34,8 @@ class BoardControlIntegrationFixture(unittest.TestCase):
                     "github": {"account": "robot"},
                     "default_worker": "default",
                     "workers": {
-                        "default": {
-                            "adapter": "cbc",
-                            "command": "cbc",
-                            "model": "default-model",
-                            "effort": "medium",
-                        },
-                        "reviewer": {
-                            "adapter": "codex",
-                            "command": "codex",
-                            "model": "review-model",
-                            "effort": "high",
-                        },
+                        "default": {"adapter": "cbc", "command": "cbc", "model": "default-model", "effort": "medium"},
+                        "reviewer": {"adapter": "codex", "command": "codex", "model": "review-model", "effort": "high"},
                     },
                     "scheduler": {"max_concurrency": 2},
                     "repos": [

@@ -1,5 +1,6 @@
 """Contracts for the operator's lifecycle board and its advertised actions."""
 
+from robert_agent.persistence.schema import execution_control as execution_schema
 from contextlib import closing
 import json
 import sqlite3
@@ -55,18 +56,12 @@ class BoardLifecycleTests(unittest.TestCase):
         item = self.create(start=True)
         decision = self.event(item, "operator_decision_required")
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?",
-                (item["workstream_id"],),
-            )
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?", (item["workstream_id"],))
             conn.execute(
                 "UPDATE workstreams SET lifecycle='completed', active_task_id=NULL WHERE workstream_id=?",
                 (item["workstream_id"],),
             )
-            conn.execute(
-                "UPDATE work_items SET activated_at=NULL WHERE work_item_id=?",
-                (item["work_item_id"],),
-            )
+            conn.execute("UPDATE work_items SET activated_at=NULL WHERE work_item_id=?", (item["work_item_id"],))
         with self.assertRaisesRegex(work_items.WorkItemConflictError, "active task"):
             self.command(item, "approve", expected_event_id=decision["event_id"])
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
@@ -77,17 +72,13 @@ class BoardLifecycleTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type='approved'").fetchone()[0],
-                0,
+                conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type='approved'").fetchone()[0], 0
             )
 
     def test_activated_item_without_runnable_work_requires_attention(self):
         item = self.create(start=True)
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?",
-                (item["workstream_id"],),
-            )
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?", (item["workstream_id"],))
             conn.execute(
                 "UPDATE workstreams SET lifecycle='completed', active_task_id=NULL WHERE workstream_id=?",
                 (item["workstream_id"],),
@@ -101,10 +92,7 @@ class BoardLifecycleTests(unittest.TestCase):
         item = self.create(start=True)
         self.event(item, "operator_decision_required")
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?",
-                (item["workstream_id"],),
-            )
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE workstream_id=?", (item["workstream_id"],))
             conn.execute(
                 "UPDATE workstreams SET lifecycle='completed', active_task_id=NULL WHERE workstream_id=?",
                 (item["workstream_id"],),
@@ -122,8 +110,7 @@ class BoardLifecycleTests(unittest.TestCase):
                 source_id = "source-" + pending
                 with closing(sqlite3.connect(self.db)) as conn, conn:
                     task_id = conn.execute(
-                        "SELECT active_task_id FROM workstreams WHERE workstream_id=?",
-                        (item["workstream_id"],),
+                        "SELECT active_task_id FROM workstreams WHERE workstream_id=?", (item["workstream_id"],)
                     ).fetchone()[0]
                     conn.execute(
                         "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,title,state) VALUES (?,'repo-1',?,'issue',16,'Closed issue','open')",
@@ -137,10 +124,7 @@ class BoardLifecycleTests(unittest.TestCase):
                         "UPDATE work_items SET origin_type='github',origin_source_id=? WHERE work_item_id=?",
                         (source_id, item["work_item_id"]),
                     )
-                    conn.execute(
-                        "UPDATE tasks SET lifecycle='completed' WHERE task_id=?",
-                        (task_id,),
-                    )
+                    conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task_id,))
                     if pending.startswith("child_"):
                         child_stream = "stream-" + pending
                         child_task = "task-" + pending
@@ -150,13 +134,7 @@ class BoardLifecycleTests(unittest.TestCase):
                         )
                         conn.execute(
                             "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES (?,?,?,?,?)",
-                            (
-                                child_task,
-                                child_stream,
-                                "running" if pending == "child_worker" else "queued",
-                                now,
-                                now,
-                            ),
+                            (child_task, child_stream, "running" if pending == "child_worker" else "queued", now, now),
                         )
                         if pending == "child_worker":
                             conn.execute(
@@ -183,11 +161,7 @@ class BoardLifecycleTests(unittest.TestCase):
                             "issue",
                             16,
                             task_id,
-                            {
-                                "state": "closed",
-                                "state_reason": "completed",
-                                "closed_at": now,
-                            },
+                            {"state": "closed", "state_reason": "completed", "closed_at": now},
                             "completed",
                             "remote_source_closed",
                             now,
@@ -225,14 +199,7 @@ class BoardLifecycleTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "UPDATE attempts SET heartbeat_at = '2026-10-22T00:02:00+00:00', failure_json = ? WHERE attempt_id = 'attempt-doing'",
-                (
-                    json.dumps(
-                        {
-                            "safe_error": "Tests failed in /home/operator/private",
-                            "stderr": "do not expose",
-                        }
-                    ),
-                ),
+                (json.dumps({"safe_error": "Tests failed in /home/operator/private", "stderr": "do not expose"}),),
             )
             conn.execute(
                 "INSERT INTO worker_phases(phase_id, attempt_id, phase, status, summary, next_step, created_at) VALUES ('phase', 'attempt-doing', 'verify', 'running', 'Checking regressions', 'Read results', '2026-10-22T00:02:00+00:00')"
@@ -258,10 +225,7 @@ class BoardLifecycleTests(unittest.TestCase):
     def test_retry_targets_failure_even_with_newer_question(self):
         item = self.create(start=True)
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='failed' WHERE workstream_id=?",
-                (item["workstream_id"],),
-            )
+            conn.execute("UPDATE tasks SET lifecycle='failed' WHERE workstream_id=?", (item["workstream_id"],))
         failure = self.event(item, "execution_failed", now="2026-10-22T00:00:00+00:00")
         self.event(item, "operator_question", now="2026-10-22T00:01:00+00:00")
         result = self.command(item, "retry")
@@ -289,8 +253,7 @@ class BoardLifecycleTests(unittest.TestCase):
             terminate.assert_called_once()
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute("SELECT status FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0],
-                "canceled",
+                conn.execute("SELECT status FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0], "canceled"
             )
             self.assertEqual(
                 conn.execute(
@@ -314,16 +277,12 @@ class BoardLifecycleTests(unittest.TestCase):
         self.event(item, "execution_failed")
         with self.assertRaises(work_items.WorkItemConflictError):
             self.command(item, "retry")
-        self.assertNotIn(
-            "retry",
-            board.get_work_item_detail(self.db, item["work_item_id"])["valid_commands"],
-        )
+        self.assertNotIn("retry", board.get_work_item_detail(self.db, item["work_item_id"])["valid_commands"])
 
     def seed_publication(self, item, failed=True, audited=True):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task_id = conn.execute(
-                "SELECT active_task_id FROM workstreams WHERE workstream_id=?",
-                (item["workstream_id"],),
+                "SELECT active_task_id FROM workstreams WHERE workstream_id=?", (item["workstream_id"],)
             ).fetchone()[0]
             conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task_id,))
             metadata = (
@@ -342,16 +301,10 @@ class BoardLifecycleTests(unittest.TestCase):
                     "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('publication-attempt',?,1,'completed')",
                     (task_id,),
                 )
-                scope = {
-                    "repo": "example/repo",
-                    "sources": [{"source_type": "issue", "number": 1}],
-                }
+                scope = {"repo": "example/repo", "sources": [{"source_type": "issue", "number": 1}]}
                 conn.execute(
                     "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, created_at, metadata_json) VALUES ('result', ?, 'publication-attempt', 'comment_analysis', '2026-10-22', json_set(?, '$.result_contract', 'compact-v1'))",
-                    (
-                        task_id,
-                        json.dumps({"audit": {"status": "accepted", "action_scope": scope}}),
-                    ),
+                    (task_id, json.dumps({"audit": {"status": "accepted", "action_scope": scope}})),
                 )
             conn.execute(
                 "INSERT INTO github_actions(action_id,task_id,action_type,audit_status,created_at,metadata_json) VALUES ('publish-action',?,'comment','accepted','2026-10-22',?)",
@@ -382,10 +335,7 @@ class BoardLifecycleTests(unittest.TestCase):
                 ).fetchone()[0],
                 1,
             )
-        self.assertEqual(
-            board.get_work_item_detail(self.db, item["work_item_id"])["valid_commands"],
-            ["cancel"],
-        )
+        self.assertEqual(board.get_work_item_detail(self.db, item["work_item_id"])["valid_commands"], ["cancel"])
         self.assertEqual(self.command(item, "retry_publish"), result)
 
     def test_task_history_exposes_publication_evidence_without_raw_metadata(self):
@@ -421,10 +371,7 @@ class BoardLifecycleTests(unittest.TestCase):
                 (
                     json.dumps(
                         {
-                            "publish": {
-                                "published_at": "2026-10-22T03:14:14Z",
-                                "status": "published",
-                            },
+                            "publish": {"published_at": "2026-10-22T03:14:14Z", "status": "published"},
                         }
                     ),
                 ),
@@ -473,15 +420,11 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertEqual(detail["execution"]["attempt_id"], "child-attempt")
         self.assertEqual(detail["valid_commands"], ["cancel"])
         self.assertIn("child-task", [task["task_id"] for task in detail["tasks"]])
-        with patch(
-            "robert_agent.adapters.processes.attempt.terminate_attempt",
-            return_value={"status": "not_found"},
-        ):
+        with patch("robert_agent.adapters.processes.attempt.terminate_attempt", return_value={"status": "not_found"}):
             self.command(item, "cancel")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks WHERE task_id='child-task'").fetchone()[0],
-                "canceled",
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id='child-task'").fetchone()[0], "canceled"
             )
 
     def test_incomplete_cleanup_is_visible_before_source_state_updates(self):
@@ -546,17 +489,12 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertNotEqual(result["task_id"], task)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute("SELECT status FROM attempts WHERE attempt_id='prepared'").fetchone()[0],
-                "canceled",
+                conn.execute("SELECT status FROM attempts WHERE attempt_id='prepared'").fetchone()[0], "canceled"
             )
             self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task,)).fetchone()[0],
-                "canceled",
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task,)).fetchone()[0], "canceled"
             )
-        self.assertEqual(
-            board.get_work_item_detail(self.db, item["work_item_id"])["valid_commands"],
-            ["cancel"],
-        )
+        self.assertEqual(board.get_work_item_detail(self.db, item["work_item_id"])["valid_commands"], ["cancel"])
 
     def test_external_publish_does_not_lock_database_but_blocks_same_task_cancel(self):
         item = self.create(start=True)
@@ -570,10 +508,7 @@ class BoardLifecycleTests(unittest.TestCase):
                 self.command(item, "cancel")
             return {"status": "published", "ok": True}
 
-        with patch(
-            "robert_agent.delivery.application.effects.publish_action",
-            side_effect=external_write,
-        ):
+        with patch("robert_agent.delivery.application.effects.publish_action", side_effect=external_write):
             self.assertTrue(publish.publish_ready_actions(self.db)["ok"])
 
     def test_publication_timeout_is_retryable(self):
@@ -582,8 +517,7 @@ class BoardLifecycleTests(unittest.TestCase):
         item = self.create(start=True)
         self.seed_publication(item)
         with patch(
-            "robert_agent.delivery.application.effects.publish_action",
-            side_effect=subprocess.TimeoutExpired("gh", 60),
+            "robert_agent.delivery.application.effects.publish_action", side_effect=subprocess.TimeoutExpired("gh", 60)
         ):
             result = publish.publish_ready_actions(self.db)
         self.assertEqual(result["failed_count"], 1)
@@ -635,11 +569,7 @@ class BoardLifecycleTests(unittest.TestCase):
             if action["action_id"] == "a-push":
                 started.set()
                 self.assertTrue(skipped.wait(3))
-                return {
-                    "ok": False,
-                    "status": "publish_failed",
-                    "safe_error": "push failed",
-                }
+                return {"ok": False, "status": "publish_failed", "safe_error": "push failed"}
             return {"ok": True, "status": "published"}
 
         def runner(name):
@@ -651,14 +581,8 @@ class BoardLifecycleTests(unittest.TestCase):
                     done.set()
 
         with (
-            patch(
-                "robert_agent.delivery.application.publish.task_publication_lock",
-                side_effect=controlled_lock,
-            ),
-            patch(
-                "robert_agent.delivery.application.effects.publish_action",
-                side_effect=external,
-            ),
+            patch("robert_agent.delivery.application.publish.task_publication_lock", side_effect=controlled_lock),
+            patch("robert_agent.delivery.application.effects.publish_action", side_effect=external),
         ):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 first = pool.submit(runner, "publisher-A")
@@ -674,14 +598,7 @@ class BoardLifecycleTests(unittest.TestCase):
             task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
             conn.execute(
                 "UPDATE attempts SET status='failed', failure_json=? WHERE attempt_id='attempt-doing'",
-                (
-                    json.dumps(
-                        {
-                            "safe_error": "Failed in /home/operator/private",
-                            "stderr": "hidden-output",
-                        }
-                    ),
-                ),
+                (json.dumps({"safe_error": "Failed in /home/operator/private", "stderr": "hidden-output"}),),
             )
             conn.execute(
                 "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('retry-attempt',?,2,'running')",
@@ -698,22 +615,18 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertNotIn("hidden-output", json.dumps(detail))
 
     def test_cancel_accepts_verified_dead_worker_and_closes_its_binding(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         item = self.fixture._seed_six_columns()["doing"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM attempts WHERE attempt_id='attempt-doing'").fetchone()[0]
             execution_store.ensure_subject(conn, "task", task_id, "human_request", "2026-10-22")
         with patch(
-            "robert_agent.adapters.processes.attempt.terminate_attempt",
-            return_value={"status": "already_dead"},
+            "robert_agent.adapters.processes.attempt.terminate_attempt", return_value={"status": "already_dead"}
         ):
             self.command(item, "cancel")
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
-                "terminal",
-            )
+            self.assertEqual(conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0], "terminal")
 
     def test_publication_scope_failure_is_visible_and_can_be_canceled(self):
         item = self.create(start=True)
@@ -742,16 +655,7 @@ class BoardLifecycleTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "UPDATE attempts SET metadata_json=? WHERE attempt_id='attempt-doing'",
-                (
-                    json.dumps(
-                        {
-                            "supervise": {
-                                "status": "worker_identity_attention",
-                                "recovery_decision": "attention",
-                            }
-                        }
-                    ),
-                ),
+                (json.dumps({"supervise": {"status": "worker_identity_attention", "recovery_decision": "attention"}}),),
             )
         detail = board.get_work_item_detail(self.db, item["work_item_id"])
         self.assertEqual(detail["column"], "waiting")
@@ -759,7 +663,7 @@ class BoardLifecycleTests(unittest.TestCase):
 
     def test_old_database_readonly_inspection_and_mixed_controls_do_not_write(self):
         from pathlib import Path
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
         from robert_agent.readmodels import workbench
 
         item = self.create("Historical task")
@@ -770,16 +674,13 @@ class BoardLifecycleTests(unittest.TestCase):
         workbench.list_work_items(self.db)
         self.assertEqual(Path(self.db).read_bytes(), before)
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            execution_store.initialize(conn)
+            execution_schema.initialize(conn)
             conn.execute(
                 "INSERT INTO workflow_bindings(subject_type,subject_id,workflow_kind,owner_engine,binding_status,workflow_id,created_at,updated_at) VALUES ('task','historical','human_request','dbos','attention','old:id','now','now')"
             )
         before = Path(self.db).read_bytes()
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                execution_store.read_binding(conn, "task", "historical")["binding_status"],
-                "attention",
-            )
+            self.assertEqual(execution_store.read_binding(conn, "task", "historical")["binding_status"], "attention")
         self.assertEqual(Path(self.db).read_bytes(), before)
 
 

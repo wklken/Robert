@@ -10,7 +10,7 @@ import sqlite3
 import subprocess
 import sys
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import git as supervision_git
 from robert_agent.workflows.maintenance import repair as supervision_repair
 from robert_agent.work.application import commands as work_items
@@ -207,12 +207,7 @@ class BrokerFixture:
                     task_id,
                     str(self.tree),
                     self.git_binding["branch"],
-                    json.dumps(
-                        {
-                            "result_contract": "compact-v1",
-                            "repair_git": self.git_binding,
-                        }
-                    ),
+                    json.dumps({"result_contract": "compact-v1", "repair_git": self.git_binding}),
                 ),
             )
             conn.execute(
@@ -249,12 +244,7 @@ class BrokerFixture:
                 (self.task,),
             ).fetchall()
         process.stdin.write(
-            json.dumps(
-                {
-                    "request": "Apply this fixture repair.",
-                    "work_item_event_ids": [row[0] for row in events],
-                }
-            )
+            json.dumps({"request": "Apply this fixture repair.", "work_item_event_ids": [row[0] for row in events]})
         )
         process.stdin.close()
         process.stdin = None

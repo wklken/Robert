@@ -215,7 +215,7 @@ class ProjectMemoryTests(unittest.TestCase):
         self.assertEqual(memories[0]["title"], "Use update-existing-pr for DD PR review loops")
 
     def _init_db(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         storage.init_database(self.db_path)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:

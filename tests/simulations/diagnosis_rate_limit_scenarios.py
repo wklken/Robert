@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import diagnosis as supervision_diagnose
 from robert_agent.supervision import store as supervision_store
 from tests.support.model_http import model_http
@@ -85,12 +85,7 @@ def wait(config, expected, *, timeout=8):
         result = supervision_diagnose.poll(config)
         if result["status"] == expected:
             return result
-        assert result["status"] in {
-            "launched",
-            "running",
-            "cooldown",
-            "provider_cooldown",
-        }, result
+        assert result["status"] in {"launched", "running", "cooldown", "provider_cooldown"}, result
         time.sleep(0.02)
     raise AssertionError(f"Diagnosis did not reach {expected}: {result}")
 
@@ -192,11 +187,7 @@ def exhausted(root):
                 "scenario": "diagnosis_persistent_429_budget_and_restart",
                 "passed": True,
                 "http_requests": 2,
-                "checks": [
-                    "hourly_budget_not_reset",
-                    "no_busy_retry",
-                    "no_false_product_defect_or_repair",
-                ],
+                "checks": ["hourly_budget_not_reset", "no_busy_retry", "no_false_product_defect_or_repair"],
             }
         finally:
             supervision_diagnose.shutdown(config)
@@ -206,14 +197,8 @@ def simultaneous(root):
     from tests.simulations.model_rate_limit_scenarios import worker_runtime
 
     root.mkdir()
-    routes = {
-        "/diagnosis": [(429, "2")],
-        "/worker/123/model-primary": [(429, "2"), (200, None)],
-    }
-    with (
-        model_http(routes) as endpoint,
-        worker_runtime(root / "worker", endpoint, tries=2) as runtime,
-    ):
+    routes = {"/diagnosis": [(429, "2")], "/worker/123/model-primary": [(429, "2"), (200, None)]}
+    with model_http(routes) as endpoint, worker_runtime(root / "worker", endpoint, tries=2) as runtime:
         config = configure(root / "diagnosis", runtime.db, endpoint.url + "/diagnosis", budget=1)
         incident(runtime.db, "while_worker_waits")
         try:

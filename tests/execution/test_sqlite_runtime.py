@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.configuration import command as validate_config
 from robert_agent.execution.application import dispatch as dispatch_queue
 
@@ -64,10 +64,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "offline migration"):
             web.build_control_context_from_config(
-                fixture.config_path,
-                host="127.0.0.1",
-                port=8765,
-                operator_identity="test",
+                fixture.config_path, host="127.0.0.1", port=8765, operator_identity="test"
             )
         from contextlib import redirect_stdout
         import io
@@ -75,16 +72,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
 
         output = io.StringIO()
         with redirect_stdout(output):
-            code = main(
-                [
-                    "run",
-                    "once",
-                    "--config",
-                    str(fixture.config_path),
-                    "--dry-run",
-                    "--skip-external",
-                ]
-            )
+            code = main(["run", "once", "--config", str(fixture.config_path), "--dry-run", "--skip-external"])
         self.assertNotEqual(code, 0)
         self.assertIn("migration_required", output.getvalue())
         self.assertIn("migrate dbos", output.getvalue())
@@ -166,10 +154,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
             )
         )
         response = run_once.run_once(
-            fixture.config_path,
-            fixture_path=fixture.fixture_path,
-            dry_run=True,
-            skip_external=True,
+            fixture.config_path, fixture_path=fixture.fixture_path, dry_run=True, skip_external=True
         )
         self.assertTrue(response["ok"], response)
         config = validate_config.validate_config(fixture.config_path, skip_external=True)
@@ -190,11 +175,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
         return (
             db,
             queue,
-            {
-                "workers": config["workers"],
-                "default_worker": config["default_worker"],
-                "config_result": config,
-            },
+            {"workers": config["workers"], "default_worker": config["default_worker"], "config_result": config},
         )
 
     def test_different_tasks_cannot_race_past_capacity(self):
@@ -212,25 +193,16 @@ class SQLiteRuntimeTests(unittest.TestCase):
             return {}
 
         with (
+            patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=competing_dispatch),
             patch.object(
-                dispatch_queue,
-                "ensure_dispatch_worktree",
-                side_effect=competing_dispatch,
-            ),
-            patch.object(
-                dispatch,
-                "dispatch_worker",
-                return_value={"ok": True, "status": "running", "pid": 123456},
+                dispatch, "dispatch_worker", return_value={"ok": True, "status": "running", "pid": 123456}
             ) as spawn,
         ):
             dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue[:1], False, 1, **kwargs)
             dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue[1:], False, 1, **kwargs)
         self.assertEqual(spawn.call_count, 1)
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0],
-                1,
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0], 1)
 
     def test_missing_episode_stops_once_and_is_not_runnable(self):
         import json
@@ -240,20 +212,14 @@ class SQLiteRuntimeTests(unittest.TestCase):
         db, queue, _kwargs = self._prepared_queue()
         task = queue[0]["task_info"]["task_id"]
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET task_kind='ci_remediation',metadata_json='{}' WHERE task_id=?",
-                (task,),
-            )
+            conn.execute("UPDATE tasks SET task_kind='ci_remediation',metadata_json='{}' WHERE task_id=?", (task,))
             conn.execute("DELETE FROM execution_subjects WHERE subject_id=?", (task,))
             for _ in range(2):
                 self.assertFalse(execution_ownership.claim_task(conn, task))
             metadata = json.loads(
                 conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task,)).fetchone()[0]
             )
-            self.assertEqual(
-                metadata["execution_attention"]["reason_code"],
-                "remediation_episode_missing",
-            )
+            self.assertEqual(metadata["execution_attention"]["reason_code"], "remediation_episode_missing")
             self.assertEqual(
                 conn.execute(
                     "SELECT count(*) FROM notifications WHERE notification_type='execution_attention_required'"
@@ -264,13 +230,9 @@ class SQLiteRuntimeTests(unittest.TestCase):
 
     def test_fact_replay_never_replaces_newer_evidence(self):
         import json
-        from tests.support.workflow_events import (
-            WorkflowEventApplicationFixture,
-            _fact,
-            NOW,
-        )
+        from tests.support.workflow_events import WorkflowEventApplicationFixture, _fact, NOW
         from robert_agent.execution import operations as execution_operations
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         fixture = WorkflowEventApplicationFixture()
         fixture.setUp()

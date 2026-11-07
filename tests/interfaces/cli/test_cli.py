@@ -9,7 +9,7 @@ from unittest import mock
 
 import yaml
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.cli.main import main
 from robert_agent.operations.initialize import init_config
 
@@ -57,15 +57,7 @@ class CliTests(unittest.TestCase):
         from robert_agent.cli import main as cli_main
 
         with mock.patch.object(cli_main.daemon, "main", return_value=0) as daemon_main:
-            main(
-                [
-                    "daemon",
-                    "run",
-                    "--config",
-                    "/tmp/robert-config.yml",
-                    "--wait-for-lease",
-                ]
-            )
+            main(["daemon", "run", "--config", "/tmp/robert-config.yml", "--wait-for-lease"])
 
         self.assertIn("--wait-for-lease", daemon_main.call_args.args[0])
 

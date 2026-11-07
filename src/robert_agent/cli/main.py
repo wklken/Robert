@@ -13,7 +13,7 @@ from robert_agent import __version__
 from robert_agent.runtime import daemon
 from robert_agent.operations import diagnostics
 from robert_agent.operations import migration as sqlite_migration
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.operations import retention
 from robert_agent.runtime import cycle as run_once
 from robert_agent.readmodels import status
@@ -233,21 +233,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_argument(prune_parser)
     _add_output_argument(prune_parser)
+    prune_parser.add_argument("--apply", action="store_true", help="Apply retention (default: read-only preview).")
+    prune_parser.add_argument("--batch-size", type=int, help="Runs, events and leases per transaction (1-500).")
     prune_parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Apply retention (default: read-only preview).",
-    )
-    prune_parser.add_argument(
-        "--batch-size",
-        type=int,
-        help="Runs, events and leases per transaction (1-500).",
-    )
-    prune_parser.add_argument(
-        "--batches",
-        type=int,
-        default=1,
-        help="Maximum apply transactions (1-1000); preview always shows one batch.",
+        "--batches", type=int, default=1, help="Maximum apply transactions (1-1000); preview always shows one batch."
     )
 
     diagnostics_parser = subparsers.add_parser(
@@ -431,10 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
                 manifest = runtime_identity.build_manifest(args.repo, args.wheel)
                 supervision_health.atomic_json(Path(args.output_file).expanduser(), manifest)
-                return _emit_and_code(
-                    {"ok": True, "status": "recorded", "manifest": manifest},
-                    args.output,
-                )
+                return _emit_and_code({"ok": True, "status": "recorded", "manifest": manifest}, args.output)
             validated = validate_config.validate_config(args.config, skip_external=True)
             if not validated.get("ok"):
                 return _emit_and_code(validated, args.output)
@@ -443,9 +429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.supervisor_command == "check":
                 result = supervision_checks.check(validated)
             elif args.supervisor_command.startswith("repair-"):
-                from robert_agent.workflows.maintenance import (
-                    repair as supervision_repair,
-                )
+                from robert_agent.workflows.maintenance import repair as supervision_repair
 
                 if args.supervisor_command == "repair-propose":
                     result = supervision_repair.propose(validated, args.incident_id)
@@ -602,10 +586,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             validated = _validated_config(args)
             if args.config_command == "show":
-                from robert_agent.configuration.routes import (
-                    load_route_policies,
-                    resolve_route_config,
-                )
+                from robert_agent.configuration.routes import load_route_policies, resolve_route_config
 
                 validated["effective_routes"] = {
                     repo["full_name"]: {

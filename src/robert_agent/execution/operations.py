@@ -1,12 +1,25 @@
 """SQLite subject state, process identity and domain recovery operations."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
+from robert_agent.persistence.queries import tasks as db_read_tasks
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import execution_fact_receipts as db_read_execution_fact_receipts
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import execution_fact_receipts as db_write_execution_fact_receipts
+from robert_agent.persistence.stores import execution_subjects as db_write_execution_subjects
+from robert_agent.persistence.stores import notifications as db_write_notifications
+
 import json
-import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.execution import retry as retry_policy
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 
 _TERMINAL_TASK_LIFECYCLES = {"completed", "failed", "canceled", "ignored"}
 _TERMINAL_EPISODE_STATUSES = {"resolved", "exhausted", "superseded", "canceled"}
@@ -58,21 +71,13 @@ def _safe_metadata(value):
     return value
 
 
-def _row(conn, query, params=()):
-    return conn.execute(query, params).fetchone()
-
-
 def _validate_subject_type(subject_type):
     if subject_type not in {"task", "remediation_episode"}:
         raise ValueError("invalid workflow subject type")
 
 
 def _load_episode(conn, episode_id):
-    row = _row(
-        conn,
-        "SELECT * FROM pr_remediation_episodes WHERE episode_id = ?",
-        (episode_id,),
-    )
+    row = db_records.first(db_read_pr_remediation_episodes.find_record_by_episode_id(conn, episode_id))
     if row is None:
         raise ValueError("workflow remediation episode subject does not exist")
     return row
@@ -101,7 +106,7 @@ def _claim(conn, subject_type, subject_id, workflow_kind, eligible, now):
             workflow_kind,
             now,
         )
-    except sqlite3.IntegrityError:
+    except db_errors.IntegrityError:
         # A concurrent claim wins; never reset existing execution control.
         existing = execution_store.get_binding(conn, subject_type, subject_id)
         if existing and existing["binding_status"] == "active":
@@ -119,11 +124,7 @@ def claim_subject(conn, subject_type, subject_id, *, now):
 
     _validate_subject_type(subject_type)
     if subject_type == "task":
-        task = _row(
-            conn,
-            "SELECT task_kind, lifecycle FROM tasks WHERE task_id = ?",
-            (subject_id,),
-        )
+        task = db_records.first(db_read_tasks.find_task_kind_and_lifecycle_by_task_id(conn, subject_id))
         if task is None:
             raise ValueError("workflow task subject does not exist")
         task_kind, lifecycle = task
@@ -139,7 +140,7 @@ def claim_subject(conn, subject_type, subject_id, *, now):
         )
 
     episode = _load_episode(conn, subject_id)
-    episode_status = episode["status"] if isinstance(episode, sqlite3.Row) else episode[7]
+    episode_status = episode["status"] if hasattr(episode, "keys") else episode[7]
     return _claim(
         conn,
         "remediation_episode",
@@ -151,10 +152,7 @@ def claim_subject(conn, subject_type, subject_id, *, now):
 
 
 def _attempt_dispatch_identity(conn, attempt_id):
-    row = conn.execute(
-        "SELECT task_id, status, metadata_json FROM attempts WHERE attempt_id = ?",
-        (attempt_id,),
-    ).fetchone()
+    row = db_records.first(db_read_attempts.find_task_id_and_status_and_metadata_json_by_attempt_id(conn, attempt_id))
     if row is None:
         return None
     task_id, status, metadata_json = row
@@ -174,7 +172,7 @@ def terminate_worker(db_path, attempt_id):
     """Terminate and durably record one recorded Worker's outcome."""
 
     now = datetime.now(timezone.utc).isoformat()
-    with closing(sqlite3.connect(db_path)) as conn, conn:
+    with closing(db_database.connect(db_path)) as conn, conn:
         attempt = _attempt_dispatch_identity(conn, attempt_id)
         if not attempt:
             return "attention"
@@ -200,22 +198,16 @@ def terminate_worker(db_path, attempt_id):
         children_status = terminate_children(conn, attempt["task_id"])
         if children_status == "attention":
             status = "attention"
-            result = {
-                **result,
-                "status": status,
-                "reason": "review_child_identity_unknown",
-            }
+            result = {**result, "status": status, "reason": "review_child_identity_unknown"}
         metadata["termination"] = result
-        conn.execute(
-            "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
-            (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
+        db_write_attempts.set_metadata_json_by_attempt_id(
+            conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id
         )
 
         if status == "attention":
-            task_row = conn.execute(
-                "SELECT task_kind, metadata_json FROM tasks WHERE task_id = ?",
-                (attempt["task_id"],),
-            ).fetchone()
+            task_row = db_records.first(
+                db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, attempt["task_id"])
+            )
             subject_candidates = []
             if task_row:
                 task_metadata = _json_object(task_row[1])
@@ -235,24 +227,12 @@ def terminate_worker(db_path, attempt_id):
             "termination": result,
             "status": status,
         }
-        conn.execute(
-            """
-            INSERT INTO notifications(
-              notification_id, task_id, notification_type, channel,
-              status, created_at, metadata_json
-            )
-            VALUES (?, ?, 'worker_termination', 'local', 'recorded', ?, ?)
-            ON CONFLICT(notification_id) DO UPDATE SET
-              status = excluded.status,
-              created_at = excluded.created_at,
-              metadata_json = excluded.metadata_json
-            """,
-            (
-                f"notification-worker-termination-{attempt_id}",
-                attempt["task_id"],
-                now,
-                json.dumps(notification_metadata, ensure_ascii=False, sort_keys=True),
-            ),
+        db_write_notifications.insert_for_terminate_worker(
+            conn,
+            f"notification-worker-termination-{attempt_id}",
+            attempt["task_id"],
+            now,
+            json.dumps(notification_metadata, ensure_ascii=False, sort_keys=True),
         )
         return status
 
@@ -300,14 +280,10 @@ def _attempt_matches_subject(conn, subject_type, subject_id, attempt_id, task_id
         return task_id == subject_id
     if subject_type != "remediation_episode":
         return False
-    row = conn.execute(
-        "SELECT metadata_json, workstream_id FROM tasks WHERE task_id = ?",
-        (task_id,),
-    ).fetchone()
-    episode = conn.execute(
-        "SELECT workstream_id, last_task_id FROM pr_remediation_episodes WHERE episode_id = ?",
-        (subject_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_metadata_json_and_workstream_id_by_task_id(conn, task_id))
+    episode = db_records.first(
+        db_read_pr_remediation_episodes.find_workstream_id_and_last_task_id_by_episode_id(conn, subject_id)
+    )
     if not row or not episode:
         return False
     metadata = _json_object(row[0])
@@ -337,19 +313,17 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     if category not in {"transient_failure", "rate_limited"}:
         _mark_recovery_attention(conn, binding, now)
         if binding:
-            conn.execute(
-                "UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?",
-                (
-                    json.dumps(
-                        {
-                            **_json_object(binding.get("metadata_json")),
-                            "reason_code": category,
-                            "required_action": "Repair the reported cause, then retry the task.",
-                        }
-                    ),
-                    subject_type,
-                    subject_id,
+            db_write_execution_subjects.update_for_dispatch_queued_locked(
+                conn,
+                json.dumps(
+                    {
+                        **_json_object(binding.get("metadata_json")),
+                        "reason_code": category,
+                        "required_action": "Repair the reported cause, then retry the task.",
+                    }
                 ),
+                subject_type,
+                subject_id,
             )
         evidence["reason_code"] = category
         return "attention"
@@ -403,18 +377,8 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     if identity_status != "dead" or not valid_progress:
         _mark_recovery_attention(conn, binding, now)
         return "attention"
-    updated = conn.execute(
-        """
-        UPDATE execution_subjects
-        SET recovery_attempts = recovery_attempts + 1,
-            updated_at = ?
-        WHERE subject_type = ? AND subject_id = ?
-          AND binding_status = 'active'
-          AND recovery_attempts = 0
-        """,
-        (now, subject_type, subject_id),
-    )
-    if updated.rowcount != 1:
+    updated = db_write_execution_subjects.update_for_classify_recovery(conn, now, subject_type, subject_id)
+    if updated != 1:
         _mark_recovery_attention(conn, binding, now)
         return "attention"
     return "recover_once"
@@ -468,12 +432,9 @@ def publication_scope_is_current(conn, task_id, action_scope):
     if binding is None:
         return True
     if subject_type == "remediation_episode":
-        row = conn.execute(
-            "SELECT status FROM pr_remediation_episodes WHERE episode_id = ?",
-            (subject_id,),
-        ).fetchone()
+        row = db_records.first(db_read_pr_remediation_episodes.find_status_by_episode_id(conn, subject_id))
         return bool(row and row[0] not in _TERMINAL_EPISODE_STATUSES)
-    row = conn.execute("SELECT lifecycle FROM tasks WHERE task_id = ?", (subject_id,)).fetchone()
+    row = db_records.first(db_read_tasks.find_lifecycle_by_task_id(conn, subject_id))
     return bool(row and row[0] not in _TERMINAL_TASK_LIFECYCLES)
 
 
@@ -481,38 +442,15 @@ def bound_attempt_for_subject(conn, subject_type, subject_id):
     """Return the one mutable Attempt attached to an exact workflow subject."""
 
     if subject_type == "task":
-        row = conn.execute(
-            """
-            SELECT attempt_id
-            FROM attempts
-            WHERE task_id = ?
-              AND status IN ('prepared', 'running', 'stale')
-            ORDER BY attempt_no DESC, attempt_id DESC
-            LIMIT 1
-            """,
-            (subject_id,),
-        ).fetchone()
+        row = db_records.first(db_read_attempts.find_for_bound_attempt_for_subject(conn, subject_id))
         return row[0] if row else None
     if subject_type != "remediation_episode":
         raise ValueError("unknown workflow subject type")
-    row = conn.execute(
-        "SELECT last_task_id FROM pr_remediation_episodes WHERE episode_id = ?",
-        (subject_id,),
-    ).fetchone()
+    row = db_records.first(db_read_pr_remediation_episodes.find_last_task_id_by_episode_id(conn, subject_id))
     if not row or not row[0]:
         return None
     task_id = row[0]
-    attempt = conn.execute(
-        """
-        SELECT attempt_id
-        FROM attempts
-        WHERE task_id = ?
-          AND status IN ('prepared', 'running', 'stale')
-        ORDER BY attempt_no DESC, attempt_id DESC
-        LIMIT 1
-        """,
-        (task_id,),
-    ).fetchone()
+    attempt = db_records.first(db_read_attempts.find_for_bound_attempt_for_subject(conn, task_id))
     return attempt[0] if attempt else None
 
 
@@ -534,19 +472,14 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
     metadata = _json_object(binding.get("metadata_json"))
     latest = metadata.get("latest_fact")
     if isinstance(latest, dict) and latest.get("fact_id"):
-        conn.execute(
-            "INSERT OR IGNORE INTO execution_fact_receipts VALUES (?,?,?,?)",
-            (
-                subject_type,
-                subject_id,
-                latest["fact_id"],
-                json.dumps(latest, sort_keys=True),
-            ),
+        db_write_execution_fact_receipts.record_historical_facts(
+            conn, subject_type, subject_id, latest["fact_id"], json.dumps(latest, sort_keys=True)
         )
-    recorded = conn.execute(
-        "SELECT evidence_json FROM execution_fact_receipts WHERE subject_type=? AND subject_id=? AND fact_id=?",
-        (subject_type, subject_id, evidence["fact_id"]),
-    ).fetchone()
+    recorded = db_records.first(
+        db_read_execution_fact_receipts.find_for_apply_classified_fact(
+            conn, subject_type, subject_id, evidence["fact_id"]
+        )
+    )
     if recorded:
         if recorded[0] is not None and json.loads(recorded[0]) != evidence:
             raise ValueError("workflow fact id conflicts with recorded evidence")
@@ -574,24 +507,12 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
     if binding["binding_status"] != "active":
         raise ValueError("workflow subject binding is not active")
 
-    conn.execute(
-        "INSERT INTO execution_fact_receipts VALUES (?,?,?,?)",
-        (
-            subject_type,
-            subject_id,
-            evidence["fact_id"],
-            json.dumps(evidence, sort_keys=True),
-        ),
+    db_write_execution_fact_receipts.insert_for_apply_classified_fact(
+        conn, subject_type, subject_id, evidence["fact_id"], json.dumps(evidence, sort_keys=True)
     )
     metadata["latest_fact"] = evidence
-    conn.execute(
-        "UPDATE execution_subjects SET metadata_json = ?, updated_at = ? WHERE subject_type = ? AND subject_id = ?",
-        (
-            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-            now,
-            subject_type,
-            subject_id,
-        ),
+    db_write_execution_subjects.update_for_apply_classified_fact(
+        conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), now, subject_type, subject_id
     )
 
     signal_id = None

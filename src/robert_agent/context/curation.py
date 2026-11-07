@@ -1,13 +1,18 @@
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import repos as db_read_repos
+
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
 from pathlib import Path
-import sqlite3
 from datetime import datetime, timezone
 
 from robert_agent.foundation.commands import emit
 from robert_agent.context import knowledge as runtime_knowledge
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 def _now():
@@ -17,7 +22,7 @@ def _now():
 def _repo_id(conn, repo_id=None):
     if repo_id:
         return repo_id
-    row = conn.execute("SELECT repo_id FROM repos ORDER BY repo_id LIMIT 1").fetchone()
+    row = db_records.first(db_read_repos.find_for_repo_id(conn))
     if not row:
         raise ValueError("no repo rows found")
     return row[0]
@@ -53,9 +58,9 @@ def run_command(argv=None):
     db_path = Path(args.db).expanduser()
     storage.init_database(db_path)
     now = _now()
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
+    with closing(db_database.connect(db_path)) as conn, conn:
+        db_sqlite.configure(conn, foreign_keys=True)
+        db_sqlite.configure(conn, busy_timeout_ms=5000)
         if args.command == "propose":
             return runtime_knowledge.propose_candidates(
                 conn,
@@ -72,11 +77,7 @@ def run_command(argv=None):
         if args.command == "show":
             candidate = runtime_knowledge.show_candidate(conn, args.candidate_id)
             if not candidate:
-                return {
-                    "ok": False,
-                    "status": "not_found",
-                    "safe_error": f"candidate not found: {args.candidate_id}",
-                }
+                return {"ok": False, "status": "not_found", "safe_error": f"candidate not found: {args.candidate_id}"}
             return {"ok": True, "status": "shown", "candidate": candidate}
         if args.command == "approve":
             return runtime_knowledge.approve_candidate(
@@ -95,11 +96,7 @@ def run_command(argv=None):
                 review_note=args.review_note,
                 run_now=now,
             )
-    return {
-        "ok": False,
-        "status": "failed_command",
-        "safe_error": f"unknown command: {args.command}",
-    }
+    return {"ok": False, "status": "failed_command", "safe_error": f"unknown command: {args.command}"}
 
 
 def main(argv=None):

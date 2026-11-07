@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class SupervisorTests(unittest.TestCase):
@@ -25,12 +25,7 @@ class SupervisorTests(unittest.TestCase):
             "data_dir": str(self.root),
             "repos": [],
             "config_path": str(self.root / "config.yml"),
-            "supervision": {
-                "mode": "observe",
-                "poll_seconds": 60,
-                "batch_size": 100,
-                "stall_seconds": 300,
-            },
+            "supervision": {"mode": "observe", "poll_seconds": 60, "batch_size": 100, "stall_seconds": 300},
         }
 
     def observation(self):
@@ -47,29 +42,16 @@ class SupervisorTests(unittest.TestCase):
         }
 
     def test_check_is_read_only_and_run_records_deduplicated_incident(self):
-        findings = {
-            "observations": [self.observation()],
-            "cursor": "",
-            "coverage_complete": True,
-        }
-        with patch(
-            "robert_agent.supervision.application.observation.collect",
-            return_value=findings,
-        ):
+        findings = {"observations": [self.observation()], "cursor": "", "coverage_complete": True}
+        with patch("robert_agent.supervision.application.observation.collect", return_value=findings):
             result = supervision_checks.check(self.config)
             self.assertTrue(result["ok"])
             with closing(sqlite3.connect(self.db)) as conn:
-                self.assertEqual(
-                    conn.execute("SELECT count(*) FROM supervision_incidents").fetchone()[0],
-                    0,
-                )
+                self.assertEqual(conn.execute("SELECT count(*) FROM supervision_incidents").fetchone()[0], 0)
             supervision_checks.check(self.config, record=True)
             supervision_checks.check(self.config, record=True)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM supervision_incidents").fetchone()[0],
-                1,
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM supervision_incidents").fetchone()[0], 1)
             self.assertEqual(
                 conn.execute(
                     "SELECT count(*) FROM notifications WHERE notification_type='supervision_incident'"
@@ -99,12 +81,7 @@ class SupervisorTests(unittest.TestCase):
     def test_configuration_rejects_unbounded_or_unknown_settings(self):
         from robert_agent.configuration.supervision import normalize
 
-        for raw in (
-            {"poll_seconds": 0},
-            {"batch_size": 100000},
-            {"mode": "magic"},
-            {"typo": 1},
-        ):
+        for raw in ({"poll_seconds": 0}, {"batch_size": 100000}, {"mode": "magic"}, {"typo": 1}):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 normalize(raw)
         self.assertEqual(normalize(None)["mode"], "observe")
@@ -120,36 +97,26 @@ class SupervisorTests(unittest.TestCase):
 
         with patch.dict("os.environ", {"ROBERT_NOTIFICATION_COMMAND": "notify-fixture"}):
             supervision_checks.deliver_health(
-                self.config["db_path"],
-                supervision_health.health_path(self.config),
-                runner=sent,
+                self.config["db_path"], supervision_health.health_path(self.config), runner=sent
             )
             self.assertEqual(calls, [])
             supervision_checks.check(self.config, record=True, now="2026-11-06T00:00:59+00:00")
             supervision_checks.deliver_health(
-                self.config["db_path"],
-                supervision_health.health_path(self.config),
-                runner=sent,
+                self.config["db_path"], supervision_health.health_path(self.config), runner=sent
             )
             self.assertEqual(calls, [])
             supervision_checks.check(self.config, record=True, now="2026-11-06T00:01:00+00:00")
             supervision_checks.deliver_health(
-                self.config["db_path"],
-                supervision_health.health_path(self.config),
-                runner=sent,
+                self.config["db_path"], supervision_health.health_path(self.config), runner=sent
             )
             supervision_checks.deliver_health(
-                self.config["db_path"],
-                supervision_health.health_path(self.config),
-                runner=sent,
+                self.config["db_path"], supervision_health.health_path(self.config), runner=sent
             )
         self.assertEqual(len(calls), 1)
         self.assertIn("delivery_id", calls[0])
         self.assertFalse(Path(self.config["db_path"]).exists())
 
-    def test_brief_writer_collision_records_health_without_notice_and_resets_episode(
-        self,
-    ):
+    def test_brief_writer_collision_records_health_without_notice_and_resets_episode(self):
         calls = []
 
         def sent(argv, **kwargs):
@@ -160,22 +127,11 @@ class SupervisorTests(unittest.TestCase):
             for minute in (0, 2):
                 with closing(sqlite3.connect(self.db)) as writer:
                     writer.execute("BEGIN IMMEDIATE")
-                    result = supervision_checks.check(
-                        self.config,
-                        record=True,
-                        now=f"2026-11-06T00:0{minute}:00+00:00",
-                    )
+                    result = supervision_checks.check(self.config, record=True, now=f"2026-11-06T00:0{minute}:00+00:00")
                     self.assertFalse(result["ok"])
-                    supervision_checks.deliver_health(
-                        self.db,
-                        supervision_health.health_path(self.config),
-                        runner=sent,
-                    )
+                    supervision_checks.deliver_health(self.db, supervision_health.health_path(self.config), runner=sent)
                     self.assertEqual(calls, [])
                 result = supervision_checks.check(self.config, record=True, now=f"2026-11-06T00:0{minute}:01+00:00")
                 self.assertTrue(result["ok"])
-                self.assertNotIn(
-                    "first_failed_at",
-                    json.loads(supervision_health.health_path(self.config).read_text()),
-                )
+                self.assertNotIn("first_failed_at", json.loads(supervision_health.health_path(self.config).read_text()))
         self.assertEqual(calls, [])

@@ -1,5 +1,6 @@
 """Shared fixtures for review coordinator tests."""
 
+from tests.support import database as fixture_database
 from robert_agent.adapters.processes import identity as worker_identity
 import json
 import os
@@ -13,7 +14,7 @@ from tests.support import review_workspace as workspace_fixture
 from robert_agent.adapters.processes import worker as dispatch
 from robert_agent.workflows.review import coordinator as review_coordinator
 from robert_agent.workflows.review import files as review_files
-from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.persistence.rounds import review as review_store
 from robert_agent.runtime import cycle as run_once
 from robert_agent.operations.initialize import init_config
 from robert_agent.resource_files import resource
@@ -41,18 +42,11 @@ class ReviewCoordinatorFixture(unittest.TestCase):
         config["data_dir"] = str(self.root / "data")
         worker = next(iter(config["workers"].values()))
         config["default_worker"] = "codex"
-        config["workers"] = {
-            "codex": worker,
-            "claude": {**worker, "adapter": "claude", "command": "claude"},
-        }
+        config["workers"] = {"codex": worker, "claude": {**worker, "adapter": "claude", "command": "claude"}}
         config["routes"] = {
             "review-pr": {
                 "worker": "codex",
-                "multi_agent_review": {
-                    "enabled": True,
-                    "workers": ["codex", "claude"],
-                    "author_allowlist": ["author"],
-                },
+                "multi_agent_review": {"enabled": True, "workers": ["codex", "claude"], "author_allowlist": ["author"]},
             }
         }
         self.config_path.write_text(yaml.safe_dump(config, sort_keys=False))
@@ -92,7 +86,7 @@ class ReviewCoordinatorFixture(unittest.TestCase):
         return result
 
     def current(self):
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             task, attempt = conn.execute("""SELECT t.task_id,a.attempt_id FROM tasks t
                 JOIN attempts a ON a.task_id=t.task_id ORDER BY t.created_at DESC,a.attempt_no DESC LIMIT 1""").fetchone()
         return task, attempt
@@ -103,11 +97,7 @@ class ReviewCoordinatorFixture(unittest.TestCase):
             "state": "open",
             "user": {"login": "author"},
             "head": {"sha": self.git_fixture.head, "ref": "feature"},
-            "base": {
-                "sha": self.git_fixture.base,
-                "ref": "main",
-                "repo": {"full_name": "example/backend"},
-            },
+            "base": {"sha": self.git_fixture.base, "ref": "main", "repo": {"full_name": "example/backend"}},
         }
 
     def launcher(self, **kwargs):
@@ -121,16 +111,7 @@ class ReviewCoordinatorFixture(unittest.TestCase):
             else "synthesis"
         )
         worker = kwargs["worker_agent_config"]["name"]
-        self.calls.append(
-            (
-                stage,
-                worker,
-                prompt.read_bytes(),
-                kwargs["worktree_path"],
-                str(output),
-                kwargs["model"],
-            )
-        )
+        self.calls.append((stage, worker, prompt.read_bytes(), kwargs["worktree_path"], str(output), kwargs["model"]))
         manifest = json.loads((prompt.parent / "context" / "manifest.json").read_text())
         if worker == self.fail_worker and stage == "review":
             return {"ok": False, "safe_error": "test model unavailable"}
@@ -152,11 +133,7 @@ class ReviewCoordinatorFixture(unittest.TestCase):
                     schema_version=1,
                     findings=[],
                     dismissed_findings=[],
-                    coverage={
-                        "reviewed_paths": ["source.py"],
-                        "unreviewed_paths": [],
-                        "notes": "Read full source",
-                    },
+                    coverage={"reviewed_paths": ["source.py"], "unreviewed_paths": [], "notes": "Read full source"},
                     merge_recommendation="ready to merge",
                 )
                 if self.bad_round:
@@ -164,18 +141,14 @@ class ReviewCoordinatorFixture(unittest.TestCase):
                 review_files.atomic_json(output / "result.json", payload)
         else:
             inputs_path = re.search(
-                r"Read the frozen selected artifact list (.*?)\. Read each",
-                prompt.read_text(),
+                r"Read the frozen selected artifact list (.*?)\. Read each", prompt.read_text()
             ).group(1)
             inputs = json.loads(Path(inputs_path).read_text())
             for record in inputs["records"]:
                 self.assertTrue(Path(record["result_path"]).is_file())
             payload = {key: manifest[key] for key in ("round_id", "snapshot_id", "head_sha")}
             payload.update(
-                schema_version=1,
-                items=[],
-                merge_recommendation="ready to merge",
-                merge_reason="没有已确认问题",
+                schema_version=1, items=[], merge_recommendation="ready to merge", merge_reason="没有已确认问题"
             )
             review_files.atomic_json(output / "evaluation.json", payload)
         return {"ok": True, "process_exited": True, "returncode": 0, "pid": 1073741824}
@@ -185,17 +158,13 @@ class ReviewCoordinatorFixture(unittest.TestCase):
         return review_coordinator.Coordinator(self.db, task, attempt, fetch_pr=self.pr, launcher=self.launcher)
 
     def finish_task(self, task):
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task,))
             conn.execute("UPDATE attempts SET status='completed' WHERE task_id=?", (task,))
             conn.execute(
-                "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL WHERE active_task_id=?",
-                (task,),
+                "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL WHERE active_task_id=?", (task,)
             )
-            conn.execute(
-                "UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?",
-                (task,),
-            )
+            conn.execute("UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?", (task,))
 
     def check_lingering_child(self, mode):
         self.cycle([self.event()])
@@ -221,7 +190,7 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
             expected_message = "worker exited immediately" if mode == "failure" else "process group"
             with self.assertRaisesRegex(expected_error, expected_message):
                 driver.run()
-            with review_store.connect(self.db) as conn:
+            with fixture_database.connect(self.db) as conn:
                 runs = review_store.runs(conn, driver.round_id)
                 self.assertFalse(any(run["stage"] == "review" and run["status"] == "succeeded" for run in runs))
                 self.assertEqual(
@@ -236,7 +205,7 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
         finally:
             # These groups were created exclusively by this fixture's launcher.
-            with review_store.connect(self.db) as conn:
+            with fixture_database.connect(self.db) as conn:
                 for run in review_store.runs(conn, driver.round_id):
                     pid = run["dispatch"].get("pid")
                     if run["stage"] == "review" and pid:

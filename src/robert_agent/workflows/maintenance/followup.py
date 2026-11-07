@@ -1,9 +1,14 @@
 """Bounded, durable follow-up for engineering repairs with an audited delivery."""
 
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import supervision_checkpoints as db_read_supervision_checkpoints
+
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import sqlite3
 from uuid import uuid4
 
 from robert_agent.workflows.maintenance import repair
@@ -17,57 +22,19 @@ _CLAIM_WINDOW = timedelta(minutes=7)
 
 
 def _candidate(conn, *, repository, policy_digest, now):
-    return conn.execute(
-        """SELECT link.scope_id AS incident_id, result.result_id, attempt.worktree_path,
-        json_extract(result.metadata_json,'$.audit.action_scope.result_head_sha') AS revision
-        FROM supervision_checkpoints link
-        JOIN work_items item ON item.work_item_id=json_extract(link.metadata_json,'$.work_item_id')
-        JOIN repos repo ON repo.repo_id=item.repo_id
-        JOIN worker_results result ON result.result_id=(
-            SELECT wr.result_id FROM tasks t JOIN worker_results wr ON wr.task_id=t.task_id
-            JOIN attempts a ON a.attempt_id=wr.attempt_id
-            WHERE t.workstream_id=item.workstream_id AND wr.output_type='new_pr' AND a.status='completed'
-              AND json_extract(wr.metadata_json,'$.audit.status')='accepted'
-              AND (json_type(a.metadata_json,'$.dispatch.pid') IS NOT 'integer'
-                   OR json_extract(a.metadata_json,'$.process_stopped_at') IS NOT NULL)
-            ORDER BY wr.created_at DESC,wr.result_id DESC LIMIT 1)
-        JOIN attempts attempt ON attempt.attempt_id=result.attempt_id
-        LEFT JOIN supervision_checkpoints followup ON followup.scope_type='repair'
-            AND followup.scope_id=link.scope_id AND followup.rule_id='followup'
-        WHERE link.scope_type='repair' AND link.rule_id='engineering'
-          AND item.created_by='system:supervisor' AND item.canceled_at IS NULL
-          AND repo.enabled=1 AND lower(repo.full_name)=?
-          AND COALESCE(attempt.worktree_path,'')!=''
-          AND (COALESCE(json_extract(followup.metadata_json,'$.status'),'')!='complete'
-               OR json_extract(followup.metadata_json,'$.result_id') IS NOT result.result_id
-               OR json_extract(followup.metadata_json,'$.revision') IS NOT json_extract(result.metadata_json,'$.audit.action_scope.result_head_sha')
-               OR json_extract(followup.metadata_json,'$.policy_digest') IS NOT ?)
-          AND (json_extract(followup.metadata_json,'$.next_check_at') IS NULL
-               OR julianday(json_extract(followup.metadata_json,'$.next_check_at'))<=julianday(?))
-          AND (json_extract(followup.metadata_json,'$.claim_expires_at') IS NULL
-               OR julianday(json_extract(followup.metadata_json,'$.claim_expires_at'))<=julianday(?))
-        ORDER BY COALESCE(json_extract(followup.metadata_json,'$.next_check_at'),link.updated_at),link.scope_id LIMIT 1""",
-        (repository, policy_digest, now.isoformat(), now.isoformat()),
-    ).fetchone()
+    return db_records.first(
+        db_read_supervision_checkpoints.find_for_candidate(
+            conn, repository, policy_digest, now.isoformat(), now.isoformat()
+        )
+    )
 
 
 def _claim(config, repo, policy, now):
     policy_digest = repair._digest(
-        [
-            policy,
-            {
-                key: repo[key]
-                for key in (
-                    "full_name",
-                    "repo_root",
-                    "worktree_root",
-                    "default_base_branch",
-                )
-            },
-        ]
+        [policy, {key: repo[key] for key in ("full_name", "repo_root", "worktree_root", "default_base_branch")}]
     )
     with closing(repair._connect(config)) as conn, conn:
-        conn.execute("BEGIN IMMEDIATE")
+        db_transactions.begin(conn, immediate=True)
         if not supervision_store.has_schema(conn):
             return None
         candidate = _candidate(conn, repository=policy["repository"], policy_digest=policy_digest, now=now)
@@ -91,7 +58,7 @@ def _claim(config, repo, policy, now):
 
 def _finish(config, key, claimed, status, now):
     with closing(repair._connect(config)) as conn, conn:
-        conn.execute("BEGIN IMMEDIATE")
+        db_transactions.begin(conn, immediate=True)
         if repair._state(conn, key).get("claim_id") != claimed["claim_id"]:
             return False
         complete = status == "verified"
@@ -147,5 +114,5 @@ def poll(config, *, now=None, runtime=None):
             if not _finish(config, key, state, outcome["status"], finished):
                 return repair._proposal_status("repair_evidence_changed", incident_id=key[1])
             return {**outcome, "incident_id": key[1]}
-    except (OSError, ValueError, sqlite3.Error):
+    except (OSError, ValueError, db_errors.Error):
         return repair._proposal_status("unavailable")

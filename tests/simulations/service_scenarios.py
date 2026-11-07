@@ -13,7 +13,7 @@ import tempfile
 import time
 
 from robert_agent.adapters.services import native as service
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.adapters.processes import identity as worker_identity
 
 
@@ -109,10 +109,7 @@ def run(root):
     source = fixture / "fixture.py"
     source.write_text(_FIXTURE, encoding="utf-8")
     executable = fixture / "robert-fixture"
-    executable.write_text(
-        f'#!/bin/sh\nexec {shlex.join([sys.executable, "-B", str(source)])} "$@"\n',
-        encoding="utf-8",
-    )
+    executable.write_text(f'#!/bin/sh\nexec {shlex.join([sys.executable, "-B", str(source)])} "$@"\n', encoding="utf-8")
     executable.chmod(0o700)
     config_path = fixture / "runtime.json"
     data = fixture / "runtime"
@@ -123,12 +120,7 @@ def run(root):
         "data_dir": str(data),
         "db_path": str(db),
         "repos": [],
-        "supervision": {
-            "mode": "observe",
-            "poll_seconds": 1,
-            "batch_size": 5,
-            "stall_seconds": 2,
-        },
+        "supervision": {"mode": "observe", "poll_seconds": 1, "batch_size": 5, "stall_seconds": 2},
     }
     config_path.write_text(json.dumps(config), encoding="utf-8")
     health = supervision_health.health_path(config)
@@ -158,14 +150,7 @@ def run(root):
                 )
                 with (fixture / f"{target}-manager.log").open("wb") as log:
                     process = subprocess.Popen(
-                        [
-                            sys.executable,
-                            "-m",
-                            "supervisor.supervisord",
-                            "-n",
-                            "-c",
-                            str(definition),
-                        ],
+                        [sys.executable, "-m", "supervisor.supervisord", "-n", "-c", str(definition)],
                         cwd=service_root,
                         env=env,
                         stdin=subprocess.DEVNULL,
@@ -175,15 +160,9 @@ def run(root):
                     )
                 managers.append((definition, process))
             ((daemon, daemon_manager), (observer, observer_manager)) = managers
-            daemon_pid = _wait(
-                lambda: _running(daemon, env, service.SUPERVISOR_PROGRAM),
-                "daemon RUNNING",
-            )
+            daemon_pid = _wait(lambda: _running(daemon, env, service.SUPERVISOR_PROGRAM), "daemon RUNNING")
             web_pid = _wait(lambda: _running(daemon, env, "robert-web"), "fixture web RUNNING")
-            original_pid = _wait(
-                lambda: _running(observer, env, service.SUPERVISION_PROGRAM),
-                "supervisor RUNNING",
-            )
+            original_pid = _wait(lambda: _running(observer, env, service.SUPERVISION_PROGRAM), "supervisor RUNNING")
             capture(daemon_pid)
             capture(web_pid)
             capture(original_pid)

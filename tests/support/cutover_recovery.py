@@ -9,7 +9,7 @@ import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.runtime import daemon
 from robert_agent.execution import runtime_state as daemon_state
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class CutoverRecoveryFixture(unittest.TestCase):
@@ -39,12 +39,7 @@ class CutoverRecoveryFixture(unittest.TestCase):
                         name,
                         self.now,
                         self.now,
-                        json.dumps(
-                            {
-                                "result_contract": "compact-v1",
-                                "dispatch": {"pid": 123456789},
-                            }
-                        ),
+                        json.dumps({"result_contract": "compact-v1", "dispatch": {"pid": 123456789}}),
                     ),
                 )
             conn.execute(

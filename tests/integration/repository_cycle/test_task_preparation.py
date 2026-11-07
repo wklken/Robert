@@ -107,7 +107,7 @@ class TaskPreparationTests(RepositoryCycleFixture):
 
     def test_web_work_item_materializes_without_fake_github_rows(self):
         from robert_agent.runtime import cycle as run_once
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
         from robert_agent.work.application import commands as work_items
 
         db_path = self.data_dir / "dd.sqlite3"
@@ -204,7 +204,7 @@ class TaskPreparationTests(RepositoryCycleFixture):
         self.assertEqual(wakeup_status, "consumed")
 
     def test_manual_task_worker_overrides_route_and_default_worker(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "manual-worker.sqlite3"
         storage.init_database(db_path)
@@ -295,13 +295,7 @@ class TaskPreparationTests(RepositoryCycleFixture):
                 config_result={
                     "default_worker": workers[0],
                     "workers": workers,
-                    "routes": {
-                        "local-result": {
-                            "worker": "default",
-                            "model": "route-model",
-                            "effort": "low",
-                        }
-                    },
+                    "routes": {"local-result": {"worker": "default", "model": "route-model", "effort": "low"}},
                 },
             )
         finally:

@@ -1,5 +1,6 @@
 """Snapshot-bound, audited voting comments with stable round idempotency."""
 
+from robert_agent.persistence.stores import vote_sessions as db_write_vote_sessions
 import hashlib
 import json
 from pathlib import Path
@@ -23,12 +24,7 @@ def validate_action(action, scope):
         raise ValueError("vote report requires trusted scope and publishing account")
     if data.get("type") != "comment" or data.get("target_url") != scope.get("vote_target_url"):
         raise ValueError("vote report target differs from trigger source")
-    for field in (
-        "vote_round_id",
-        "vote_snapshot_id",
-        "vote_report_path",
-        "vote_report_sha256",
-    ):
+    for field in ("vote_round_id", "vote_snapshot_id", "vote_report_path", "vote_report_sha256"):
         if not data.get(field) or data[field] != scope.get(field):
             raise ValueError("vote report differs from trusted scope")
     for path_field, hash_field in [
@@ -77,10 +73,7 @@ def publication_keys(action, scope):
     }
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     request = hashlib.sha256(
-        json.dumps(
-            [identity, data["vote_snapshot_id"], data["vote_report_sha256"]],
-            sort_keys=True,
-        ).encode()
+        json.dumps([identity, data["vote_snapshot_id"], data["vote_report_sha256"]], sort_keys=True).encode()
     ).hexdigest()
     return "publication:" + key, "request:" + request
 
@@ -109,11 +102,7 @@ def reconcile(action, scope, run_command):
             raise ValueError("malformed comment query response")
         matches = [c for c in comments if isinstance(c.get("body"), str) and marker in c["body"]]
         if not matches:
-            return {
-                "status": "confirmed_absent",
-                "reason_code": "vote_lookup_complete_absent",
-                "evidence": {},
-            }
+            return {"status": "confirmed_absent", "reason_code": "vote_lookup_complete_absent", "evidence": {}}
         if len(matches) != 1:
             raise ValueError("vote marker conflict")
         comment = matches[0]
@@ -132,11 +121,7 @@ def reconcile(action, scope, run_command):
             },
         }
     except (ValueError, OSError, TypeError, KeyError):
-        return {
-            "status": "unknown",
-            "reason_code": "vote_reconciliation_unknown",
-            "evidence": {},
-        }
+        return {"status": "unknown", "reason_code": "vote_reconciliation_unknown", "evidence": {}}
 
 
 def publish(action, scope, run_command, scope_guard=None):
@@ -152,12 +137,7 @@ def publish(action, scope, run_command, scope_guard=None):
         }
     existing = reconcile(action, scope, run_command)
     if existing["status"] == "confirmed_effect":
-        return {
-            "ok": True,
-            "status": "published",
-            "deduplicated": True,
-            **existing["evidence"],
-        }
+        return {"ok": True, "status": "published", "deduplicated": True, **existing["evidence"]}
     if existing["status"] == "unknown":
         return {
             "ok": False,
@@ -169,10 +149,7 @@ def publish(action, scope, run_command, scope_guard=None):
         # Complete paginated snapshots distinguish missing adopted comments from
         # failed lookups and avoid one request per historical comment.
         current = vote_workspace.read_source(
-            manifest["repo"],
-            manifest["number"],
-            manifest["source_type"],
-            run_command=run_command,
+            manifest["repo"], manifest["number"], manifest["source_type"], run_command=run_command
         )
         same = vote_workspace.same_sources(manifest, current)
         if manifest.get("source_worktree") and manifest["source_type"] == "issue":
@@ -202,12 +179,7 @@ def publish(action, scope, run_command, scope_guard=None):
     try:
         validate_action(action, scope)
     except (ValueError, OSError, TypeError):
-        return {
-            "ok": False,
-            "status": "publish_failed",
-            "retryable": False,
-            "safe_error": "Vote artifacts changed.",
-        }
+        return {"ok": False, "status": "publish_failed", "retryable": False, "safe_error": "Vote artifacts changed."}
     result = run_command(
         [
             "gh",
@@ -248,7 +220,6 @@ def publish(action, scope, run_command, scope_guard=None):
 
 def record_outcome(conn, action, status, now):
     if is_vote(action) and status in {"published", "superseded"}:
-        conn.execute(
-            "UPDATE vote_sessions SET status=?,updated_at=? WHERE round_id=?",
-            (status, now, review_publish.payload(action)["vote_round_id"]),
+        db_write_vote_sessions.set_status_and_updated_at_by_round_id(
+            conn, status, now, review_publish.payload(action)["vote_round_id"]
         )

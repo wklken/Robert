@@ -1,11 +1,11 @@
 """runtime supervisor responsibilities."""
 
+from robert_agent.persistence import errors as db_errors
 from contextlib import contextmanager
 import fcntl
 import os
 from pathlib import Path
 import signal
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -132,9 +132,7 @@ def _stop_child(proc):
 
 def _repair_once(config_path):
     from robert_agent.workflows.maintenance import repair as supervision_repair
-    from robert_agent.workflows.maintenance import (
-        followup as supervision_repair_followup,
-    )
+    from robert_agent.workflows.maintenance import followup as supervision_repair_followup
     from robert_agent.configuration import command as validate_config
 
     def stopped(*_):
@@ -157,7 +155,7 @@ def main(argv=None):
         try:
             if Path(args[2]).is_file():
                 notify.deliver_pending(args[2], limit=1)
-        except (OSError, sqlite3.Error):
+        except (OSError, db_errors.Error):
             pass
     else:
         raise SystemExit("Use robert supervisor run/check/status")

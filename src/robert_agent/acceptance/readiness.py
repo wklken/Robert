@@ -1,10 +1,15 @@
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+
 #!/usr/bin/env python3
 import argparse
 import re
 from pathlib import Path
 import shlex
 import shutil
-import sqlite3
 import subprocess
 import sys
 
@@ -95,33 +100,10 @@ def _control_plane_state_gate(db_path):
             "control plane database has not been created yet",
             evidence=str(db_path),
         )
-    with sqlite3.connect(db_path) as conn:
-        prepared_attempts = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM attempts a
-            JOIN tasks t ON t.task_id = a.task_id
-            WHERE a.status = 'prepared'
-              AND t.lifecycle IN ('queued', 'running')
-            """
-        ).fetchone()[0]
-        running_attempts = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM attempts a
-            JOIN tasks t ON t.task_id = a.task_id
-            WHERE a.status IN ('running', 'stale')
-              AND t.lifecycle IN ('queued', 'running')
-            """
-        ).fetchone()[0]
-        pending_publish_actions = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM github_actions
-            WHERE audit_status = 'accepted'
-              AND publish_status = 'not_published'
-            """
-        ).fetchone()[0]
+    with db_database.connect(db_path) as conn:
+        prepared_attempts = db_records.first(db_read_attempts.find_for_control_plane_state_gate(conn))[0]
+        running_attempts = db_records.first(db_read_attempts.find_for_control_plane_state_gate_2(conn))[0]
+        pending_publish_actions = db_records.first(db_read_github_actions.find_for_control_plane_state_gate(conn))[0]
     evidence = {
         "db_path": str(db_path),
         "prepared_attempts": prepared_attempts,

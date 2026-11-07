@@ -1,16 +1,31 @@
 """Reconcile terminal GitHub source state with owned work."""
 
+from robert_agent.persistence.queries import attempts as db_read_attempts
+
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_sources as db_read_github_sources
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import audit_events as db_write_audit_events
+from robert_agent.persistence.stores import github_events as db_write_github_events
+from robert_agent.persistence.stores import github_sources as db_write_github_sources
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import work_items as db_write_work_items
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.adapters.github import sources as github_sources
-from robert_agent.adapters.sqlite import transactions
+from robert_agent.persistence import transactions as transactions
 from robert_agent.execution.application import monitor
 from robert_agent.work.application import commands as work_items
 from robert_agent.work import control_queries
-from robert_agent.execution import inspection as supervise
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import operations as execution_operations
 from robert_agent.execution import ownership as execution_ownership
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import queries as work_queries
@@ -46,7 +61,7 @@ def record_remote_terminal_state(
 ):
     from robert_agent.delivery.lock import task_publication_lock
 
-    database = next((row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), "")
+    database = next((row[2] for row in db_sqlite.database_list(conn) if row[1] == "main"), "")
     args = (
         conn,
         repo_id,
@@ -92,10 +107,7 @@ def _record_remote_terminal_state_locked(
 ):
     subject_type, subject_id = "task", task_id
     if task_id:
-        task_row = conn.execute(
-            "SELECT task_kind, metadata_json FROM tasks WHERE task_id = ?",
-            (task_id,),
-        ).fetchone()
+        task_row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
         task_metadata = values.json_object(task_row[1] if task_row else None)
         episode_id = task_metadata.get("remediation_episode_id") if task_row else None
         if (
@@ -140,10 +152,9 @@ def _record_remote_terminal_state_locked(
         )
     if task_id and not binding and not execution_ownership.reconcile_task_allowed(conn, task_id, run_now):
         return False
-    source_metadata_row = conn.execute(
-        "SELECT metadata_json,state FROM github_sources WHERE source_id = ?",
-        (source_id,),
-    ).fetchone()
+    source_metadata_row = db_records.first(
+        db_read_github_sources.find_metadata_json_and_state_by_source_id(conn, source_id)
+    )
     source_metadata = values.json_object(source_metadata_row[0] if source_metadata_row else None)
     attention = binding and binding["binding_status"] == "attention"
     if (
@@ -154,32 +165,18 @@ def _record_remote_terminal_state_locked(
     ):
         return False
     source_metadata["remote_state"] = remote_state
-    conn.execute(
-        """
-        UPDATE github_sources
-        SET state = ?,
-            html_url = COALESCE(?, html_url),
-            title = COALESCE(NULLIF(?, ''), title),
-            source_updated_at = COALESCE(?, source_updated_at),
-            metadata_json = ?
-        WHERE source_id = ?
-        """,
-        (
-            remote_state.get("state") or "closed",
-            remote_state.get("html_url"),
-            remote_state.get("title") or "",
-            remote_state.get("updated_at"),
-            json.dumps(source_metadata, ensure_ascii=False, sort_keys=True),
-            source_id,
-        ),
+    db_write_github_sources.record_remote_terminal_state_locked(
+        conn,
+        remote_state.get("state") or "closed",
+        remote_state.get("html_url"),
+        remote_state.get("title") or "",
+        remote_state.get("updated_at"),
+        json.dumps(source_metadata, ensure_ascii=False, sort_keys=True),
+        source_id,
     )
     if attention:
         return False
-    attempts = conn.execute(
-        f"""SELECT attempt_id, status, metadata_json FROM attempts
-        WHERE task_id = ? AND (status='prepared' OR {supervise.occupied_attempt_sql("attempts")})""",
-        (task_id,),
-    ).fetchall()
+    attempts = db_read_attempts.record_remote_terminal_state_locked(conn, task_id)
     attempt_metadata = {}
     cleanup_pending = False
     for attempt_id, attempt_status, metadata_json in attempts:
@@ -187,11 +184,7 @@ def _record_remote_terminal_state_locked(
         if attempt_status in {"running", "stale", "completed"}:
             previous_termination = metadata.get("termination")
             metadata["termination"] = monitor.terminate_owned_attempt(conn, task_id, metadata)
-            if metadata["termination"]["status"] not in {
-                "terminated",
-                "not_found",
-                "already_dead",
-            }:
+            if metadata["termination"]["status"] not in {"terminated", "not_found", "already_dead"}:
                 cleanup_pending = True
                 if previous_termination != metadata["termination"]:
                     execution_notifications.insert(
@@ -199,15 +192,10 @@ def _record_remote_terminal_state_locked(
                         "worker_cleanup_pending",
                         "recorded",
                         run_now,
-                        {
-                            "task_id": task_id,
-                            "attempt_id": attempt_id,
-                            "termination": metadata["termination"],
-                        },
+                        {"task_id": task_id, "attempt_id": attempt_id, "termination": metadata["termination"]},
                     )
-            conn.execute(
-                "UPDATE attempts SET status = 'running', metadata_json = ? WHERE attempt_id = ?",
-                (json.dumps(metadata, sort_keys=True), attempt_id),
+            db_write_attempts.update_for_supervise_running_attempts_3(
+                conn, json.dumps(metadata, sort_keys=True), attempt_id
             )
         attempt_metadata[attempt_id] = metadata
     if cleanup_pending:
@@ -219,87 +207,47 @@ def _record_remote_terminal_state_locked(
         "number": number,
         "remote_state": remote_state,
     }
-    conn.execute(
-        """
-        UPDATE tasks
-        SET lifecycle = 'canceled',
-            updated_at = ?,
-            metadata_json = ?
-        WHERE task_id = ?
-          AND lifecycle IN ('detected', 'authorized', 'classified', 'queued', 'running', 'waiting_for_user')
-        """,
-        (
-            run_now,
-            json.dumps(
-                {"remote_reconciliation": remote_payload},
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-            task_id,
-        ),
+    db_write_tasks.record_remote_terminal_state_locked(
+        conn,
+        run_now,
+        json.dumps({"remote_reconciliation": remote_payload}, ensure_ascii=False, sort_keys=True),
+        task_id,
     )
     for attempt_id, metadata in attempt_metadata.items():
         metadata["remote_reconciliation"] = remote_payload
-        conn.execute(
-            "UPDATE attempts SET status = 'canceled', finished_at = ?, failure_json = ?, "
-            "metadata_json = ? WHERE attempt_id = ?",
-            (
-                run_now,
-                json.dumps(remote_payload, sort_keys=True),
-                json.dumps(metadata, sort_keys=True),
-                attempt_id,
-            ),
+        db_write_attempts.record_remote_terminal_state_locked(
+            conn, run_now, json.dumps(remote_payload, sort_keys=True), json.dumps(metadata, sort_keys=True), attempt_id
         )
     execution_ownership.close_terminal_task(conn, task_id, run_now)
     publication_outcomes.retire_unstarted_actions(conn, task_id, run_now)
-    workstream_metadata_row = conn.execute(
-        "SELECT metadata_json FROM workstreams WHERE workstream_id = ?",
-        (workstream_id,),
-    ).fetchone()
+    workstream_metadata_row = db_records.first(
+        db_read_workstreams.find_metadata_json_by_workstream_id(conn, workstream_id)
+    )
     workstream_metadata = values.json_object(workstream_metadata_row[0] if workstream_metadata_row else None)
     workstream_metadata["remote_reconciliation"] = remote_payload
-    conn.execute(
-        """
-        UPDATE workstreams
-        SET lifecycle = ?,
-            active_task_id = NULL,
-            updated_at = ?,
-            metadata_json = ?
-        WHERE workstream_id = ?
-        """,
-        (
-            workstream_lifecycle,
-            run_now,
-            json.dumps(workstream_metadata, ensure_ascii=False, sort_keys=True),
-            workstream_id,
-        ),
+    db_write_workstreams.record_remote_terminal_state_locked(
+        conn,
+        workstream_lifecycle,
+        run_now,
+        json.dumps(workstream_metadata, ensure_ascii=False, sort_keys=True),
+        workstream_id,
     )
-    conn.execute(
-        """
-        INSERT INTO audit_events(
-          audit_id, repo_id, workstream_id, task_id, event_type, created_at, payload_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            values.new_id("audit"),
-            repo_id,
-            workstream_id,
-            task_id,
-            audit_type,
-            run_now,
-            json.dumps(remote_payload, ensure_ascii=False, sort_keys=True),
-        ),
+    db_write_audit_events.record_remote_terminal_state_locked(
+        conn,
+        values.new_id("audit"),
+        repo_id,
+        workstream_id,
+        task_id,
+        audit_type,
+        run_now,
+        json.dumps(remote_payload, ensure_ascii=False, sort_keys=True),
     )
     item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
     if item and source_type == "issue" and item["origin_source_id"] == source_id:
         facts = control_queries.lifecycle_facts(conn, item)
-        unfinished = conn.execute(
-            """SELECT 1 FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-            WHERE (w.workstream_id=? OR w.origin_workstream_id=?)
-              AND t.lifecycle NOT IN ('completed','failed','canceled','ignored') LIMIT 1""",
-            (item["workstream_id"], item["workstream_id"]),
-        ).fetchone()
+        unfinished = db_records.first(
+            db_read_tasks.record_remote_terminal_state_locked(conn, item["workstream_id"], item["workstream_id"])
+        )
         if (
             not unfinished
             and not facts["running"]
@@ -321,14 +269,8 @@ def _record_remote_terminal_state_locked(
                 metadata={"source_key": source_key, "number": number},
                 now=run_now,
             )
-            conn.execute(
-                f"""UPDATE work_items SET {terminal_column}=?, updated_at=?, version=version+1
-                WHERE work_item_id=? AND completed_at IS NULL AND canceled_at IS NULL""",
-                (
-                    remote_state.get("closed_at") or run_now,
-                    run_now,
-                    item["work_item_id"],
-                ),
+            db_write_work_items.mark_remote_terminal(
+                conn, item["work_item_id"], terminal_column, remote_state.get("closed_at") or run_now, run_now
             )
     if item and source_type == "pull_request":
         if audit_type == "remote_pr_merged":
@@ -340,26 +282,10 @@ def _record_remote_terminal_state_locked(
                 metadata={"source_key": source_key, "number": number},
                 now=run_now,
             )
-            conn.execute(
-                """
-                UPDATE work_items
-                SET completed_at = ?, updated_at = ?, version = version + 1
-                WHERE work_item_id = ? AND completed_at IS NULL
-                """,
-                (
-                    remote_state.get("merged_at") or run_now,
-                    run_now,
-                    item["work_item_id"],
-                ),
+            db_write_work_items.update_for_finalize_accepted_result(
+                conn, remote_state.get("merged_at") or run_now, run_now, item["work_item_id"]
             )
-            conn.execute(
-                """
-                UPDATE workstreams
-                SET lifecycle = 'completed', active_task_id = NULL, updated_at = ?
-                WHERE workstream_id = (SELECT workstream_id FROM work_items WHERE work_item_id = ?)
-                """,
-                (run_now, item["work_item_id"]),
-            )
+            db_write_workstreams.record_remote_terminal_state_locked_2(conn, run_now, item["work_item_id"])
         elif audit_type == "remote_pr_closed":
             work_items.record_system_event(
                 conn,
@@ -396,28 +322,9 @@ def _current_state_terminal_reason(event):
 
 
 def _source_has_active_unpublished_result(conn, source_id):
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM workstreams w
-        LEFT JOIN workstream_sources ws ON ws.workstream_id = w.workstream_id
-        JOIN tasks t ON t.workstream_id = w.workstream_id
-        JOIN worker_results wr ON wr.task_id = t.task_id
-        LEFT JOIN github_actions ga ON ga.result_id = wr.result_id
-        WHERE (w.primary_source_id = ? OR ws.source_id = ?)
-          AND (
-            t.lifecycle IN ('queued', 'running', 'waiting_for_user')
-            OR json_extract(wr.metadata_json, '$.audit.status') IS NULL
-            OR (
-              ga.action_id IS NOT NULL
-              AND ga.audit_status = 'accepted'
-              AND ga.publish_status != 'published'
-            )
-          )
-        LIMIT 1
-        """,
-        (source_id, source_id),
-    ).fetchone()
+    row = db_records.first(
+        db_read_workstreams.find_for_source_has_active_unpublished_result(conn, source_id, source_id)
+    )
     return bool(row)
 
 
@@ -431,10 +338,7 @@ def _record_current_state_closed_source(
     remote_state,
     run_now,
 ):
-    source_metadata_row = conn.execute(
-        "SELECT metadata_json FROM github_sources WHERE source_id = ?",
-        (source_id,),
-    ).fetchone()
+    source_metadata_row = db_records.first(db_read_github_sources.find_metadata_json_by_source_id(conn, source_id))
     source_metadata = values.json_object(source_metadata_row[0] if source_metadata_row else None)
     payload = {
         "status": "current_state_closed",
@@ -446,45 +350,17 @@ def _record_current_state_closed_source(
         "remote_state": remote_state,
     }
     source_metadata["current_state_reconciliation"] = payload
-    conn.execute(
-        """
-        UPDATE github_sources
-        SET state = 'closed',
-            html_url = COALESCE(?, html_url),
-            title = COALESCE(NULLIF(?, ''), title),
-            source_updated_at = COALESCE(?, source_updated_at),
-            metadata_json = ?
-        WHERE source_id = ?
-        """,
-        (
-            remote_state.get("html_url"),
-            remote_state.get("title") or "",
-            remote_state.get("updated_at"),
-            json.dumps(source_metadata, ensure_ascii=False, sort_keys=True),
-            source_id,
-        ),
+    db_write_github_sources.record_current_state_closed_source(
+        conn,
+        remote_state.get("html_url"),
+        remote_state.get("title") or "",
+        remote_state.get("updated_at"),
+        json.dumps(source_metadata, ensure_ascii=False, sort_keys=True),
+        source_id,
     )
-    conn.execute(
-        """
-        UPDATE github_events
-        SET authorization_status = 'ignored_current_state_closed'
-        WHERE event_id = ?
-        """,
-        (event_id,),
-    )
-    conn.execute(
-        """
-        INSERT INTO audit_events(
-          audit_id, repo_id, workstream_id, task_id, event_type, created_at, payload_json
-        )
-        VALUES (?, ?, NULL, NULL, 'current_state_closed', ?, ?)
-        """,
-        (
-            values.new_id("audit"),
-            repo_id,
-            run_now,
-            json.dumps(payload, ensure_ascii=False, sort_keys=True),
-        ),
+    db_write_github_events.record_current_state_closed_source(conn, event_id)
+    db_write_audit_events.record_current_state_closed_source(
+        conn, values.new_id("audit"), repo_id, run_now, json.dumps(payload, ensure_ascii=False, sort_keys=True)
     )
     return payload
 
@@ -514,7 +390,7 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
     for workstream_id, task_id, source_id, source_key, source_type, number in rows:
         task_id = task_id or work_queries.latest_task_id(conn, workstream_id)
         conn.commit()
-        conn.execute("SAVEPOINT reconcile_source")
+        db_transactions.savepoint(conn, "reconcile_source")
         source_succeeded = False
         try:
             remote_state = github_sources.read_source_state(repo["full_name"], source_type, number, runner)

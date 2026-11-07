@@ -22,7 +22,7 @@ class IsolatedDaemonTests(unittest.TestCase):
         import sys
         import time
         from tests.support.publication_budget import PublicationBudgetFixture
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         fixture = PublicationBudgetFixture()
         fixture.setUp()
@@ -98,12 +98,7 @@ repos:
         }
         child = str(TEST_ROOT / "support" / "reliability_daemon_child.py")
         with (root / "daemon.log").open("w") as log:
-            first = subprocess.Popen(
-                [sys.executable, child, str(root), "crash"],
-                stdout=log,
-                stderr=log,
-                env=env,
-            )
+            first = subprocess.Popen([sys.executable, child, str(root), "crash"], stdout=log, stderr=log, env=env)
 
             def stop(process):
                 if process.poll() is None:
@@ -113,20 +108,12 @@ repos:
             self.addCleanup(stop, first)
             self.assertEqual(first.wait(timeout=30), 73, (root / "daemon.log").read_text())
             with closing(sqlite3.connect(fixture.db)) as conn, conn:
-                self.assertEqual(
-                    conn.execute("SELECT status FROM publication_intents").fetchone()[0],
-                    "executing",
-                )
+                self.assertEqual(conn.execute("SELECT status FROM publication_intents").fetchone()[0], "executing")
                 # Simulate the lease grace period after confirmed process death.
                 conn.execute(
                     "UPDATE leases SET expires_at='2000-01-01T00:00:00Z' WHERE resource_type IN ('daemon','agent_run')"
                 )
-            second = subprocess.Popen(
-                [sys.executable, child, str(root), "recover"],
-                stdout=log,
-                stderr=log,
-                env=env,
-            )
+            second = subprocess.Popen([sys.executable, child, str(root), "recover"], stdout=log, stderr=log, env=env)
             self.addCleanup(stop, second)
             deadline = time.monotonic() + 30
             complete = False

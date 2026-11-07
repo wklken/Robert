@@ -11,9 +11,7 @@ from tests.support.repository_cycle import (
 
 
 class PreparedPRFollowupTests(RepositoryCycleFixture):
-    def test_robot_authored_pr_followup_without_hidden_metadata_reuses_existing_branch(
-        self,
-    ):
+    def test_robot_authored_pr_followup_without_hidden_metadata_reuses_existing_branch(self):
         from robert_agent.runtime import cycle as run_once
 
         fixture_path = self.root / "pr-followup.json"
@@ -165,10 +163,7 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
         )
         self.assertEqual(
             pending,
-            [
-                ("trigger", "comment:older-issue-task"),
-                ("trigger", "comment:pr-followup-task"),
-            ],
+            [("trigger", "comment:older-issue-task"), ("trigger", "comment:pr-followup-task")],
         )
 
     def test_prepared_pr_reroute_preserves_required_skill_gate(self):
@@ -184,15 +179,13 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
             ).fetchone()
             self.assertEqual(row[:2], ("failed", "failed"))
             self.assertIn("missing-reroute-skill", json.loads(row[2]))
-            from robert_agent.execution.application.dispatch import (
-                current_dispatch_target,
-            )
+            from robert_agent.execution.application.dispatch import current_dispatch_target
 
             self.assertIsNone(current_dispatch_target(conn, "attempt-pr-2886"))
 
     def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(self, blocked=False):
         from robert_agent.runtime import cycle as run_once
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
@@ -362,7 +355,7 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
 
     def test_live_dispatch_uses_refreshed_worktree_after_prepared_pr_reroute(self):
         from robert_agent.runtime import cycle as run_once
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
