@@ -66,7 +66,7 @@ def scan_repo(config, repo, session, hints):
     with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
         repo_id = work_repositories.upsert_repo(conn, repo)
         known = work_queries.load_known_workstreams(conn, repo_id)
-        health_sources = set(db_read_workstreams.find_for_scan_repo(conn, repo_id))
+        health_sources = {(row[0], row[1]) for row in db_read_workstreams.find_for_scan_repo(conn, repo_id)}
         sources = list(
             dict.fromkeys(
                 (row[4], row[5], (row[4], row[5]) in health_sources)

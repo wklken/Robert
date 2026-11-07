@@ -110,7 +110,10 @@ jobs:
               assert callable(importlib.import_module(name).main), name
           assert resource('workflow.yml').is_file()
           assert resource('routes.yml').is_file()
-          for name in ('runtime.scan', 'runtime.control'):
+          for name in (
+              'runtime.scan', 'runtime.control', 'runtime.paused_monitor',
+              'workflows.maintenance.worker', 'workflows.review.coordinator', 'workflows.vote.coordinator',
+          ):
               subprocess.run([sys.executable, '-I', '-m', 'robert_agent.' + name, '--help'], check=True)
           PYTHON
 

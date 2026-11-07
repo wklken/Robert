@@ -72,6 +72,55 @@ class GitHubScanRemediationTests(unittest.TestCase):
             )
         self.assertEqual([args for args in calls if args[1] == "api" and "/issues/" in args[2]], [])
 
+    def test_open_derived_pr_keeps_health_checks_and_later_repositories_scanning(self):
+        from robert_agent.work.application import completion
+
+        fixture, config, repo_id = self.fixture()
+        repo = config["repos"][0]
+        repo["pr_automation"] = {"conflict": {"enabled": True}}
+        config["repos"] = [dict(repo, full_name="example/first"), repo, dict(repo, full_name="example/last")]
+        now = "2026-11-07T00:00:00+00:00"
+        with closing(sqlite3.connect(config["db_path"])) as conn, conn:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute(
+                """INSERT INTO workstreams(workstream_id,repo_id,created_at,updated_at)
+                VALUES ('origin',?,?,?)""",
+                (repo_id, now, now),
+            )
+            completion._materialize_open_pr_workstream(
+                conn,
+                repo_id,
+                repo["full_name"],
+                "origin",
+                {"type": "open_pr", "url": f"https://github.com/{repo['full_name']}/pull/42"},
+                now,
+            )
+
+        observed = []
+
+        def collect(repo, **kwargs):
+            observed.append(repo["full_name"])
+            return []
+
+        def runner(args, **kwargs):
+            self.assertEqual(args[:2], ["gh", "api"])
+            return subprocess.CompletedProcess(args, 0, '{"state":"open"}', "")
+
+        with (
+            mock.patch.object(validate_config, "validate_config", return_value=config),
+            mock.patch.object(synchronization.github_budget, "budget", return_value=True),
+            mock.patch.object(GitHubReadSession, "collect_notifications", return_value={}),
+            mock.patch.object(GitHubReadSession, "collect_events", side_effect=collect),
+            mock.patch.object(synchronization.pr_health, "fetch_pr_snapshot", return_value=None) as health,
+        ):
+            result = synchronization.scan(fixture.config_path, runner=runner)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["batch_count"], 3)
+        self.assertEqual(observed, [item["full_name"] for item in config["repos"]])
+        health.assert_called_once_with(repo["full_name"], 42, runner=mock.ANY)
+        with closing(sqlite3.connect(config["db_path"])) as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM github_scan_batches").fetchone()[0], 3)
+
     def test_child_attention_is_reported_once_without_detaching_the_child(self):
         from robert_agent.runtime.control import ControlLane
 

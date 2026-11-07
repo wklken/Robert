@@ -27,7 +27,6 @@ from robert_agent.delivery.application import publish
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-WORKER_RESULT_SCRIPT = PACKAGE_ROOT / "worker/result.py"
 DEFAULT_WORKFLOW = resource("workflow.yml")
 
 
@@ -51,7 +50,7 @@ def _mock_new_pr_worker(workspace_dir):
 import json
 import sys
 
-sys.path.insert(0, {str(WORKER_RESULT_SCRIPT.parent.parent)!r})
+sys.path.insert(0, {str(PACKAGE_ROOT.parent)!r})
 from robert_agent.delivery.application import submission as result
 
 prompt = sys.stdin.read()
