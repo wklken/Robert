@@ -1,4 +1,5 @@
 """Reconcile terminal GitHub source state with owned work."""
+
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.adapters.github import sources as github_sources
 from robert_agent.adapters.sqlite import transactions
@@ -44,9 +45,22 @@ def record_remote_terminal_state(
     run_now,
 ):
     from robert_agent.delivery.lock import task_publication_lock
-    database = next((row[2] for row in conn.execute('PRAGMA database_list') if row[1] == 'main'), '')
-    args = (conn, repo_id, workstream_id, source_id, source_key, source_type, number,
-            task_id, remote_state, workstream_lifecycle, audit_type, run_now)
+
+    database = next((row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"), "")
+    args = (
+        conn,
+        repo_id,
+        workstream_id,
+        source_id,
+        source_key,
+        source_type,
+        number,
+        task_id,
+        remote_state,
+        workstream_lifecycle,
+        audit_type,
+        run_now,
+    )
     if not task_id or not database:
         return _record_remote_terminal_state_locked(*args)
     conn.commit()
@@ -84,16 +98,17 @@ def _record_remote_terminal_state_locked(
         ).fetchone()
         task_metadata = values.json_object(task_row[1] if task_row else None)
         episode_id = task_metadata.get("remediation_episode_id") if task_row else None
-        if task_row and task_row[0] in {
-            "ci_remediation",
-            "merge_conflict_remediation",
-        } and episode_id:
+        if (
+            task_row
+            and task_row[0]
+            in {
+                "ci_remediation",
+                "merge_conflict_remediation",
+            }
+            and episode_id
+        ):
             subject_type, subject_id = "remediation_episode", str(episode_id)
-    binding = (
-        execution_store.get_binding(conn, subject_type, subject_id)
-        if subject_id
-        else None
-    )
+    binding = execution_store.get_binding(conn, subject_type, subject_id) if subject_id else None
     workflow_fact = None
     if binding and binding["binding_status"] == "active":
         marker = (
@@ -123,11 +138,7 @@ def _record_remote_terminal_state_locked(
             workflow_fact,
             now=run_now,
         )
-    if (
-        task_id
-        and not binding
-        and not execution_ownership.reconcile_task_allowed(conn, task_id, run_now)
-    ):
+    if task_id and not binding and not execution_ownership.reconcile_task_allowed(conn, task_id, run_now):
         return False
     source_metadata_row = conn.execute(
         "SELECT metadata_json,state FROM github_sources WHERE source_id = ?",
@@ -135,8 +146,12 @@ def _record_remote_terminal_state_locked(
     ).fetchone()
     source_metadata = values.json_object(source_metadata_row[0] if source_metadata_row else None)
     attention = binding and binding["binding_status"] == "attention"
-    if (attention and source_metadata_row and source_metadata_row[1] == remote_state.get("state")
-            and source_metadata.get("remote_state") == remote_state):
+    if (
+        attention
+        and source_metadata_row
+        and source_metadata_row[1] == remote_state.get("state")
+        and source_metadata.get("remote_state") == remote_state
+    ):
         return False
     source_metadata["remote_state"] = remote_state
     conn.execute(
@@ -162,7 +177,7 @@ def _record_remote_terminal_state_locked(
         return False
     attempts = conn.execute(
         f"""SELECT attempt_id, status, metadata_json FROM attempts
-        WHERE task_id = ? AND (status='prepared' OR {supervise.occupied_attempt_sql('attempts')})""",
+        WHERE task_id = ? AND (status='prepared' OR {supervise.occupied_attempt_sql("attempts")})""",
         (task_id,),
     ).fetchall()
     attempt_metadata = {}
@@ -172,12 +187,24 @@ def _record_remote_terminal_state_locked(
         if attempt_status in {"running", "stale", "completed"}:
             previous_termination = metadata.get("termination")
             metadata["termination"] = monitor.terminate_owned_attempt(conn, task_id, metadata)
-            if metadata["termination"]["status"] not in {"terminated", "not_found", "already_dead"}:
+            if metadata["termination"]["status"] not in {
+                "terminated",
+                "not_found",
+                "already_dead",
+            }:
                 cleanup_pending = True
                 if previous_termination != metadata["termination"]:
-                    execution_notifications.insert(conn, "worker_cleanup_pending", "recorded", run_now,
-                                         {"task_id": task_id, "attempt_id": attempt_id,
-                                          "termination": metadata["termination"]})
+                    execution_notifications.insert(
+                        conn,
+                        "worker_cleanup_pending",
+                        "recorded",
+                        run_now,
+                        {
+                            "task_id": task_id,
+                            "attempt_id": attempt_id,
+                            "termination": metadata["termination"],
+                        },
+                    )
             conn.execute(
                 "UPDATE attempts SET status = 'running', metadata_json = ? WHERE attempt_id = ?",
                 (json.dumps(metadata, sort_keys=True), attempt_id),
@@ -203,7 +230,11 @@ def _record_remote_terminal_state_locked(
         """,
         (
             run_now,
-            json.dumps({"remote_reconciliation": remote_payload}, ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                {"remote_reconciliation": remote_payload},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
             task_id,
         ),
     )
@@ -212,8 +243,12 @@ def _record_remote_terminal_state_locked(
         conn.execute(
             "UPDATE attempts SET status = 'canceled', finished_at = ?, failure_json = ?, "
             "metadata_json = ? WHERE attempt_id = ?",
-            (run_now, json.dumps(remote_payload, sort_keys=True),
-             json.dumps(metadata, sort_keys=True), attempt_id),
+            (
+                run_now,
+                json.dumps(remote_payload, sort_keys=True),
+                json.dumps(metadata, sort_keys=True),
+                attempt_id,
+            ),
         )
     execution_ownership.close_terminal_task(conn, task_id, run_now)
     publication_outcomes.retire_unstarted_actions(conn, task_id, run_now)
@@ -265,7 +300,13 @@ def _record_remote_terminal_state_locked(
               AND t.lifecycle NOT IN ('completed','failed','canceled','ignored') LIMIT 1""",
             (item["workstream_id"], item["workstream_id"]),
         ).fetchone()
-        if not unfinished and not facts["running"] and not facts["actions"] and not facts["cleanup_pending"] and not facts["workflow_attention"]:
+        if (
+            not unfinished
+            and not facts["running"]
+            and not facts["actions"]
+            and not facts["cleanup_pending"]
+            and not facts["workflow_attention"]
+        ):
             terminal_column = "completed_at" if workstream_lifecycle == "completed" else "canceled_at"
             decision = work_items._unresolved_event(conn, item["work_item_id"], work_items.DECISION_EVENTS)
             work_items.record_system_event(
@@ -274,14 +315,20 @@ def _record_remote_terminal_state_locked(
                 event_type="completed" if workstream_lifecycle == "completed" else "canceled",
                 idempotency_key=f"issue-closed:{source_key}:{remote_state.get('closed_at') or run_now}",
                 body="GitHub issue closed: " + (remote_state.get("state_reason") or "closed"),
-                resolves_event_id=(decision["event_id"] if hasattr(decision, "keys") else decision[0]) if decision else None,
+                resolves_event_id=(decision["event_id"] if hasattr(decision, "keys") else decision[0])
+                if decision
+                else None,
                 metadata={"source_key": source_key, "number": number},
                 now=run_now,
             )
             conn.execute(
                 f"""UPDATE work_items SET {terminal_column}=?, updated_at=?, version=version+1
                 WHERE work_item_id=? AND completed_at IS NULL AND canceled_at IS NULL""",
-                (remote_state.get("closed_at") or run_now, run_now, item["work_item_id"]),
+                (
+                    remote_state.get("closed_at") or run_now,
+                    run_now,
+                    item["work_item_id"],
+                ),
             )
     if item and source_type == "pull_request":
         if audit_type == "remote_pr_merged":
@@ -299,7 +346,11 @@ def _record_remote_terminal_state_locked(
                 SET completed_at = ?, updated_at = ?, version = version + 1
                 WHERE work_item_id = ? AND completed_at IS NULL
                 """,
-                (remote_state.get("merged_at") or run_now, run_now, item["work_item_id"]),
+                (
+                    remote_state.get("merged_at") or run_now,
+                    run_now,
+                    item["work_item_id"],
+                ),
             )
             conn.execute(
                 """
@@ -504,10 +555,19 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
             raise
         except Exception as exc:
             transactions.finish_isolation(conn, "reconcile_source", rollback=True)
-            execution_notifications.update_failure(conn, "source_reconcile_failed", source_key, run_now,
-                {"source_key": source_key, "task_id": task_id,
-                 "reason_code": "source_reconcile_failed", "error_type": type(exc).__name__,
-                 "required_action": "Inspect this source; other sources continue and this source will be retried."})
+            execution_notifications.update_failure(
+                conn,
+                "source_reconcile_failed",
+                source_key,
+                run_now,
+                {
+                    "source_key": source_key,
+                    "task_id": task_id,
+                    "reason_code": "source_reconcile_failed",
+                    "error_type": type(exc).__name__,
+                    "required_action": "Inspect this source; other sources continue and this source will be retried.",
+                },
+            )
         finally:
             if source_succeeded:
                 execution_notifications.update_failure(conn, "source_reconcile_failed", source_key, run_now)

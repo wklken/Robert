@@ -1,5 +1,6 @@
 """Dashboard HTML view."""
 
+
 def render_dashboard_html():
     return r"""<!doctype html>
 <html lang="en">

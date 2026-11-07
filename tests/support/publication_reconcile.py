@@ -1,4 +1,5 @@
 """Shared fixtures for publication reconcile tests."""
+
 import json
 import sqlite3
 import tempfile
@@ -26,9 +27,7 @@ class PublicationReconcileFixture(unittest.TestCase):
             "repo": "x/y",
             "sources": [{"source_type": "issue", "number": 1}],
         }
-        metadata = {
-            "audit": {"status": "accepted", "action_scope": scope}
-        }
+        metadata = {"audit": {"status": "accepted", "action_scope": scope}}
         body = "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\nready"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(

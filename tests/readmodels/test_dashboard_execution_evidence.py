@@ -44,10 +44,7 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
 
         self.assertEqual(data["recent_runs"][0]["run_id"], "run-1")
         self.assertEqual(data["recent_runs"][0]["status"], "failed")
-        steps = {
-            step["step_key"]: step["status"]
-            for step in data["recent_runs"][0]["steps"]
-        }
+        steps = {step["step_key"]: step["status"] for step in data["recent_runs"][0]["steps"]}
         self.assertEqual(steps["validate_config"], "succeeded")
         self.assertEqual(steps["dispatch"], "failed")
         self.assertEqual(steps["summarize"], "skipped")
@@ -196,7 +193,10 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
         self.assertEqual(result["result_id"], "result-1")
         self.assertEqual(result["task_id"], "task-1")
         self.assertEqual(result["consumed_event_fingerprints"], ["comment:1"])
-        self.assertEqual(result["verification"], [{"command": "python -m unittest", "status": "passed"}])
+        self.assertEqual(
+            result["verification"],
+            [{"command": "python -m unittest", "status": "passed"}],
+        )
         self.assertEqual(result["metadata"]["used_skills"], ["fast-code-path"])
         self.assertEqual(result["metadata"]["audit"]["status"], "accepted")
         self.assertEqual(data["used_skill_counts"], {"fast-code-path": 1})

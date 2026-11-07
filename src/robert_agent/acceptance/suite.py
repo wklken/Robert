@@ -117,8 +117,11 @@ def _verify_production_canary_evidence(evidence_url, marker_id, run_command=subp
     except ValueError:
         comment = {}
     body = comment.get("body") if isinstance(comment.get("body"), str) else ""
-    marker = (f"attempt_id=attempt-production-canary-{marker_id} action_index=0"
-              if marker_id else "attempt_id=attempt-production-canary-")
+    marker = (
+        f"attempt_id=attempt-production-canary-{marker_id} action_index=0"
+        if marker_id
+        else "attempt_id=attempt-production-canary-"
+    )
     if marker not in body:
         return {
             "ok": False,
@@ -184,11 +187,7 @@ def acceptance_suite(
 
     required_safe_checks = ordered + (["live_worker"] if include_live_worker else [])
     safe_acceptance_ok = all(results[name]["ok"] for name in required_safe_checks)
-    failed_checks = [
-        name
-        for name in required_safe_checks
-        if not results[name]["ok"]
-    ]
+    failed_checks = [name for name in required_safe_checks if not results[name]["ok"]]
     production_write = {
         "ok": False,
         "status": "required",

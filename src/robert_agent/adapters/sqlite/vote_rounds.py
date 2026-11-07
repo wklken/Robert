@@ -1,4 +1,5 @@
 """Durable file handoffs for native vote rounds (SQLite, no agent framework)."""
+
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -61,19 +62,19 @@ def now():
 
 def initialize(conn):
     # execute separately: executescript would commit the caller's transaction.
-    for statement in SCHEMA.split(';'):
+    for statement in SCHEMA.split(";"):
         if statement.strip():
             conn.execute(statement)
-    if 'model' not in {row[1] for row in conn.execute('PRAGMA table_info(vote_runs)')}:
-        conn.execute('ALTER TABLE vote_runs ADD COLUMN model TEXT')
-    columns = {row[1] for row in conn.execute('PRAGMA table_info(vote_runs)')}
-    if 'slot_reserved' not in columns:
-        conn.execute('ALTER TABLE vote_runs ADD COLUMN slot_reserved INTEGER NOT NULL DEFAULT 0')
+    if "model" not in {row[1] for row in conn.execute("PRAGMA table_info(vote_runs)")}:
+        conn.execute("ALTER TABLE vote_runs ADD COLUMN model TEXT")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(vote_runs)")}
+    if "slot_reserved" not in columns:
+        conn.execute("ALTER TABLE vote_runs ADD COLUMN slot_reserved INTEGER NOT NULL DEFAULT 0")
         # Existing children remain counted until their process groups are
         # proven to have exited, including ambiguous starts.
         conn.execute("UPDATE vote_runs SET slot_reserved=1 WHERE status IN ('starting','running')")
-    if 'started_at' not in columns:
-        conn.execute('ALTER TABLE vote_runs ADD COLUMN started_at TEXT')
+    if "started_at" not in columns:
+        conn.execute("ALTER TABLE vote_runs ADD COLUMN started_at TEXT")
         conn.execute("UPDATE vote_runs SET started_at=created_at WHERE status IN ('starting','running')")
 
     # Build after legacy columns are upgraded, not in the initial schema loop.
@@ -84,7 +85,7 @@ def initialize(conn):
 def connect(db_path):
     with closing(sqlite3.connect(db_path, timeout=10)) as conn, conn:
         conn.row_factory = sqlite3.Row
-        conn.execute('PRAGMA foreign_keys=ON')
+        conn.execute("PRAGMA foreign_keys=ON")
         yield conn
 
 
@@ -96,9 +97,9 @@ def decode(row):
     if row is None:
         return None
     result = dict(row)
-    for field in ('request_json', 'manifest_json', 'dispatch_json', 'artifact_json'):
+    for field in ("request_json", "manifest_json", "dispatch_json", "artifact_json"):
         if field in result:
-            result[field[:-5]] = json.loads(result.pop(field) or '{}')
+            result[field[:-5]] = json.loads(result.pop(field) or "{}")
     return result
 
 
@@ -106,128 +107,192 @@ def session(conn, *, round_id=None, task_id=None):
     # Do not change a caller's row_factory.
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vote_sessions'").fetchone():
         return None
-    cursor = conn.execute('SELECT * FROM vote_sessions WHERE ' +
-                          ('round_id=?' if round_id else 'task_id=?'),
-                          (round_id or task_id,))
+    cursor = conn.execute(
+        "SELECT * FROM vote_sessions WHERE " + ("round_id=?" if round_id else "task_id=?"),
+        (round_id or task_id,),
+    )
     row = cursor.fetchone()
     return decode(dict(zip([c[0] for c in cursor.description], row))) if row else None
 
 
 def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
-    trigger = event['event_fingerprint'] + (':recovery:' + recovery_key if recovery_key else '')
+    trigger = event["event_fingerprint"] + (":recovery:" + recovery_key if recovery_key else "")
     key = f"{repo['full_name']}:{event['source_type']}:{event['number']}:{trigger}"
-    round_id = 'vote-' + hashlib.sha256(key.encode()).hexdigest()[:24]
+    round_id = "vote-" + hashlib.sha256(key.encode()).hexdigest()[:24]
     request = {
-        'repo': dict(repo), 'event': dict(event), 'route': dict(route),
-        'workers': [dict(worker) for worker in workers],
+        "repo": dict(repo),
+        "event": dict(event),
+        "route": dict(route),
+        "workers": [dict(worker) for worker in workers],
     }
     timestamp = now()
-    conn.execute('''INSERT OR IGNORE INTO vote_sessions(
+    conn.execute(
+        """INSERT OR IGNORE INTO vote_sessions(
         round_id,repo,number,source_type,workstream_id,trigger_fingerprint,request_json,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?)''',
-        (round_id, repo['full_name'], event['number'], event['source_type'], event['workstream_id'],
-         trigger, json.dumps(request, ensure_ascii=False), timestamp, timestamp))
+        VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            round_id,
+            repo["full_name"],
+            event["number"],
+            event["source_type"],
+            event["workstream_id"],
+            trigger,
+            json.dumps(request, ensure_ascii=False),
+            timestamp,
+            timestamp,
+        ),
+    )
     return session(conn, round_id=round_id)
 
 
 def update(conn, round_id, **fields):
-    allowed = {'task_id', 'status', 'manifest_json', 'report_path', 'report_sha256', 'error', 'request_json'}
+    allowed = {
+        "task_id",
+        "status",
+        "manifest_json",
+        "report_path",
+        "report_sha256",
+        "error",
+        "request_json",
+    }
     if not fields or set(fields) - allowed:
-        raise ValueError('invalid review session update')
-    fields['updated_at'] = now()
-    conn.execute('UPDATE vote_sessions SET ' + ','.join(f'{key}=?' for key in fields)
-                 + ' WHERE round_id=?', [*fields.values(), round_id])
+        raise ValueError("invalid review session update")
+    fields["updated_at"] = now()
+    conn.execute(
+        "UPDATE vote_sessions SET " + ",".join(f"{key}=?" for key in fields) + " WHERE round_id=?",
+        [*fields.values(), round_id],
+    )
 
 
 def runs(conn, round_id):
-    cursor = conn.execute('SELECT * FROM vote_runs WHERE round_id=? ORDER BY created_at,run_id', (round_id,))
+    cursor = conn.execute(
+        "SELECT * FROM vote_runs WHERE round_id=? ORDER BY created_at,run_id",
+        (round_id,),
+    )
     names = [col[0] for col in cursor.description]
     return [decode(dict(zip(names, row))) for row in cursor]
 
 
 def new_run(conn, round_id, stage, worker_id, owner_attempt_id, root, prompt_sha256, model=None):
-    attempt_no = conn.execute('''SELECT COALESCE(MAX(attempt_no),0)+1 FROM vote_runs
-        WHERE round_id=? AND stage=? AND worker_id=?''', (round_id, stage, worker_id)).fetchone()[0]
-    output_dir = Path(root) / ('runs' if stage == 'vote' else stage)
-    if stage == 'vote':
+    attempt_no = conn.execute(
+        """SELECT COALESCE(MAX(attempt_no),0)+1 FROM vote_runs
+        WHERE round_id=? AND stage=? AND worker_id=?""",
+        (round_id, stage, worker_id),
+    ).fetchone()[0]
+    output_dir = Path(root) / ("runs" if stage == "vote" else stage)
+    if stage == "vote":
         # Worker names are arbitrary config keys, never path components.
         output_dir /= hashlib.sha256(worker_id.encode()).hexdigest()[:16]
     # A rolled-back INSERT can leave its directory behind. Never reuse those
     # unregistered outputs, even when the next database attempt number is equal.
-    run_id, timestamp = 'vote-run-' + uuid4().hex, now()
-    output_dir /= f'attempt-{attempt_no}-{run_id}'
+    run_id, timestamp = "vote-run-" + uuid4().hex, now()
+    output_dir /= f"attempt-{attempt_no}-{run_id}"
     output_dir.mkdir(parents=True, exist_ok=False)
-    conn.execute('''INSERT INTO vote_runs(run_id,round_id,stage,worker_id,model,attempt_no,
+    conn.execute(
+        """INSERT INTO vote_runs(run_id,round_id,stage,worker_id,model,attempt_no,
         owner_attempt_id,status,output_dir,prompt_sha256,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,'prepared',?,?,?,?)''',
-        (run_id, round_id, stage, worker_id, model, attempt_no, owner_attempt_id,
-         str(output_dir.resolve()), prompt_sha256, timestamp, timestamp))
-    return next(run for run in runs(conn, round_id) if run['run_id'] == run_id)
+        VALUES (?,?,?,?,?,?,?,'prepared',?,?,?,?)""",
+        (
+            run_id,
+            round_id,
+            stage,
+            worker_id,
+            model,
+            attempt_no,
+            owner_attempt_id,
+            str(output_dir.resolve()),
+            prompt_sha256,
+            timestamp,
+            timestamp,
+        ),
+    )
+    return next(run for run in runs(conn, round_id) if run["run_id"] == run_id)
 
 
 def update_run(conn, run_id, **fields):
-    allowed = {'status', 'dispatch_json', 'artifact_json', 'error', 'slot_reserved'}
+    allowed = {"status", "dispatch_json", "artifact_json", "error", "slot_reserved"}
     if not fields or set(fields) - allowed:
-        raise ValueError('invalid review run update')
-    fields['updated_at'] = now()
-    conn.execute('UPDATE vote_runs SET ' + ','.join(f'{key}=?' for key in fields)
-                 + ' WHERE run_id=?', [*fields.values(), run_id])
+        raise ValueError("invalid review run update")
+    fields["updated_at"] = now()
+    conn.execute(
+        "UPDATE vote_runs SET " + ",".join(f"{key}=?" for key in fields) + " WHERE run_id=?",
+        [*fields.values(), run_id],
+    )
 
 
 def process_pool_status(conn):
     from robert_agent.adapters.sqlite import model_pool
+
     return model_pool.status(conn)
 
 
 def reserved_runs(conn):
-    cursor = conn.execute('SELECT * FROM vote_runs WHERE slot_reserved=1')
+    cursor = conn.execute("SELECT * FROM vote_runs WHERE slot_reserved=1")
     names = [column[0] for column in cursor.description]
     return [decode(dict(zip(names, row))) for row in cursor]
 
 
 def reserve_slot(conn, run_id):
     from robert_agent.adapters.sqlite import model_pool
-    return model_pool.reserve(conn, 'vote_runs', run_id, now())
+
+    return model_pool.reserve(conn, "vote_runs", run_id, now())
 
 
 def release_slot(conn, run_id):
-    conn.execute('UPDATE vote_runs SET slot_reserved=0 WHERE run_id=?', (run_id,))
+    conn.execute("UPDATE vote_runs SET slot_reserved=0 WHERE run_id=?", (run_id,))
 
 
 def can_abandon(run):
-    return run['status'] == 'starting' and not run['dispatch'] and bool(run.get('slot_reserved'))
+    return run["status"] == "starting" and not run["dispatch"] and bool(run.get("slot_reserved"))
 
 
 def task_status(conn, task_id):
     entry = session(conn, task_id=task_id)
     if not entry:
         return None
-    return {key: value for key, value in entry.items() if key != 'request'} | {
-        'process_pool': process_pool_status(conn),
-        'runs': [{key: value for key, value in run.items() if key != 'dispatch'}
-                 for run in runs(conn, entry['round_id'])]}
+    return {key: value for key, value in entry.items() if key != "request"} | {
+        "process_pool": process_pool_status(conn),
+        "runs": [
+            {key: value for key, value in run.items() if key != "dispatch"} for run in runs(conn, entry["round_id"])
+        ],
+    }
 
 
 def board_status(conn, task_id):
     """Only bounded public status; no filesystem paths, environment or raw logs."""
     from robert_agent.security.text import safe_text
+
     entry = session(conn, task_id=task_id)
     if not entry:
         return None
-    manifest = entry['manifest']
-    return {'round_id': entry['round_id'], 'status': entry['status'], 'kind': 'vote',
-            'process_pool': process_pool_status(conn),
-            'head_sha': manifest.get('head_sha'), 'base_ref': manifest.get('base_ref'),
-            'error': safe_text(entry['error'] or ''),
-            'runs': [{'run_id': run['run_id'], 'can_abandon': can_abandon(run),
-                      'stage': run['stage'], 'worker_id': safe_text(run['worker_id']),
-                      'model': safe_text(run['model'] or ''),
-                      'slot_reserved': bool(run['slot_reserved']) if 'slot_reserved' in run else None,
-                      'attempt_no': run['attempt_no'], 'status': run['status'],
-                      'error': safe_text(run['error'] or '')}
-                     for run in runs(conn, entry['round_id'])]}
+    manifest = entry["manifest"]
+    return {
+        "round_id": entry["round_id"],
+        "status": entry["status"],
+        "kind": "vote",
+        "process_pool": process_pool_status(conn),
+        "head_sha": manifest.get("head_sha"),
+        "base_ref": manifest.get("base_ref"),
+        "error": safe_text(entry["error"] or ""),
+        "runs": [
+            {
+                "run_id": run["run_id"],
+                "can_abandon": can_abandon(run),
+                "stage": run["stage"],
+                "worker_id": safe_text(run["worker_id"]),
+                "model": safe_text(run["model"] or ""),
+                "slot_reserved": bool(run["slot_reserved"]) if "slot_reserved" in run else None,
+                "attempt_no": run["attempt_no"],
+                "status": run["status"],
+                "error": safe_text(run["error"] or ""),
+            }
+            for run in runs(conn, entry["round_id"])
+        ],
+    }
 
 
 def release_finished_slot(conn, run):
-    conn.execute("UPDATE vote_runs SET slot_reserved=0 WHERE run_id=? AND updated_at=?",
-                 (run['run_id'], run['updated_at']))
+    conn.execute(
+        "UPDATE vote_runs SET slot_reserved=0 WHERE run_id=? AND updated_at=?",
+        (run["run_id"], run["updated_at"]),
+    )

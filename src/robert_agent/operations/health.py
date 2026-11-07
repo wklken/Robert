@@ -10,7 +10,7 @@ import sqlite3
 def _control_failure_snapshot(conn, limit):
     """Track separate control lanes so a healthy drain cannot hide a dead scan."""
     streaks, recovered = {}, set()
-    for lane in ('scan', 'local', 'publish', 'context_refresh'):
+    for lane in ("scan", "local", "publish", "context_refresh"):
         events = conn.execute(
             """SELECT daemon_event_id,status FROM daemon_events
             WHERE ((status='failed' AND (json_type(metadata_json,'$.control_lane')='text'
@@ -22,10 +22,11 @@ def _control_failure_snapshot(conn, limit):
                   CASE WHEN json_extract(metadata_json,'$.context_refresh')=1 THEN 'context_refresh'
                        WHEN event_type='local_drain_completed' THEN 'local'
                        WHEN event_type='publish_completed' THEN 'publish' ELSE 'scan' END)=?
-            ORDER BY created_at DESC,daemon_event_id DESC LIMIT ?""", (lane, limit),
+            ORDER BY created_at DESC,daemon_event_id DESC LIMIT ?""",
+            (lane, limit),
         ).fetchall()
         for identifier, status in events:
-            if status != 'failed':
+            if status != "failed":
                 if not streaks.get(lane):
                     recovered.add(lane)
                 break
@@ -35,38 +36,54 @@ def _control_failure_snapshot(conn, limit):
     runs = conn.execute(
         """SELECT run_id,status,error_json FROM agent_runs
         WHERE status IN ('completed','failed')
-        ORDER BY COALESCE(finished_at,started_at) DESC,run_id DESC LIMIT ?""", (limit,),
+        ORDER BY COALESCE(finished_at,started_at) DESC,run_id DESC LIMIT ?""",
+        (limit,),
     ).fetchall()
     for identifier, status, encoded in runs:
-        if status != 'failed' or json.loads(encoded or '{}').get('status') != 'executor_interrupted':
-            if not streaks.get('executor'):
-                recovered.add('executor')
+        if status != "failed" or json.loads(encoded or "{}").get("status") != "executor_interrupted":
+            if not streaks.get("executor"):
+                recovered.add("executor")
             break
-        streaks.setdefault('executor', []).append(identifier)
+        streaks.setdefault("executor", []).append(identifier)
     return streaks, recovered
 
 
 def _persist_control_failure_alerts(conn, now, streaks, recovered, *, supervision_owns_alerts=False):
-    for lane in {'scan', 'local', 'publish', 'context_refresh', 'executor'}:
+    for lane in {"scan", "local", "publish", "context_refresh", "executor"}:
         failures = streaks.get(lane, [])
         existing = conn.execute(
             """SELECT notification_id FROM notifications
             WHERE notification_type='control_plane_failed' AND status!='resolved'
-              AND json_extract(metadata_json,'$.control_lane')=?""", (lane,),
+              AND json_extract(metadata_json,'$.control_lane')=?""",
+            (lane,),
         ).fetchall()
         if not failures and lane in recovered:
             for (identifier,) in existing:
-                conn.execute("UPDATE notifications SET status='resolved' WHERE notification_id=?", (identifier,))
-        elif len(failures) >= 3 and not existing and not (supervision_owns_alerts and lane in {'scan', 'local', 'publish'}):
+                conn.execute(
+                    "UPDATE notifications SET status='resolved' WHERE notification_id=?",
+                    (identifier,),
+                )
+        elif (
+            len(failures) >= 3
+            and not existing
+            and not (supervision_owns_alerts and lane in {"scan", "local", "publish"})
+        ):
             conn.execute(
                 """INSERT OR IGNORE INTO notifications(notification_id,notification_type,
                     channel,status,created_at,metadata_json)
                 VALUES (?,'control_plane_failed','local','recorded',?,?)""",
-                ('notification-control-' + lane + '-' + failures[-1], now, json.dumps({
-                    'control_lane': lane, 'failure_count': len(failures),
-                    'reason_code': 'control_plane_failed',
-                    'required_action': 'Inspect repeated control failures and restore GitHub event processing.',
-                })),
+                (
+                    "notification-control-" + lane + "-" + failures[-1],
+                    now,
+                    json.dumps(
+                        {
+                            "control_lane": lane,
+                            "failure_count": len(failures),
+                            "reason_code": "control_plane_failed",
+                            "required_action": "Inspect repeated control failures and restore GitHub event processing.",
+                        }
+                    ),
+                ),
             )
 
 
@@ -101,15 +118,29 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
             "SELECT count(*) FROM (SELECT notification_id FROM notifications WHERE status='recorded' AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted') LIMIT ?)",
             (limit,),
         ).fetchone()[0]
-        failed_notifications = conn.execute("SELECT count(*) FROM notifications WHERE json_extract(metadata_json,'$.delivery.status')='exhausted'").fetchone()[0]
-        oldest_notification = conn.execute("SELECT MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM notifications WHERE channel='local' AND status NOT IN ('sent','resolved') AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted')", (now,)).fetchone()[0]
-        outbox = conn.execute("SELECT count(*), MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM workflow_outbox WHERE status='pending'", (now,)).fetchone()
+        failed_notifications = conn.execute(
+            "SELECT count(*) FROM notifications WHERE json_extract(metadata_json,'$.delivery.status')='exhausted'"
+        ).fetchone()[0]
+        oldest_notification = conn.execute(
+            "SELECT MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM notifications WHERE channel='local' AND status NOT IN ('sent','resolved') AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted')",
+            (now,),
+        ).fetchone()[0]
+        outbox = conn.execute(
+            "SELECT count(*), MAX(0, (julianday(?)-MIN(julianday(created_at)))*86400) FROM workflow_outbox WHERE status='pending'",
+            (now,),
+        ).fetchone()
         outbox_attention = conn.execute("SELECT count(*) FROM workflow_outbox WHERE status='attention'").fetchone()[0]
     alerts_persisted = True
     try:
         with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
-            _persist_control_failure_alerts(conn, now, streaks, recovered, supervision_owns_alerts=supervision_owns_alerts)
-            for task_id, reason in ([] if supervision_owns_alerts else delayed):
+            _persist_control_failure_alerts(
+                conn,
+                now,
+                streaks,
+                recovered,
+                supervision_owns_alerts=supervision_owns_alerts,
+            )
+            for task_id, reason in [] if supervision_owns_alerts else delayed:
                 conn.execute(
                     """INSERT OR IGNORE INTO notifications(notification_id,task_id,notification_type,channel,status,created_at,metadata_json)
                     VALUES (?,?,'execution_delayed','local','recorded',?,?)""",
@@ -126,7 +157,11 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
                     ),
                 )
     except sqlite3.OperationalError as exc:
-        if str(exc) not in {'database is locked', 'database table is locked', 'database schema is locked'}:
+        if str(exc) not in {
+            "database is locked",
+            "database table is locked",
+            "database schema is locked",
+        }:
             raise
         alerts_persisted = False
     wal = Path(str(db_path) + "-wal")
@@ -146,7 +181,5 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
         "pending_outbox": outbox[0],
         "oldest_outbox_seconds": outbox[1],
         "attention_outbox": outbox_attention,
-        "notification_delivery_configured": bool(
-            os.environ.get("ROBERT_NOTIFICATION_COMMAND")
-        ),
+        "notification_delivery_configured": bool(os.environ.get("ROBERT_NOTIFICATION_COMMAND")),
     }

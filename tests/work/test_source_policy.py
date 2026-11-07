@@ -65,12 +65,16 @@ class SourcePolicyTests(unittest.TestCase):
         uncovered = {**pending, "number": 4, "event_fingerprint": "notification:4"}
 
         refreshed = source_policy.refresh_pending_events(
-            [fresh], [stale, pending, uncovered],
+            [fresh],
+            [stale, pending, uncovered],
             {("issue", 2), ("pull_request", 2)},
             {"github_account": "robot", "trusted_actors": ["maintainer"]},
         )
 
-        self.assertEqual([event["event_fingerprint"] for event in refreshed], ["comment:2", "notification:3"])
+        self.assertEqual(
+            [event["event_fingerprint"] for event in refreshed],
+            ["comment:2", "notification:3"],
+        )
         self.assertEqual(refreshed[0]["body"], "fresh evidence")
         self.assertFalse(refreshed[1]["mentions_dd"])
         self.assertFalse(refreshed[1]["trusted_trigger_found"])

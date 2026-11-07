@@ -20,27 +20,19 @@ class WorkerLifecycleWorkflowTests(WorkerLifecycleWorkflowFixture):
         now = "2026-08-02T00:01:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             self.assertEqual(
-                execution_operations.classify_recovery(
-                    conn, "task", "task:test", "attempt:test", evidence, now=now
-                ),
+                execution_operations.classify_recovery(conn, "task", "task:test", "attempt:test", evidence, now=now),
                 "recover_once",
             )
             self.assertEqual(
-                execution_store.get_binding(conn, "task", "task:test")[
-                    "recovery_attempts"
-                ],
+                execution_store.get_binding(conn, "task", "task:test")["recovery_attempts"],
                 1,
             )
             self.assertEqual(
-                execution_operations.classify_recovery(
-                    conn, "task", "task:test", "attempt:test", evidence, now=now
-                ),
+                execution_operations.classify_recovery(conn, "task", "task:test", "attempt:test", evidence, now=now),
                 "attention",
             )
             self.assertEqual(
-                execution_store.get_binding(conn, "task", "task:test")[
-                    "binding_status"
-                ],
+                execution_store.get_binding(conn, "task", "task:test")["binding_status"],
                 "attention",
             )
 
@@ -69,9 +61,7 @@ class WorkerLifecycleWorkflowTests(WorkerLifecycleWorkflowFixture):
                 "continue",
             )
             self.assertEqual(
-                execution_store.get_binding(conn, "task", "task:test")[
-                    "recovery_attempts"
-                ],
+                execution_store.get_binding(conn, "task", "task:test")["recovery_attempts"],
                 0,
             )
 

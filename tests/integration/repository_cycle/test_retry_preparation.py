@@ -10,6 +10,7 @@ from tests.support.repository_cycle import (
 class RetryPreparationTests(RepositoryCycleFixture):
     def test_retry_after_failed_task_includes_original_trigger_as_context(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -22,9 +23,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             attempt_id = conn.execute("SELECT attempt_id FROM attempts").fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,))
             conn.execute(
                 "UPDATE attempts SET status = 'failed', finished_at = ? WHERE attempt_id = ?",
                 ("2026-06-23T04:00:00+00:00", attempt_id),
@@ -66,9 +65,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
 
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            tasks = conn.execute(
-                "SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at"
-            ).fetchall()
+            tasks = conn.execute("SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at").fetchall()
             child_events = conn.execute(
                 """
                 SELECT te.relationship, ge.event_fingerprint
@@ -89,6 +86,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
 
     def test_retry_after_failed_task_keeps_original_trigger_primary(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -101,9 +99,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             attempt_id = conn.execute("SELECT attempt_id FROM attempts").fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,))
             conn.execute(
                 "UPDATE attempts SET status = 'failed', finished_at = ? WHERE attempt_id = ?",
                 ("2026-06-23T04:00:00+00:00", attempt_id),
@@ -145,9 +141,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
 
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            tasks = conn.execute(
-                "SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at"
-            ).fetchall()
+            tasks = conn.execute("SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at").fetchall()
             child_events = conn.execute(
                 """
                 SELECT te.relationship, ge.event_fingerprint
@@ -201,8 +195,11 @@ class RetryPreparationTests(RepositoryCycleFixture):
                 (workstream_id,),
             )
             # This fixture was only prepared in dry-run; no process was launched.
-            conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.dispatch') WHERE task_id=?", (parent_task_id,))
-            execution_ownership.close_terminal_task(conn, parent_task_id, '2026-10-19T00:01:00+00:00')
+            conn.execute(
+                "UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.dispatch') WHERE task_id=?",
+                (parent_task_id,),
+            )
+            execution_ownership.close_terminal_task(conn, parent_task_id, "2026-10-19T00:01:00+00:00")
         context = work_items.CommandContext(
             actor_kind="operator",
             actor_identity="owner",
@@ -219,12 +216,26 @@ class RetryPreparationTests(RepositoryCycleFixture):
         self.assertEqual(queued["status"], "queued")
         with closing(sqlite3.connect(db_path)) as conn, conn:
             self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id))
-            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
-            self.assertTrue(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            self.assertTrue(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            conn.execute("UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?", (parent_task_id,))
-            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            conn.execute("UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?", (parent_task_id,))
+            self.assertFalse(
+                execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id="unrelated")
+            )
+            self.assertTrue(
+                execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued["wakeup_id"])
+            )
+            self.assertTrue(
+                execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued["wakeup_id"])
+            )
+            conn.execute(
+                "UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?",
+                (parent_task_id,),
+            )
+            self.assertFalse(
+                execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued["wakeup_id"])
+            )
+            conn.execute(
+                "UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?",
+                (parent_task_id,),
+            )
         followup_fixture = self.root / "retrigger-followup.json"
         followup_fixture.write_text(
             json.dumps(

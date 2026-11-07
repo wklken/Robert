@@ -9,7 +9,7 @@ setup, use the [coding-agent install guide](agent-install.md) instead.
 ## Requirements
 
 - Linux or macOS. Windows is supported through WSL.
-- Python 3.10 or newer.
+- An upstream-maintained stable Python release, currently 3.11–3.15.
 - Git and GitHub CLI (`gh`) with an authenticated session.
 - At least one local worker command such as Codex.
 - `pipx` is recommended for installation.

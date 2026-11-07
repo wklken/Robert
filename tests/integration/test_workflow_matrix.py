@@ -8,8 +8,15 @@ from tests.support import PACKAGE_ROOT
 
 
 def _new_pr_actions(**_assignment):
-    return [{"type": "push_existing_pr"},
-            {"type": "open_pr", "title": "Fix issue", "body": "Opened PR", "issue_resolution": "complete"}]
+    return [
+        {"type": "push_existing_pr"},
+        {
+            "type": "open_pr",
+            "title": "Fix issue",
+            "body": "Opened PR",
+            "issue_resolution": "complete",
+        },
+    ]
 
 
 def _dd_comment_body(text, **_identity):
@@ -82,6 +89,7 @@ repos:
 
     def run_fixture(self, events, name="events.json"):
         from robert_agent.runtime import cycle as run_once
+
         return run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -115,6 +123,7 @@ repos:
             (task_id,),
         )
         from tests.support.repository_cycle import RepositoryCycleFixture
+
         RepositoryCycleFixture._materialize_worktree(self, worktree_path, branch)
         return _new_pr_actions(
             task_id=task_id,
@@ -230,7 +239,9 @@ repos:
                 (record["result_id"],),
             )
 
-            conn.execute("UPDATE github_actions SET target_url='https://github.com/example/backend/pull/909', external_id='909' WHERE action_type='open_pr'")
+            conn.execute(
+                "UPDATE github_actions SET target_url='https://github.com/example/backend/pull/909', external_id='909' WHERE action_type='open_pr'"
+            )
         audited = self.run_fixture([], name="empty-after-pr.json")
 
         self.assertTrue(audited["ok"], audited)
@@ -336,7 +347,9 @@ repos:
                 "UPDATE github_actions SET publish_status = 'published' WHERE result_id = ?",
                 (record["result_id"],),
             )
-            conn.execute("UPDATE github_actions SET target_url='https://github.com/example/backend/pull/909', external_id='909' WHERE action_type='open_pr'")
+            conn.execute(
+                "UPDATE github_actions SET target_url='https://github.com/example/backend/pull/909', external_id='909' WHERE action_type='open_pr'"
+            )
         audited = self.run_fixture([], name="empty-after-open-pr.json")
         self.assertTrue(audited["ok"], audited)
 
@@ -425,8 +438,8 @@ repos:
                 str(self.worktree_root / "analysis-707"),
             ),
         )
-        self.assertIn("allowed_github_actions: [\"comment\"]", prompt)
-        self.assertNotIn("allowed_github_actions: [\"open_pr\"", prompt)
+        self.assertIn('allowed_github_actions: ["comment"]', prompt)
+        self.assertNotIn('allowed_github_actions: ["open_pr"', prompt)
 
     def test_review_request_creates_source_review_worktree(self):
         result = self.create_review_pr_workstream()
@@ -679,9 +692,9 @@ repos:
                 str(self.worktree_root / "analysis-707"),
             ),
         )
-        self.assertIn("allowed_github_actions: [\"comment\"]", prompt)
-        self.assertNotIn("allowed_github_actions: [\"open_pr\"", prompt)
-        self.assertNotIn("allowed_github_actions: [\"push_existing_pr\"", prompt)
+        self.assertIn('allowed_github_actions: ["comment"]', prompt)
+        self.assertNotIn('allowed_github_actions: ["open_pr"', prompt)
+        self.assertNotIn('allowed_github_actions: ["push_existing_pr"', prompt)
 
     def test_trusted_reply_resumes_waiting_for_user_workflow(self):
         from robert_agent.delivery.application import submission as result
@@ -714,7 +727,11 @@ repos:
                     "consumed_event_fingerprints": ["assigned:assign-issue-101"],
                     "verification": [],
                     "handoff": "waiting for trusted user clarification",
-                    "operator_question": {"kind":"clarification", "summary":"Please confirm the desired behavior.", "choices":[]},
+                    "operator_question": {
+                        "kind": "clarification",
+                        "summary": "Please confirm the desired behavior.",
+                        "choices": [],
+                    },
                     "used_skills": [],
                 },
             },

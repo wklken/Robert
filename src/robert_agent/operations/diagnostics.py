@@ -30,9 +30,7 @@ def _safe_json(payload):
 
 def _config_summary(config_path):
     try:
-        raw = yaml.safe_load(
-            Path(config_path).read_text(encoding="utf-8")
-        )
+        raw = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
     except (OSError, ValueError, yaml.YAMLError):
         raw = {}
     github = raw.get("github") if isinstance(raw, dict) else {}
@@ -40,21 +38,9 @@ def _config_summary(config_path):
     workers = raw.get("workers") if isinstance(raw, dict) else {}
     return {
         "version": raw.get("version") if isinstance(raw, dict) else None,
-        "github_account": (
-            github.get("account")
-            if isinstance(github, dict)
-            else None
-        ),
-        "repositories": [
-            repo.get("full_name")
-            for repo in repos or []
-            if isinstance(repo, dict)
-        ],
-        "workers": (
-            list(workers)
-            if isinstance(workers, dict)
-            else []
-        ),
+        "github_account": (github.get("account") if isinstance(github, dict) else None),
+        "repositories": [repo.get("full_name") for repo in repos or [] if isinstance(repo, dict)],
+        "workers": (list(workers) if isinstance(workers, dict) else []),
     }
 
 
@@ -71,17 +57,13 @@ def _database_payloads(config_path):
     with closing(sqlite3.connect(db_path)) as conn:
         status_payload = status.build_status(db_path)
         runs_payload = status.build_runs(conn, limit=5)
-        row = conn.execute(
-            "SELECT MAX(version) FROM schema_migrations"
-        ).fetchone()
+        row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
     return status_payload, runs_payload, str(row[0] or "unknown")
 
 
 def export_diagnostics(config_path, output_path):
     output = Path(output_path).expanduser()
-    status_payload, runs_payload, schema_version = _database_payloads(
-        config_path
-    )
+    status_payload, runs_payload, schema_version = _database_payloads(config_path)
     files = {
         "manifest.json": _safe_json(
             {
@@ -94,9 +76,7 @@ def export_diagnostics(config_path, output_path):
                 ],
             }
         ),
-        "config-summary.json": _safe_json(
-            _config_summary(config_path)
-        ),
+        "config-summary.json": _safe_json(_config_summary(config_path)),
         "status.json": _safe_json(status_payload),
         "recent-runs.json": _safe_json(runs_payload),
         "schema-version.txt": schema_version,

@@ -4,6 +4,15 @@
 
 ## Setup
 
+Use an upstream-maintained stable Python release. As of 2026-11-07, Robert
+supports Python 3.11–3.15, including branches receiving security fixes only.
+Python 3.10 reached end of life on 2026-10-01 and is no longer supported.
+See the [official Python version status](https://devguide.python.org/versions/).
+
+When a branch reaches EOL, raise `project.requires-python` in `pyproject.toml`
+and update its classifiers, Ruff target, CI matrix and installation guides
+together. Add new stable Python releases to the matrix before claiming support.
+
 ```bash
 git clone https://github.com/wklken/Robert.git
 cd Robert
@@ -29,12 +38,19 @@ Production defaults remain `~/.config/robert/config.yml` and
 Run focused tests first, then the complete gate:
 The Ruff rules and import-linter layer contracts are defined in `pyproject.toml`.
 Install the development extra to run both. Import-linter is a development-only
-dependency; its bounded version keeps the same contract engine on Python 3.10–3.14.
+dependency; its bounded version keeps the same contract engine across the CI matrix.
 The architecture tests additionally reject cycles across the complete module graph.
+
+Ruff is also the Python formatter. Its version is pinned in the development
+extra so local formatting and CI agree. Use the stable style with a 120-column
+line length, double quotes and spaces; Markdown prompt fixtures are excluded.
+Apply formatting with `python3 -m ruff format src tests`, then run the checks below. CI rejects
+formatting drift without modifying files.
 
 ```bash
 python3 -B -m unittest tests.interfaces.cli.test_cli
 python3 -m ruff check src tests
+python3 -m ruff format --check src tests
 python3 -m mypy src/robert_agent/cli src/robert_agent/paths.py \
   src/robert_agent/configuration src/robert_agent/execution/stages.py \
   src/robert_agent/context/skills.py src/robert_agent/adapters/services/native.py
@@ -109,6 +125,8 @@ Release preparation:
 
 ```bash
 python3 -m pip install -e '.[dev]'
+python3 -m ruff check src tests
+python3 -m ruff format --check src tests
 python3 -B -m unittest discover -s tests
 python3 -B -m compileall -q src
 python3 -m build

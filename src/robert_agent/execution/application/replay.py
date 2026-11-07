@@ -16,9 +16,7 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
     pending = execution_store.pending_facts(conn, repo_id, now)
     output = []
     for fact in pending:
-        control = execution_store.get_binding(
-            conn, fact["subject_type"], fact["subject_id"]
-        )
+        control = execution_store.get_binding(conn, fact["subject_type"], fact["subject_id"])
         if not control or control["binding_status"] == "attention":
             continue
         if control["binding_status"] == "terminal":
@@ -33,9 +31,7 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
                     (fact["subject_id"],),
                 ).fetchone()
             if terminal:
-                execution_store.consume_fact(
-                    conn, fact["source_signal_id"], now, reason="subject_terminal"
-                )
+                execution_store.consume_fact(conn, fact["source_signal_id"], now, reason="subject_terminal")
             else:
                 conn.execute(
                     "UPDATE execution_subjects SET binding_status='attention',metadata_json=json_set(metadata_json,'$.reason_code','terminal_execution_domain_mismatch','$.required_action','Inspect task state before resuming migrated events.') WHERE subject_type=? AND subject_id=?",
@@ -72,35 +68,24 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
             if (
                 fact["topic"] != "remediation_decision"
                 or event.get("authorization_status") != "authorized_system_trigger"
-                or ((event.get("metadata") or {}).get("remediation") or {}).get(
-                    "episode_id"
-                )
-                != fact["subject_id"]
+                or ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id") != fact["subject_id"]
             ):
-                execution_store.mark_binding_attention(
-                    conn, fact["subject_type"], fact["subject_id"], now
-                )
+                execution_store.mark_binding_attention(conn, fact["subject_type"], fact["subject_id"], now)
                 continue
             # The regular health collector revalidates snapshot, policy and
             # budgets. Never dispatch an archived system trigger on its own.
             if not any(
                 fresh.get("event_fingerprint") == fact["fact_id"]
-                and ((fresh.get("metadata") or {}).get("remediation") or {}).get(
-                    "episode_id"
-                )
-                == fact["subject_id"]
+                and ((fresh.get("metadata") or {}).get("remediation") or {}).get("episode_id") == fact["subject_id"]
                 for fresh in fresh_system_decisions
             ):
                 continue
             continue  # already present in the freshly validated decision batch
         driving = (
-            work_policies.is_driving_context_event(event)
-            or event.get("authorization_status") == "authorized_trigger"
+            work_policies.is_driving_context_event(event) or event.get("authorization_status") == "authorized_trigger"
         )
         if driving and repo is not None and not work_policies.is_trusted_actor(event, repo):
-            execution_store.mark_binding_attention(
-                conn, fact["subject_type"], fact["subject_id"], now
-            )
+            execution_store.mark_binding_attention(conn, fact["subject_type"], fact["subject_id"], now)
             conn.execute(
                 "UPDATE execution_subjects SET metadata_json=json_set(metadata_json,'$.reason_code','migrated_event_requires_trusted_actor','$.required_action','Review migrated event authorization before retrying.') WHERE subject_type=? AND subject_id=?",
                 (fact["subject_type"], fact["subject_id"]),
@@ -126,8 +111,5 @@ def acknowledge_effects(conn, repo_id, now):
             JOIN tasks t ON t.task_id=te.task_id WHERE ge.event_fingerprint=?""",
             (fact["fact_id"],),
         ).fetchall()
-        if any(
-            task_id != fact["task_id"] or lifecycle in {"queued", "running"}
-            for task_id, lifecycle in linked
-        ):
+        if any(task_id != fact["task_id"] or lifecycle in {"queued", "running"} for task_id, lifecycle in linked):
             execution_store.consume_fact(conn, fact["source_signal_id"], now)

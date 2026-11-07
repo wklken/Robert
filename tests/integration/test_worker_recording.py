@@ -25,7 +25,16 @@ class WorkerRecordingTests(WorkerProtocolFixture):
             output_type="comment_analysis",
             planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
+            verification=[
+                {
+                    "command": "python -m unittest",
+                    "status": "passed",
+                    "purpose": "regression",
+                    "required": False,
+                    "exit_code": 0,
+                    "source": "worker_reported",
+                }
+            ],
             handoff="done",
             used_skills=["fast-code-path"],
         )

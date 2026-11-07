@@ -5,13 +5,15 @@ from datetime import datetime, timedelta, timezone
 from tests.support import PACKAGE_ROOT
 from robert_agent.adapters.processes import worker as cycle_worker
 from tests.support.repository_cycle import (
-    RepositoryCycleFixture, _verification_evidence,
+    RepositoryCycleFixture,
+    _verification_evidence,
 )
 
 
 class DispatchOrderingTests(RepositoryCycleFixture):
     def test_failed_trigger_event_is_not_recreated_without_new_event(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -50,9 +52,9 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         self.assertEqual(second["prompt_paths"], [])
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-            trigger_count = conn.execute(
-                "SELECT COUNT(*) FROM task_events WHERE relationship = 'trigger'"
-            ).fetchone()[0]
+            trigger_count = conn.execute("SELECT COUNT(*) FROM task_events WHERE relationship = 'trigger'").fetchone()[
+                0
+            ]
         self.assertEqual(task_count, 1)
         self.assertEqual(trigger_count, 1)
 
@@ -155,14 +157,36 @@ class DispatchOrderingTests(RepositoryCycleFixture):
                 (str(pr_prompt), now),
             )
 
-            for task, stream, source in [('task-pr', 'github:example/backend!2886', 'source:github:example/backend!2886'),
-                                         ('task-older', 'github:example/backend#2878', 'source:github:example/backend#2878')]:
-                event = {'event_type': 'comment', 'event_fingerprint': task, 'actor_login': 'wklken',
-                         'body': '@robert-bot analyze this', 'workstream_id': stream,
-                         'source_key': stream, 'source_type': 'issue', 'number': 2878}
-                conn.execute("INSERT INTO github_events(event_id,repo_id,source_id,event_fingerprint,event_type,payload_json,event_at) VALUES(?,'repo:example/backend',?,?,'comment',?,?)",
-                             (task, source, task, json.dumps(event), now))
-                conn.execute("INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES(?,?,'trigger',?)", (task, task, now))
+            for task, stream, source in [
+                (
+                    "task-pr",
+                    "github:example/backend!2886",
+                    "source:github:example/backend!2886",
+                ),
+                (
+                    "task-older",
+                    "github:example/backend#2878",
+                    "source:github:example/backend#2878",
+                ),
+            ]:
+                event = {
+                    "event_type": "comment",
+                    "event_fingerprint": task,
+                    "actor_login": "wklken",
+                    "body": "@robert-bot analyze this",
+                    "workstream_id": stream,
+                    "source_key": stream,
+                    "source_type": "issue",
+                    "number": 2878,
+                }
+                conn.execute(
+                    "INSERT INTO github_events(event_id,repo_id,source_id,event_fingerprint,event_type,payload_json,event_at) VALUES(?,'repo:example/backend',?,?,'comment',?,?)",
+                    (task, source, task, json.dumps(event), now),
+                )
+                conn.execute(
+                    "INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES(?,?,'trigger',?)",
+                    (task, task, now),
+                )
 
         calls = []
         original_dispatch = cycle_worker.dispatch_worker
@@ -195,6 +219,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
 
     def test_max_concurrency_blocks_new_dispatch_but_keeps_prepared_task(self):
         from robert_agent.runtime import cycle as run_once
+
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace("max_concurrency: 3", "max_concurrency: 1"),
@@ -256,9 +281,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         self.assertTrue(second["ok"], second)
         self.assertEqual(calls, [])
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            statuses = conn.execute(
-                "SELECT status FROM attempts ORDER BY started_at"
-            ).fetchall()
+            statuses = conn.execute("SELECT status FROM attempts ORDER BY started_at").fetchall()
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         self.assertEqual(statuses, [("running",), ("prepared",)])
         self.assertEqual(task_count, 2)
@@ -266,10 +289,9 @@ class DispatchOrderingTests(RepositoryCycleFixture):
     def test_child_task_dispatch_respects_live_capacity(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         self.config_path.write_text(
-            self.config_path.read_text(encoding="utf-8").replace(
-                "max_concurrency: 3", "max_concurrency: 1"
-            ),
+            self.config_path.read_text(encoding="utf-8").replace("max_concurrency: 3", "max_concurrency: 1"),
             encoding="utf-8",
         )
         first = run_once.run_once(
@@ -283,9 +305,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             repo_id = conn.execute("SELECT repo_id FROM repos").fetchone()[0]
-            parent_task_id, parent_attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            parent_task_id, parent_attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         self.fixture_path.write_text(
             json.dumps(

@@ -51,25 +51,17 @@ class SQLiteMigrationTests(unittest.TestCase):
         self.assertEqual(before, self.db.read_bytes())
         result = sqlite_migration.apply(self.db, plan)
         self.assertTrue(result["ok"], result)
-        self.assertEqual(
-            sqlite_migration.apply(self.db, plan)["status"], "already_applied"
-        )
+        self.assertEqual(sqlite_migration.apply(self.db, plan)["status"], "already_applied")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT recovery_attempts FROM execution_subjects"
-                ).fetchone()[0],
+                conn.execute("SELECT recovery_attempts FROM execution_subjects").fetchone()[0],
                 1,
             )
             self.assertEqual(
-                conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[
-                    0
-                ],
+                conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[0],
                 "terminal",
             )
-            self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "queued"
-            )
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "queued")
             self.assertEqual(
                 conn.execute("SELECT count(*) FROM execution_migrations").fetchone()[0],
                 1,
@@ -82,17 +74,13 @@ class SQLiteMigrationTests(unittest.TestCase):
         self.assertEqual(sqlite_migration.apply(self.db, plan)["status"], "stale_plan")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[
-                    0
-                ],
+                conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[0],
                 "active",
             )
 
     def test_running_worker_unknown_publication_and_v1_are_blockers(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','t',1,'running')"
-            )
+            conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','t',1,'running')")
         self.assertFalse(sqlite_migration.preview(self.db)["ok"])
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE attempts SET status='completed'")
@@ -107,9 +95,7 @@ class SQLiteMigrationTests(unittest.TestCase):
         self.assertTrue(sqlite_migration.apply(self.db, plan)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute(
-                    "SELECT binding_status FROM execution_subjects"
-                ).fetchone()[0],
+                conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
                 "attention",
             )
 
@@ -135,14 +121,10 @@ class SQLiteMigrationTests(unittest.TestCase):
         self.assertFalse(path.exists())
 
     def test_fresh_second_plan_is_also_idempotent(self):
-        self.assertTrue(
-            sqlite_migration.apply(self.db, sqlite_migration.preview(self.db))["ok"]
-        )
+        self.assertTrue(sqlite_migration.apply(self.db, sqlite_migration.preview(self.db))["ok"])
         plan = sqlite_migration.preview(self.db)
         self.assertTrue(plan["ok"], plan)
-        self.assertEqual(
-            sqlite_migration.apply(self.db, plan)["status"], "already_migrated"
-        )
+        self.assertEqual(sqlite_migration.apply(self.db, plan)["status"], "already_migrated")
 
     def test_rejected_spool_is_history_not_a_pending_result(self):
         directory = self.db.parent / (self.db.name + ".results")
@@ -170,9 +152,7 @@ class SQLiteMigrationTests(unittest.TestCase):
             )
         plan = sqlite_migration.preview(self.db)
         self.assertFalse(plan["ok"], plan)
-        self.assertTrue(
-            any(b["reason"].startswith("worker_identity_") for b in plan["blockers"])
-        )
+        self.assertTrue(any(b["reason"].startswith("worker_identity_") for b in plan["blockers"]))
 
     def test_unrelated_control_row_does_not_authorize_dbos_startup(self):
         from robert_agent.adapters.sqlite import execution_control as execution_store
@@ -225,22 +205,16 @@ class SQLiteMigrationTests(unittest.TestCase):
             self.assertEqual(json.loads(row[3]), event)
             self.assertIsNone(row[4])
             self.assertEqual(
-                conn.execute(
-                    "SELECT count(*) FROM workflow_signal_receipts"
-                ).fetchone()[0],
+                conn.execute("SELECT count(*) FROM workflow_signal_receipts").fetchone()[0],
                 0,
             )
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM wakeups").fetchone()[0], 1
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM wakeups").fetchone()[0], 1)
 
     def test_writer_lock_refuses_apply(self):
         plan = sqlite_migration.preview(self.db)
         with closing(sqlite3.connect(self.db)) as writer:
             writer.execute("BEGIN IMMEDIATE")
-            self.assertEqual(
-                sqlite_migration.apply(self.db, plan)["status"], "database_busy"
-            )
+            self.assertEqual(sqlite_migration.apply(self.db, plan)["status"], "database_busy")
 
     def test_cli_preview_creates_private_plan_and_refuses_overwrite(self):
         from contextlib import redirect_stdout
@@ -281,7 +255,9 @@ class SQLiteMigrationTests(unittest.TestCase):
 
     def test_running_standalone_cycle_blocks_handoff(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute("INSERT INTO agent_runs(run_id,status,started_at,config_path,dry_run) VALUES ('live','running','now','config',0)")
+            conn.execute(
+                "INSERT INTO agent_runs(run_id,status,started_at,config_path,dry_run) VALUES ('live','running','now','config',0)"
+            )
         plan = sqlite_migration.preview(self.db)
         self.assertFalse(plan["ok"])
         self.assertTrue(any(b.get("run_id") == "live" for b in plan["blockers"]), plan)
@@ -300,11 +276,21 @@ class SQLiteMigrationTests(unittest.TestCase):
         from robert_agent.adapters.sqlite import execution_control as execution_store
 
         plan = sqlite_migration.preview(self.db)
-        with patch.object(execution_store, "record_historical_facts", side_effect=RuntimeError("injected failure")):
+        with patch.object(
+            execution_store,
+            "record_historical_facts",
+            side_effect=RuntimeError("injected failure"),
+        ):
             with self.assertRaisesRegex(RuntimeError, "injected failure"):
                 sqlite_migration.apply(self.db, plan)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[0], "active")
+            self.assertEqual(
+                conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[0],
+                "active",
+            )
             self.assertEqual(conn.execute("SELECT count(*) FROM execution_subjects").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT count(*) FROM execution_migrations").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM execution_migrations").fetchone()[0],
+                0,
+            )
         self.assertTrue(sqlite_migration.apply(self.db, plan)["ok"])

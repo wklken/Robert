@@ -23,6 +23,7 @@ def _empty_discovery(args):
 class GitHubEventMatrixTests(unittest.TestCase):
     def collect_normalized(self, fake_runner, known_workstreams=None):
         from robert_agent.adapters.github import discovery as discover
+
         raw_events = discover.collect_live_events(
             REPO_CONFIG,
             runner=fake_runner,
@@ -32,6 +33,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
     def collect_decisions(self, fake_runner, known_workstreams=None):
         from robert_agent.security import authorization as authorize
+
         events = self.collect_normalized(
             fake_runner,
             known_workstreams=known_workstreams,
@@ -374,13 +376,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
         events = self.collect_normalized(fake_runner)
 
         self.assertEqual(events, [])
-        self.assertFalse(
-            any(
-                call[:3]
-                == ["gh", "api", "repos/example/backend/issues/3105/comments"]
-                for call in calls
-            )
-        )
+        self.assertFalse(any(call[:3] == ["gh", "api", "repos/example/backend/issues/3105/comments"] for call in calls))
 
 
 if __name__ == "__main__":

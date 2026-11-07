@@ -1,4 +1,5 @@
 """Transactional human review of runtime knowledge candidates."""
+
 from contextlib import closing
 import sqlite3
 from robert_agent.context import knowledge

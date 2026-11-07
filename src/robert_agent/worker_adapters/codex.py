@@ -32,14 +32,14 @@ def build_launch(
         command.extend(["--model", model])
     command.extend(
         [
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--sandbox",
-        "danger-full-access",
-        "--json",
-        "--cd",
-        str(cwd),
-        "--add-dir",
-        str(prompt_path.parent),
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--sandbox",
+            "danger-full-access",
+            "--json",
+            "--cd",
+            str(cwd),
+            "--add-dir",
+            str(prompt_path.parent),
         ]
     )
     if worktree_path:

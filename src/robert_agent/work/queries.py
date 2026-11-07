@@ -1,4 +1,5 @@
 """Read task and source facts without importing the runtime driver."""
+
 import json
 
 
@@ -66,13 +67,26 @@ def task_related_events(conn, task_id, include_consumed=False):
         else:
             events.append(event)
     # Enrich recovery content while retaining the original trigger authority.
-    metadata = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
-    refreshed = json.loads(metadata[0] or '{}').get('refreshed_context', []) if metadata else []
-    by_fingerprint = {item['event_fingerprint']: item for item in refreshed}
+    metadata = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    refreshed = json.loads(metadata[0] or "{}").get("refreshed_context", []) if metadata else []
+    by_fingerprint = {item["event_fingerprint"]: item for item in refreshed}
     for event in events + consumed_events:
-        snapshot = by_fingerprint.get(event.get('event_fingerprint'), {})
-        event.update({key: snapshot[key] for key in ('body', 'title', 'source_updated_at',
-            'body_observed', 'body_updated_at', 'source_body', 'operator_responses') if key in snapshot})
+        snapshot = by_fingerprint.get(event.get("event_fingerprint"), {})
+        event.update(
+            {
+                key: snapshot[key]
+                for key in (
+                    "body",
+                    "title",
+                    "source_updated_at",
+                    "body_observed",
+                    "body_updated_at",
+                    "source_body",
+                    "operator_responses",
+                )
+                if key in snapshot
+            }
+        )
     return events + consumed_events
 
 

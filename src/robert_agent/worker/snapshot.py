@@ -1,4 +1,5 @@
 """Worker snapshot command-line boundary."""
+
 import argparse
 from robert_agent.execution import progress as implementation
 from robert_agent.foundation.commands import emit
@@ -25,14 +26,18 @@ def main(argv=None):
             next_step=args.next_step,
         )
     else:
-        result = {"ok": True, "status": "built", "snapshot": implementation.build_snapshot(
-            task_id=args.task_id,
-            attempt_id=args.attempt_id,
-            phase=args.phase,
-            status=args.status,
-            summary=args.summary,
-            next_step=args.next_step,
-        )}
+        result = {
+            "ok": True,
+            "status": "built",
+            "snapshot": implementation.build_snapshot(
+                task_id=args.task_id,
+                attempt_id=args.attempt_id,
+                phase=args.phase,
+                status=args.status,
+                summary=args.summary,
+                next_step=args.next_step,
+            ),
+        }
     return emit(result)
 
 

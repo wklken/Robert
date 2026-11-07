@@ -4,13 +4,16 @@ import sqlite3
 from datetime import datetime, timezone
 from tests.support import PACKAGE_ROOT
 from tests.support.repository_cycle import (
-    RepositoryCycleFixture, _Completed, _verification_evidence,
+    RepositoryCycleFixture,
+    _Completed,
+    _verification_evidence,
 )
 
 
 class FollowupIntakeTests(RepositoryCycleFixture):
     def test_existing_workstream_followup_is_context_not_new_task(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -51,17 +54,19 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             relationships = {
-                row[0]
-                for row in conn.execute("SELECT relationship FROM task_events ORDER BY relationship")
+                row[0] for row in conn.execute("SELECT relationship FROM task_events ORDER BY relationship")
             }
         self.assertEqual(task_count, 1)
         self.assertEqual(relationships, {"context", "trigger"})
         with closing(sqlite3.connect(db_path)) as conn:
-            event = conn.execute("SELECT authorization_status FROM github_events WHERE event_fingerprint='comment:comment-2'").fetchone()
+            event = conn.execute(
+                "SELECT authorization_status FROM github_events WHERE event_fingerprint='comment:comment-2'"
+            ).fetchone()
         self.assertEqual(event, ("context_only",))
 
     def test_existing_workstream_followup_without_mention_is_ignored(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -102,8 +107,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             relationships = {
-                row[0]
-                for row in conn.execute("SELECT relationship FROM task_events ORDER BY relationship")
+                row[0] for row in conn.execute("SELECT relationship FROM task_events ORDER BY relationship")
             }
             event_status = conn.execute(
                 """
@@ -118,6 +122,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
 
     def test_active_issue_workstream_does_not_capture_pr_followup_task(self):
         from robert_agent.runtime import cycle as run_once
+
         issue_fixture = self.root / "issue.json"
         issue_fixture.write_text(
             json.dumps(
@@ -184,12 +189,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         self.assertTrue(second["ok"], second)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            workstream_ids = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT workstream_id FROM tasks ORDER BY created_at"
-                )
-            ]
+            workstream_ids = [row[0] for row in conn.execute("SELECT workstream_id FROM tasks ORDER BY created_at")]
         self.assertEqual(
             workstream_ids,
             [
@@ -200,6 +200,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
 
     def test_member_context_on_known_inactive_pr_workstream_does_not_create_task(self):
         from robert_agent.runtime import cycle as run_once
+
         db_path = self.data_dir / "dd.sqlite3"
         initial = run_once.run_once(
             self.config_path,
@@ -292,6 +293,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
 
     def test_trusted_context_on_known_inactive_pr_workstream_creates_new_task(self):
         from robert_agent.runtime import cycle as run_once
+
         db_path = self.data_dir / "dd.sqlite3"
         initial = run_once.run_once(
             self.config_path,
@@ -377,6 +379,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
     def test_issue_to_pr_review_followup_keeps_workstreams_separate(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         def fake_issue_runner(args, **_kwargs):
             if args[:3] == ["gh", "search", "issues"] and "--assignee" in args:
                 return _Completed(args, "[]")
@@ -440,9 +443,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         self.assertTrue(issue_run["ok"], issue_run)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            issue_task_id, issue_attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            issue_task_id, issue_attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         record = result.record_result(
             db_path,
@@ -471,7 +472,9 @@ class FollowupIntakeTests(RepositoryCycleFixture):
                 (record["result_id"],),
             )
 
-            conn.execute("UPDATE github_actions SET target_url='https://github.com/example/backend/pull/456', external_id='456' WHERE action_type='open_pr'")
+            conn.execute(
+                "UPDATE github_actions SET target_url='https://github.com/example/backend/pull/456', external_id='456' WHERE action_type='open_pr'"
+            )
 
         finalized = run_once.run_once(
             self.config_path,

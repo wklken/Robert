@@ -24,20 +24,35 @@ class PackageLayoutTests(unittest.TestCase):
                 self.assertIsNotNone(importlib.import_module(module_name))
 
     def test_documented_recovery_modules_remain_executable(self):
-        for module in ('runtime.scan', 'runtime.control'):
+        for module in ("runtime.scan", "runtime.control"):
             with self.subTest(module=module):
-                result = subprocess.run([sys.executable, '-m', 'robert_agent.' + module, '--help'],
-                                        capture_output=True, text=True, timeout=10)
+                result = subprocess.run(
+                    [sys.executable, "-m", "robert_agent." + module, "--help"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_background_scan_script_ignores_checkout_package(self):
         from robert_agent.runtime import daemon
+
         with tempfile.TemporaryDirectory() as temporary:
-            shadow = Path(temporary) / 'robert_agent'
+            shadow = Path(temporary) / "robert_agent"
             shadow.mkdir()
-            (shadow / '__init__.py').write_text('raise RuntimeError("untrusted checkout imported")')
-            result = subprocess.run([sys.executable, '-B', daemon._script_path('runtime/scan.py'), '--help'],
-                                    cwd=temporary, capture_output=True, text=True, timeout=10)
+            (shadow / "__init__.py").write_text('raise RuntimeError("untrusted checkout imported")')
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    daemon._script_path("runtime/scan.py"),
+                    "--help",
+                ],
+                cwd=temporary,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_packaged_workflow_exists(self):

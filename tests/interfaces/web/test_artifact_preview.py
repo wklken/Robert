@@ -6,6 +6,7 @@ from tests.support.summary_database import SummaryFixture
 class ArtifactPreviewHTTPTests(SummaryFixture):
     def test_web_serves_registered_text_artifact_preview(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         log_path = self.root / "worker.stderr.log"
@@ -32,6 +33,7 @@ class ArtifactPreviewHTTPTests(SummaryFixture):
 
     def test_web_rejects_unregistered_artifact_preview(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 

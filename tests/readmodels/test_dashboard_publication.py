@@ -13,10 +13,7 @@ class DashboardPublicationTests(DashboardFixture):
         task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
         self.assertEqual(task["operator_state"], "needs_attention")
         self.assertEqual(task["next_action"], "inspect_github_publish_failure")
-        steps = {
-            (step["target_kind"], step["target_id"]): step
-            for step in data["operator_next_steps"]
-        }
+        steps = {(step["target_kind"], step["target_id"]): step for step in data["operator_next_steps"]}
         self.assertEqual(
             steps[("task", "task-1")],
             {
@@ -32,7 +29,13 @@ class DashboardPublicationTests(DashboardFixture):
                 "reason": "needs_attention",
                 "notification_type": "github_publish_failed",
                 "safe_error": "gh: authentication failed",
-                "command": ["gh", "api", "repos/x/y/issues/1/comments", "-f", "body=ready"],
+                "command": [
+                    "gh",
+                    "api",
+                    "repos/x/y/issues/1/comments",
+                    "-f",
+                    "body=ready",
+                ],
             },
         )
 
@@ -44,10 +47,7 @@ class DashboardPublicationTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        steps = {
-            (step["target_kind"], step["target_id"]): step
-            for step in data["operator_next_steps"]
-        }
+        steps = {(step["target_kind"], step["target_id"]): step for step in data["operator_next_steps"]}
         self.assertEqual(steps[("task", "task-1")]["notification_type"], "github_publish_failed")
         self.assertEqual(steps[("task", "task-1")]["safe_error"], "gh: authentication failed")
         self.assertEqual(
@@ -65,12 +65,12 @@ class DashboardPublicationTests(DashboardFixture):
         task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
         self.assertEqual(task["operator_state"], "needs_attention")
         self.assertEqual(task["next_action"], "inspect_github_publish_skipped")
-        steps = {
-            (step["target_kind"], step["target_id"]): step
-            for step in data["operator_next_steps"]
-        }
+        steps = {(step["target_kind"], step["target_id"]): step for step in data["operator_next_steps"]}
         self.assertEqual(steps[("task", "task-1")]["notification_type"], "github_publish_skipped")
-        self.assertEqual(steps[("task", "task-1")]["safe_error"], "publisher does not support action_type close_issue")
+        self.assertEqual(
+            steps[("task", "task-1")]["safe_error"],
+            "publisher does not support action_type close_issue",
+        )
 
     def test_web_waiting_for_user_with_unpublished_question_waits_for_publish(self):
         db_path = self.root / "dd.sqlite3"
@@ -95,8 +95,5 @@ class DashboardPublicationTests(DashboardFixture):
         self.assertEqual(task["next_action"], "none")
         self.assertNotIn(
             ("task", "task-1"),
-            {
-                (step["target_kind"], step["target_id"])
-                for step in data["operator_next_steps"]
-            },
+            {(step["target_kind"], step["target_id"]) for step in data["operator_next_steps"]},
         )

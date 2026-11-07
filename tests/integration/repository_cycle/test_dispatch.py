@@ -17,11 +17,21 @@ class CycleDispatchTests(RepositoryCycleFixture):
         from unittest.mock import patch
         from robert_agent.runtime import cycle as run_once
 
-        with patch.object(assigned_workspace, 'prepare_worktree', return_value={
-            "ok": False, "status": "blocked_dirty_worktree", "worktree_path": "/unmanaged",
-        }):
-            result = run_once.run_once(self.config_path, fixture_path=self.fixture_path,
-                                       dry_run=True, skip_external=True)
+        with patch.object(
+            assigned_workspace,
+            "prepare_worktree",
+            return_value={
+                "ok": False,
+                "status": "blocked_dirty_worktree",
+                "worktree_path": "/unmanaged",
+            },
+        ):
+            result = run_once.run_once(
+                self.config_path,
+                fixture_path=self.fixture_path,
+                dry_run=True,
+                skip_external=True,
+            )
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["dispatch_count"], 0)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
@@ -29,6 +39,7 @@ class CycleDispatchTests(RepositoryCycleFixture):
 
     def test_live_run_dispatches_existing_prepared_attempt(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -80,8 +91,11 @@ class CycleDispatchTests(RepositoryCycleFixture):
         self.assertGreater(datetime.fromisoformat(started_at), datetime.fromisoformat(old))
         self.assertGreater(datetime.fromisoformat(heartbeat_at), datetime.fromisoformat(old))
 
-    def test_live_run_prepares_missing_worktree_before_dispatching_prepared_attempt(self):
+    def test_live_run_prepares_missing_worktree_before_dispatching_prepared_attempt(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -95,7 +109,10 @@ class CycleDispatchTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             attempt_id = conn.execute("SELECT attempt_id FROM attempts").fetchone()[0]
             planned_worktree = Path(
-                conn.execute("SELECT worktree_path FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()[0]
+                conn.execute(
+                    "SELECT worktree_path FROM attempts WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()[0]
             )
         self.assertFalse(planned_worktree.exists())
         calls = []
@@ -165,8 +182,9 @@ class CycleDispatchTests(RepositoryCycleFixture):
 
     def test_live_run_passes_configured_worker_command_to_dispatch(self):
         from robert_agent.runtime import cycle as run_once
+
         config = yaml.safe_load(self.config_path.read_text())
-        config['workers']['default'].update(adapter='codex', command='/opt/homebrew/bin/codex')
+        config["workers"]["default"].update(adapter="codex", command="/opt/homebrew/bin/codex")
         self.config_path.write_text(yaml.safe_dump(config))
         first = run_once.run_once(
             self.config_path,
@@ -216,6 +234,7 @@ class CycleDispatchTests(RepositoryCycleFixture):
 
     def test_live_dispatch_records_worker_log_artifacts(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -274,6 +293,7 @@ class CycleDispatchTests(RepositoryCycleFixture):
 
     def test_live_dispatch_failure_records_failed_state(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -302,9 +322,7 @@ class CycleDispatchTests(RepositoryCycleFixture):
         self.assertEqual(second["status"], "failed_dispatch")
         self.assertIn("cbc", second["safe_error"])
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            attempt_status, failure_json = conn.execute(
-                "SELECT status, failure_json FROM attempts"
-            ).fetchone()
+            attempt_status, failure_json = conn.execute("SELECT status, failure_json FROM attempts").fetchone()
             task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
             workstream_lifecycle, active_task_id = conn.execute(
                 "SELECT lifecycle, active_task_id FROM workstreams"

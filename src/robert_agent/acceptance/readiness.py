@@ -57,9 +57,7 @@ def _config_next_action(config_path, safe_error):
         script_path = AGENT_ROOT / "operations/initialize.py"
         config_path = Path(config_path).expanduser().resolve()
         return (
-            f"{shlex.quote(sys.executable)} -B "
-            f"{shlex.quote(str(script_path))} "
-            f"--config {shlex.quote(str(config_path))}"
+            f"{shlex.quote(sys.executable)} -B {shlex.quote(str(script_path))} --config {shlex.quote(str(config_path))}"
         )
     if "placeholder values" in safe_error:
         return f"Replace placeholder values in {Path(config_path).expanduser().resolve()}"
@@ -68,7 +66,9 @@ def _config_next_action(config_path, safe_error):
     if "config.database" in safe_error or "database must be a filename" in safe_error:
         return f"Set database to a SQLite filename in {Path(config_path).expanduser().resolve()}"
     if "config.python_bin" in safe_error:
-        return f"Set python_bin to python3 or an absolute Python executable in {Path(config_path).expanduser().resolve()}"
+        return (
+            f"Set python_bin to python3 or an absolute Python executable in {Path(config_path).expanduser().resolve()}"
+        )
     if "workers" in safe_error or "default_worker" in safe_error:
         return f"Fix the named worker definitions in {Path(config_path).expanduser().resolve()}"
     if "routes" in safe_error:
@@ -139,10 +139,7 @@ def _control_plane_state_gate(db_path):
             "control_plane_state",
             "passed",
             summary,
-            (
-                f"Review prepared attempts before non-dry-run: {sys.executable} -B "
-                f"{summarize_path} --db {db_path}"
-            ),
+            (f"Review prepared attempts before non-dry-run: {sys.executable} -B {summarize_path} --db {db_path}"),
             evidence,
         )
     return _gate(
@@ -211,9 +208,7 @@ def acceptance_preflight(
             _gate(
                 repo_checkout_gate_id,
                 "passed" if (repo_root / ".git").exists() else "failed",
-                "repo_root is a git checkout"
-                if (repo_root / ".git").exists()
-                else "repo_root is not a git checkout",
+                "repo_root is a git checkout" if (repo_root / ".git").exists() else "repo_root is not a git checkout",
                 None if (repo_root / ".git").exists() else f"Provide a real local git checkout for {repo_name}",
                 str(repo_root),
             )
@@ -250,11 +245,7 @@ def acceptance_preflight(
         _gate(
             "python_bin",
             "passed" if python_path else "failed",
-            (
-                f"{python_bin} Python command is available"
-                if python_path
-                else f"{python_bin} Python command is missing"
-            ),
+            (f"{python_bin} Python command is available" if python_path else f"{python_bin} Python command is missing"),
             None if python_path else f"Install or configure python_bin: {python_bin}",
             python_path or None,
         )
@@ -317,11 +308,7 @@ def acceptance_preflight(
         worker_agent = worker["agent"]
         worker_executable = worker["command_argv"][0]
         worker_path = _command_path(command_exists, worker_executable)
-        gate_id = (
-            f"worker_command:{worker_name}"
-            if multiple_workers
-            else "worker_command"
-        )
+        gate_id = f"worker_command:{worker_name}" if multiple_workers else "worker_command"
         summary_prefix = (
             f"{worker_name} ({worker_agent}) worker command"
             if multiple_workers
@@ -331,23 +318,13 @@ def acceptance_preflight(
             _gate(
                 gate_id,
                 "passed" if worker_path else "failed",
-                (
-                    f"{summary_prefix} is available"
-                    if worker_path
-                    else f"{summary_prefix} is missing"
-                ),
+                (f"{summary_prefix} is available" if worker_path else f"{summary_prefix} is missing"),
                 None
                 if worker_path
                 else (
-                    (
-                        f"Install or configure {worker_name} ({worker_agent}) "
-                        f"worker command: {worker_executable}"
-                    )
+                    (f"Install or configure {worker_name} ({worker_agent}) worker command: {worker_executable}")
                     if multiple_workers
-                    else (
-                        f"Install or configure {worker_agent} worker agent "
-                        f"command: {worker_executable}"
-                    )
+                    else (f"Install or configure {worker_agent} worker agent command: {worker_executable}")
                 ),
                 worker_path or None,
             )

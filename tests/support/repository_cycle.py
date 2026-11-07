@@ -1,4 +1,5 @@
 """Repository-cycle scenarios share local checkout and attempt builders."""
+
 from contextlib import closing
 import json
 import sqlite3
@@ -19,7 +20,12 @@ def _dd_comment_body(text, **_identity):
 def _new_pr_actions(**_assignment):
     return [
         {"type": "push_existing_pr"},
-        {"type": "open_pr", "title": "Fix issue", "body": "Opened PR", "issue_resolution": "complete"},
+        {
+            "type": "open_pr",
+            "title": "Fix issue",
+            "body": "Opened PR",
+            "issue_resolution": "complete",
+        },
     ]
 
 
@@ -62,7 +68,7 @@ class RepositoryCycleFixture(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.repo_root = self.root / "blueking-apigateway"
         self.repo_root.mkdir()
-        init_test_checkout(self.repo_root, 'master')
+        init_test_checkout(self.repo_root, "master")
         self.worktree_root = self.repo_root / ".worktrees"
         self.worktree_root.mkdir()
         self.data_dir = self.root / "data"
@@ -183,11 +189,7 @@ repos:
                         timestamp,
                         timestamp,
                         timestamp,
-                        (
-                            None
-                            if failure is None
-                            else json.dumps(failure, sort_keys=True)
-                        ),
+                        (None if failure is None else json.dumps(failure, sort_keys=True)),
                     ),
                 )
             if not same_task:
@@ -210,8 +212,13 @@ repos:
             )
 
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE tasks SET metadata_json=? WHERE task_id=?",
-                         (json.dumps({"trigger_work_item_event_id": "local-request"}), "task-current"))
+            conn.execute(
+                "UPDATE tasks SET metadata_json=? WHERE task_id=?",
+                (
+                    json.dumps({"trigger_work_item_event_id": "local-request"}),
+                    "task-current",
+                ),
+            )
 
         worker = {
             "name": "default",
@@ -251,13 +258,17 @@ repos:
                 1,
                 workers=[worker],
                 default_worker=worker,
-                config_result={"default_worker": worker, "workers": [worker], "routes": {
-                    "new-pr": {
-                        "worker": "default",
-                        "model": "route-model",
-                        "effort": "high",
-                    }
-                }},
+                config_result={
+                    "default_worker": worker,
+                    "workers": [worker],
+                    "routes": {
+                        "new-pr": {
+                            "worker": "default",
+                            "model": "route-model",
+                            "effort": "high",
+                        }
+                    },
+                },
             )
         finally:
             cycle_worker.dispatch_worker = original
@@ -278,7 +289,19 @@ repos:
         self.assertTrue(path.is_relative_to(self.root), path)
         path.mkdir(parents=True, exist_ok=True)
         if not (path / ".git").exists():
-            for argv in (["init", "-b", branch], ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "fixture"]):
+            for argv in (
+                ["init", "-b", branch],
+                [
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "fixture",
+                ],
+            ):
                 subprocess.run(["git", *argv], cwd=path, check=True, capture_output=True)
 
     def _new_pr_actions_for_attempt(
@@ -372,7 +395,10 @@ repos:
         from robert_agent.runtime import cycle as run_once
 
         first = run_once.run_once(
-            self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True,
+            self.config_path,
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
         )
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
@@ -388,14 +414,23 @@ repos:
                 conn.execute(
                     "INSERT INTO worker_phases(phase_id,attempt_id,phase,status,summary,next_step,created_at)"
                     " VALUES ('stale-phase', ?, 'verify', 'running',"
-                    " 'Starting command', 'Wait for command completion', ?)", (attempt_id, now),
+                    " 'Starting command', 'Wait for command completion', ?)",
+                    (attempt_id, now),
                 )
             if transport:
                 log = self.data_dir / "artifacts" / task_id / f"{attempt_id}.stdout.log"
                 log.parent.mkdir(parents=True, exist_ok=True)
-                log.write_text(json.dumps({"type": "turn.failed", "error": {
-                    "message": "stream disconnected before completion: stream closed before response.completed",
-                }}) + "\n")
+                log.write_text(
+                    json.dumps(
+                        {
+                            "type": "turn.failed",
+                            "error": {
+                                "message": "stream disconnected before completion: stream closed before response.completed",
+                            },
+                        }
+                    )
+                    + "\n"
+                )
                 conn.execute(
                     "INSERT INTO artifacts(artifact_id,task_id,attempt_id,artifact_type,path,created_at)"
                     " VALUES ('transport-log',?,?, 'worker_stdout',?,?)",
@@ -406,10 +441,21 @@ repos:
     def _rate_limited_attempt(self, *, fallback="model-fallback", model="model-primary", phase=False):
         db_path, task_id, attempt_id = self._interrupted_attempt(phase=phase, transport=True)
         log = self.data_dir / "artifacts" / task_id / f"{attempt_id}.stdout.log"
-        log.write_text(json.dumps({"type": "turn.failed", "error": {
-            "message": "exceeded retry limit, last status: 429 Too Many Requests",
-        }}) + "\n")
+        log.write_text(
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {
+                        "message": "exceeded retry limit, last status: 429 Too Many Requests",
+                    },
+                }
+            )
+            + "\n"
+        )
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json, '$.dispatch.model', ?,"
-                         " '$.dispatch.worker_name', 'default', '$.dispatch.fallback_model', ?)", (model, fallback))
+            conn.execute(
+                "UPDATE attempts SET metadata_json=json_set(metadata_json, '$.dispatch.model', ?,"
+                " '$.dispatch.worker_name', 'default', '$.dispatch.fallback_model', ?)",
+                (model, fallback),
+            )
         return db_path, task_id, attempt_id

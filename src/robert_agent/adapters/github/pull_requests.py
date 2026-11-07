@@ -6,10 +6,13 @@ import subprocess
 
 def read_pr(repo, number):
     completed = subprocess.run(
-        ['gh', 'api', f'repos/{repo}/pulls/{number}'],
-        capture_output=True, text=True, check=True, timeout=60,
+        ["gh", "api", f"repos/{repo}/pulls/{number}"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
     )
     value = json.loads(completed.stdout)
-    if not isinstance(value, dict) or value.get('number') != number:
-        raise ValueError('GitHub returned invalid PR metadata')
+    if not isinstance(value, dict) or value.get("number") != number:
+        raise ValueError("GitHub returned invalid PR metadata")
     return value

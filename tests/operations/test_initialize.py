@@ -4,6 +4,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class InitializeTests(TemporaryWorkspace):
     def test_init_config_creates_public_config_and_refuses_overwrite(self):
         from robert_agent.operations import initialize as init_config
+
         target = self.root / "nested" / "config.yml"
         repo = self.root / "repo"
         repo.mkdir()

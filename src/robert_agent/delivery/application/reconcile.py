@@ -73,8 +73,7 @@ def _evidence(**values):
             result[key] = [_bounded(item) for item in value[:8]]
         elif isinstance(value, dict):
             result[key] = {
-                str(item_key)[:64]: _bounded(item_value)
-                for item_key, item_value in list(value.items())[:16]
+                str(item_key)[:64]: _bounded(item_value) for item_key, item_value in list(value.items())[:16]
             }
         else:
             result[key] = _bounded(value)
@@ -161,8 +160,11 @@ def _scope_projection(action_scope):
                 if isinstance(item, dict)
             ]
         elif key == "repair_git" and isinstance(value, dict):
-            projected[key] = {name: value[name] for name in ("branch", "base_sha", "remote", "worktree", "private_root")
-                              if isinstance(value.get(name), str)}
+            projected[key] = {
+                name: value[name]
+                for name in ("branch", "base_sha", "remote", "worktree", "private_root")
+                if isinstance(value.get(name), str)
+            }
         elif isinstance(value, (str, int, bool)) or value is None:
             projected[key] = value
     if not projected:
@@ -175,7 +177,7 @@ def derive_publication_keys(action, action_scope):
 
     if vote_publish.is_vote(action):
         return vote_publish.publication_keys(action, action_scope)
-    if action.get('action_type') == 'submit_pr_review':
+    if action.get("action_type") == "submit_pr_review":
         return review_publish.publication_keys(action, action_scope)
     projection = _scope_projection(action_scope)
     if not isinstance(projection, dict):
@@ -195,9 +197,7 @@ def derive_publication_keys(action, action_scope):
         "target_url": identity["target_url"],
         "scope": projection,
     }
-    request_encoded = json.dumps(
-        request_identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
+    request_encoded = json.dumps(request_identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     request_digest = hashlib.sha256(request_encoded.encode("utf-8")).hexdigest()
     return f"publication:{digest}", f"request:{request_digest}"
 
@@ -417,7 +417,11 @@ def _remote_branch(action, action_scope, run_command):
         try:
             snapshot = pr_health.fetch_pr_snapshot(repo, pr_number, runner=run_command)
         except Exception as exc:
-            return _result("unknown", "existing_pr_snapshot_query_failed", error_type=type(exc).__name__)
+            return _result(
+                "unknown",
+                "existing_pr_snapshot_query_failed",
+                error_type=type(exc).__name__,
+            )
         if not snapshot or snapshot.get("state") != "open" or snapshot.get("merged"):
             return _result("unknown", "existing_pr_snapshot_changed")
         if snapshot.get("head_sha") != observed_head or snapshot.get("base_sha") != observed_base:

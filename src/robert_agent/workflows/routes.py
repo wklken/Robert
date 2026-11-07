@@ -32,8 +32,10 @@ def verification_policy_for(route_id):
 
 def review_input_policy(expected_output, trigger):
     """Select the review contract from controller-owned trigger metadata."""
-    if (expected_output not in {"update_existing_pr", "review_comment"}
-            or trigger.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}):
+    if expected_output not in {"update_existing_pr", "review_comment"} or trigger.get("task_kind") in {
+        "ci_remediation",
+        "merge_conflict_remediation",
+    }:
         return "none"
     if trigger.get("event_type") in {"comment", "manual_operator_request"}:
         return "classify"
@@ -63,10 +65,7 @@ def route_task(task):
         "requirement_analysis",
     }:
         return dict(ROUTES["local-result"])
-    if (
-        task.get("source_type") == "pull_request"
-        and task.get("authorization_status") == "accepted_review_participant"
-    ):
+    if task.get("source_type") == "pull_request" and task.get("authorization_status") == "accepted_review_participant":
         return dict(ROUTES["review-comment"])
     if task.get("source_type") == "pull_request" and (
         task.get("event_type") == "review_request"
@@ -82,7 +81,12 @@ def route_task(task):
     if task.get("source_type") == "pull_request" and task.get("has_open_dd_pr"):
         if intent == "waiting_for_user":
             return dict(ROUTES["waiting-for-user"])
-        if intent in {"analysis", "discussion", "requirement_analysis", "review_request"}:
+        if intent in {
+            "analysis",
+            "discussion",
+            "requirement_analysis",
+            "review_request",
+        }:
             return dict(ROUTES["review-comment"])
         return dict(ROUTES["update-existing-pr"])
     if (

@@ -1,4 +1,5 @@
 """Compose the configured application use cases for a controller cycle."""
+
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.work.application import synchronization as synchronization
 from robert_agent.work import scan_batches as scan_batches
@@ -60,10 +61,11 @@ def run_once(
     if not cutover["ok"]:
         return cutover
     with closing(sqlite3.connect(db_path)) as pool_conn, pool_conn:
-        review_store.configure_process_pool(pool_conn, config_result['model_max_concurrency'])
+        review_store.configure_process_pool(pool_conn, config_result["model_max_concurrency"])
     with closing(sqlite3.connect(db_path)) as guard:
         execution_store.require_migrated(guard)
     from robert_agent.delivery.application.submission import replay_pending_results
+
     if not dry_run:
         replay_pending_results(db_path, config=config_result)
     run_id = values.new_id("run")
@@ -71,8 +73,12 @@ def run_once(
         executor_identity = worker_identity.capture_process_identity(os.getpid())
     except (OSError, ValueError, worker_identity.IdentityReadError):
         executor_identity = None
-    executor_summary = json.dumps({'executor_id': os.environ.get('_ROBERT_EXECUTOR_ID') or values.new_id('executor'),
-                                   'executor_identity': executor_identity})
+    executor_summary = json.dumps(
+        {
+            "executor_id": os.environ.get("_ROBERT_EXECUTOR_ID") or values.new_id("executor"),
+            "executor_identity": executor_identity,
+        }
+    )
     run_now = values.utc_now()
     prompt_paths = []
     dispatch_queue = []
@@ -134,7 +140,12 @@ def run_once(
                 )
             except ControlDeadlineExceeded:
                 raise
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as exc:
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                FileNotFoundError,
+                json.JSONDecodeError,
+            ) as exc:
                 error = run_errors.safe_discovery_error(exc)
                 run_journal.mark_run_step(
                     conn,
@@ -162,16 +173,17 @@ def run_once(
         )
         if max_dispatches is not None:
             capacity_remaining = min(capacity_remaining, max(0, int(max_dispatches)))
-        dispatch_budget = {"remaining": capacity_remaining, 'repo_remaining': {
-            rid: max(0, int(repo.get('max_concurrency', max_concurrency)) - capacity.running_attempt_count(conn, rid))
-            for rid, repo in repos}}
-        publish_budget = {
-            "remaining": (
-                None
-                if max_publish_actions is None
-                else max(0, int(max_publish_actions))
-            )
+        dispatch_budget = {
+            "remaining": capacity_remaining,
+            "repo_remaining": {
+                rid: max(
+                    0,
+                    int(repo.get("max_concurrency", max_concurrency)) - capacity.running_attempt_count(conn, rid),
+                )
+                for rid, repo in repos
+            },
         }
+        publish_budget = {"remaining": (None if max_publish_actions is None else max(0, int(max_publish_actions)))}
 
         run_journal.mark_run_step(conn, run_id, "repo_pipelines", "running", run_now)
         repo_summaries = []
@@ -187,10 +199,17 @@ def run_once(
                 observation = scan_batches.next_batch(db_path, repo_id, context=context)
                 if observation is None and scan_batches.has_pending(conn, [repo_id]):
                     from robert_agent.work import wakeup as scan_wakeup
-                    scan_wakeup.request_wakeup(conn, repo_id=repo_id, reason='manual_operator_request', dedupe_key=context, metadata={'kind': 'github_context_refresh'})
+
+                    scan_wakeup.request_wakeup(
+                        conn,
+                        repo_id=repo_id,
+                        reason="manual_operator_request",
+                        dedupe_key=context,
+                        metadata={"kind": "github_context_refresh"},
+                    )
                     conn.commit()
                 if observation is not None:
-                    repo_discovery_runner = github_recording.ReplayRunner(observation['responses'])
+                    repo_discovery_runner = github_recording.ReplayRunner(observation["responses"])
             summary = repository_cycle.run_repo_pipeline(
                 conn,
                 data_dir=data_dir,
@@ -216,32 +235,62 @@ def run_once(
             )
             conn.commit()
             if consume_observations and observation is not None:
-                scan_batches.finish_batch(db_path, observation['batch_id'], success=summary['status'] == 'completed',
-                                         failure_reason=summary['failure_status'] or 'local_processing_failed')
+                scan_batches.finish_batch(
+                    db_path,
+                    observation["batch_id"],
+                    success=summary["status"] == "completed",
+                    failure_reason=summary["failure_status"] or "local_processing_failed",
+                )
             repo_summaries.append(summary)
             if consume_observations and dispatch_queue and dispatch_error is None:
                 # The repo transaction and lease are finished. Do not make its
                 # prepared tasks wait for another repository's local pipeline.
                 try:
-                    dispatch_results.extend(dispatcher.dispatch_queued(
-                        db_path, repo_ids, dispatch_queue, dry_run, max_concurrency,
-                        config_result.get('workers'), config_result.get('default_worker'),
-                        config_result,
-                    ))
+                    dispatch_results.extend(
+                        dispatcher.dispatch_queued(
+                            db_path,
+                            repo_ids,
+                            dispatch_queue,
+                            dry_run,
+                            max_concurrency,
+                            config_result.get("workers"),
+                            config_result.get("default_worker"),
+                            config_result,
+                        )
+                    )
                 except Exception as exc:
                     dispatch_error = run_errors.safe_dispatch_error(exc)
                 dispatch_queue.clear()
-                dispatched = sum(result.get('status') in {'running', 'completed_by_worker_result'} for result in dispatch_results)
-                dispatch_budget['remaining'] = max(0, max_concurrency - capacity.running_attempt_count_for_repos(conn, repo_ids))
+                dispatched = sum(
+                    result.get("status") in {"running", "completed_by_worker_result"} for result in dispatch_results
+                )
+                dispatch_budget["remaining"] = max(
+                    0,
+                    max_concurrency - capacity.running_attempt_count_for_repos(conn, repo_ids),
+                )
                 if max_dispatches is not None:
-                    dispatch_budget['remaining'] = min(dispatch_budget['remaining'], max(0, max_dispatches - dispatched))
-                dispatch_budget['repo_remaining'] = {
-                    rid: max(0, int(candidate.get('max_concurrency', max_concurrency)) - capacity.running_attempt_count(conn, rid))
-                    for rid, candidate in repos}
+                    dispatch_budget["remaining"] = min(
+                        dispatch_budget["remaining"],
+                        max(0, max_dispatches - dispatched),
+                    )
+                dispatch_budget["repo_remaining"] = {
+                    rid: max(
+                        0,
+                        int(candidate.get("max_concurrency", max_concurrency))
+                        - capacity.running_attempt_count(conn, rid),
+                    )
+                    for rid, candidate in repos
+                }
 
         aggregate_counts, publish_result, overall_status = run_journal.summarize_repositories(
-            conn, run_id, run_now, repo_summaries, len(prompt_paths), len(dispatch_queue),
-            dry_run=dry_run, skip_publish=skip_publish,
+            conn,
+            run_id,
+            run_now,
+            repo_summaries,
+            len(prompt_paths),
+            len(dispatch_queue),
+            dry_run=dry_run,
+            skip_publish=skip_publish,
         )
 
         if overall_status == "skipped_active_lease":
@@ -272,23 +321,32 @@ def run_once(
             }
 
     try:
-        dispatch_results.extend(dispatcher.dispatch_queued(
-            db_path,
-            repo_ids,
-            dispatch_queue,
-            dry_run,
-            max_concurrency,
-            config_result.get("workers"),
-            config_result.get("default_worker"),
-            config_result,
-        ))
+        dispatch_results.extend(
+            dispatcher.dispatch_queued(
+                db_path,
+                repo_ids,
+                dispatch_queue,
+                dry_run,
+                max_concurrency,
+                config_result.get("workers"),
+                config_result.get("default_worker"),
+                config_result,
+            )
+        )
     except Exception as exc:
         dispatch_error = run_errors.safe_dispatch_error(exc)
     finally:
         with closing(run_journal.connect(db_path)) as conn, conn:
             run_journal.finish_dispatch(
-                conn, run_id, overall_status, repo_summaries, len(prompt_paths),
-                dispatch_results, dispatch_error, aggregate_counts, publish_result,
+                conn,
+                run_id,
+                overall_status,
+                repo_summaries,
+                len(prompt_paths),
+                dispatch_results,
+                dispatch_error,
+                aggregate_counts,
+                publish_result,
             )
     dispatch_failure = run_journal.dispatch_failure_for(dispatch_results, dispatch_error)
     if dispatch_failure:
@@ -307,7 +365,11 @@ def run_once(
         return {
             "ok": False,
             "status": "partial_failure",
-            "failure_scope": ('controller' if any(item.get('failure_status') == 'repository_pipeline_failed' for item in repo_summaries) else 'repository'),
+            "failure_scope": (
+                "controller"
+                if any(item.get("failure_status") == "repository_pipeline_failed" for item in repo_summaries)
+                else "repository"
+            ),
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -321,14 +383,16 @@ def run_once(
             None,
         )
         failure_status = (
-            failure_summary.get("failure_status")
-            if failure_summary and len(repo_summaries) == 1
-            else "failed"
+            failure_summary.get("failure_status") if failure_summary and len(repo_summaries) == 1 else "failed"
         )
         return {
             "ok": False,
             "status": failure_status,
-            "failure_scope": ('controller' if any(item.get('failure_status') == 'repository_pipeline_failed' for item in repo_summaries) else 'repository'),
+            "failure_scope": (
+                "controller"
+                if any(item.get("failure_status") == "repository_pipeline_failed" for item in repo_summaries)
+                else "repository"
+            ),
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -375,5 +439,5 @@ def main(argv=None):
     return emit(result, 0 if result.get("ok") else 3)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     raise SystemExit(main())

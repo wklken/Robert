@@ -35,11 +35,7 @@ class WorkspaceResolutionTests(unittest.TestCase):
             dry_run=True,
         )
         self.assertEqual(result["mode"], "new_branch")
-        self.assertTrue(
-            result["worktree_path"].startswith(
-                str(self.repo_root / ".worktrees")
-            )
-        )
+        self.assertTrue(result["worktree_path"].startswith(str(self.repo_root / ".worktrees")))
 
     def test_classification_uses_artifact_directory(self):
         result = resolve_task_workspace(
@@ -83,16 +79,8 @@ class WorkspaceResolutionTests(unittest.TestCase):
             dry_run=True,
         )
 
-        self.assertTrue(
-            backend_result["worktree_path"].startswith(
-                self.repo["worktree_root"]
-            )
-        )
-        self.assertTrue(
-            frontend_result["worktree_path"].startswith(
-                frontend["worktree_root"]
-            )
-        )
+        self.assertTrue(backend_result["worktree_path"].startswith(self.repo["worktree_root"]))
+        self.assertTrue(frontend_result["worktree_path"].startswith(frontend["worktree_root"]))
 
     def test_public_analysis_route_records_isolated_workspace(self):
         root = Path(self.tmp.name)
@@ -143,12 +131,8 @@ class WorkspaceResolutionTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"], result)
-        with closing(
-            sqlite3.connect(root / "data" / "robert.sqlite3")
-        ) as conn:
-            worktree_path = conn.execute(
-                "SELECT worktree_path FROM attempts"
-            ).fetchone()[0]
+        with closing(sqlite3.connect(root / "data" / "robert.sqlite3")) as conn:
+            worktree_path = conn.execute("SELECT worktree_path FROM attempts").fetchone()[0]
         self.assertEqual(
             worktree_path,
             str(self.repo_root / ".worktrees" / "analysis-42"),

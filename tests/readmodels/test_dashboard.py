@@ -92,9 +92,7 @@ class DashboardTests(DashboardFixture):
         data = dashboard.build_dashboard_data(db_path)
 
         self.assertIn("notification_center", data)
-        self.assertTrue(
-            any(item["kind"] == "notification" for item in data["notification_center"])
-        )
+        self.assertTrue(any(item["kind"] == "notification" for item in data["notification_center"]))
         self.assertTrue(
             {
                 "id",

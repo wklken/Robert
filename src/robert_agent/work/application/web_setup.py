@@ -1,4 +1,5 @@
 """Prepare durable repository controls for a configured local interface."""
+
 from contextlib import closing
 import sqlite3
 from robert_agent.adapters.sqlite import database as storage
@@ -31,7 +32,6 @@ def _upsert_control_repo(conn, repo):
         ),
     )
     return repo_id
-
 
 
 def prepare_repositories(config):

@@ -2,6 +2,7 @@ import json
 import unittest
 from tests.support import PACKAGE_ROOT
 from tests.support import REPO_ROOT
+
 WORKER_MODULE = PACKAGE_ROOT / "worker"
 
 
@@ -78,7 +79,8 @@ class NewSkillSkeletonTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 for literal in forbidden_literals:
                     if literal == "result.json" and path.relative_to(PACKAGE_ROOT).as_posix() in {
-                        "workflows/review/files.py", "workflows/review/coordinator.py"
+                        "workflows/review/files.py",
+                        "workflows/review/coordinator.py",
                     }:
                         # Native review results are registered artifacts, not the
                         # removed file-backed task/control plane.
@@ -107,11 +109,17 @@ class NewSkillSkeletonTests(unittest.TestCase):
         schema = json.loads((PACKAGE_ROOT / "resources" / "schemas" / "config.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(
             schema["required"],
-            ["version", "data_dir", "database", "github", "default_worker", "workers", "repos"],
+            [
+                "version",
+                "data_dir",
+                "database",
+                "github",
+                "default_worker",
+                "workers",
+                "repos",
+            ],
         )
-        self.assertFalse(
-            schema["properties"]["github"]["additionalProperties"]
-        )
+        self.assertFalse(schema["properties"]["github"]["additionalProperties"])
         worker_config = schema["properties"]["workers"]["additionalProperties"]
         self.assertEqual(
             worker_config["required"],

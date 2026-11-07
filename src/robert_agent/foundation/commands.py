@@ -11,8 +11,8 @@ class ControlDeadlineExceeded(subprocess.TimeoutExpired):
 
 def run_command(command, *, runner=None, **kwargs):
     """Bound control-plane commands by both their cap and the owning child deadline."""
-    timeout = kwargs.pop('timeout', None)
-    deadline = os.environ.get('_ROBERT_CONTROL_DEADLINE')
+    timeout = kwargs.pop("timeout", None)
+    deadline = os.environ.get("_ROBERT_CONTROL_DEADLINE")
     deadline_limits_call = False
     if deadline is not None:
         deadline = float(deadline)

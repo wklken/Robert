@@ -31,9 +31,16 @@ def doctor(config_path, skip_external=False):
         }
 
     cutover = result_cutover.check(validated["db_path"])
-    checks["result_contract_cutover"] = {**cutover, "status": "passed" if cutover["ok"] else "failed"}
+    checks["result_contract_cutover"] = {
+        **cutover,
+        "status": "passed" if cutover["ok"] else "failed",
+    }
 
-    checks['workflow_engine']={'status':'passed','mode':'sqlite','configured':True}
+    checks["workflow_engine"] = {
+        "status": "passed",
+        "mode": "sqlite",
+        "configured": True,
+    }
 
     worker = validated["default_worker"]
     worker_command = worker["command_argv"][0]
@@ -46,28 +53,26 @@ def doctor(config_path, skip_external=False):
     gh_path = shutil.which("gh")
     gh_ok = skip_external or bool(gh_path)
     if gh_path and not skip_external:
-        gh_ok = subprocess.run(
-            ["gh", "auth", "status"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        ).returncode == 0
+        gh_ok = (
+            subprocess.run(
+                ["gh", "auth", "status"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
     checks["github_cli"] = {
         "status": "passed" if gh_ok else "failed",
     }
 
-    repos_ok = all(
-        Path(repo["repo_root"]).exists()
-        for repo in validated["repos"]
-    )
+    repos_ok = all(Path(repo["repo_root"]).exists() for repo in validated["repos"])
     checks["repositories"] = {
         "status": "passed" if repos_ok else "failed",
     }
 
-    installed = discover_skill_names(
-        validated["skills"]["search_paths"]
-    )
+    installed = discover_skill_names(validated["skills"]["search_paths"])
     route_checks = []
     for repo in validated["repos"]:
         for policy in load_route_policies():
@@ -85,11 +90,7 @@ def doctor(config_path, skip_external=False):
                 }
             )
     checks["skills"] = {
-        "status": (
-            "passed"
-            if all(item["runnable"] for item in route_checks)
-            else "failed"
-        ),
+        "status": ("passed" if all(item["runnable"] for item in route_checks) else "failed"),
         "routes": route_checks,
     }
 
@@ -98,5 +99,10 @@ def doctor(config_path, skip_external=False):
         "ok": ok,
         "status": "ready" if ok else "failed",
         "checks": checks,
-        "supervision": {"mode": validated["supervision"]["mode"], "notification_delivery": "configured" if os.environ.get("ROBERT_NOTIFICATION_COMMAND") else "not_configured"},
+        "supervision": {
+            "mode": validated["supervision"]["mode"],
+            "notification_delivery": "configured"
+            if os.environ.get("ROBERT_NOTIFICATION_COMMAND")
+            else "not_configured",
+        },
     }

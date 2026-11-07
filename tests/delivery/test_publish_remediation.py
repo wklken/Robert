@@ -35,7 +35,11 @@ class PublishRemediationTests(PublicationFixture):
                 return Completed("repair-1\n")
             if command[:2] == ["git", "push"]:
                 return Completed("pushed\n")
-            if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments?per_page=100"]:
+            if command[:3] == [
+                "gh",
+                "api",
+                "repos/x/y/issues/42/comments?per_page=100",
+            ]:
                 return Completed("[]")
             if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments"]:
                 return Completed(
@@ -95,7 +99,11 @@ class PublishRemediationTests(PublicationFixture):
                         }
                     )
                 )
-            if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments?per_page=100"]:
+            if command[:3] == [
+                "gh",
+                "api",
+                "repos/x/y/issues/42/comments?per_page=100",
+            ]:
                 return Completed("[]")
             if command[:3] == ["gh", "api", "repos/x/y/issues/42/comments"]:
                 return Completed(
@@ -169,13 +177,7 @@ class PublishRemediationTests(PublicationFixture):
         self.assertTrue(second["ok"], second)
         self.assertEqual(second["pending_count"], 0)
         self.assertFalse(any(command[:2] == ["git", "push"] for command in calls))
-        self.assertFalse(
-            any(
-                command[:3]
-                == ["gh", "api", "repos/x/y/issues/42/comments"]
-                for command in calls
-            )
-        )
+        self.assertFalse(any(command[:3] == ["gh", "api", "repos/x/y/issues/42/comments"] for command in calls))
         with closing(sqlite3.connect(db_path)) as conn:
             statuses = conn.execute(
                 """

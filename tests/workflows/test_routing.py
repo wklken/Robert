@@ -5,6 +5,7 @@ import unittest
 class RoutingTests(unittest.TestCase):
     def test_routes_do_not_advertise_internal_worker_as_skill(self):
         from robert_agent.workflows import routes as route
+
         internal_worker_name = "robert-worker"
         for route_id, route_config in route.ROUTES.items():
             with self.subTest(route_id=route_id):
@@ -12,6 +13,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_web_analysis_routes_to_local_result(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task({"origin_type": "web", "intent": "analysis"})
 
         self.assertEqual(result["route_id"], "local-result")
@@ -21,12 +23,14 @@ class RoutingTests(unittest.TestCase):
 
     def test_web_bug_fix_still_routes_to_new_pr(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task({"origin_type": "web", "intent": "bug_fix"})
 
         self.assertEqual(result["route_id"], "new-pr")
 
     def test_low_confidence_route_creates_classification_task(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task({"intent": "unclear"})
 
         self.assertEqual(result["expected_output"], "classification_result")
@@ -34,6 +38,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_analysis_route_cannot_open_pr(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task({"intent": "analysis"})
 
         self.assertEqual(result["expected_output"], "comment_analysis")
@@ -98,10 +103,14 @@ class RoutingTests(unittest.TestCase):
         ):
             with self.subTest(background=background):
                 body = f"{background}\n统计报错结果 @robert-bot"
-                self.assertEqual(discover.infer_intent("Bug: failed checks", body, "comment", "robert-bot"), "analysis")
+                self.assertEqual(
+                    discover.infer_intent("Bug: failed checks", body, "comment", "robert-bot"),
+                    "analysis",
+                )
 
     def test_new_pr_route_only_advertises_publisher_supported_actions(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task({"intent": "bug_fix"})
 
         self.assertEqual(result["expected_output"], "new_pr")
@@ -122,6 +131,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_update_existing_pr_route_cannot_open_new_pr(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task({"intent": "pr_followup_fix", "has_open_dd_pr": True})
 
         self.assertEqual(result["expected_output"], "update_existing_pr")
@@ -178,6 +188,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_dd_pr_bug_fix_followup_updates_existing_pr(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task(
             {
                 "intent": "bug_fix",
@@ -192,6 +203,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_third_party_pr_bug_fix_request_stays_comment_only(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task(
             {
                 "intent": "bug_fix",
@@ -215,6 +227,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_review_request_routes_to_source_review_worktree(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task(
             {
                 "event_type": "review_request",
@@ -242,20 +255,23 @@ class RoutingTests(unittest.TestCase):
                     "@robert-bot review 下这个 PR，以增加一个新的 subsystem 的标准 review",
                     "comment",
                 )
-                result = route.route_task({
-                    "event_type": "comment",
-                    "intent": intent,
-                    "source_type": "pull_request",
-                    "authorization_status": "authorized_trigger",
-                    "has_open_dd_pr": has_open_dd_pr,
-                    "body": "@robert-bot review this PR",
-                })
+                result = route.route_task(
+                    {
+                        "event_type": "comment",
+                        "intent": intent,
+                        "source_type": "pull_request",
+                        "authorization_status": "authorized_trigger",
+                        "has_open_dd_pr": has_open_dd_pr,
+                        "body": "@robert-bot review this PR",
+                    }
+                )
                 self.assertEqual(result["route_id"], "review-pr")
                 self.assertEqual(result["workspace_mode"], "review_pr")
                 self.assertEqual(result["allowed_github_actions"], ["comment"])
 
     def test_dd_pr_unclear_followup_defaults_to_existing_pr_update(self):
         from robert_agent.workflows import routes as route
+
         result = route.route_task(
             {
                 "source_type": "pull_request",
@@ -271,6 +287,7 @@ class RoutingTests(unittest.TestCase):
     def test_prompt_includes_metadata_and_allowed_actions(self):
         from robert_agent.context import prompts as render_prompt
         from robert_agent.workflows import routes as route
+
         route_result = route.route_task({"intent": "bug_fix"})
         prompt = render_prompt.render_prompt(
             task={
@@ -301,7 +318,10 @@ class RoutingTests(unittest.TestCase):
         self.assertIn(f"{sys.executable} /worker/snapshot.py", prompt)
         self.assertIn(f"{sys.executable} /worker/heartbeat.py", prompt)
         self.assertIn(f"{sys.executable} /agent/result.py", prompt)
-        self.assertIn(f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 task task-1", prompt)
+        self.assertIn(
+            f"{sys.executable} /agent/status.py --db /tmp/dd.sqlite3 task task-1",
+            prompt,
+        )
         self.assertIn(f"{sys.executable} /agent/status.py --help", prompt)
         self.assertIn("ad hoc SQLite queries", prompt)
         self.assertIn("For comments supply type and body", prompt)
@@ -353,7 +373,10 @@ class RoutingTests(unittest.TestCase):
                 if route_id in {"new-pr", "update-existing-pr"}:
                     self.assertIn("Unit-test writing guidance:", prompt)
                     self.assertIn("mutation testing", prompt)
-                    self.assertIn("Only run mutation testing when explicitly requested by the task or required by applicable repository instructions", prompt)
+                    self.assertIn(
+                        "Only run mutation testing when explicitly requested by the task or required by applicable repository instructions",
+                        prompt,
+                    )
                     self.assertIn("restore production code", prompt)
                 else:
                     self.assertNotIn("Unit-test writing guidance:", prompt)
@@ -362,9 +385,8 @@ class RoutingTests(unittest.TestCase):
     def test_update_existing_pr_prompt_requires_review_point_evaluation(self):
         from robert_agent.context import prompts as render_prompt
         from robert_agent.workflows import routes as route
-        route_result = route.route_task(
-            {"intent": "bug_fix", "source_type": "pull_request", "has_open_dd_pr": True}
-        )
+
+        route_result = route.route_task({"intent": "bug_fix", "source_type": "pull_request", "has_open_dd_pr": True})
         prompt = render_prompt.render_prompt(
             task={
                 "task_id": "task-1",
@@ -388,7 +410,9 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('"review_point_evaluation": []', prompt)
         self.assertIn('"used_skills": []', prompt)
 
-    def test_prompt_distinguishes_repository_skill_deliverables_from_runtime_skills(self):
+    def test_prompt_distinguishes_repository_skill_deliverables_from_runtime_skills(
+        self,
+    ):
         from robert_agent.context import prompts as render_prompt
         from robert_agent.workflows import routes as route
 
@@ -411,7 +435,10 @@ class RoutingTests(unittest.TestCase):
         )
 
         self.assertIn("Repository skill files, such as skills/*/SKILL.md", prompt)
-        self.assertIn("may be created or modified when required by the authorized repository task", prompt)
+        self.assertIn(
+            "may be created or modified when required by the authorized repository task",
+            prompt,
+        )
         self.assertIn("must not create, modify, or install runtime skills", prompt)
         self.assertIn("~/.codex/skills/", prompt)
         self.assertIn("other configured runtime skill directories", prompt)
@@ -503,9 +530,7 @@ class RoutingTests(unittest.TestCase):
             route.route_task(task),
             [
                 {
-                    "event_fingerprint": (
-                        "github-system:merge-conflict:77:head-1:base-1"
-                    ),
+                    "event_fingerprint": ("github-system:merge-conflict:77:head-1:base-1"),
                     "metadata": {
                         "remediation": {
                             "episode_id": "episode-conflict",
@@ -531,9 +556,12 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("never force-push", prompt)
         self.assertNotIn("Review-point evaluation", prompt)
 
-    def test_comment_analysis_prompt_result_example_includes_required_comment_action(self):
+    def test_comment_analysis_prompt_result_example_includes_required_comment_action(
+        self,
+    ):
         from robert_agent.context import prompts as render_prompt
         from robert_agent.workflows import routes as route
+
         route_result = route.route_task({"intent": "analysis"})
         prompt = render_prompt.render_prompt(
             task={
@@ -563,6 +591,7 @@ class RoutingTests(unittest.TestCase):
     def test_classification_prompt_limits_worker_scope(self):
         from robert_agent.context import prompts as render_prompt
         from robert_agent.workflows import routes as route
+
         route_result = route.route_task({"intent": "unclear"})
         prompt = render_prompt.render_prompt(
             task={
@@ -596,6 +625,7 @@ class RoutingTests(unittest.TestCase):
     def test_new_pr_prompt_delegates_issue_metadata_to_robert(self):
         from robert_agent.context import prompts as render_prompt
         from robert_agent.workflows import routes as route
+
         route_result = route.route_task({"intent": "bug_fix"})
         prompt = render_prompt.render_prompt(
             task={

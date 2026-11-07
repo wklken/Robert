@@ -174,14 +174,24 @@ def build_result(
         if not isinstance(remediation_evidence, dict):
             raise ValueError("remediation_evidence must be an object")
         payload["remediation_evidence"] = dict(remediation_evidence)
-    return {"task_id": task_id, "attempt_id": attempt_id, "output_type": output_type,
-            "submission": {key: value for key, value in payload.items()
-                           if key not in {"task_id", "attempt_id", "output_type"}}}
+    return {
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "output_type": output_type,
+        "submission": {
+            key: value for key, value in payload.items() if key not in {"task_id", "attempt_id", "output_type"}
+        },
+    }
 
 
 def _unavailable():
-    return {"ok": False, "status": "validation_unavailable", "reason_code": "validation_unavailable",
-            "safe_error": "Validation state is temporarily unavailable.", "retryable": True}
+    return {
+        "ok": False,
+        "status": "validation_unavailable",
+        "reason_code": "validation_unavailable",
+        "safe_error": "Validation state is temporarily unavailable.",
+        "retryable": True,
+    }
 
 
 def _lookup(db_path, envelope, digest):
@@ -190,16 +200,27 @@ def _lookup(db_path, envelope, digest):
         _, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"], include_scope=False)
         if rejection:
             return rejection
-        row = conn.execute("SELECT result_id,metadata_json FROM worker_results WHERE attempt_id=? AND task_id=?",
-                           (envelope["attempt_id"], envelope["task_id"])).fetchone()
+        row = conn.execute(
+            "SELECT result_id,metadata_json FROM worker_results WHERE attempt_id=? AND task_id=?",
+            (envelope["attempt_id"], envelope["task_id"]),
+        ).fetchone()
         if not row:
             return None
         metadata = json.loads(row[1] or "{}")
         if metadata.get("result_contract") != result_contract.CONTRACT_ID:
             return {"ok": False, "status": "unsupported_contract"}
         if metadata.get("submission_fingerprint") == digest:
-            return {"ok": True, "status": "recorded", "result_id": row[0], "deduplicated": True}
-        return {"ok": False, "status": "result_conflict", "safe_error": "A different result is already recorded for this attempt."}
+            return {
+                "ok": True,
+                "status": "recorded",
+                "result_id": row[0],
+                "deduplicated": True,
+            }
+        return {
+            "ok": False,
+            "status": "result_conflict",
+            "safe_error": "A different result is already recorded for this attempt.",
+        }
 
 
 def _prepare(db_path, envelope):
@@ -216,10 +237,12 @@ def _prepare(db_path, envelope):
             if checked["ok"]:
                 if any(action["type"] == "push_existing_pr" for action in normalized["planned_github_actions"]):
                     if action_scope.observe_worktree_status(settings["action_scope"]) != "clean":
-                        response = result_validation.failure({
-                            "violations": ["uncommitted_worktree"],
-                            "safe_error": "Push results require a clean worktree with all task-owned changes committed.",
-                        })
+                        response = result_validation.failure(
+                            {
+                                "violations": ["uncommitted_worktree"],
+                                "safe_error": "Push results require a clean worktree with all task-owned changes committed.",
+                            }
+                        )
                         result_validation.record_diagnostic(db_path, envelope, response["reason_code"])
                         return None, response
                     normalized["submission_head_sha"] = action_scope.observe_head(settings["action_scope"])
@@ -230,27 +253,64 @@ def _prepare(db_path, envelope):
 
 
 def record_result(db_path, payload, *, notifier=None):
-    if (not isinstance(payload, dict) or set(payload) != {"task_id", "attempt_id", "output_type", "submission"}
-            or not all(isinstance(payload.get(name), str) and payload[name] for name in ("task_id", "attempt_id", "output_type"))):
-        return {"ok": False, "status": "failed_validation", "reason_code": "invalid_envelope",
-                "field_path": "result", "safe_error": "Use the bound compact submission envelope."}
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"task_id", "attempt_id", "output_type", "submission"}
+        or not all(
+            isinstance(payload.get(name), str) and payload[name] for name in ("task_id", "attempt_id", "output_type")
+        )
+    ):
+        return {
+            "ok": False,
+            "status": "failed_validation",
+            "reason_code": "invalid_envelope",
+            "field_path": "result",
+            "safe_error": "Use the bound compact submission envelope.",
+        }
     try:
-        return result_spool.submit(db_path, payload, _record_result_db, notifier, prepare=_prepare, lookup=_lookup)
+        return result_spool.submit(
+            db_path,
+            payload,
+            _record_result_db,
+            notifier,
+            prepare=_prepare,
+            lookup=_lookup,
+        )
     except (sqlite3.Error, OSError):
         return _unavailable()
     except (ValueError, TypeError):
-        return {"ok": False, "status": "failed_validation", "reason_code": "invalid_json", "field_path": "result",
-                "safe_error": "Submission must contain valid JSON values."}
+        return {
+            "ok": False,
+            "status": "failed_validation",
+            "reason_code": "invalid_json",
+            "field_path": "result",
+            "safe_error": "Submission must contain valid JSON values.",
+        }
 
 
 def replay_pending_results(db_path, limit=100, *, config=None, attempt_id=None):
     def ingest(path, payload, *, notifier=None):
-        return _record_result_db(path, payload, notifier=notifier, busy_timeout_ms=100,
-                                 replay=True, recovery_config=config)
+        return _record_result_db(
+            path,
+            payload,
+            notifier=notifier,
+            busy_timeout_ms=100,
+            replay=True,
+            recovery_config=config,
+        )
+
     return result_spool.replay(db_path, ingest, limit, attempt_id=attempt_id)
 
 
-def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, replay=False, recovery_config=None):
+def _record_result_db(
+    db_path,
+    payload,
+    *,
+    notifier=None,
+    busy_timeout_ms=5000,
+    replay=False,
+    recovery_config=None,
+):
     if payload.get("_result_contract") != result_contract.CONTRACT_ID:
         return {"ok": False, "status": "unsupported_contract"}
     if "planned_github_actions" not in payload:
@@ -268,7 +328,11 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         return {"ok": False, "status": "failed_validation", "safe_error": skill_error}
     verification, verification_error = _validate_verification(payload.get("verification", []))
     if verification_error:
-        return {"ok": False, "status": "failed_validation", "safe_error": verification_error}
+        return {
+            "ok": False,
+            "status": "failed_validation",
+            "safe_error": verification_error,
+        }
     local_event_ids = payload.get("consumed_work_item_event_ids", [])
     if not isinstance(local_event_ids, list) or not all(
         isinstance(event_id, str) and event_id for event_id in local_event_ids
@@ -278,11 +342,13 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
             "status": "failed_validation",
             "safe_error": "consumed_work_item_event_ids must be a string list",
         }
-    operator_question, question_error = _validate_operator_question(
-        payload.get("operator_question")
-    )
+    operator_question, question_error = _validate_operator_question(payload.get("operator_question"))
     if question_error:
-        return {"ok": False, "status": "failed_validation", "safe_error": question_error}
+        return {
+            "ok": False,
+            "status": "failed_validation",
+            "safe_error": question_error,
+        }
     metadata = {
         "recorded_by": "robert.worker",
         "used_skills": used_skills,
@@ -324,53 +390,92 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         conn.execute("BEGIN IMMEDIATE")
         metadata["result_saved_at"] = result_spool.saved_at(db_path, payload["attempt_id"])
         metadata["result_ingested_at"] = datetime.now(timezone.utc).isoformat()
-        task = conn.execute("SELECT lifecycle, task_kind, metadata_json FROM tasks WHERE task_id=?", (payload["task_id"],)).fetchone()
-        if task and task[0] in {'canceled', 'failed', 'ignored'}:
+        task = conn.execute(
+            "SELECT lifecycle, task_kind, metadata_json FROM tasks WHERE task_id=?",
+            (payload["task_id"],),
+        ).fetchone()
+        if task and task[0] in {"canceled", "failed", "ignored"}:
             return {"ok": False, "status": "rejected_by_supervisor"}
-        subject_type, subject_id = 'task', payload['task_id']
-        if task and task[1] in {'ci_remediation', 'merge_conflict_remediation'}:
-            episode_id = json.loads(task[2] or '{}').get('remediation_episode_id')
+        subject_type, subject_id = "task", payload["task_id"]
+        if task and task[1] in {"ci_remediation", "merge_conflict_remediation"}:
+            episode_id = json.loads(task[2] or "{}").get("remediation_episode_id")
             if episode_id:
-                subject_type, subject_id = 'remediation_episode', episode_id
+                subject_type, subject_id = "remediation_episode", episode_id
         owner = execution_store.get_binding(conn, subject_type, subject_id)
-        if owner and owner['binding_status'] != 'active':
+        if owner and owner["binding_status"] != "active":
             return {"ok": False, "status": "rejected_by_workflow_owner"}
-        bound = conn.execute("SELECT metadata_json,status FROM attempts WHERE attempt_id=? AND task_id=?",
-                             (payload["attempt_id"], payload["task_id"])).fetchone()
+        bound = conn.execute(
+            "SELECT metadata_json,status FROM attempts WHERE attempt_id=? AND task_id=?",
+            (payload["attempt_id"], payload["task_id"]),
+        ).fetchone()
         if not bound or json.loads(bound[0] or "{}").get("result_contract") != result_contract.CONTRACT_ID:
             return {"ok": False, "status": "unsupported_contract"}
-        existing = conn.execute("SELECT result_id, metadata_json FROM worker_results WHERE attempt_id=?", (payload["attempt_id"],)).fetchone()
+        existing = conn.execute(
+            "SELECT result_id, metadata_json FROM worker_results WHERE attempt_id=?",
+            (payload["attempt_id"],),
+        ).fetchone()
         if existing:
-            if json.loads(existing[1] or '{}').get('submission_fingerprint') == metadata['submission_fingerprint']:
-                return {"ok": True, "status": "recorded", "result_id": existing[0], "deduplicated": True}
-            return {"ok": False, "status": "result_conflict", "safe_error": "A different result was already recorded for this attempt."}
+            if json.loads(existing[1] or "{}").get("submission_fingerprint") == metadata["submission_fingerprint"]:
+                return {
+                    "ok": True,
+                    "status": "recorded",
+                    "result_id": existing[0],
+                    "deduplicated": True,
+                }
+            return {
+                "ok": False,
+                "status": "result_conflict",
+                "safe_error": "A different result was already recorded for this attempt.",
+            }
         if bound[1] not in {"prepared", "running", "stale"}:
             return {"ok": False, "status": "rejected_by_supervisor"}
-        prior_rejection = conn.execute("SELECT json_extract(metadata_json,'$.result_validation') FROM attempts WHERE attempt_id=? AND task_id=?", (payload['attempt_id'], payload['task_id'])).fetchone()
+        prior_rejection = conn.execute(
+            "SELECT json_extract(metadata_json,'$.result_validation') FROM attempts WHERE attempt_id=? AND task_id=?",
+            (payload["attempt_id"], payload["task_id"]),
+        ).fetchone()
         if prior_rejection and prior_rejection[0]:
             return {"ok": False, "status": "rejected_by_supervisor"}
-        if payload.get('output_type') == 'waiting_for_user':
-            attempt = conn.execute("SELECT status FROM attempts WHERE attempt_id=? AND task_id=?", (payload['attempt_id'], payload['task_id'])).fetchone()
-            if not attempt or attempt[0] not in {'prepared', 'running', 'stale'}:
+        if payload.get("output_type") == "waiting_for_user":
+            attempt = conn.execute(
+                "SELECT status FROM attempts WHERE attempt_id=? AND task_id=?",
+                (payload["attempt_id"], payload["task_id"]),
+            ).fetchone()
+            if not attempt or attempt[0] not in {"prepared", "running", "stale"}:
                 return {"ok": False, "status": "rejected_by_supervisor"}
-            origin = conn.execute("SELECT origin_type FROM work_items WHERE workstream_id=(SELECT workstream_id FROM tasks WHERE task_id=?)",(payload['task_id'],)).fetchone()
+            origin = conn.execute(
+                "SELECT origin_type FROM work_items WHERE workstream_id=(SELECT workstream_id FROM tasks WHERE task_id=?)",
+                (payload["task_id"],),
+            ).fetchone()
             error = None
             if operator_question is None:
-                error = 'waiting_for_user requires operator_question'
-            elif (not origin or origin[0] == 'github') and not any(a.get('type') == 'comment' for a in actions):
-                error = 'GitHub waiting_for_user requires a public comment action'
+                error = "waiting_for_user requires operator_question"
+            elif (not origin or origin[0] == "github") and not any(a.get("type") == "comment" for a in actions):
+                error = "GitHub waiting_for_user requires a public comment action"
             if error:
-                return {"ok": False, "status": "failed_validation", "reason_code": "question_not_deliverable",
-                        "safe_error": error, "required_action": "Correct the question and submit again in this attempt."}
+                return {
+                    "ok": False,
+                    "status": "failed_validation",
+                    "reason_code": "question_not_deliverable",
+                    "safe_error": error,
+                    "required_action": "Correct the question and submit again in this attempt.",
+                }
         claim = None
         if replay:
             from robert_agent.supervision import actions as supervision_actions
-            gate = supervision_actions.begin(conn, task_id=payload['task_id'], kind='spool_replay',
-                target_id=payload['attempt_id'], generation=metadata['submission_fingerprint'],
-                now=result_created_at, config=recovery_config, native_retry=True)
-            if gate['status'] == 'blocked':
-                return {'ok': True, 'status': 'replay_blocked'}
-            claim = gate.get('claim')
+
+            gate = supervision_actions.begin(
+                conn,
+                task_id=payload["task_id"],
+                kind="spool_replay",
+                target_id=payload["attempt_id"],
+                generation=metadata["submission_fingerprint"],
+                now=result_created_at,
+                config=recovery_config,
+                native_retry=True,
+            )
+            if gate["status"] == "blocked":
+                return {"ok": True, "status": "replay_blocked"}
+            claim = gate.get("claim")
         conn.execute(
             """
             INSERT INTO worker_results(
@@ -429,16 +534,33 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
             WHERE attempt_id = ? AND task_id = ?
               AND status IN ('running', 'prepared', 'stale')
             """,
-            (result_created_at, result_created_at, payload["attempt_id"], payload["task_id"]),
+            (
+                result_created_at,
+                result_created_at,
+                payload["attempt_id"],
+                payload["task_id"],
+            ),
         )
         if cur.rowcount == 0:
             conn.rollback()
-            return {"ok": False, "status": "rejected_by_supervisor", "result_id": result_id}
+            return {
+                "ok": False,
+                "status": "rejected_by_supervisor",
+                "result_id": result_id,
+            }
         _insert_worker_result_wakeup(conn, payload, result_id, result_created_at)
-        if claim and not supervision_actions.finish(conn, claim, outcome='observing',
-                receipt={'attempt_id': payload['attempt_id'], 'result_id': result_id,
-                         'fingerprint': metadata['submission_fingerprint']}, now=result_created_at):
+        if claim and not supervision_actions.finish(
+            conn,
+            claim,
+            outcome="observing",
+            receipt={
+                "attempt_id": payload["attempt_id"],
+                "result_id": result_id,
+                "fingerprint": metadata["submission_fingerprint"],
+            },
+            now=result_created_at,
+        ):
             conn.rollback()
-            return {'ok': True, 'status': 'replay_blocked'}
+            return {"ok": True, "status": "replay_blocked"}
     wakeup_notifier.notify(db_path, sender=notifier)
     return {"ok": True, "status": "recorded", "result_id": result_id}

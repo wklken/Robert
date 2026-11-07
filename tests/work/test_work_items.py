@@ -70,20 +70,26 @@ class WorkItemSchemaTests(unittest.TestCase):
               created_by, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-07-19T00:00:00+00:00', '2026-07-19T00:00:00+00:00')
             """,
-            tuple(values[key] for key in (
-                "work_item_id", "repo_id", "title", "priority", "origin_type",
-                "origin_source_id", "routing_mode", "requested_worker", "workstream_id",
-                "creation_idempotency_key", "created_by",
-            )),
+            tuple(
+                values[key]
+                for key in (
+                    "work_item_id",
+                    "repo_id",
+                    "title",
+                    "priority",
+                    "origin_type",
+                    "origin_source_id",
+                    "routing_mode",
+                    "requested_worker",
+                    "workstream_id",
+                    "creation_idempotency_key",
+                    "created_by",
+                )
+            ),
         )
 
     def test_schema_creates_work_item_tables_and_control_columns(self):
-        table_names = {
-            row[0]
-            for row in self.conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
+        table_names = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         self.assertEqual(
             {"work_items", "work_item_events"},
             {name for name in table_names if name in {"work_items", "work_item_events"}},
@@ -105,28 +111,40 @@ class WorkItemSchemaTests(unittest.TestCase):
         cases = [
             {"work_item_id": "wi-2", "creation_idempotency_key": "create-2"},
             {
-                "work_item_id": "wi-3", "origin_source_id": None,
-                "creation_idempotency_key": "create-1", "workstream_id": None,
+                "work_item_id": "wi-3",
+                "origin_source_id": None,
+                "creation_idempotency_key": "create-1",
+                "workstream_id": None,
                 "origin_type": "web",
             },
             {
-                "work_item_id": "wi-4", "origin_source_id": None,
-                "creation_idempotency_key": "create-4", "origin_type": "web",
+                "work_item_id": "wi-4",
+                "origin_source_id": None,
+                "creation_idempotency_key": "create-4",
+                "origin_type": "web",
             },
             {
-                "work_item_id": "wi-5", "origin_source_id": None,
-                "creation_idempotency_key": "create-5", "workstream_id": None,
-                "origin_type": "web", "priority": "urgent",
+                "work_item_id": "wi-5",
+                "origin_source_id": None,
+                "creation_idempotency_key": "create-5",
+                "workstream_id": None,
+                "origin_type": "web",
+                "priority": "urgent",
             },
             {
-                "work_item_id": "wi-6", "origin_source_id": None,
-                "creation_idempotency_key": "create-6", "workstream_id": None,
+                "work_item_id": "wi-6",
+                "origin_source_id": None,
+                "creation_idempotency_key": "create-6",
+                "workstream_id": None,
                 "origin_type": "email",
             },
             {
-                "work_item_id": "wi-7", "origin_source_id": None,
-                "creation_idempotency_key": "create-7", "workstream_id": None,
-                "origin_type": "web", "routing_mode": "manual",
+                "work_item_id": "wi-7",
+                "origin_source_id": None,
+                "creation_idempotency_key": "create-7",
+                "workstream_id": None,
+                "origin_type": "web",
+                "routing_mode": "manual",
             },
         ]
         for values in cases:
@@ -228,7 +246,9 @@ class WorkItemMigrationTests(unittest.TestCase):
                 """
             )
 
-    def test_upgrade_backfills_only_root_workstream_once_without_mutating_execution_rows(self):
+    def test_upgrade_backfills_only_root_workstream_once_without_mutating_execution_rows(
+        self,
+    ):
         from robert_agent.adapters.sqlite import database as storage
 
         self._create_legacy_database()
@@ -307,9 +327,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
             active_task_id, lifecycle = conn.execute(
                 "SELECT active_task_id, lifecycle FROM workstreams WHERE workstream_id = 'github:example/repo!21'"
             ).fetchone()
-            wakeups = conn.execute(
-                "SELECT reason, task_id, status, metadata_json FROM wakeups"
-            ).fetchall()
+            wakeups = conn.execute("SELECT reason, task_id, status, metadata_json FROM wakeups").fetchall()
         self.assertEqual((active_task_id, lifecycle), (None, "failed"))
         self.assertEqual(len(wakeups), 1)
         self.assertEqual(wakeups[0][:3], ("manual_operator_request", parent_task_id, "pending"))
@@ -373,12 +391,8 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         self.assertEqual(item["workstream_id"], f"local:{item['work_item_id']}")
         self.assertIsNotNone(item["activated_at"])
         with closing(sqlite3.connect(self.db_path)) as conn:
-            task = conn.execute(
-                "SELECT lifecycle, priority, routing_mode, requested_worker FROM tasks"
-            ).fetchone()
-            wakeup = conn.execute(
-                "SELECT reason, work_item_id, task_id, status FROM wakeups"
-            ).fetchone()
+            task = conn.execute("SELECT lifecycle, priority, routing_mode, requested_worker FROM tasks").fetchone()
+            wakeup = conn.execute("SELECT reason, work_item_id, task_id, status FROM wakeups").fetchone()
         self.assertEqual(task, ("detected", "P1", "manual", "reviewer"))
         self.assertEqual(wakeup[:2], ("manual_operator_request", item["work_item_id"]))
         self.assertIsNotNone(wakeup[2])
@@ -548,9 +562,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
                 "SELECT task_id, parent_task_id, lifecycle FROM tasks ORDER BY created_at, task_id"
             ).fetchall()
             workstream_count = conn.execute("SELECT COUNT(*) FROM workstreams").fetchone()[0]
-            running_attempts = conn.execute(
-                "SELECT COUNT(*) FROM attempts WHERE status = 'running'"
-            ).fetchone()[0]
+            running_attempts = conn.execute("SELECT COUNT(*) FROM attempts WHERE status = 'running'").fetchone()[0]
             active_tasks = conn.execute(
                 """
                 SELECT COUNT(*) FROM tasks
@@ -659,23 +671,33 @@ class WorkItemCommandTests(WorkItemCommandFixture):
                     self._question(item["work_item_id"], 1)
                 current = board.get_work_item_detail(self.db_path, item["work_item_id"])
                 canceled = work_items.execute_command(
-                    self.db_path, item["work_item_id"], context=self.context,
-                    command="cancel", expected_version=current["version"],
+                    self.db_path,
+                    item["work_item_id"],
+                    context=self.context,
+                    command="cancel",
+                    expected_version=current["version"],
                     idempotency_key="cancel",
                 )
                 with self.assertRaises(work_items.WorkItemConflictError):
                     work_items.execute_command(
-                        self.db_path, item["work_item_id"], context=self.context,
-                        command=command, expected_version=canceled["item"]["version"],
-                        idempotency_key="after-cancel", body="Continue",
+                        self.db_path,
+                        item["work_item_id"],
+                        context=self.context,
+                        command=command,
+                        expected_version=canceled["item"]["version"],
+                        idempotency_key="after-cancel",
+                        body="Continue",
                     )
                 current = board.get_work_item_detail(self.db_path, item["work_item_id"])
                 self.assertEqual(current["column"], "history")
                 with closing(sqlite3.connect(self.db_path)) as conn:
-                    self.assertEqual(conn.execute(
-                        "SELECT COUNT(*) FROM tasks WHERE workstream_id = ? AND lifecycle = 'detected'",
-                        (item["workstream_id"],),
-                    ).fetchone()[0], 0)
+                    self.assertEqual(
+                        conn.execute(
+                            "SELECT COUNT(*) FROM tasks WHERE workstream_id = ? AND lifecycle = 'detected'",
+                            (item["workstream_id"],),
+                        ).fetchone()[0],
+                        0,
+                    )
 
     def test_cancel_rejects_a_live_attempt_without_mutation(self):
         from robert_agent.work.application import commands as work_items
@@ -702,9 +724,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
                 idempotency_key="cancel-running",
             )
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertIsNone(
-                conn.execute("SELECT canceled_at FROM work_items").fetchone()[0]
-            )
+            self.assertIsNone(conn.execute("SELECT canceled_at FROM work_items").fetchone()[0])
 
     def test_github_issue_and_derived_pr_resolve_to_one_stable_item(self):
         from robert_agent.work.application import commands as work_items

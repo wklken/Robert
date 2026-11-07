@@ -51,16 +51,11 @@ def _decode_json(value, default=None):
 def _connect(db_path):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    tables = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     missing = REQUIRED_TABLES - tables
     if missing:
         conn.close()
-        raise sqlite3.OperationalError(
-            "workbench schema is missing: " + ", ".join(sorted(missing))
-        )
+        raise sqlite3.OperationalError("workbench schema is missing: " + ", ".join(sorted(missing)))
     return conn
 
 
@@ -92,9 +87,9 @@ def _group_rows(conn, sql, key, ids=None):
     if ids is not None and not ids:
         return grouped
     ids = None if ids is None else list(dict.fromkeys(ids))
-    batches = [None] if ids is None else [ids[i:i + 200] for i in range(0, len(ids), 200)]
+    batches = [None] if ids is None else [ids[i : i + 200] for i in range(0, len(ids), 200)]
     for batch in batches:
-        query = sql if batch is None else f"SELECT * FROM ({sql}) WHERE {key} IN (" + ','.join('?' for _ in batch) + ')'
+        query = sql if batch is None else f"SELECT * FROM ({sql}) WHERE {key} IN (" + ",".join("?" for _ in batch) + ")"
         for row in conn.execute(query, batch or []):
             item = dict(row)
             grouped[item[key]].append(item)
@@ -105,14 +100,21 @@ def _load_state(conn, workstream_id=None):
     workstream_ids = None
     if workstream_id is not None:
         # Ancestors provide the owning board item for a derived PR workstream.
-        workstream_ids = [row[0] for row in conn.execute(
-            """WITH RECURSIVE ancestors(workstream_id,origin_workstream_id) AS (
+        workstream_ids = [
+            row[0]
+            for row in conn.execute(
+                """WITH RECURSIVE ancestors(workstream_id,origin_workstream_id) AS (
                 SELECT workstream_id,origin_workstream_id FROM workstreams WHERE workstream_id=?
                 UNION
                 SELECT w.workstream_id,w.origin_workstream_id FROM workstreams w
                 JOIN ancestors a ON w.workstream_id=a.origin_workstream_id
-            ) SELECT workstream_id FROM ancestors""", (workstream_id,))]
-    clause = '' if workstream_ids is None else ' WHERE w.workstream_id IN (' + ','.join('?' for _ in workstream_ids) + ')'
+            ) SELECT workstream_id FROM ancestors""",
+                (workstream_id,),
+            )
+        ]
+    clause = (
+        "" if workstream_ids is None else " WHERE w.workstream_id IN (" + ",".join("?" for _ in workstream_ids) + ")"
+    )
     workstreams = [
         dict(row)
         for row in conn.execute(
@@ -139,7 +141,8 @@ def _load_state(conn, workstream_id=None):
             JOIN repos r ON r.repo_id = w.repo_id
             LEFT JOIN github_sources gs ON gs.source_id = w.primary_source_id
             {clause}
-            """, workstream_ids or [],
+            """,
+            workstream_ids or [],
         )
     ]
     tasks = _group_rows(
@@ -151,7 +154,8 @@ def _load_state(conn, workstream_id=None):
         FROM tasks
         ORDER BY updated_at DESC, task_id DESC
         """,
-        "workstream_id", workstream_ids,
+        "workstream_id",
+        workstream_ids,
     )
     task_ids = None if workstream_ids is None else [task["task_id"] for rows in tasks.values() for task in rows]
     attempts = _group_rows(
@@ -163,9 +167,12 @@ def _load_state(conn, workstream_id=None):
         FROM attempts
         ORDER BY attempt_no DESC, started_at DESC, attempt_id DESC
         """,
-        "task_id", task_ids,
+        "task_id",
+        task_ids,
     )
-    attempt_ids = None if task_ids is None else [attempt["attempt_id"] for rows in attempts.values() for attempt in rows]
+    attempt_ids = (
+        None if task_ids is None else [attempt["attempt_id"] for rows in attempts.values() for attempt in rows]
+    )
     phases = _group_rows(
         conn,
         """
@@ -173,7 +180,8 @@ def _load_state(conn, workstream_id=None):
         FROM worker_phases
         ORDER BY created_at, phase_id
         """,
-        "attempt_id", attempt_ids,
+        "attempt_id",
+        attempt_ids,
     )
     results = _group_rows(
         conn,
@@ -184,7 +192,8 @@ def _load_state(conn, workstream_id=None):
         FROM worker_results
         ORDER BY created_at DESC, result_id DESC
         """,
-        "task_id", task_ids,
+        "task_id",
+        task_ids,
     )
     actions = _group_rows(
         conn,
@@ -195,7 +204,8 @@ def _load_state(conn, workstream_id=None):
         FROM github_actions
         ORDER BY created_at DESC, action_id DESC
         """,
-        "task_id", task_ids,
+        "task_id",
+        task_ids,
     )
     artifacts = _group_rows(
         conn,
@@ -204,7 +214,8 @@ def _load_state(conn, workstream_id=None):
         FROM artifacts
         ORDER BY created_at DESC, artifact_id DESC
         """,
-        "task_id", task_ids,
+        "task_id",
+        task_ids,
     )
     notifications = _group_rows(
         conn,
@@ -213,7 +224,8 @@ def _load_state(conn, workstream_id=None):
         FROM notifications
         ORDER BY created_at DESC, notification_id DESC
         """,
-        "task_id", task_ids,
+        "task_id",
+        task_ids,
     )
     remediation_episodes = _group_rows(
         conn,
@@ -225,39 +237,55 @@ def _load_state(conn, workstream_id=None):
         FROM pr_remediation_episodes
         ORDER BY updated_at DESC, episode_id DESC
         """,
-        "workstream_id", workstream_ids,
+        "workstream_id",
+        workstream_ids,
     )
     attention = {}
     from robert_agent.adapters.sqlite import execution_control as execution_store
+
     subjects = set()
     for stream_tasks in tasks.values():
         for task in stream_tasks:
-            subjects.add(('task', task['task_id']))
-            metadata = _decode_json(task.get('metadata_json'), {}) or {}
-            if metadata.get('remediation_episode_id'):
-                subjects.add(('remediation_episode', metadata['remediation_episode_id']))
+            subjects.add(("task", task["task_id"]))
+            metadata = _decode_json(task.get("metadata_json"), {}) or {}
+            if metadata.get("remediation_episode_id"):
+                subjects.add(("remediation_episode", metadata["remediation_episode_id"]))
     controls = execution_store.read_controls(conn, subjects if workstream_ids is not None else None)
     for stream_tasks in tasks.values():
         for task in stream_tasks:
-            metadata = _decode_json(task.get('metadata_json'), {}) or {}
-            binding = controls.get(('task', task['task_id'])) or controls.get(('remediation_episode', metadata.get('remediation_episode_id')))
-            if metadata.get('execution_attention'):
-                attention[task['workstream_id']] = safe_text(metadata['execution_attention'].get('reason_code'))
-            if binding and binding['binding_status'] == 'attention':
-                metadata = _decode_json(binding['metadata_json'], {}) or {}
-                attention[task['workstream_id']] = safe_text(metadata.get('reason_code') or 'execution_attention_required')
-    occupied_clause = '' if workstream_ids is None else ' AND t.workstream_id IN (' + ','.join('?' for _ in workstream_ids) + ')'
-    occupied_tasks = {row[0] for row in conn.execute(
-        f"SELECT a.task_id FROM attempts a JOIN tasks t ON t.task_id=a.task_id WHERE {supervise.occupied_attempt_sql()} {occupied_clause}", workstream_ids or [])}
+            metadata = _decode_json(task.get("metadata_json"), {}) or {}
+            binding = controls.get(("task", task["task_id"])) or controls.get(
+                ("remediation_episode", metadata.get("remediation_episode_id"))
+            )
+            if metadata.get("execution_attention"):
+                attention[task["workstream_id"]] = safe_text(metadata["execution_attention"].get("reason_code"))
+            if binding and binding["binding_status"] == "attention":
+                metadata = _decode_json(binding["metadata_json"], {}) or {}
+                attention[task["workstream_id"]] = safe_text(
+                    metadata.get("reason_code") or "execution_attention_required"
+                )
+    occupied_clause = (
+        "" if workstream_ids is None else " AND t.workstream_id IN (" + ",".join("?" for _ in workstream_ids) + ")"
+    )
+    occupied_tasks = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT a.task_id FROM attempts a JOIN tasks t ON t.task_id=a.task_id WHERE {supervise.occupied_attempt_sql()} {occupied_clause}",
+            workstream_ids or [],
+        )
+    }
     return {
         "workflow_attention": attention,
         "occupied_tasks": occupied_tasks,
         "workstreams": workstreams,
         "workstreams_by_id": {row["workstream_id"]: row for row in workstreams},
-        "board_items": board.workstream_projections(conn, workstream_ids=workstream_ids,
-            controls=controls if workstream_ids is None else None) if conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'"
-        ).fetchone() else {},
+        "board_items": board.workstream_projections(
+            conn,
+            workstream_ids=workstream_ids,
+            controls=controls if workstream_ids is None else None,
+        )
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'").fetchone()
+        else {},
         "tasks": tasks,
         "attempts": attempts,
         "phases": phases,
@@ -299,13 +327,15 @@ def _derive_operator_state(
         latest_by_kind.setdefault(episode["episode_kind"], episode)
     latest_episodes = list(latest_by_kind.values())
     remediation_superseded = bool(latest_episodes) and all(
-        episode["status"] in {"resolved", "superseded", "canceled"}
-        for episode in latest_episodes
+        episode["status"] in {"resolved", "superseded", "canceled"} for episode in latest_episodes
     )
     failure = _decode_json((attempt or {}).get("failure_json"), {}) or {}
     if failure.get("reason_code") == "question_not_deliverable":
-        return ("needs_attention", "question_not_deliverable",
-                safe_text(failure.get("safe_error")) + " Confirm Worker cleanup, then correct the question and retry.")
+        return (
+            "needs_attention",
+            "question_not_deliverable",
+            safe_text(failure.get("safe_error")) + " Confirm Worker cleanup, then correct the question and retry.",
+        )
     for action in actions:
         if action["publish_status"] == "published":
             continue
@@ -315,7 +345,14 @@ def _derive_operator_state(
             return (
                 "needs_attention",
                 "publish_failed",
-                safe_text(publish.get('required_action') or (f"Publication failed; retry at {publish['next_retry_at']}." if publish.get('next_retry_at') else "Publishing the accepted GitHub action failed.")),
+                safe_text(
+                    publish.get("required_action")
+                    or (
+                        f"Publication failed; retry at {publish['next_retry_at']}."
+                        if publish.get("next_retry_at")
+                        else "Publishing the accepted GitHub action failed."
+                    )
+                ),
             )
         if (
             action["audit_status"] == "accepted"
@@ -328,11 +365,7 @@ def _derive_operator_state(
                 "An accepted GitHub action was skipped during publication.",
             )
     exhausted = next(
-        (
-            episode
-            for episode in latest_episodes
-            if episode["status"] == "exhausted"
-        ),
+        (episode for episode in latest_episodes if episode["status"] == "exhausted"),
         None,
     )
     if exhausted:
@@ -367,19 +400,13 @@ def _derive_operator_state(
             "workstream_failed",
             "The GitHub workstream is in a failed state.",
         )
-    if (
-        workstream["workstream_lifecycle"] == "waiting_for_user"
-        or (task and task["lifecycle"] == "waiting_for_user")
-    ):
+    if workstream["workstream_lifecycle"] == "waiting_for_user" or (task and task["lifecycle"] == "waiting_for_user"):
         return (
             "waiting",
             "waiting_for_user",
             "The agent is waiting for a trusted GitHub user response.",
         )
-    if any(
-        action["audit_status"] == "accepted" and action["publish_status"] == "not_published"
-        for action in actions
-    ):
+    if any(action["audit_status"] == "accepted" and action["publish_status"] == "not_published" for action in actions):
         return (
             "working",
             "waiting_publish",
@@ -405,19 +432,13 @@ def _derive_operator_state(
             "active_workstream",
             "The GitHub workstream remains active.",
         )
-    if any(
-        episode["status"] in {"open", "queued", "remediating"}
-        for episode in latest_episodes
-    ):
+    if any(episode["status"] in {"open", "queued", "remediating"} for episode in latest_episodes):
         return (
             "working",
             "pr_remediation_active",
             "Automated PR remediation is active.",
         )
-    if any(
-        episode["status"] == "waiting_for_signal"
-        for episode in latest_episodes
-    ):
+    if any(episode["status"] == "waiting_for_signal" for episode in latest_episodes):
         return (
             "waiting",
             "pr_remediation_waiting_for_signal",
@@ -474,8 +495,12 @@ def _item_from_workstream(state, workstream):
         actions,
         remediation_episodes,
     )
-    if workstream['workstream_id'] in state.get('workflow_attention', {}):
-        bucket, reason_code, reason_summary = ('needs_attention', state['workflow_attention'][workstream['workstream_id']], 'Automatic execution stopped. Inspect the failure, resolve its cause, then explicitly retry or cancel.')
+    if workstream["workstream_id"] in state.get("workflow_attention", {}):
+        bucket, reason_code, reason_summary = (
+            "needs_attention",
+            state["workflow_attention"][workstream["workstream_id"]],
+            "Automatic execution stopped. Inspect the failure, resolve its cause, then explicitly retry or cancel.",
+        )
     board_item = state["board_items"].get(workstream["workstream_id"])
     ancestor = workstream
     seen = set()
@@ -487,34 +512,44 @@ def _item_from_workstream(state, workstream):
         seen.add(origin)
         board_item = state["board_items"].get(origin)
         ancestor = streams.get(origin, {})
-    lifecycle = {key: board_item[key] for key in (
-        "work_item_id", "column", "reason_code", "reason_summary", "pr"
-    )} if board_item else None
+    lifecycle = (
+        {key: board_item[key] for key in ("work_item_id", "column", "reason_code", "reason_summary", "pr")}
+        if board_item
+        else None
+    )
     if (
         workstream["workstream_lifecycle"] in {"completed", "canceled"}
-        and (str(workstream.get("source_state") or "").lower() in {"closed", "merged"}
-             or (board_item and board_item['operator_cancellation_settled']))
-        and (not board_item or board_item['reason_code'] != 'canceled'
-             or board_item['operator_cancellation_settled'])
-        and workstream['workstream_id'] not in state.get('workflow_attention', {})
+        and (
+            str(workstream.get("source_state") or "").lower() in {"closed", "merged"}
+            or (board_item and board_item["operator_cancellation_settled"])
+        )
+        and (not board_item or board_item["reason_code"] != "canceled" or board_item["operator_cancellation_settled"])
+        and workstream["workstream_id"] not in state.get("workflow_attention", {})
         and not any(t["lifecycle"] in ACTIVE_TASK_LIFECYCLES | {"waiting_for_user"} for t in tasks)
-        and not any(t['task_id'] in state['occupied_tasks'] for t in tasks)
+        and not any(t["task_id"] in state["occupied_tasks"] for t in tasks)
         and not any(
             a["audit_status"] in {"pending", "accepted"} and a["publish_status"] == "not_published"
-            for t in tasks for a in state["actions"].get(t["task_id"], [])
+            for t in tasks
+            for a in state["actions"].get(t["task_id"], [])
         )
-        and not any(e["status"] in {"open", "queued", "remediating", "waiting_for_signal"} for e in remediation_episodes)
+        and not any(
+            e["status"] in {"open", "queued", "remediating", "waiting_for_signal"} for e in remediation_episodes
+        )
     ):
-        if board_item and board_item['reason_code'] == 'canceled':
-            bucket, reason_code, reason_summary = 'history', 'canceled', 'Canceled by the operator'
+        if board_item and board_item["reason_code"] == "canceled":
+            bucket, reason_code, reason_summary = (
+                "history",
+                "canceled",
+                "Canceled by the operator",
+            )
         else:
             bucket, reason_code, reason_summary = (
-                "history", "inactive", "The source is closed and its workstream has ended; previous failures remain in execution history."
+                "history",
+                "inactive",
+                "The source is closed and its workstream has ended; previous failures remain in execution history.",
             )
     failed_publish_actions = sum(
-        1
-        for action in actions
-        if action["publish_status"] != "published" and _publish_error(action)
+        1 for action in actions if action["publish_status"] != "published" and _publish_error(action)
     )
     item = {
         "id": workstream["workstream_id"],
@@ -540,20 +575,13 @@ def _item_from_workstream(state, workstream):
             "pending_publish_actions": sum(
                 1
                 for action in actions
-                if action["audit_status"] == "accepted"
-                and action["publish_status"] == "not_published"
+                if action["audit_status"] == "accepted" and action["publish_status"] == "not_published"
             ),
             "failed_publish_actions": failed_publish_actions,
             "worker_resume_count": sum(
-                1
-                for notification in notifications
-                if notification["notification_type"] == "worker_resume_prepared"
+                1 for notification in notifications if notification["notification_type"] == "worker_resume_prepared"
             ),
-            "remediation_status": (
-                remediation_episodes[0]["status"]
-                if remediation_episodes
-                else None
-            ),
+            "remediation_status": (remediation_episodes[0]["status"] if remediation_episodes else None),
         },
         "task_ids": [candidate["task_id"] for candidate in tasks],
     }
@@ -585,7 +613,8 @@ def _text_contains_all(values, terms):
 def _matches_query(item, qualifiers, terms):
     source = item["source"]
     if qualifiers["repo"] and not any(
-        value in {
+        value
+        in {
             str(source.get("repo_id") or "").lower(),
             str(source.get("repo_full_name") or "").lower(),
         }
@@ -595,8 +624,7 @@ def _matches_query(item, qualifiers, terms):
     if qualifiers["author"] and str(source.get("author_login") or "").lower() not in qualifiers["author"]:
         return False
     if qualifiers["task"] and not all(
-        any(value in task_id.lower() for task_id in item["task_ids"])
-        for value in qualifiers["task"]
+        any(value in task_id.lower() for task_id in item["task_ids"]) for value in qualifiers["task"]
     ):
         return False
     for value in qualifiers["is"]:
@@ -664,10 +692,7 @@ def list_work_items(
     qualifiers, terms = _parse_query(query)
     with closing(_connect(db_path)) as conn:
         state = _load_state(conn)
-    items = [
-        _item_from_workstream(state, workstream)
-        for workstream in state["workstreams"]
-    ]
+    items = [_item_from_workstream(state, workstream) for workstream in state["workstreams"]]
     repositories = sorted(
         {
             (item["source"]["repo_id"], item["source"]["repo_full_name"])
@@ -677,11 +702,7 @@ def list_work_items(
         key=lambda value: (value[1].lower(), value[0]),
     )
     actors = sorted(
-        {
-            item["source"]["author_login"]
-            for item in items
-            if item["source"]["author_login"]
-        },
+        {item["source"]["author_login"] for item in items if item["source"]["author_login"]},
         key=str.lower,
     )
     items = [
@@ -701,9 +722,7 @@ def list_work_items(
         cursor_pair = _decode_cursor(cursor)
         try:
             cursor_index = next(
-                index
-                for index, item in enumerate(items)
-                if (item["updated_at"] or "", item["id"]) == cursor_pair
+                index for index, item in enumerate(items) if (item["updated_at"] or "", item["id"]) == cursor_pair
             )
         except StopIteration as exc:
             raise WorkItemQueryError("invalid cursor") from exc
@@ -717,10 +736,7 @@ def list_work_items(
     return {
         "items": page,
         "counts": {name: counts.get(name, 0) for name in BUCKET_ORDER},
-        "repositories": [
-            {"repo_id": repo_id, "full_name": full_name}
-            for repo_id, full_name in repositories
-        ],
+        "repositories": [{"repo_id": repo_id, "full_name": full_name} for repo_id, full_name in repositories],
         "actors": actors,
         "next_cursor": next_cursor,
     }
@@ -730,7 +746,13 @@ def _safe_failure(value):
     failure = _decode_json(value, {}) or {}
     if not isinstance(failure, dict):
         return None
-    return safe_text(failure.get("safe_error") or failure.get("message") or failure.get("reason") or failure.get("original_status") or failure.get("status"))
+    return safe_text(
+        failure.get("safe_error")
+        or failure.get("message")
+        or failure.get("reason")
+        or failure.get("original_status")
+        or failure.get("status")
+    )
 
 
 def _safe_result(row):
@@ -749,9 +771,7 @@ def _safe_result(row):
     }
     if isinstance(usage, dict):
         payload["usage"] = {
-            key: usage.get(key)
-            for key in ("usage_available", "source", "usage", "total_cost_usd")
-            if key in usage
+            key: usage.get(key) for key in ("usage_available", "source", "usage", "total_cost_usd") if key in usage
         }
     return payload
 
@@ -769,7 +789,18 @@ def _safe_action(row):
         "audit_status": row["audit_status"],
         "publish_status": row["publish_status"],
         "safe_error": safe_text(publish.get("safe_error")) if isinstance(publish, dict) else None,
-        "retry": {key: publish.get(key) for key in ('attempt_count','max_attempts','reason_code','next_retry_at','required_action')} if isinstance(publish, dict) else {},
+        "retry": {
+            key: publish.get(key)
+            for key in (
+                "attempt_count",
+                "max_attempts",
+                "reason_code",
+                "next_retry_at",
+                "required_action",
+            )
+        }
+        if isinstance(publish, dict)
+        else {},
         "created_at": row["created_at"],
     }
 
@@ -780,11 +811,7 @@ def get_work_item(db_path, workstream_id):
     with closing(_connect(db_path)) as conn:
         state = _load_state(conn, workstream_id)
         workstream = next(
-            (
-                candidate
-                for candidate in state["workstreams"]
-                if candidate["workstream_id"] == workstream_id
-            ),
+            (candidate for candidate in state["workstreams"] if candidate["workstream_id"] == workstream_id),
             None,
         )
         if not workstream:
@@ -824,7 +851,9 @@ def get_work_item(db_path, workstream_id):
             workstream,
             state["tasks"].get(workstream_id, []),
         )
-        timings = [execution_metrics.task_timing(conn, task["task_id"]) for task in state["tasks"].get(workstream_id, [])]
+        timings = [
+            execution_metrics.task_timing(conn, task["task_id"]) for task in state["tasks"].get(workstream_id, [])
+        ]
         retrigger_pending = False
         if current_task:
             retrigger_pending = bool(
@@ -851,17 +880,23 @@ def get_work_item(db_path, workstream_id):
     artifacts = [row for task_id in task_ids for row in state["artifacts"].get(task_id, [])]
     return {
         "id": workstream_id,
-        "work_item_id": item["lifecycle"]["work_item_id"] if item["lifecycle"] else (board_item[0] if board_item else None),
+        "work_item_id": item["lifecycle"]["work_item_id"]
+        if item["lifecycle"]
+        else (board_item[0] if board_item else None),
         "source": item["source"],
         "workstream_lifecycle": item["workstream_lifecycle"],
         "lifecycle": item["lifecycle"],
         "related_sources": related_sources,
         "execution_timings": timings,
         "notification_delivery": [
-            {"notification_id": row["notification_id"], "type": row["notification_type"],
-             "created_at": row["created_at"],
-             "delivery": _decode_json(row["metadata_json"]).get("delivery", {"status": "pending"})}
-            for task_id in task_ids for row in state["notifications"].get(task_id, [])
+            {
+                "notification_id": row["notification_id"],
+                "type": row["notification_type"],
+                "created_at": row["created_at"],
+                "delivery": _decode_json(row["metadata_json"]).get("delivery", {"status": "pending"}),
+            }
+            for task_id in task_ids
+            for row in state["notifications"].get(task_id, [])
         ],
         "operator_state": {
             "bucket": item["bucket"],
@@ -871,8 +906,13 @@ def get_work_item(db_path, workstream_id):
         "controls": {
             "can_retrigger": bool(
                 current_task
-                and ((current_task["lifecycle"] == "failed" and workstream["workstream_lifecycle"] == "failed")
-                     or _decode_json(current_task.get('metadata_json'), {}).get('execution_attention', {}).get('reason_code') == 'result_contract_cutover')
+                and (
+                    (current_task["lifecycle"] == "failed" and workstream["workstream_lifecycle"] == "failed")
+                    or _decode_json(current_task.get("metadata_json"), {})
+                    .get("execution_attention", {})
+                    .get("reason_code")
+                    == "result_contract_cutover"
+                )
                 and str(workstream.get("source_state") or "").lower() == "open"
                 and not retrigger_pending
             ),

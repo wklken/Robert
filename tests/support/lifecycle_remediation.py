@@ -1,4 +1,5 @@
 """Shared fixtures for lifecycle remediation tests."""
+
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
@@ -16,11 +17,11 @@ from robert_agent.adapters.processes import identity as worker_identity
 class LifecycleRemediationFixture(unittest.TestCase):
     def process(self):
         process = subprocess.Popen(
-            [sys.executable, '-c', 'import time; time.sleep(120)'],
+            [sys.executable, "-c", "import time; time.sleep(120)"],
             start_new_session=True,
         )
         self.addCleanup(self.stop_process, process)
-        time.sleep(.1)
+        time.sleep(0.1)
         return process, worker_identity.capture_process_identity(process.pid)
 
     @staticmethod
@@ -40,12 +41,15 @@ class LifecycleRemediationFixture(unittest.TestCase):
         with closing(sqlite3.connect(fixture.db)) as conn, conn:
             conn.execute(
                 "UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,metadata_json=json_set(?, '$.result_contract', 'compact-v1')",
-                (old, old, json.dumps({'dispatch': identity})),
+                (old, old, json.dumps({"dispatch": identity})),
             )
-            task, repo = conn.execute('''SELECT t.task_id,w.repo_id FROM tasks t
-                JOIN workstreams w ON w.workstream_id=t.workstream_id''').fetchone()
-            execution_store.ensure_subject(conn, 'task', task, 'human_request', now.isoformat())
-            conn.execute('''INSERT INTO worker_phases(
+            task, repo = conn.execute("""SELECT t.task_id,w.repo_id FROM tasks t
+                JOIN workstreams w ON w.workstream_id=t.workstream_id""").fetchone()
+            execution_store.ensure_subject(conn, "task", task, "human_request", now.isoformat())
+            conn.execute(
+                """INSERT INTO worker_phases(
                 phase_id,attempt_id,phase,status,summary,created_at)
-                VALUES ('started','attempt-1','analyze','running','Analyzing',?)''', (old,))
+                VALUES ('started','attempt-1','analyze','running','Analyzing',?)""",
+                (old,),
+            )
         return fixture, process, repo, now.isoformat()

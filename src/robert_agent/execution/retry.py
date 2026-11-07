@@ -42,7 +42,13 @@ def error_class(message):
         return "permission_required"
     if any(
         value in text
-        for value in ("missing fields", "not a valid", "invalid configuration", "src refspec", "does not appear to be a git repository")
+        for value in (
+            "missing fields",
+            "not a valid",
+            "invalid configuration",
+            "src refspec",
+            "does not appear to be a git repository",
+        )
     ):
         return "configuration_required"
     return "transient_failure"
@@ -77,17 +83,8 @@ def failure_state(previous, message, now, *, retryable=True):
     elapsed = (timestamp(now) - timestamp(first)).total_seconds()
     transient = category in {"transient_failure", "rate_limited"}
     delay = max(min(60, 5 * 2 ** min(count - 1, 4)), _retry_after_seconds(message, now))
-    allowed = (
-        retryable
-        and transient
-        and count < MAX_ATTEMPTS
-        and elapsed + delay < MAX_ELAPSED_SECONDS
-    )
-    reason = (
-        category
-        if not transient
-        else ("retry_scheduled" if allowed else "retry_budget_exhausted")
-    )
+    allowed = retryable and transient and count < MAX_ATTEMPTS and elapsed + delay < MAX_ELAPSED_SECONDS
+    reason = category if not transient else ("retry_scheduled" if allowed else "retry_budget_exhausted")
     return {
         "attempt_count": count,
         "max_attempts": MAX_ATTEMPTS,
@@ -96,11 +93,7 @@ def failure_state(previous, message, now, *, retryable=True):
         "error_class": category,
         "reason_code": reason,
         "retryable": bool(allowed),
-        "next_retry_at": (
-            timestamp(now) + timedelta(seconds=delay)
-        ).isoformat()
-        if allowed
-        else None,
+        "next_retry_at": (timestamp(now) + timedelta(seconds=delay)).isoformat() if allowed else None,
         "required_action": None
         if allowed
         else {
@@ -184,7 +177,12 @@ def terminal_rate_limit(logs):
             if event.get("type") == "result":
                 if not event.get("is_error"):
                     return None
-                errors.append({"type": "result", "message": str(event.get("errors") or event.get("result") or "")})
+                errors.append(
+                    {
+                        "type": "result",
+                        "message": str(event.get("errors") or event.get("result") or ""),
+                    }
+                )
                 break
             if event.get("type") in {"error", "turn.failed"}:
                 error = event.get("error") or event.get("message") or ""

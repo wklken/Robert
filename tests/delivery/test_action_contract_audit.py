@@ -95,7 +95,10 @@ class ActionContractAuditTests(WorkerProtocolFixture):
             attempt_id="attempt-1",
             output_type="update_existing_pr",
             planned_github_actions=[
-                {"type": "push_existing_pr", "target_url": "https://github.com/x/y/pull/1"}
+                {
+                    "type": "push_existing_pr",
+                    "target_url": "https://github.com/x/y/pull/1",
+                }
             ],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
@@ -147,10 +150,7 @@ class ActionContractAuditTests(WorkerProtocolFixture):
                 {
                     "type": "comment",
                     "url": "https://github.com/x/y/issues/1#comment",
-                    "body": (
-                        "failed at /Users/sample-user/project "
-                        "with 10.0.0.2"
-                    ),
+                    "body": ("failed at /Users/sample-user/project with 10.0.0.2"),
                 }
             ],
             consumed_event_fingerprints=["comment:1"],

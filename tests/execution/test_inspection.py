@@ -5,6 +5,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class InspectionTests(TemporaryWorkspace):
     def test_supervise_classifies_stale_and_timeout(self):
         from robert_agent.execution import inspection as supervise
+
         now = datetime(2026, 6, 16, tzinfo=timezone.utc)
         stale = supervise.classify_attempt(
             heartbeat_at=now - timedelta(minutes=25),
@@ -28,6 +29,7 @@ class InspectionTests(TemporaryWorkspace):
 
     def test_supervise_defaults_hard_timeout_to_45_minutes(self):
         from robert_agent.execution import inspection as supervise
+
         now = datetime(2026, 10, 19, tzinfo=timezone.utc)
 
         timed_out = supervise.classify_attempt(

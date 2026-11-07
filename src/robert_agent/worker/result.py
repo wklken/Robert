@@ -1,4 +1,5 @@
 """Worker result command-line boundary."""
+
 import argparse
 import json
 import sys
@@ -16,10 +17,26 @@ def main(argv=None):
     try:
         submission = json.load(sys.stdin)
     except ValueError:
-        return emit({"ok": False, "status": "failed_validation", "reason_code": "invalid_json",
-                     "field_path": "result", "safe_error": "Submission must be valid JSON."})
-    return emit(implementation.record_result(args.db, {"task_id": args.task_id, "attempt_id": args.attempt_id,
-                                       "output_type": args.output_type, "submission": submission}))
+        return emit(
+            {
+                "ok": False,
+                "status": "failed_validation",
+                "reason_code": "invalid_json",
+                "field_path": "result",
+                "safe_error": "Submission must be valid JSON.",
+            }
+        )
+    return emit(
+        implementation.record_result(
+            args.db,
+            {
+                "task_id": args.task_id,
+                "attempt_id": args.attempt_id,
+                "output_type": args.output_type,
+                "submission": submission,
+            },
+        )
+    )
 
 
 if __name__ == "__main__":

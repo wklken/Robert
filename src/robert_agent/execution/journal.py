@@ -1,4 +1,5 @@
 """Persist controller run steps and deadline cleanup."""
+
 from contextlib import closing
 from contextlib import contextmanager
 from robert_agent.foundation import values
@@ -8,7 +9,7 @@ import sqlite3
 import time
 
 
-SUMMARY_REFERENCE = {'summary_ref': 'agent_runs.summary_json'}
+SUMMARY_REFERENCE = {"summary_ref": "agent_runs.summary_json"}
 
 
 def insert_run_step(conn, run_id, key, status="pending"):
@@ -25,12 +26,15 @@ _STEP_CLOCKS: dict[tuple[str, str | None, str], float] = {}
 
 
 def _step_duration(identity, status, output):
-    if status == 'running':
+    if status == "running":
         _STEP_CLOCKS.setdefault(identity, time.monotonic())
-    if status in {'succeeded', 'failed', 'skipped'}:
+    if status in {"succeeded", "failed", "skipped"}:
         started = _STEP_CLOCKS.pop(identity, None)
         if started is not None:
-            output = {**(output if isinstance(output, dict) else {}), 'duration_seconds': max(0, time.monotonic() - started)}
+            output = {
+                **(output if isinstance(output, dict) else {}),
+                "duration_seconds": max(0, time.monotonic() - started),
+            }
     return output
 
 
@@ -139,8 +143,12 @@ def run_transaction(db_path, run_id):
                 yield conn
         except ControlDeadlineExceeded:
             now = values.utc_now()
-            error = json.dumps({"status": "execution_deadline",
-                "safe_error": "Control command exceeded its execution deadline."})
+            error = json.dumps(
+                {
+                    "status": "execution_deadline",
+                    "safe_error": "Control command exceeded its execution deadline.",
+                }
+            )
             with conn:
                 interrupt_run(conn, run_id, now, error)
             raise
@@ -171,7 +179,13 @@ def finish_run(conn, run_id, status, finished_at, summary, *, error=None, sort_k
     else:
         conn.execute(
             """UPDATE agent_runs SET status=?,finished_at=?,summary_json=?,error_json=? WHERE run_id=?""",
-            (status, finished_at, summary_json, json.dumps(error, ensure_ascii=False, sort_keys=True), run_id),
+            (
+                status,
+                finished_at,
+                summary_json,
+                json.dumps(error, ensure_ascii=False, sort_keys=True),
+                run_id,
+            ),
         )
 
 
@@ -190,33 +204,39 @@ def mark_repo_failure(conn, run_id, repo_id, failed_step, run_now, error):
             (run_id, repo_id, step),
         ).fetchone()
         if row and (row[0] in {"pending", "running"} or step == failed_step):
-            mark_repo_run_step(conn, run_id, repo_id, step, "failed" if step == failed_step else "skipped",
-                run_now, error=error)
+            mark_repo_run_step(
+                conn,
+                run_id,
+                repo_id,
+                step,
+                "failed" if step == failed_step else "skipped",
+                run_now,
+                error=error,
+            )
 
 
-
-def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, queued_count, *, dry_run, skip_publish):
+def summarize_repositories(
+    conn,
+    run_id,
+    run_now,
+    repo_summaries,
+    prompt_count,
+    queued_count,
+    *,
+    dry_run,
+    skip_publish,
+):
     aggregate_counts = {
         "supervised_count": sum(item["supervised_count"] for item in repo_summaries),
-        "failed_timeout_recovered_count": sum(
-            item["failed_timeout_recovered_count"] for item in repo_summaries
-        ),
+        "failed_timeout_recovered_count": sum(item["failed_timeout_recovered_count"] for item in repo_summaries),
         "audited_result_count": sum(item["audited_result_count"] for item in repo_summaries),
-        "reconciled_source_count": sum(
-            item["reconciled_source_count"] for item in repo_summaries
-        ),
+        "reconciled_source_count": sum(item["reconciled_source_count"] for item in repo_summaries),
         "raw_event_count": sum(item["raw_event_count"] for item in repo_summaries),
         "decision_count": sum(item["decision_count"] for item in repo_summaries),
-        "current_state_closed_skip_count": sum(
-            item["current_state_closed_skip_count"] for item in repo_summaries
-        ),
-        "publish_pending_count": sum(
-            item["publish_pending_count"] for item in repo_summaries
-        ),
+        "current_state_closed_skip_count": sum(item["current_state_closed_skip_count"] for item in repo_summaries),
+        "publish_pending_count": sum(item["publish_pending_count"] for item in repo_summaries),
         "published_count": sum(item["published_count"] for item in repo_summaries),
-        "publish_skipped_count": sum(
-            item["publish_skipped_count"] for item in repo_summaries
-        ),
+        "publish_skipped_count": sum(item["publish_skipped_count"] for item in repo_summaries),
         "publish_failed_count": sum(item["publish_failed_count"] for item in repo_summaries),
         "finalized_task_count": sum(item["finalized_task_count"] for item in repo_summaries),
     }
@@ -226,11 +246,7 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
             "skipped"
             if skip_publish
             else (
-                "publish_failed"
-                if aggregate_counts["publish_failed_count"]
-                else "dry_run"
-                if dry_run
-                else "published"
+                "publish_failed" if aggregate_counts["publish_failed_count"] else "dry_run" if dry_run else "published"
             )
         ),
         "pending_count": aggregate_counts["publish_pending_count"],
@@ -245,19 +261,13 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
     step_outputs = {
         "acquire_lease": {
             "repo_count": len(repo_summaries),
-            "acquired_count": sum(
-                1 for item in repo_summaries if item["lease_status"] == "acquired"
-            ),
+            "acquired_count": sum(1 for item in repo_summaries if item["lease_status"] == "acquired"),
             "skipped_active_lease_count": sum(
-                1
-                for item in repo_summaries
-                if item["lease_status"] == "skipped_active_lease"
+                1 for item in repo_summaries if item["lease_status"] == "skipped_active_lease"
             ),
         },
         "supervise": {
-            "failed_timeout_recovered_count": aggregate_counts[
-                "failed_timeout_recovered_count"
-            ],
+            "failed_timeout_recovered_count": aggregate_counts["failed_timeout_recovered_count"],
             "supervised_count": aggregate_counts["supervised_count"],
         },
         "audit_results": {
@@ -277,19 +287,13 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
             "prompt_count": prompt_count,
             "dispatch_queue_count": queued_count,
             "reconciled_source_count": aggregate_counts["reconciled_source_count"],
-            "current_state_closed_skip_count": aggregate_counts[
-                "current_state_closed_skip_count"
-            ],
+            "current_state_closed_skip_count": aggregate_counts["current_state_closed_skip_count"],
         },
     }
 
     for step in REPO_STEP_ORDER:
         failed_summary = next(
-            (
-                item
-                for item in repo_summaries
-                if item["status"] == "failed" and item.get("safe_error")
-            ),
+            (item for item in repo_summaries if item["status"] == "failed" and item.get("safe_error")),
             None,
         )
         error = None
@@ -311,14 +315,8 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
         )
 
     failed_repos = [item for item in repo_summaries if item["status"] == "failed"]
-    succeeded_repos = [
-        item
-        for item in repo_summaries
-        if item["status"] in {"completed", "skipped_active_lease"}
-    ]
-    if repo_summaries and all(
-        item["status"] == "skipped_active_lease" for item in repo_summaries
-    ):
+    succeeded_repos = [item for item in repo_summaries if item["status"] in {"completed", "skipped_active_lease"}]
+    if repo_summaries and all(item["status"] == "skipped_active_lease" for item in repo_summaries):
         overall_status = "skipped_active_lease"
     elif failed_repos and succeeded_repos:
         overall_status = "partial_failure"
@@ -328,9 +326,7 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
         overall_status = "completed"
 
     repo_pipeline_status = (
-        "skipped"
-        if overall_status == "skipped_active_lease"
-        else ("failed" if failed_repos else "succeeded")
+        "skipped" if overall_status == "skipped_active_lease" else ("failed" if failed_repos else "succeeded")
     )
     mark_run_step(
         conn,
@@ -343,7 +339,6 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
     return aggregate_counts, publish_result, overall_status
 
 
-
 def dispatch_failure_for(dispatch_results, dispatch_error):
     return dispatch_error or next(
         (result for result in dispatch_results if not result.get("ok", True) or result.get("status") == "failed"),
@@ -351,8 +346,17 @@ def dispatch_failure_for(dispatch_results, dispatch_error):
     )
 
 
-def finish_dispatch(conn, run_id, overall_status, repo_summaries, prompt_count,
-                    dispatch_results, dispatch_error, aggregate_counts, publish_result):
+def finish_dispatch(
+    conn,
+    run_id,
+    overall_status,
+    repo_summaries,
+    prompt_count,
+    dispatch_results,
+    dispatch_error,
+    aggregate_counts,
+    publish_result,
+):
     finished_at = values.utc_now()
     failure = dispatch_failure_for(dispatch_results, dispatch_error)
     dispatch_count = len(dispatch_results)
@@ -368,43 +372,96 @@ def finish_dispatch(conn, run_id, overall_status, repo_summaries, prompt_count,
         "supervised_count": aggregate_counts["supervised_count"],
     }
     if failure:
-        mark_run_step(conn, run_id, "dispatch", "failed", finished_at,
-                      output={"dispatch_count": dispatch_count}, error=failure)
-        mark_run_step(conn, run_id, "summarize", "skipped", finished_at,
-                      output={"reason": failure.get("status", "failed_dispatch")})
+        mark_run_step(
+            conn,
+            run_id,
+            "dispatch",
+            "failed",
+            finished_at,
+            output={"dispatch_count": dispatch_count},
+            error=failure,
+        )
+        mark_run_step(
+            conn,
+            run_id,
+            "summarize",
+            "skipped",
+            finished_at,
+            output={"reason": failure.get("status", "failed_dispatch")},
+        )
         finish_run(conn, run_id, "failed", finished_at, summary, error=failure)
         return
-    mark_run_step(conn, run_id, "dispatch", "succeeded", finished_at, output={"dispatch_count": dispatch_count})
+    mark_run_step(
+        conn,
+        run_id,
+        "dispatch",
+        "succeeded",
+        finished_at,
+        output={"dispatch_count": dispatch_count},
+    )
     mark_run_step(conn, run_id, "summarize", "succeeded", finished_at, output=summary)
     if overall_status not in {"failed", "partial_failure"}:
         finish_run(conn, run_id, "completed", finished_at, summary)
         return
     first_repo_error = next(
-        ({"status": item.get("failure_status", "failed"), "safe_error": item["safe_error"],
-          "repo_id": item["repo_id"], "full_name": item["full_name"]}
-         for item in repo_summaries if item["status"] == "failed"),
+        (
+            {
+                "status": item.get("failure_status", "failed"),
+                "safe_error": item["safe_error"],
+                "repo_id": item["repo_id"],
+                "full_name": item["full_name"],
+            }
+            for item in repo_summaries
+            if item["status"] == "failed"
+        ),
         None,
     )
-    finish_run(conn, run_id, "failed", finished_at, summary, error=first_repo_error or publish_result)
+    finish_run(
+        conn,
+        run_id,
+        "failed",
+        finished_at,
+        summary,
+        error=first_repo_error or publish_result,
+    )
 
 
 def interrupt_run(conn, run_id, now, error_json):
-    conn.execute("""UPDATE leases SET status='released',released_at=?,heartbeat_at=?
-        WHERE resource_type='agent_run' AND owner_id=? AND status='active'""", (now, now, run_id))
-    for table in ('run_steps', 'run_repo_steps'):
-        conn.execute(f"""UPDATE {table}
+    conn.execute(
+        """UPDATE leases SET status='released',released_at=?,heartbeat_at=?
+        WHERE resource_type='agent_run' AND owner_id=? AND status='active'""",
+        (now, now, run_id),
+    )
+    for table in ("run_steps", "run_repo_steps"):
+        conn.execute(
+            f"""UPDATE {table}
             SET status=CASE WHEN status='running' THEN 'failed' ELSE 'skipped' END,
                 finished_at=?,error_json=?
-            WHERE run_id=? AND status IN ('running','pending')""", (now, error_json, run_id))
-    conn.execute("""UPDATE agent_runs SET status='failed',finished_at=?,error_json=?
-        WHERE run_id=? AND status='running'""", (now, error_json, run_id))
+            WHERE run_id=? AND status IN ('running','pending')""",
+            (now, error_json, run_id),
+        )
+    conn.execute(
+        """UPDATE agent_runs SET status='failed',finished_at=?,error_json=?
+        WHERE run_id=? AND status='running'""",
+        (now, error_json, run_id),
+    )
 
 
 def finish_stopped_executor(conn, executor_id, now):
-    error = json.dumps({'status': 'executor_interrupted',
-                        'safe_error': 'Control executor stopped before recording its outcome.'})
-    run_ids = [row[0] for row in conn.execute("""SELECT run_id FROM agent_runs
-        WHERE status='running' AND json_extract(summary_json,'$.executor_id')=?""", (executor_id,))]
+    error = json.dumps(
+        {
+            "status": "executor_interrupted",
+            "safe_error": "Control executor stopped before recording its outcome.",
+        }
+    )
+    run_ids = [
+        row[0]
+        for row in conn.execute(
+            """SELECT run_id FROM agent_runs
+        WHERE status='running' AND json_extract(summary_json,'$.executor_id')=?""",
+            (executor_id,),
+        )
+    ]
     for run_id in run_ids:
         interrupt_run(conn, run_id, now, error)
 

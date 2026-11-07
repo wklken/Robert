@@ -139,9 +139,7 @@ def claim_subject(conn, subject_type, subject_id, *, now):
         )
 
     episode = _load_episode(conn, subject_id)
-    episode_status = (
-        episode["status"] if isinstance(episode, sqlite3.Row) else episode[7]
-    )
+    episode_status = episode["status"] if isinstance(episode, sqlite3.Row) else episode[7]
     return _claim(
         conn,
         "remediation_episode",
@@ -198,10 +196,15 @@ def terminate_worker(db_path, attempt_id):
 
         metadata = _json_object(attempt.get("metadata_json"))
         from robert_agent.execution.rounds import terminate_children
+
         children_status = terminate_children(conn, attempt["task_id"])
         if children_status == "attention":
             status = "attention"
-            result = {**result, "status": status, "reason": "review_child_identity_unknown"}
+            result = {
+                **result,
+                "status": status,
+                "reason": "review_child_identity_unknown",
+            }
         metadata["termination"] = result
         conn.execute(
             "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
@@ -223,9 +226,7 @@ def terminate_worker(db_path, attempt_id):
             for subject_type, subject_id in subject_candidates:
                 binding = execution_store.get_binding(conn, subject_type, subject_id)
                 if binding and binding["binding_status"] == "active":
-                    execution_store.mark_binding_attention(
-                        conn, subject_type, subject_id, now
-                    )
+                    execution_store.mark_binding_attention(conn, subject_type, subject_id, now)
                     break
 
         notification_metadata = {
@@ -448,9 +449,7 @@ def mark_publication_attention(conn, task_id, action_scope, reason_code, *, now)
     already-attention bindings.  A missing binding is a valid legacy state.
     """
 
-    subject_type, subject_id, binding = publication_subject_for_action(
-        conn, task_id, action_scope
-    )
+    subject_type, subject_id, binding = publication_subject_for_action(conn, task_id, action_scope)
     if binding and binding.get("binding_status") == "active":
         execution_store.mark_binding_attention(conn, subject_type, subject_id, now)
     return subject_type, subject_id, binding
@@ -459,9 +458,7 @@ def mark_publication_attention(conn, task_id, action_scope, reason_code, *, now)
 def publication_scope_is_current(conn, task_id, action_scope):
     """Return whether an accepted publication scope may safely retry absence."""
 
-    subject_type, subject_id, binding = publication_subject_for_action(
-        conn, task_id, action_scope
-    )
+    subject_type, subject_id, binding = publication_subject_for_action(conn, task_id, action_scope)
     if binding and binding.get("binding_status") != "active":
         return False
     # Legacy rows may predate workflow bindings.  Their durable publication
@@ -476,9 +473,7 @@ def publication_scope_is_current(conn, task_id, action_scope):
             (subject_id,),
         ).fetchone()
         return bool(row and row[0] not in _TERMINAL_EPISODE_STATUSES)
-    row = conn.execute(
-        "SELECT lifecycle FROM tasks WHERE task_id = ?", (subject_id,)
-    ).fetchone()
+    row = conn.execute("SELECT lifecycle FROM tasks WHERE task_id = ?", (subject_id,)).fetchone()
     return bool(row and row[0] not in _TERMINAL_TASK_LIFECYCLES)
 
 

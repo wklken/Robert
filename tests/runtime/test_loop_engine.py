@@ -50,6 +50,7 @@ repos:
 
     def test_loop_stops_without_runnable_work(self):
         from robert_agent.runtime import loop as loop_engine
+
         result = loop_engine.run_loop(
             self.config_path,
             dry_run=True,
@@ -64,6 +65,7 @@ repos:
 
     def test_loop_ignores_local_work_outside_configured_repos(self):
         from robert_agent.runtime import loop as loop_engine
+
         db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -150,9 +152,11 @@ repos:
                 """,
                 (now, now),
             )
-            execution_store.ensure_subject(conn, 'task', 'task-b', 'human_request', now)
-            conn.execute("INSERT INTO execution_pending_facts(source_signal_id,subject_type,subject_id,topic,dedupe_key,fact_id,disposition,repo_id,task_id,payload_json,not_before_at) VALUES ('pending-b','task','task-b','subject-events','reply-b','reply-b','github_event','repo-b','task-b','{}',?)",(now,))
-
+            execution_store.ensure_subject(conn, "task", "task-b", "human_request", now)
+            conn.execute(
+                "INSERT INTO execution_pending_facts(source_signal_id,subject_type,subject_id,topic,dedupe_key,fact_id,disposition,repo_id,task_id,payload_json,not_before_at) VALUES ('pending-b','task','task-b','subject-events','reply-b','reply-b','github_event','repo-b','task-b','{}',?)",
+                (now,),
+            )
 
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo-a"]))
@@ -160,6 +164,7 @@ repos:
 
     def test_loop_stops_when_cycle_makes_no_progress(self):
         from robert_agent.runtime import loop as loop_engine
+
         db_path = self._init_runnable_db()
 
         def runner(*_args, **_kwargs):
@@ -179,6 +184,7 @@ repos:
 
     def test_loop_ignores_agent_run_count_when_detecting_progress(self):
         from robert_agent.runtime import loop as loop_engine
+
         db_path = self._init_runnable_db()
 
         def runner(*_args, **_kwargs):
@@ -190,7 +196,11 @@ repos:
                     """,
                     (datetime.now(timezone.utc).isoformat(),),
                 )
-            return {"ok": True, "status": "completed", "run_id": "run-no-business-progress"}
+            return {
+                "ok": True,
+                "status": "completed",
+                "run_id": "run-no-business-progress",
+            }
 
         result = loop_engine.run_loop(
             self.config_path,
@@ -206,6 +216,7 @@ repos:
 
     def test_loop_stops_at_max_cycles_while_progress_continues(self):
         from robert_agent.runtime import loop as loop_engine
+
         db_path = self._init_runnable_db()
         calls = []
 
@@ -255,6 +266,7 @@ repos:
 
     def test_loop_runs_when_attempt_needs_supervision(self):
         from robert_agent.runtime import loop as loop_engine
+
         db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -312,10 +324,15 @@ repos:
 
     def test_loop_stops_when_run_once_fails(self):
         from robert_agent.runtime import loop as loop_engine
+
         self._init_runnable_db()
 
         def runner(*_args, **_kwargs):
-            return {"ok": False, "status": "failed_dispatch", "safe_error": "worker failed"}
+            return {
+                "ok": False,
+                "status": "failed_dispatch",
+                "safe_error": "worker failed",
+            }
 
         result = loop_engine.run_loop(
             self.config_path,
@@ -330,12 +347,17 @@ repos:
 
     def test_loop_passes_skip_publish_to_run_once(self):
         from robert_agent.runtime import loop as loop_engine
+
         self._init_runnable_db()
         runner_kwargs = []
 
         def runner(*_args, **kwargs):
             runner_kwargs.append(kwargs)
-            return {"ok": False, "status": "failed_dispatch", "safe_error": "worker failed"}
+            return {
+                "ok": False,
+                "status": "failed_dispatch",
+                "safe_error": "worker failed",
+            }
 
         result = loop_engine.run_loop(
             self.config_path,
@@ -350,6 +372,7 @@ repos:
 
     def test_loop_zero_publish_budget_does_not_block_skip_publish_work(self):
         from robert_agent.runtime import loop as loop_engine
+
         self._init_runnable_db()
         runner_kwargs = []
 
@@ -376,15 +399,14 @@ repos:
 
     def test_loop_enforces_publish_action_budget(self):
         from robert_agent.runtime import loop as loop_engine
+
         db_path = self._init_runnable_db()
         runner_kwargs = []
 
         def runner(*_args, **kwargs):
             runner_kwargs.append(kwargs)
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute(
-                    "UPDATE wakeups SET status = 'consumed' WHERE wakeup_id = 'wakeup-1'"
-                )
+                conn.execute("UPDATE wakeups SET status = 'consumed' WHERE wakeup_id = 'wakeup-1'")
                 now = datetime.now(timezone.utc).isoformat()
                 conn.execute(
                     """
@@ -428,6 +450,7 @@ repos:
 
     def _init_runnable_db(self):
         from robert_agent.runtime import loop as loop_engine
+
         db_path, _repo_ids = loop_engine.load_config_scope(self.config_path, skip_external=True)
         now = datetime.now(timezone.utc).isoformat()
         with closing(sqlite3.connect(db_path)) as conn, conn:

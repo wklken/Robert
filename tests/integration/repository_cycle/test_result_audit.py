@@ -3,7 +3,10 @@ import json
 import sqlite3
 from tests.support import PACKAGE_ROOT
 from tests.support.repository_cycle import (
-    RepositoryCycleFixture, _dd_comment_body, _review_point_evaluation, _verification_evidence,
+    RepositoryCycleFixture,
+    _dd_comment_body,
+    _review_point_evaluation,
+    _verification_evidence,
 )
 
 
@@ -11,6 +14,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
     def test_run_once_rejects_publishable_result_without_required_verification(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -21,9 +25,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -53,6 +55,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
     def test_audit_rejects_comment_target_outside_task_repository(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -81,9 +84,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -103,9 +104,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
                             ),
                         }
                     ],
-                    "consumed_event_fingerprints": [
-                        "comment:comment-analysis-scope"
-                    ],
+                    "consumed_event_fingerprints": ["comment:comment-analysis-scope"],
                     "verification": [],
                     "handoff": "ready",
                     "used_skills": ["fast-code-path"],
@@ -123,6 +122,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
     def test_worker_result_missing_recommended_skill_is_accepted(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -133,9 +133,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -169,15 +167,9 @@ class CycleResultAuditTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
-            audit_metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )["audit"]
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
+            action_status = conn.execute("SELECT audit_status, publish_status FROM github_actions").fetchone()
+            audit_metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["audit"]
             notification = conn.execute(
                 "SELECT notification_type, status FROM notifications ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
@@ -190,6 +182,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
     def test_update_existing_pr_audit_uses_required_skill_and_review_evaluation(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         pr_fixture = self.root / "pr-followup.json"
         pr_fixture.write_text(
             json.dumps(
@@ -224,12 +217,8 @@ class CycleResultAuditTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
-            repo_id, source_id = conn.execute(
-                "SELECT repo_id, primary_source_id FROM workstreams"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
+            repo_id, source_id = conn.execute("SELECT repo_id, primary_source_id FROM workstreams").fetchone()
             conn.execute(
                 """
                 INSERT INTO github_events(
@@ -267,7 +256,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
                             "type": "comment",
                             "target_url": "https://github.com/example/backend/pull/456",
                             "body": _dd_comment_body("Implemented the valid review point and pushed the branch."),
-                        }
+                        },
                     ],
                     "consumed_event_fingerprints": ["comment:pr-followup"],
                     "verification": [_verification_evidence()],
@@ -292,9 +281,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
             action_statuses = conn.execute(
                 "SELECT action_type, audit_status, publish_status FROM github_actions ORDER BY action_type"
             ).fetchall()
-            audit_metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )["audit"]
+            audit_metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["audit"]
         self.assertEqual(
             action_statuses,
             [
@@ -311,6 +298,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
     def test_worker_result_output_type_must_match_route_expected_output(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -321,9 +309,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -361,6 +347,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
     def test_worker_result_is_not_reaudited_after_audit_metadata_recorded(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -371,9 +358,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -423,12 +408,8 @@ class CycleResultAuditTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
-            audit_metadata = json.loads(
-                conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0]
-            )["audit"]
+            action_status = conn.execute("SELECT audit_status, publish_status FROM github_actions").fetchone()
+            audit_metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["audit"]
         self.assertEqual(task_lifecycle, "running")
         self.assertEqual(action_status, ("accepted", "not_published"))
         self.assertEqual(audit_metadata["status"], "accepted")

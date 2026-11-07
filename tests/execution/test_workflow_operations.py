@@ -111,8 +111,8 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
             self.assertEqual(first, same)
 
-            execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
-            execution_store.mark_binding_attention(conn,'remediation_episode','episode-1',NOW)
+            execution_store.ensure_subject(conn, "remediation_episode", "episode-1", "pr_remediation", NOW)
+            execution_store.mark_binding_attention(conn, "remediation_episode", "episode-1", NOW)
             self.assertIsNone(
                 execution_operations.claim_subject(
                     conn,
@@ -122,9 +122,7 @@ class WorkflowOperationsTests(unittest.TestCase):
                 )
             )
 
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = 'task-1'"
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = 'task-1'")
             self.assertEqual(
                 execution_operations.claim_subject(
                     conn,
@@ -165,10 +163,14 @@ class WorkflowOperationsTests(unittest.TestCase):
                     "task-remediation",
                     now=NOW,
                 )
-            execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', NOW)
-            self.assertEqual(execution_operations.claim_subject(conn,'task','task-1',now=NOW)['binding_status'],'active')
-            execution_store.mark_binding_attention(conn,'task','task-1',NOW)
-            self.assertIsNone(execution_operations.claim_subject(conn,'task','task-1',now=NOW))
+            execution_store.ensure_subject(conn, "task", "task-1", "human_request", NOW)
+            self.assertEqual(
+                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)["binding_status"],
+                "active",
+            )
+            execution_store.mark_binding_attention(conn, "task", "task-1", NOW)
+            self.assertIsNone(execution_operations.claim_subject(conn, "task", "task-1", now=NOW))
+
 
 class MigratedSubjectClaimTests(unittest.TestCase):
     def setUp(self):
@@ -203,7 +205,14 @@ class MigratedSubjectClaimTests(unittest.TestCase):
 
         for row_factory in (None, sqlite3.Row):
             self.conn.row_factory = row_factory
-            for lifecycle in ("queued", "running", "completed", "failed", "canceled", "ignored"):
+            for lifecycle in (
+                "queued",
+                "running",
+                "completed",
+                "failed",
+                "canceled",
+                "ignored",
+            ):
                 with self.subTest(row_factory=row_factory, lifecycle=lifecycle):
                     self.conn.execute("DELETE FROM execution_subjects")
                     self.conn.execute("DELETE FROM tasks")
@@ -211,9 +220,7 @@ class MigratedSubjectClaimTests(unittest.TestCase):
                         "INSERT INTO tasks(task_id, workstream_id, lifecycle, created_at, updated_at) VALUES ('task', 'ws', ?, ?, ?)",
                         (lifecycle, NOW, NOW),
                     )
-                    binding = execution_operations.claim_subject(
-                        self.conn, "task", "task", now=NOW
-                    )
+                    binding = execution_operations.claim_subject(self.conn, "task", "task", now=NOW)
                     if lifecycle in {"queued", "running"}:
                         self.assertEqual(binding["binding_status"], "active")
                     else:
@@ -247,9 +254,7 @@ class MigratedSubjectClaimTests(unittest.TestCase):
                         """,
                         (status, NOW, NOW),
                     )
-                    binding = execution_operations.claim_subject(
-                        self.conn, "remediation_episode", "episode", now=NOW
-                    )
+                    binding = execution_operations.claim_subject(self.conn, "remediation_episode", "episode", now=NOW)
                     if status == "queued":
                         self.assertEqual(binding["binding_status"], "active")
                     else:

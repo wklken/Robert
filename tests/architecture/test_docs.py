@@ -71,9 +71,7 @@ class DocumentationTests(unittest.TestCase):
                 self.assertFalse((ROOT / "docs" / name).exists())
 
     def test_agent_install_guide_is_complete(self):
-        text = (ROOT / "docs" / "agent-install.md").read_text(
-            encoding="utf-8"
-        )
+        text = (ROOT / "docs" / "agent-install.md").read_text(encoding="utf-8")
         for fragment in [
             "pipx install robert-github-agent",
             "gh auth status",

@@ -6,7 +6,9 @@ from tests.support import PACKAGE_ROOT
 from robert_agent.work.application import completion
 from robert_agent.application import repository_cycle
 from tests.support.repository_cycle import (
-    RepositoryCycleFixture, _dd_comment_body, _verification_evidence,
+    RepositoryCycleFixture,
+    _dd_comment_body,
+    _verification_evidence,
 )
 
 
@@ -14,6 +16,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
     def test_audited_worker_result_with_unpublished_action_keeps_task_active(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -24,9 +27,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -60,19 +61,13 @@ class CyclePublicationTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
-            action_status = conn.execute(
-                "SELECT audit_status, publish_status FROM github_actions"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
+            action_status = conn.execute("SELECT audit_status, publish_status FROM github_actions").fetchone()
             wakeup_status = conn.execute(
                 "SELECT status FROM wakeups WHERE result_id = ?",
                 (record["result_id"],),
             ).fetchone()[0]
-            relationship = conn.execute(
-                "SELECT relationship FROM task_events"
-            ).fetchone()[0]
+            relationship = conn.execute("SELECT relationship FROM task_events").fetchone()[0]
         self.assertEqual(task_lifecycle, "running")
         self.assertEqual(workstream, ("active", task_id))
         self.assertEqual(action_status, ("accepted", "not_published"))
@@ -81,6 +76,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
 
     def test_run_once_records_publish_actions_step_after_audit(self):
         from robert_agent.runtime import cycle as run_once
+
         calls = []
         original_publish = publish.publish_ready_actions
 
@@ -120,6 +116,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
 
     def test_skip_publish_skips_publish_step_and_does_not_invoke_publish(self):
         from robert_agent.runtime import cycle as run_once
+
         original_publish = publish.publish_ready_actions
         original_finalize = completion.finalize_published_results
 
@@ -158,6 +155,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
     def test_publish_step_finalizes_task_after_action_is_published(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -186,9 +184,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
         record = result.record_result(
             db_path,
             {
@@ -256,9 +252,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
                 "SELECT lifecycle FROM tasks WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-            workstream = conn.execute(
-                "SELECT lifecycle, active_task_id FROM workstreams"
-            ).fetchone()
+            workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             relationship = conn.execute(
                 "SELECT relationship FROM task_events WHERE task_id = ?",
                 (task_id,),
@@ -274,22 +268,38 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertEqual(publish_step["finalized_task_count"], 1)
 
         from robert_agent.readmodels import board
+
         with closing(sqlite3.connect(db_path)) as conn:
-            item_id, completed_at = conn.execute(
-                "SELECT work_item_id, completed_at FROM work_items"
-            ).fetchone()
+            item_id, completed_at = conn.execute("SELECT work_item_id, completed_at FROM work_items").fetchone()
         self.assertIsNotNone(completed_at)
         self.assertEqual(board.get_work_item_detail(db_path, item_id)["column"], "done")
 
-        self.fixture_path.write_text(json.dumps({"events": [{
-            "id": "analysis-followup", "number": 123, "source_type": "issue",
-            "event_type": "assigned", "actor_login": "wklken",
-            "assigned_to": "robert-bot", "assignment_actor_login": "wklken",
-            "body": "Please analyze the token flow too", "intent": "analysis",
-        }]}), encoding="utf-8")
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "analysis-followup",
+                            "number": 123,
+                            "source_type": "issue",
+                            "event_type": "assigned",
+                            "actor_login": "wklken",
+                            "assigned_to": "robert-bot",
+                            "assignment_actor_login": "wklken",
+                            "body": "Please analyze the token flow too",
+                            "intent": "analysis",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         followup = run_once.run_once(
-            self.config_path, workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
-            fixture_path=self.fixture_path, dry_run=True, skip_external=True,
+            self.config_path,
+            workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
         )
         self.assertTrue(followup["ok"], followup)
         detail = board.get_work_item_detail(db_path, item_id)
@@ -299,6 +309,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
 
     def test_publish_failure_does_not_skip_unrelated_routing(self):
         from robert_agent.runtime import cycle as run_once
+
         original_publish = publish.publish_ready_actions
 
         def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None):
@@ -329,9 +340,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertEqual(result["status"], "publish_failed")
         self.assertEqual(len(result["prompt_paths"]), 1)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            step_statuses = dict(
-                conn.execute("SELECT step_key, status FROM run_steps")
-            )
+            step_statuses = dict(conn.execute("SELECT step_key, status FROM run_steps"))
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         self.assertEqual(step_statuses["publish_actions"], "failed")
         self.assertEqual(step_statuses["discover"], "succeeded")
@@ -341,9 +350,12 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertEqual(step_statuses["summarize"], "succeeded")
         self.assertEqual(task_count, 1)
 
-    def test_open_pr_result_materializes_published_pr_target_linked_to_origin_issue(self):
+    def test_open_pr_result_materializes_published_pr_target_linked_to_origin_issue(
+        self,
+    ):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -354,9 +366,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            task_id, attempt_id = conn.execute(
-                "SELECT task_id, attempt_id FROM attempts"
-            ).fetchone()
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
 
         record = result.record_result(
             db_path,
@@ -416,7 +426,9 @@ class CyclePublicationTests(RepositoryCycleFixture):
             ),
         )
 
-    def test_run_once_publish_filters_single_config_repo_when_db_has_other_repo_actions(self):
+    def test_run_once_publish_filters_single_config_repo_when_db_has_other_repo_actions(
+        self,
+    ):
         from robert_agent.adapters.sqlite import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
@@ -449,7 +461,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
                     (task_id, workstream_id, now, now),
                 )
                 conn.execute(
-                    'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at, metadata_json) VALUES (?, ?, 1, \'completed\', ?, ?, \'{"result_contract":"compact-v1"}\')',
+                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at, metadata_json) VALUES (?, ?, 1, 'completed', ?, ?, '{\"result_contract\":\"compact-v1\"}')",
                     (f"attempt:{repo_id}", task_id, now, now),
                 )
                 conn.execute(

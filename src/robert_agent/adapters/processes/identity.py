@@ -343,9 +343,7 @@ def terminate_recorded_identity(
 
     inspect = inspect or inspect_recorded_identity
     signal_group = signal_group or os.killpg
-    supervisor_process_group_id = (
-        os.getpgrp() if supervisor_process_group_id is None else supervisor_process_group_id
-    )
+    supervisor_process_group_id = os.getpgrp() if supervisor_process_group_id is None else supervisor_process_group_id
     clock = clock or _default_clock
     sleep = sleep or time.sleep
     if not _valid_identity(recorded):
@@ -425,7 +423,10 @@ def terminate_recorded_identity(
 
 def live_process_group(pgid):
     completed = subprocess.run(
-        ["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True, timeout=5,
+        ["ps", "-axo", "pid=,pgid=,stat="],
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
     if completed.returncode != 0:
         raise OSError("cannot inspect worker process group")
@@ -467,5 +468,5 @@ def cleanup_new_process(proc, *, signal_group=None, wait_timeout=2.0):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            time.sleep(min(.05, remaining))
+            time.sleep(min(0.05, remaining))
     return False

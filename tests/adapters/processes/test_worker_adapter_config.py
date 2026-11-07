@@ -27,13 +27,14 @@ class WorkerEnvironmentTests(unittest.TestCase):
 
     def test_worker_config_rejects_working_directory(self):
         from tests.support.config_v2 import ConfigV2Fixture
+
         fixture = ConfigV2Fixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        fixture.config['workers']['a']['working_directory'] = '/repo'
+        fixture.config["workers"]["a"]["working_directory"] = "/repo"
         result = fixture.validate()
-        self.assertFalse(result['ok'])
-        self.assertIn('working_directory', result['safe_error'])
+        self.assertFalse(result["ok"])
+        self.assertIn("working_directory", result["safe_error"])
 
     def test_command_adapter_requires_command_sequence(self):
         with self.assertRaisesRegex(ValueError, "YAML sequence"):

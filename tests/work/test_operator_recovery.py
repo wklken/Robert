@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 from contextlib import closing
 
 
@@ -27,16 +26,10 @@ class RecoveryEntryTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         task_id = fixture._failed_github_task()
         with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='running' WHERE task_id=?", (task_id,)
-            )
-            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', '2026-10-24T00:00:00+00:00')
-            execution_store.mark_binding_attention(
-                conn, "task", task_id, "2026-10-24T00:00:00+00:00"
-            )
-            conn.execute(
-                "UPDATE tasks SET lifecycle='failed' WHERE task_id=?", (task_id,)
-            )
+            conn.execute("UPDATE tasks SET lifecycle='running' WHERE task_id=?", (task_id,))
+            execution_store.ensure_subject(conn, "task", task_id, "human_request", "2026-10-24T00:00:00+00:00")
+            execution_store.mark_binding_attention(conn, "task", task_id, "2026-10-24T00:00:00+00:00")
+            conn.execute("UPDATE tasks SET lifecycle='failed' WHERE task_id=?", (task_id,))
         response = work_items.retrigger_failed_github_task(
             fixture.db_path,
             task_id,
@@ -49,7 +42,5 @@ class RecoveryEntryTests(unittest.TestCase):
                 "terminal",
             )
             self.assertTrue(
-                execution_ownership.parent_allows_child(
-                    conn, task_id, retrigger_wakeup_id=response["wakeup_id"]
-                )
+                execution_ownership.parent_allows_child(conn, task_id, retrigger_wakeup_id=response["wakeup_id"])
             )

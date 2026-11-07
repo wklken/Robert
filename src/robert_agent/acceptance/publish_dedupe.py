@@ -13,8 +13,7 @@ from robert_agent.delivery.application import publish
 
 
 COMMENT_BODY = (
-    "<!-- robert-comment task_id=task-comment attempt_id=attempt-comment "
-    "action_index=0 -->\nExisting comment"
+    "<!-- robert-comment task_id=task-comment attempt_id=attempt-comment action_index=0 -->\nExisting comment"
 )
 PR_BODY = (
     "<!-- robert-workstream\n"
@@ -48,7 +47,13 @@ class _DedupeRunner:
 
     def __call__(self, command, **kwargs):
         self.calls.append({"command": list(command), "kwargs": dict(kwargs)})
-        if command == ["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"]:
+        if command == [
+            "gh",
+            "api",
+            "repos/x/y/issues/1/comments?per_page=100",
+            "--paginate",
+            "--slurp",
+        ]:
             return _Completed(
                 json.dumps(
                     [
@@ -162,7 +167,13 @@ def _insert_fixture(db_path):
             VALUES (?, ?, ?, ?, '["comment:1"]', '[]', 'ready', ?, json_object('result_contract','compact-v1'))
             """,
             [
-                ("result-comment", "task-comment", "attempt-comment", "comment_analysis", now),
+                (
+                    "result-comment",
+                    "task-comment",
+                    "attempt-comment",
+                    "comment_analysis",
+                    now,
+                ),
                 ("result-pr", "task-pr", "attempt-pr", "new_pr", now),
             ],
         )

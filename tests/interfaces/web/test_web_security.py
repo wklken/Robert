@@ -9,7 +9,9 @@ import xml.etree.ElementTree as ET
 
 from robert_agent.adapters.sqlite import database as storage
 from robert_agent.interfaces.web.server import (
-    build_http_response, build_read_only_control_context, handle_dashboard_post,
+    build_http_response,
+    build_read_only_control_context,
+    handle_dashboard_post,
     validate_server_options,
 )
 
@@ -17,16 +19,23 @@ from robert_agent.interfaces.web.server import (
 class WebSecurityTests(unittest.TestCase):
     def test_proxy_origin_passes_host_origin_and_csrf_checks(self):
         context = build_read_only_control_context(
-            "unused.sqlite3", host="0.0.0.0", port=8765,
+            "unused.sqlite3",
+            host="0.0.0.0",
+            port=8765,
             public_origin="https://robert.example.com/",
         )
         headers = {
-            "Host": "robert.example.com", "Origin": "https://robert.example.com",
-            "Content-Type": "application/json", "X-Robert-CSRF-Token": context.csrf_token,
+            "Host": "robert.example.com",
+            "Origin": "https://robert.example.com",
+            "Content-Type": "application/json",
+            "X-Robert-CSRF-Token": context.csrf_token,
         }
         status, _, body = handle_dashboard_post(
-            "/api/work-items", b"{}", "unused.sqlite3",
-            control_context=context, request_headers=headers,
+            "/api/work-items",
+            b"{}",
+            "unused.sqlite3",
+            control_context=context,
+            request_headers=headers,
         )
         self.assertEqual(status, 503, body)
         self.assertIn("--config", json.loads(body)["safe_error"])
@@ -35,27 +44,45 @@ class WebSecurityTests(unittest.TestCase):
             ({"Origin": "https://attacker.example.com"}, "invalid Origin"),
             ({"X-Robert-CSRF-Token": "wrong"}, "invalid CSRF token"),
             ({"Origin": "http://robert.example.com"}, "invalid Origin"),
-            ({"Host": "attacker.example.com", "X-Forwarded-Host": "robert.example.com"}, "invalid Host"),
+            (
+                {
+                    "Host": "attacker.example.com",
+                    "X-Forwarded-Host": "robert.example.com",
+                },
+                "invalid Host",
+            ),
         ):
             with self.subTest(changes=changes):
                 status, _, body = handle_dashboard_post(
-                    "/api/work-items", b"{}", "unused.sqlite3",
-                    control_context=context, request_headers={**headers, **changes},
+                    "/api/work-items",
+                    b"{}",
+                    "unused.sqlite3",
+                    control_context=context,
+                    request_headers={**headers, **changes},
                 )
                 self.assertEqual(status, 403)
                 self.assertEqual(json.loads(body)["safe_error"], error)
 
     def test_public_origin_must_be_an_explicit_http_origin(self):
         for origin in (
-            "robert.example.com", "ftp://robert.example.com", "https://*.example.com",
-            "https://user:password@robert.example.com", "https://robert.example.com/path",
-            "https://robert.example.com?query=1", "https://robert.example.com#fragment",
-            "https://robert.example.com:invalid", "https://robert.example.com:99999",
-            "https://robert.example.com\\attacker", "https://robert.example.com\n",
+            "robert.example.com",
+            "ftp://robert.example.com",
+            "https://*.example.com",
+            "https://user:password@robert.example.com",
+            "https://robert.example.com/path",
+            "https://robert.example.com?query=1",
+            "https://robert.example.com#fragment",
+            "https://robert.example.com:invalid",
+            "https://robert.example.com:99999",
+            "https://robert.example.com\\attacker",
+            "https://robert.example.com\n",
         ):
             with self.subTest(origin=origin), self.assertRaises(ValueError):
                 build_read_only_control_context(
-                    "unused.sqlite3", host="127.0.0.1", port=8765, public_origin=origin,
+                    "unused.sqlite3",
+                    host="127.0.0.1",
+                    port=8765,
+                    public_origin=origin,
                 )
 
     def test_public_origin_uses_browser_serialization(self):
@@ -66,13 +93,18 @@ class WebSecurityTests(unittest.TestCase):
         ):
             with self.subTest(origin=origin):
                 context = build_read_only_control_context(
-                    "unused.sqlite3", host="127.0.0.1", port=8765, public_origin=origin,
+                    "unused.sqlite3",
+                    host="127.0.0.1",
+                    port=8765,
+                    public_origin=origin,
                 )
                 self.assertIn(expected, context.allowed_origins)
 
     def test_custom_public_port_is_preserved(self):
         context = build_read_only_control_context(
-            "unused.sqlite3", host="127.0.0.1", port=8765,
+            "unused.sqlite3",
+            host="127.0.0.1",
+            port=8765,
             public_origin="https://robert.example.com:9443",
         )
         self.assertIn("https://robert.example.com:9443", context.allowed_origins)
@@ -105,29 +137,38 @@ class WebSecurityTests(unittest.TestCase):
         for route in ("/", "/?bucket=history", "/board", "/work", "/operations"):
             status, _, body = build_http_response(route, "unused.sqlite3")
             self.assertEqual(status, 200, route)
-            self.assertIn(b'<link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">', body)
+            self.assertIn(
+                b'<link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">',
+                body,
+            )
             self.assertEqual(body.count(b'rel="icon"'), 1, route)
 
     def test_artifact_preview_selects_the_requested_historical_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            db = root / 'review.sqlite3'
+            db = root / "review.sqlite3"
             storage.init_database(db)
             with sqlite3.connect(db) as conn:
                 for number in (1, 2):
-                    path = root / f'attempt-{number}.log'
-                    path.write_text(f'output from attempt {number}')
+                    path = root / f"attempt-{number}.log"
+                    path.write_text(f"output from attempt {number}")
                     conn.execute(
-                        'INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES (?,?,?,?,?)',
-                        (f'log-{number}', 'task-1', 'worker_stdout', str(path), f'2026-10-2{number}'),
+                        "INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES (?,?,?,?,?)",
+                        (
+                            f"log-{number}",
+                            "task-1",
+                            "worker_stdout",
+                            str(path),
+                            f"2026-10-2{number}",
+                        ),
                     )
-            url = '/artifact.txt?task_id=task-1&artifact_type=worker_stdout&artifact_id=log-1'
+            url = "/artifact.txt?task_id=task-1&artifact_type=worker_stdout&artifact_id=log-1"
             status, _, body = build_http_response(url, db)
             self.assertEqual(status, 200)
-            self.assertIn(b'output from attempt 1', body)
-            self.assertNotIn(b'output from attempt 2', body)
-            self.assertEqual(build_http_response(url.replace('task-1', 'unrelated-task'), db)[0], 404)
-            self.assertEqual(build_http_response(url.replace('log-1', 'unknown'), db)[0], 404)
+            self.assertIn(b"output from attempt 1", body)
+            self.assertNotIn(b"output from attempt 2", body)
+            self.assertEqual(build_http_response(url.replace("task-1", "unrelated-task"), db)[0], 404)
+            self.assertEqual(build_http_response(url.replace("log-1", "unknown"), db)[0], 404)
 
     def test_artifact_preview_rejects_paths_outside_database_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,14 +184,20 @@ class WebSecurityTests(unittest.TestCase):
             directory_link = data / "linked"
             directory_link.symlink_to(root, target_is_directory=True)
             for path in (secret, link, directory_link / "private.txt"):
-                with self.subTest(path=path), closing(sqlite3.connect(db)) as conn, conn:
+                with (
+                    self.subTest(path=path),
+                    closing(sqlite3.connect(db)) as conn,
+                    conn,
+                ):
                     conn.execute("DELETE FROM artifacts")
                     conn.execute(
                         "INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES (?,?,?,?,?)",
-                        ("unsafe", "task-1", "worker_stdout", str(path), "now"))
+                        ("unsafe", "task-1", "worker_stdout", str(path), "now"),
+                    )
                     conn.commit()
                     status, _, body = build_http_response(
-                        "/artifact.txt?task_id=task-1&artifact_type=worker_stdout", db)
+                        "/artifact.txt?task_id=task-1&artifact_type=worker_stdout", db
+                    )
                     self.assertEqual(status, 404)
                     self.assertNotIn(b"private host data", body)
 

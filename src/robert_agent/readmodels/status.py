@@ -43,10 +43,13 @@ def _row_dict(row):
 
 
 def _table_exists(conn, name):
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (name,),
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _checked_at_utc():
@@ -66,17 +69,13 @@ def _compact_json(value, max_items=8, max_chars=240):
     if isinstance(value, dict):
         items = list(value.items())
         compact = {
-            key: _compact_json(item, max_items=max_items, max_chars=max_chars)
-            for key, item in items[:max_items]
+            key: _compact_json(item, max_items=max_items, max_chars=max_chars) for key, item in items[:max_items]
         }
         if len(items) > max_items:
             compact["_truncated_keys"] = len(items) - max_items
         return compact
     if isinstance(value, list):
-        compact = [
-            _compact_json(item, max_items=max_items, max_chars=max_chars)
-            for item in value[:max_items]
-        ]
+        compact = [_compact_json(item, max_items=max_items, max_chars=max_chars) for item in value[:max_items]]
         if len(value) > max_items:
             compact.append({"_truncated_items": len(value) - max_items})
         return compact
@@ -108,7 +107,15 @@ def _compact_dispatch(dispatch):
         return {}
     compact = {
         key: dispatch.get(key)
-        for key in ["ok", "status", "task_id", "attempt_id", "pid", "returncode", "safe_error"]
+        for key in [
+            "ok",
+            "status",
+            "task_id",
+            "attempt_id",
+            "pid",
+            "returncode",
+            "safe_error",
+        ]
         if key in dispatch
     }
     if "command" in dispatch:
@@ -129,7 +136,11 @@ def _proc_process_status(pid_value):
         return {"status": "unknown", "pid": pid_value, "safe_error": str(exc)}
     parts = stat_text.rsplit(") ", 1)
     if len(parts) != 2:
-        return {"status": "unknown", "pid": pid_value, "safe_error": "invalid /proc stat"}
+        return {
+            "status": "unknown",
+            "pid": pid_value,
+            "safe_error": "invalid /proc stat",
+        }
     fields = parts[1].split()
     state = fields[0] if fields else ""
     return {
@@ -157,10 +168,26 @@ def _process_status(pid):
     except ProcessLookupError:
         return {"status": "not_found", "pid": pid_value}
     except PermissionError:
-        return {"status": "running", "pid": pid_value, "visibility": "permission_denied"}
+        return {
+            "status": "running",
+            "pid": pid_value,
+            "visibility": "permission_denied",
+        }
     try:
         result = subprocess.run(
-            ["ps", "-p", str(pid_value), "-o", "pid=", "-o", "etime=", "-o", "time=", "-o", "stat="],
+            [
+                "ps",
+                "-p",
+                str(pid_value),
+                "-o",
+                "pid=",
+                "-o",
+                "etime=",
+                "-o",
+                "time=",
+                "-o",
+                "stat=",
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -168,7 +195,12 @@ def _process_status(pid):
         )
     except (OSError, subprocess.SubprocessError) as exc:
         if alive_by_signal:
-            return {"status": "running", "pid": pid_value, "source": "signal", "safe_error": str(exc)}
+            return {
+                "status": "running",
+                "pid": pid_value,
+                "source": "signal",
+                "safe_error": str(exc),
+            }
         return {"status": "unknown", "pid": pid_value, "safe_error": str(exc)}
     output = result.stdout.strip()
     if result.returncode != 0 or not output:
@@ -222,7 +254,12 @@ def build_status(db_path, history_limit=5):
     with closing(sqlite3.connect(db_path)) as conn:
         timings = execution_metrics.summarize(conn)
         from robert_agent.supervision import store as supervision_store
-        supervision = supervision_store.list_incidents(conn, status="active", limit=history_limit) if supervision_store.has_schema(conn) else []
+
+        supervision = (
+            supervision_store.list_incidents(conn, status="active", limit=history_limit)
+            if supervision_store.has_schema(conn)
+            else []
+        )
     latest_run = (data.get("recent_runs") or [{}])[0]
     return {
         "summary": data.get("summary") or {},
@@ -235,10 +272,7 @@ def build_status(db_path, history_limit=5):
         "latest_loop": data.get("latest_loop") or {},
         "operator_alerts": (data.get("operator_alerts") or [])[:history_limit],
         "operator_next_steps": (data.get("operator_next_steps") or [])[:history_limit],
-        "recent_tasks": [
-            _compact_task(task)
-            for task in (data.get("recent_tasks") or [])[:history_limit]
-        ],
+        "recent_tasks": [_compact_task(task) for task in (data.get("recent_tasks") or [])[:history_limit]],
         "latest_run": {
             "run_id": latest_run.get("run_id"),
             "status": latest_run.get("status"),
@@ -444,8 +478,10 @@ def build_task(conn, task_id, result_limit=5):
     task["artifacts"] = _artifacts_for(conn, task_id=task_id)
     if _table_exists(conn, "review_sessions"):
         from robert_agent.adapters.sqlite import review_rounds as review_store
+
         task["review"] = review_store.task_status(conn, task_id)
     from robert_agent.adapters.sqlite import vote_rounds as vote_store
+
     task["vote"] = vote_store.task_status(conn, task_id)
     task["events"] = [
         _row_dict(row)
@@ -545,7 +581,13 @@ def build_run(conn, run_id):
     run["steps"] = [
         {
             **_row_dict(row),
-            "output": _compact_json(step_output(row["step_key"], _decode_json(row["output_json"], {}) or {}, _decode_json(row["referenced_summary_json"], {}) or {})),
+            "output": _compact_json(
+                step_output(
+                    row["step_key"],
+                    _decode_json(row["output_json"], {}) or {},
+                    _decode_json(row["referenced_summary_json"], {}) or {},
+                )
+            ),
             "error": _compact_json(_decode_json(row["error_json"], {}) or {}),
         }
         for row in conn.execute(
@@ -681,7 +723,13 @@ def _payload_summary(payload):
 def _event_candidates(identifier):
     candidates = [identifier]
     if ":" not in identifier:
-        for prefix in ["comment", "review_comment", "review", "assigned", "notification"]:
+        for prefix in [
+            "comment",
+            "review_comment",
+            "review",
+            "assigned",
+            "notification",
+        ]:
             candidates.append(f"{prefix}:{identifier}")
     return list(dict.fromkeys(candidates))
 

@@ -7,7 +7,6 @@ import sqlite3
 from uuid import uuid4
 
 
-
 def _id(prefix):
     return f"{prefix}-{uuid4().hex[:12]}"
 
@@ -261,9 +260,9 @@ def repo_id_for_full_name(full_name):
 
 
 def run_exists(conn, daemon_run_id):
-    return conn.execute('SELECT 1 FROM daemon_runs WHERE daemon_run_id=?', (daemon_run_id,)).fetchone() is not None
+    return conn.execute("SELECT 1 FROM daemon_runs WHERE daemon_run_id=?", (daemon_run_id,)).fetchone() is not None
 
 
 def started_at(conn, daemon_run_id):
-    row = conn.execute('SELECT started_at FROM daemon_runs WHERE daemon_run_id=?', (daemon_run_id,)).fetchone()
+    row = conn.execute("SELECT started_at FROM daemon_runs WHERE daemon_run_id=?", (daemon_run_id,)).fetchone()
     return row[0] if row else None

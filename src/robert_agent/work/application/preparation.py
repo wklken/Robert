@@ -1,4 +1,5 @@
 """Prepare an attempt with durable inputs, a workspace and a prompt."""
+
 from datetime import timedelta
 from pathlib import Path
 from robert_agent.execution import retry as retry_policy
@@ -97,8 +98,7 @@ def upsert_route_decision(conn, task_id, route_result, run_now):
     )
 
 
-def refresh_prepared_task(conn, data_dir, db_path, repo, event, run_now,
-                           dry_run, config_result=None):
+def refresh_prepared_task(conn, data_dir, db_path, repo, event, run_now, dry_run, config_result=None):
     state = source_events.active_task_state(conn, event["workstream_id"])
     if not state:
         return None
@@ -109,25 +109,38 @@ def refresh_prepared_task(conn, data_dir, db_path, repo, event, run_now,
         if not acquired:
             return None
         current = source_events.active_task_state(conn, event["workstream_id"])
-        owner = conn.execute("SELECT active_task_id FROM workstreams WHERE workstream_id=?",
-                             (event["workstream_id"],)).fetchone()
-        if (current != state or not owner or owner[0] != state["task_id"]
-                or current["task_lifecycle"] != "queued"
-                or current["attempt_status"] != "prepared"):
+        owner = conn.execute(
+            "SELECT active_task_id FROM workstreams WHERE workstream_id=?",
+            (event["workstream_id"],),
+        ).fetchone()
+        if (
+            current != state
+            or not owner
+            or owner[0] != state["task_id"]
+            or current["task_lifecycle"] != "queued"
+            or current["attempt_status"] != "prepared"
+        ):
             return None
         prompt_path = attempt_context.prompt_path_for_task(conn, data_dir, state["task_id"])
-        paths = [prompt_path, *(Path(path) for path in
-                 attempt_context.github_context_paths(prompt_path.parent, state["attempt_id"]).values())]
+        paths = [
+            prompt_path,
+            *(
+                Path(path)
+                for path in attempt_context.github_context_paths(prompt_path.parent, state["attempt_id"]).values()
+            ),
+        ]
         previous = {path: path.read_bytes() if path.exists() else None for path in paths}
         try:
             result = _refresh_prepared_task_locked(
-                conn, data_dir, db_path, repo, event, run_now, dry_run, config_result)
+                conn, data_dir, db_path, repo, event, run_now, dry_run, config_result
+            )
             conn.commit()  # Publish metadata before dispatch can acquire this lock.
             return result
         except BaseException:
             conn.rollback()
-            attempt_context.atomic_replace_files({path: content for path, content in previous.items()
-                                   if content is not None})
+            attempt_context.atomic_replace_files(
+                {path: content for path, content in previous.items() if content is not None}
+            )
             for path, content in previous.items():
                 if content is None:
                     path.unlink(missing_ok=True)
@@ -160,15 +173,16 @@ def _refresh_prepared_task_locked(
     if route_result["route_id"] != "update-existing-pr":
         return None
     input_policy = route.review_input_policy(route_result["expected_output"], event)
-    if (state["expected_output"] in {"update_existing_pr", "review_comment"}
-            and source_events.task_review_input_policy(conn, state["task_id"]) == "required"):
+    if (
+        state["expected_output"] in {"update_existing_pr", "review_comment"}
+        and source_events.task_review_input_policy(conn, state["task_id"]) == "required"
+    ):
         input_policy = "required"
     prompt_path = attempt_context.prompt_path_for_task(conn, data_dir, state["task_id"])
     context_path = Path(attempt_context.github_context_paths(prompt_path.parent, state["attempt_id"])["json_path"])
     try:
         prepared_events = json.loads(context_path.read_text(encoding="utf-8"))["events"]
-        event_known = any(item.get("event_fingerprint") == event["event_fingerprint"]
-                          for item in prepared_events)
+        event_known = any(item.get("event_fingerprint") == event["event_fingerprint"] for item in prepared_events)
     except (OSError, ValueError, KeyError, TypeError):
         event_known = False
     if (
@@ -184,10 +198,16 @@ def _refresh_prepared_task_locked(
     # Recheck after external preparation as well. Execution control can revoke
     # ownership while Git is running; no stale input may be installed afterward.
     current = source_events.active_task_state(conn, event["workstream_id"])
-    owner = conn.execute("SELECT active_task_id FROM workstreams WHERE workstream_id=?",
-                         (event["workstream_id"],)).fetchone()
-    if (current != state or not owner or owner[0] != state["task_id"]
-            or not execution_ownership.claim_task(conn, state["task_id"], run_now)):
+    owner = conn.execute(
+        "SELECT active_task_id FROM workstreams WHERE workstream_id=?",
+        (event["workstream_id"],),
+    ).fetchone()
+    if (
+        current != state
+        or not owner
+        or owner[0] != state["task_id"]
+        or not execution_ownership.claim_task(conn, state["task_id"], run_now)
+    ):
         return None
     conn.commit()
     related_events = work_queries.task_related_events(conn, state["task_id"])
@@ -201,13 +221,18 @@ def _refresh_prepared_task_locked(
     )
     prompt_path = attempt_context.prompt_path_for_task(conn, data_dir, state["task_id"])
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
-    github_context = attempt_context.write_github_context_artifacts(prompt_path.parent, state["attempt_id"], related_events)
+    github_context = attempt_context.write_github_context_artifacts(
+        prompt_path.parent, state["attempt_id"], related_events
+    )
     github_context["current_event_fingerprint"] = event["event_fingerprint"]
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
-    runtime_context["publication_targets"] = result_contract.target_urls({
-        "repo": repo["full_name"], "sources": work_queries.sources_for_workstream(conn, event["workstream_id"]),
-    })
+    runtime_context["publication_targets"] = result_contract.target_urls(
+        {
+            "repo": repo["full_name"],
+            "sources": work_queries.sources_for_workstream(conn, event["workstream_id"]),
+        }
+    )
     prompt_text = render_prompt.render_prompt(
         {
             "task_id": state["task_id"],
@@ -236,10 +261,23 @@ def _refresh_prepared_task_locked(
     ]:
         updated = conn.execute(
             "UPDATE artifacts SET bytes=?, created_at=? WHERE attempt_id=? AND artifact_type=? AND path=?",
-            (Path(path).stat().st_size, run_now, state["attempt_id"], artifact_type, path),
+            (
+                Path(path).stat().st_size,
+                run_now,
+                state["attempt_id"],
+                artifact_type,
+                path,
+            ),
         )
         if not updated.rowcount:
-            insert_file_artifact(conn, state["task_id"], state["attempt_id"], artifact_type, path, run_now)
+            insert_file_artifact(
+                conn,
+                state["task_id"],
+                state["attempt_id"],
+                artifact_type,
+                path,
+                run_now,
+            )
     conn.execute(
         """
         UPDATE tasks
@@ -253,16 +291,16 @@ def _refresh_prepared_task_locked(
             state["task_id"],
         ),
     )
-    conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.review_input_policy',?) WHERE task_id=?",
-                 (input_policy, state["task_id"]))
+    conn.execute(
+        "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.review_input_policy',?) WHERE task_id=?",
+        (input_policy, state["task_id"]),
+    )
     upsert_route_decision(conn, state["task_id"], route_result, run_now)
     attempt_metadata_row = conn.execute(
         "SELECT metadata_json FROM attempts WHERE attempt_id = ?",
         (state["attempt_id"],),
     ).fetchone()
-    attempt_metadata = values.json_object(
-        attempt_metadata_row[0] if attempt_metadata_row else None
-    )
+    attempt_metadata = values.json_object(attempt_metadata_row[0] if attempt_metadata_row else None)
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     if existing_pr_head_sha:
         attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
@@ -282,14 +320,25 @@ def _refresh_prepared_task_locked(
     skill_status = route_result.get("skill_status") or {"runnable": True}
     workspace_blocked = bool(worktree_result and not worktree_result.get("ok", True))
     if not skill_status["runnable"] or workspace_blocked:
-        reason = (worktree_result.get("status", "worktree_unavailable")
-                  if workspace_blocked else "required_route_skills_missing")
-        conn.execute("UPDATE attempts SET status='failed', finished_at=? WHERE attempt_id=?",
-                     (run_now, state["attempt_id"]))
-        work_application_lifecycle.finalize_failed_task(conn, state["task_id"], event["workstream_id"], run_now,
-                              {"status": reason})
-        execution_notifications.insert(conn, reason, "recorded", run_now,
-                             metadata={"task_id": state["task_id"], "safe_error": reason})
+        reason = (
+            worktree_result.get("status", "worktree_unavailable")
+            if workspace_blocked
+            else "required_route_skills_missing"
+        )
+        conn.execute(
+            "UPDATE attempts SET status='failed', finished_at=? WHERE attempt_id=?",
+            (run_now, state["attempt_id"]),
+        )
+        work_application_lifecycle.finalize_failed_task(
+            conn, state["task_id"], event["workstream_id"], run_now, {"status": reason}
+        )
+        execution_notifications.insert(
+            conn,
+            reason,
+            "recorded",
+            run_now,
+            metadata={"task_id": state["task_id"], "safe_error": reason},
+        )
     return prompt_path
 
 
@@ -312,40 +361,44 @@ def create_task_attempt_and_prompt(
     native_round_id=None,
 ):
     if not conn.in_transaction:
-        conn.execute('BEGIN IMMEDIATE')
-    remediation_context = (
-        (event.get("metadata") or {}).get("remediation") or {}
-    )
+        conn.execute("BEGIN IMMEDIATE")
+    remediation_context = (event.get("metadata") or {}).get("remediation") or {}
     selected_round = None
     if native_round_id:
-        round_store = vote_store if route_result.get('native_vote_workers') else review_store
+        round_store = vote_store if route_result.get("native_vote_workers") else review_store
         selected_round = round_store.session(conn, round_id=native_round_id)
-        if (not selected_round or selected_round['task_id'] or selected_round['status'] != 'queued'
-                or selected_round['workstream_id'] != stream['workstream_id']
-                or selected_round['request']['event']['event_fingerprint'] != event['event_fingerprint']):
+        if (
+            not selected_round
+            or selected_round["task_id"]
+            or selected_round["status"] != "queued"
+            or selected_round["workstream_id"] != stream["workstream_id"]
+            or selected_round["request"]["event"]["event_fingerprint"] != event["event_fingerprint"]
+        ):
             return None
     existing = None
     if existing_task_id:
-        existing = conn.execute('''SELECT t.metadata_json FROM tasks t
+        existing = conn.execute(
+            """SELECT t.metadata_json FROM tasks t
             JOIN workstreams w ON w.active_task_id=t.task_id
             WHERE t.task_id=? AND t.workstream_id=? AND t.lifecycle='detected'
               AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.task_id)
-              AND json_extract(t.metadata_json,'$.trigger_work_item_event_id') IS NOT NULL''',
-            (existing_task_id, stream['workstream_id'])).fetchone()
+              AND json_extract(t.metadata_json,'$.trigger_work_item_event_id') IS NOT NULL""",
+            (existing_task_id, stream["workstream_id"]),
+        ).fetchone()
         if not existing or not execution_ownership.claim_task(conn, existing_task_id, run_now):
             return None
     if existing_task_id:
         lineage_key = supervision_lineage.get_task_lineage(conn, existing_task_id)
     elif selected_round:
-        lineage_key = selected_round['request']['event'].get(supervision_lineage.LINEAGE_FIELD)
+        lineage_key = selected_round["request"]["event"].get(supervision_lineage.LINEAGE_FIELD)
     elif new_request_event is not None:
         lineage_key = supervision_lineage.github_key(new_request_event)
     elif parent_task_id:
         # A continuation of a legacy request stays unassigned; a parent link
         # alone is not evidence that an old request has a valid recovery chain.
         lineage_key = supervision_lineage.get_task_lineage(conn, parent_task_id)
-    elif remediation_context.get('episode_id'):
-        lineage_key = supervision_lineage.episode_key(remediation_context['episode_id'])
+    elif remediation_context.get("episode_id"):
+        lineage_key = supervision_lineage.episode_key(remediation_context["episode_id"])
     else:
         lineage_key = supervision_lineage.github_key(event)
     if new_request_event is not None:
@@ -353,17 +406,27 @@ def create_task_attempt_and_prompt(
         # Recheck after worktree I/O, which releases the SQLite writer lock.
         if not source_events.github_followup_allows_new_subject(conn, repo, new_request_event, parent_task_id):
             return None
-    elif not existing_task_id and parent_task_id and not execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id):
+    elif (
+        not existing_task_id
+        and parent_task_id
+        and not execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=retrigger_wakeup_id)
+    ):
         return None
-    if not (route_result.get('native_review_workers') or route_result.get('native_vote_workers')):
+    if not (route_result.get("native_review_workers") or route_result.get("native_vote_workers")):
         # Native rounds have a separate explicit-request admission contract;
         # canceling one round does not cancel later independent review requests.
-        item = work_items.resolve_work_item_for_workstream(conn, stream['workstream_id'])
-        if item and item['canceled_at'] and (new_request_event is None or source_events.operator_canceled_item(conn, item)):
+        item = work_items.resolve_work_item_for_workstream(conn, stream["workstream_id"])
+        if (
+            item
+            and item["canceled_at"]
+            and (new_request_event is None or source_events.operator_canceled_item(conn, item))
+        ):
             return None
-        current_stream = conn.execute('SELECT lifecycle FROM workstreams WHERE workstream_id=?',
-                                      (stream['workstream_id'],)).fetchone()
-        if current_stream and current_stream[0] == 'canceled' and new_request_event is None:
+        current_stream = conn.execute(
+            "SELECT lifecycle FROM workstreams WHERE workstream_id=?",
+            (stream["workstream_id"],),
+        ).fetchone()
+        if current_stream and current_stream[0] == "canceled" and new_request_event is None:
             return None
     if remediation_context.get("episode_id") and not execution_ownership.claim_episode(
         conn,
@@ -386,11 +449,14 @@ def create_task_attempt_and_prompt(
         related_events = [event]
     refreshed_context = None
     if retrigger_wakeup_id:
-        saved = conn.execute('SELECT metadata_json FROM wakeups WHERE wakeup_id=?', (retrigger_wakeup_id,)).fetchone()
-        refreshed_context = json.loads(saved[0]).get('refreshed_context') if saved else None
+        saved = conn.execute(
+            "SELECT metadata_json FROM wakeups WHERE wakeup_id=?",
+            (retrigger_wakeup_id,),
+        ).fetchone()
+        refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
     elif parent_task_id and new_request_event is None:
-        saved = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (parent_task_id,)).fetchone()
-        refreshed_context = json.loads(saved[0]).get('refreshed_context') if saved else None
+        saved = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (parent_task_id,)).fetchone()
+        refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
     workstream_id = stream["workstream_id"]
     source_id = values.github_source_id(event["source_key"])
     task_id = existing_task_id or values.new_id("task")
@@ -455,8 +521,11 @@ def create_task_attempt_and_prompt(
         route_confidence=route_result.get("confidence", "low"),
         now=run_now,
     )
-    if item['origin_type'] == 'github' and item['canceled_at'] and new_request_event is not None:
-        conn.execute('UPDATE work_items SET canceled_at=NULL,completed_at=NULL,updated_at=?,version=version+1 WHERE work_item_id=?', (run_now, item['work_item_id']))
+    if item["origin_type"] == "github" and item["canceled_at"] and new_request_event is not None:
+        conn.execute(
+            "UPDATE work_items SET canceled_at=NULL,completed_at=NULL,updated_at=?,version=version+1 WHERE work_item_id=?",
+            (run_now, item["work_item_id"]),
+        )
     if item["origin_type"] == "github" and item["completed_at"] and not item["canceled_at"]:
         conn.execute(
             """UPDATE work_items SET completed_at=NULL, updated_at=?, version=version+1
@@ -479,9 +548,12 @@ def create_task_attempt_and_prompt(
                 run_now,
             ),
         )
-    runtime_context["publication_targets"] = result_contract.target_urls({
-        "repo": repo["full_name"], "sources": work_queries.sources_for_workstream(conn, workstream_id),
-    })
+    runtime_context["publication_targets"] = result_contract.target_urls(
+        {
+            "repo": repo["full_name"],
+            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+        }
+    )
     prompt_path.write_text(
         render_prompt.render_prompt(
             task,
@@ -497,17 +569,37 @@ def create_task_attempt_and_prompt(
         **(values.json_object(existing[0]) if existing else {}),
         **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
         "review_input_policy": task["review_input_policy"],
-        **({'refreshed_context': related_events} if existing else
-           {'refreshed_context': refreshed_context} if refreshed_context else {}),
-        **({"remediation_episode_id": remediation_context.get("episode_id")}
-           if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"} else {}),
-        **({'new_request_event_id': values.github_event_id(new_request_event['event_fingerprint'])}
-           if new_request_event is not None else {}),
+        **(
+            {"refreshed_context": related_events}
+            if existing
+            else {"refreshed_context": refreshed_context}
+            if refreshed_context
+            else {}
+        ),
+        **(
+            {"remediation_episode_id": remediation_context.get("episode_id")}
+            if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
+            else {}
+        ),
+        **(
+            {"new_request_event_id": values.github_event_id(new_request_event["event_fingerprint"])}
+            if new_request_event is not None
+            else {}
+        ),
     }
     if existing:
-        conn.execute('''UPDATE tasks SET lifecycle=?,route_id=?,expected_output=?,updated_at=?,metadata_json=?
-            WHERE task_id=?''', (task_lifecycle, route_result['route_id'], route_result['expected_output'],
-                                 run_now, json.dumps(task_metadata, ensure_ascii=False), task_id))
+        conn.execute(
+            """UPDATE tasks SET lifecycle=?,route_id=?,expected_output=?,updated_at=?,metadata_json=?
+            WHERE task_id=?""",
+            (
+                task_lifecycle,
+                route_result["route_id"],
+                route_result["expected_output"],
+                run_now,
+                json.dumps(task_metadata, ensure_ascii=False),
+                task_id,
+            ),
+        )
     else:
         conn.execute(
             """
@@ -524,8 +616,7 @@ def create_task_attempt_and_prompt(
                 event.get("task_kind", "human_request"),
                 (
                     "queued"
-                    if blocked
-                    and event.get("task_kind", "human_request") == "human_request"
+                    if blocked and event.get("task_kind", "human_request") == "human_request"
                     else task_lifecycle
                 ),
                 parent_task_id,
@@ -545,14 +636,26 @@ def create_task_attempt_and_prompt(
         workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
         recovery_key = None
         if retrigger_wakeup_id and parent_task_id:
-            parent = conn.execute('SELECT metadata_json FROM tasks WHERE task_id=?', (parent_task_id,)).fetchone()
+            parent = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (parent_task_id,)).fetchone()
             previous_round = round_store.session(conn, task_id=parent_task_id)
-            if ((previous_round and previous_round['status'] == 'superseded')
-                    or (parent and values.json_object(parent[0]).get('recovered_execution_attention', {}).get('reason_code') == 'result_contract_cutover')):
+            if (previous_round and previous_round["status"] == "superseded") or (
+                parent
+                and values.json_object(parent[0]).get("recovered_execution_attention", {}).get("reason_code")
+                == "result_contract_cutover"
+            ):
                 recovery_key = retrigger_wakeup_id
-        entry = (round_store.session(conn, round_id=native_round_id) if native_round_id
-                 else round_store.enqueue(conn, repo, {**event, supervision_lineage.LINEAGE_FIELD: lineage_key},
-                                          route_result, workers, recovery_key=recovery_key))
+        entry = (
+            round_store.session(conn, round_id=native_round_id)
+            if native_round_id
+            else round_store.enqueue(
+                conn,
+                repo,
+                {**event, supervision_lineage.LINEAGE_FIELD: lineage_key},
+                route_result,
+                workers,
+                recovery_key=recovery_key,
+            )
+        )
         round_store.update(conn, entry["round_id"], task_id=task_id, status="queued", error=None)
     if blocked and event.get("task_kind", "human_request") == "human_request":
         conn.execute(
@@ -596,11 +699,7 @@ def create_task_attempt_and_prompt(
         ),
     )
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
-    attempt_metadata = (
-        {"existing_pr_head_sha": existing_pr_head_sha}
-        if existing_pr_head_sha
-        else {}
-    )
+    attempt_metadata = {"existing_pr_head_sha": existing_pr_head_sha} if existing_pr_head_sha else {}
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
     conn.execute(
         """
@@ -637,8 +736,8 @@ def create_task_attempt_and_prompt(
                 "task_id": task_id,
                 "safe_error": (
                     worktree_result.get("status", "worktree_unavailable")
-                    if workspace_blocked else
-                    "missing required route skills: " + ", ".join(skill_status["missing_required"])
+                    if workspace_blocked
+                    else "missing required route skills: " + ", ".join(skill_status["missing_required"])
                 ),
             },
         )
@@ -800,9 +899,12 @@ def create_resume_attempt_and_prompt(
     github_context = attempt_context.write_github_context_artifacts(prompt_dir, attempt_id, events)
     runtime_context["github_context"] = github_context
     repo_full_name = conn.execute("SELECT full_name FROM repos WHERE repo_id=?", (repo_id,)).fetchone()[0]
-    runtime_context["publication_targets"] = result_contract.target_urls({
-        "repo": repo_full_name, "sources": work_queries.sources_for_workstream(conn, workstream_id),
-    })
+    runtime_context["publication_targets"] = result_contract.target_urls(
+        {
+            "repo": repo_full_name,
+            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+        }
+    )
     prompt_path.write_text(
         render_prompt.render_prompt(
             task,
@@ -833,9 +935,7 @@ def create_resume_attempt_and_prompt(
             transport_failure_count=failure_count,
             not_before_at=(values.parse_time(run_now) + timedelta(seconds=delay_seconds)).isoformat(),
         )
-    existing_pr_head_sha = values.json_object(previous_metadata_json).get(
-        "existing_pr_head_sha"
-    )
+    existing_pr_head_sha = values.json_object(previous_metadata_json).get("existing_pr_head_sha")
     if isinstance(existing_pr_head_sha, str) and existing_pr_head_sha:
         attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID

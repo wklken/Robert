@@ -5,6 +5,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class WorkerDispatchTests(TemporaryWorkspace):
     def test_dispatch_dry_run_records_prepared_attempt(self):
         from robert_agent.adapters.processes import worker as dispatch
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -24,6 +25,7 @@ class WorkerDispatchTests(TemporaryWorkspace):
 
     def test_dispatch_detects_immediate_worker_exit_with_log_artifacts(self):
         from robert_agent.adapters.processes import worker as dispatch
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")
@@ -67,7 +69,7 @@ class WorkerDispatchTests(TemporaryWorkspace):
         self.assertEqual(result["status"], "failed_dispatch")
         self.assertEqual(result["returncode"], 7)
         self.assertEqual(cleaned, [23456])
-        self.assertFalse(result['cleanup_pending'])
+        self.assertFalse(result["cleanup_pending"])
         self.assertIn("stdout_path", result)
         self.assertIn("stderr_path", result)
         self.assertTrue(Path(result["stdout_path"]).exists())
@@ -82,6 +84,7 @@ class WorkerDispatchTests(TemporaryWorkspace):
 
     def test_dispatch_reports_popen_failure_with_log_artifacts(self):
         from robert_agent.adapters.processes import worker as dispatch
+
         prompt_path = self.root / "task" / "prompt.md"
         prompt_path.parent.mkdir()
         prompt_path.write_text("hello", encoding="utf-8")

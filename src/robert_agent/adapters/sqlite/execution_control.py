@@ -79,9 +79,7 @@ def get_binding(conn, subject_type, subject_id):
 
 def read_binding(conn, subject_type, subject_id):
     """Read old controls without writing; a neutral row wins per subject."""
-    tables = {
-        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for table in ("execution_subjects", "workflow_bindings"):
         if table in tables:
             row = _row(
@@ -101,15 +99,17 @@ def read_controls(conn, subjects=None):
         subjects = sorted(set(subjects))
         if not subjects:
             return controls
-    tables = {
-        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for table in ("workflow_bindings", "execution_subjects"):
         if table in tables:
             # Keep bounded parameter counts for older supported SQLite builds.
-            batches = [None] if subjects is None else [subjects[i:i + 200] for i in range(0, len(subjects), 200)]
+            batches = [None] if subjects is None else [subjects[i : i + 200] for i in range(0, len(subjects), 200)]
             for batch in batches:
-                clause = '' if batch is None else ' WHERE (subject_type,subject_id) IN (' + ','.join('(?,?)' for _ in batch) + ')'
+                clause = (
+                    ""
+                    if batch is None
+                    else " WHERE (subject_type,subject_id) IN (" + ",".join("(?,?)" for _ in batch) + ")"
+                )
                 params = [] if batch is None else [value for subject in batch for value in subject]
                 cursor = conn.execute(f"SELECT * FROM {table}" + clause, params)
                 names = [column[0] for column in cursor.description]
@@ -140,15 +140,11 @@ def import_legacy_controls(conn):
 
 
 def migration_coverage(conn):
-    tables = {
-        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     covered_subjects = set()
     covered_signals = set()
     if "execution_migrations" in tables:
-        for snapshot, mappings in conn.execute(
-            "SELECT snapshot_json,mappings_json FROM execution_migrations"
-        ):
+        for snapshot, mappings in conn.execute("SELECT snapshot_json,mappings_json FROM execution_migrations"):
             original = json.loads(snapshot)
             covered_subjects.update(
                 (b["subject_type"], b["subject_id"])
@@ -163,9 +159,7 @@ def migration_coverage(conn):
                         (mapping["signal_id"],),
                     ).fetchone()
                     if not receipt:
-                        raise MigrationRequiredError(
-                            "Migration journal references a missing historical receipt"
-                        )
+                        raise MigrationRequiredError("Migration journal references a missing historical receipt")
                     continue
                 row = _row(
                     conn.execute(
@@ -188,17 +182,13 @@ def migration_coverage(conn):
                         "not_before_at",
                     )
                 ):
-                    raise MigrationRequiredError(
-                        "Migration journal conflicts with queued execution facts"
-                    )
+                    raise MigrationRequiredError("Migration journal conflicts with queued execution facts")
             covered_signals.update(m["signal_id"] for m in mapped)
     return covered_subjects, covered_signals
 
 
 def require_migrated(conn):
-    if not conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE name='workflow_bindings'"
-    ).fetchone():
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='workflow_bindings'").fetchone():
         return
     covered_subjects, covered_signals = migration_coverage(conn)
     for row in conn.execute(
@@ -207,21 +197,15 @@ def require_migrated(conn):
         key = (row[0], row[1])
         if key in covered_subjects:
             if row[2] != "terminal" or not get_binding(conn, *key):
-                raise MigrationRequiredError(
-                    "DBOS migration journal conflicts with execution controls"
-                )
+                raise MigrationRequiredError("DBOS migration journal conflicts with execution controls")
         elif row[2] != "terminal":
             raise MigrationRequiredError(
                 "DBOS execution requires offline migration: run robert migrate dbos --db PATH --dry-run"
             )
         elif row[0] == "task":
-            task = conn.execute(
-                "SELECT lifecycle FROM tasks WHERE task_id=?", (row[1],)
-            ).fetchone()
+            task = conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (row[1],)).fetchone()
             if task and task[0] not in _TERMINAL_TASK_LIFECYCLES:
-                raise MigrationRequiredError(
-                    "Terminal DBOS binding has a nonterminal task; offline migration required"
-                )
+                raise MigrationRequiredError("Terminal DBOS binding has a nonterminal task; offline migration required")
         else:
             episode = conn.execute(
                 "SELECT status FROM pr_remediation_episodes WHERE episode_id=?",
@@ -231,21 +215,15 @@ def require_migrated(conn):
                 raise MigrationRequiredError(
                     "Terminal DBOS binding has a nonterminal episode; offline migration required"
                 )
-    for signal, workflow, topic in conn.execute(
-        "SELECT signal_id,workflow_id,topic FROM workflow_outbox"
-    ):
+    for signal, workflow, topic in conn.execute("SELECT signal_id,workflow_id,topic FROM workflow_outbox"):
         receipt = conn.execute(
             "SELECT workflow_id,topic FROM workflow_signal_receipts WHERE signal_id=?",
             (signal,),
         ).fetchone()
         if receipt and tuple(receipt) != (workflow, topic):
-            raise MigrationRequiredError(
-                "Historical signal receipt conflicts with its source"
-            )
+            raise MigrationRequiredError("Historical signal receipt conflicts with its source")
         if not receipt and signal not in covered_signals:
-            raise MigrationRequiredError(
-                "Unconsumed DBOS signal requires offline migration"
-            )
+            raise MigrationRequiredError("Unconsumed DBOS signal requires offline migration")
 
 
 def pending_facts(conn, repo_id, now):
@@ -287,10 +265,7 @@ def record_historical_facts(conn, binding, signals=()):
             ),
         )
     for signal in signals:
-        if (
-            signal["workflow_id"] == binding.get("workflow_id")
-            and signal["topic"] == "subject-events"
-        ):
+        if signal["workflow_id"] == binding.get("workflow_id") and signal["topic"] == "subject-events":
             payload = json.loads(signal["payload_json"])
             if payload.get("fact_id"):
                 conn.execute(
@@ -346,17 +321,13 @@ def _validate_subject(conn, subject_type, subject_id, workflow_kind):
     if (subject_type, workflow_kind) not in legal_pairs:
         raise ValueError("illegal workflow subject and kind pairing")
     if subject_type == "task":
-        row = conn.execute(
-            "SELECT task_kind, lifecycle FROM tasks WHERE task_id = ?", (subject_id,)
-        ).fetchone()
+        row = conn.execute("SELECT task_kind, lifecycle FROM tasks WHERE task_id = ?", (subject_id,)).fetchone()
         if not row:
             raise ValueError("workflow task subject does not exist")
         if row[0] != "human_request" or row[1] in _TERMINAL_TASK_LIFECYCLES:
             raise ValueError("workflow task subject is not eligible")
         return
-    row = conn.execute(
-        "SELECT status FROM pr_remediation_episodes WHERE episode_id = ?", (subject_id,)
-    ).fetchone()
+    row = conn.execute("SELECT status FROM pr_remediation_episodes WHERE episode_id = ?", (subject_id,)).fetchone()
     if not row:
         raise ValueError("workflow remediation episode subject does not exist")
     if row[0] in _TERMINAL_EPISODE_STATUSES:
@@ -399,23 +370,12 @@ def mark_binding_attention(conn, subject_type, subject_id, now):
     return get_binding(conn, subject_type, subject_id)
 
 
-def prepare_publication_intent(
-    conn, action_id, idempotency_key, request_fingerprint, now
-):
-    if not conn.execute(
-        "SELECT 1 FROM github_actions WHERE action_id = ?", (action_id,)
-    ).fetchone():
+def prepare_publication_intent(conn, action_id, idempotency_key, request_fingerprint, now):
+    if not conn.execute("SELECT 1 FROM github_actions WHERE action_id = ?", (action_id,)).fetchone():
         raise ValueError("publication action does not exist")
-    existing = _row(
-        conn.execute(
-            "SELECT * FROM publication_intents WHERE action_id = ?", (action_id,)
-        )
-    )
+    existing = _row(conn.execute("SELECT * FROM publication_intents WHERE action_id = ?", (action_id,)))
     if existing:
-        if (
-            existing["idempotency_key"] == idempotency_key
-            and existing["request_fingerprint"] == request_fingerprint
-        ):
+        if existing["idempotency_key"] == idempotency_key and existing["request_fingerprint"] == request_fingerprint:
             return existing
         raise ValueError("publication action already has a conflicting intent")
     existing_key = _row(
@@ -425,9 +385,7 @@ def prepare_publication_intent(
         )
     )
     if existing_key:
-        raise ValueError(
-            "publication idempotency key already belongs to another action"
-        )
+        raise ValueError("publication idempotency key already belongs to another action")
     publication_id = _id("publication", action_id)
     conn.execute(
         """
@@ -446,9 +404,7 @@ def prepare_publication_intent(
     )
 
 
-def transition_publication_intent(
-    conn, publication_id, status, now, remote_evidence=None, error=None
-):
+def transition_publication_intent(conn, publication_id, status, now, remote_evidence=None, error=None):
     intent = _row(
         conn.execute(
             "SELECT * FROM publication_intents WHERE publication_id = ?",
@@ -460,9 +416,7 @@ def transition_publication_intent(
     if intent["status"] == status:
         return intent
     if status not in _PUBLICATION_TRANSITIONS.get(intent["status"], set()):
-        raise ValueError(
-            f"illegal publication intent transition: {intent['status']} -> {status}"
-        )
+        raise ValueError(f"illegal publication intent transition: {intent['status']} -> {status}")
     fields = ["status = ?", "updated_at = ?"]
     values = [status, now]
     if status == "executing":

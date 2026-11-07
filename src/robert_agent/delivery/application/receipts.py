@@ -1,4 +1,5 @@
 """application delivery receipts responsibilities."""
+
 import re
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
@@ -26,24 +27,35 @@ def delivery_receipt(conn, action, result, now):
     response = result.get("response") or {}
     reconciliation = response.get("reconciliation") or {}
     metadata = publication_values.decode_json(action.get("metadata_json"))
-    marker = publication_effects.hidden_marker(metadata.get("body", ""),
-                            WORKSTREAM_MARKER_RE if action["action_type"] == "open_pr" else COMMENT_MARKER_RE)
+    marker = publication_effects.hidden_marker(
+        metadata.get("body", ""),
+        WORKSTREAM_MARKER_RE if action["action_type"] == "open_pr" else COMMENT_MARKER_RE,
+    )
     return {
         "schema_version": 1,
-        "action_id": action["action_id"], "result_id": action.get("result_id"),
-        "task_id": action.get("task_id"), "action_type": action["action_type"],
+        "action_id": action["action_id"],
+        "result_id": action.get("result_id"),
+        "task_id": action.get("task_id"),
+        "action_type": action["action_type"],
         "scope": scope,
         "external_id": result.get("external_id") or reconciliation.get("external_id"),
         "target_url": result.get("target_url") or reconciliation.get("target_url") or action.get("target_url"),
-        "result_head_sha": (result.get("result_head_sha") or reconciliation.get("source_sha")
-                            or (reconciliation.get("remote_sha") if action["action_type"] == "push_existing_pr" else None)
-                            or response.get("head_sha")),
+        "result_head_sha": (
+            result.get("result_head_sha")
+            or reconciliation.get("source_sha")
+            or (reconciliation.get("remote_sha") if action["action_type"] == "push_existing_pr" else None)
+            or response.get("head_sha")
+        ),
         "expected_marker": marker,
-        "confirmation_method": ("remote_reconciliation" if reconciliation else
-                                "remote_deduplication" if result.get("deduplicated") else "publisher_acknowledgement"),
+        "confirmation_method": (
+            "remote_reconciliation"
+            if reconciliation
+            else "remote_deduplication"
+            if result.get("deduplicated")
+            else "publisher_acknowledgement"
+        ),
         "confirmed_at": now,
     }
-
 
 
 def mark_published(conn, action, result, now, intent=None):
@@ -79,9 +91,7 @@ def mark_published(conn, action, result, now, intent=None):
         current = intent["status"]
         if current in {"executing", "failed"}:
             if current == "failed":
-                execution_store.transition_publication_intent(
-                    conn, intent["publication_id"], "executing", now
-                )
+                execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
             execution_store.transition_publication_intent(
                 conn,
                 intent["publication_id"],

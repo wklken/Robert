@@ -1,4 +1,5 @@
 """Persist source events and read their associated task state."""
+
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.work.application import commands as work_items
 from robert_agent.work import control_queries
@@ -197,38 +198,67 @@ def event_existing_pr_head_sha(event):
 
 
 def operator_canceled_item(conn, item):
-    if not item or not item['canceled_at']:
+    if not item or not item["canceled_at"]:
         return False
-    return bool(conn.execute("SELECT 1 FROM work_item_events WHERE work_item_id=? AND event_type='canceled' AND actor_kind!='system' LIMIT 1", (item['work_item_id'],)).fetchone())
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM work_item_events WHERE work_item_id=? AND event_type='canceled' AND actor_kind!='system' LIMIT 1",
+            (item["work_item_id"],),
+        ).fetchone()
+    )
 
 
 def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
     """Admit a fresh trusted request, preserving the prior execution's state."""
-    if (not parent_task_id or not work_policies.is_driving_context_event(event)
-            or not work_policies.is_trusted_actor(event, repo)
-            or event.get('actor_kind') == 'github_system'
-            or event.get('actor_login') == repo['github_account']):
+    if (
+        not parent_task_id
+        or not work_policies.is_driving_context_event(event)
+        or not work_policies.is_trusted_actor(event, repo)
+        or event.get("actor_kind") == "github_system"
+        or event.get("actor_login") == repo["github_account"]
+    ):
         return False
-    if conn.execute('SELECT 1 FROM task_events WHERE event_id=? LIMIT 1',
-                    (values.github_event_id(event['event_fingerprint']),)).fetchone():
+    if conn.execute(
+        "SELECT 1 FROM task_events WHERE event_id=? LIMIT 1",
+        (values.github_event_id(event["event_fingerprint"]),),
+    ).fetchone():
         return False
-    parent = conn.execute('''SELECT t.lifecycle,w.lifecycle,w.active_task_id,t.metadata_json
+    parent = conn.execute(
+        """SELECT t.lifecycle,w.lifecycle,w.active_task_id,t.metadata_json
         FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-        WHERE t.task_id=? AND w.workstream_id=? AND w.repo_id=?''',
-        (parent_task_id, event['workstream_id'], values.repository_id(repo['full_name']))).fetchone()
-    remote_canceled = bool(parent and parent[0] == 'canceled' and values.json_object(parent[3]).get('remote_reconciliation'))
-    if (not parent or (parent[0] not in {'completed', 'failed'} and not remote_canceled)
-            or (parent[1] not in {'completed', 'failed'} and not remote_canceled) or parent[2]
-            or work_queries.latest_task_id(conn, event['workstream_id']) != parent_task_id):
+        WHERE t.task_id=? AND w.workstream_id=? AND w.repo_id=?""",
+        (
+            parent_task_id,
+            event["workstream_id"],
+            values.repository_id(repo["full_name"]),
+        ),
+    ).fetchone()
+    remote_canceled = bool(
+        parent and parent[0] == "canceled" and values.json_object(parent[3]).get("remote_reconciliation")
+    )
+    if (
+        not parent
+        or (parent[0] not in {"completed", "failed"} and not remote_canceled)
+        or (parent[1] not in {"completed", "failed"} and not remote_canceled)
+        or parent[2]
+        or work_queries.latest_task_id(conn, event["workstream_id"]) != parent_task_id
+    ):
         return False
-    item = work_items.resolve_work_item_for_workstream(conn, event['workstream_id'])
-    if not item or (item['canceled_at'] and (not remote_canceled or operator_canceled_item(conn, item))):
+    item = work_items.resolve_work_item_for_workstream(conn, event["workstream_id"])
+    if not item or (item["canceled_at"] and (not remote_canceled or operator_canceled_item(conn, item))):
         return False
     facts = control_queries.lifecycle_facts(conn, item)
-    if (facts['running'] or facts['actions'] or facts['cleanup_pending']
-            or facts['workflow_attention'] or facts['source_closed']):
+    if (
+        facts["running"]
+        or facts["actions"]
+        or facts["cleanup_pending"]
+        or facts["workflow_attention"]
+        or facts["source_closed"]
+    ):
         return False
-    placeholders = ','.join('?' for _ in facts['streams'])
-    return not conn.execute(f'''SELECT 1 FROM tasks WHERE workstream_id IN ({placeholders})
-        AND lifecycle NOT IN ('completed','failed','canceled','ignored') LIMIT 1''',
-        facts['streams']).fetchone()
+    placeholders = ",".join("?" for _ in facts["streams"])
+    return not conn.execute(
+        f"""SELECT 1 FROM tasks WHERE workstream_id IN ({placeholders})
+        AND lifecycle NOT IN ('completed','failed','canceled','ignored') LIMIT 1""",
+        facts["streams"],
+    ).fetchone()

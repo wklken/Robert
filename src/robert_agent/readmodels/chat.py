@@ -74,10 +74,7 @@ def format_status(data):
         ),
     ]
     if wakeup_summary.get("available"):
-        lines.append(
-            f"Wakeups pending: {wakeup_summary.get('pending', 0)} | "
-            f"Due: {wakeup_summary.get('due', 0)}"
-        )
+        lines.append(f"Wakeups pending: {wakeup_summary.get('pending', 0)} | Due: {wakeup_summary.get('due', 0)}")
     if acceptance_metrics:
         lines.append(
             f"Results accepted: {acceptance_metrics.get('accepted_results', 0)} | "
@@ -86,8 +83,7 @@ def format_status(data):
         )
     if latest_loop:
         lines.append(
-            f"Latest loop: {latest_loop.get('stop_reason', 'unknown')} | "
-            f"Cycles: {latest_loop.get('cycles', 0)}"
+            f"Latest loop: {latest_loop.get('stop_reason', 'unknown')} | Cycles: {latest_loop.get('cycles', 0)}"
         )
     daemon = data.get("daemon") or {}
     latest_daemon_run = daemon.get("latest_run") or {}
@@ -102,11 +98,7 @@ def format_status(data):
     if alerts:
         lines.extend(["", "### Alerts"])
         for alert in alerts[:8]:
-            lines.append(
-                "- "
-                f"{alert['severity']} {alert['alert_type']}: "
-                f"{alert['count']} -> {alert['next_action']}"
-            )
+            lines.append(f"- {alert['severity']} {alert['alert_type']}: {alert['count']} -> {alert['next_action']}")
 
     if steps:
         lines.extend(["", "### Next steps"])
@@ -137,9 +129,7 @@ def format_task(data, task_id):
     if not task:
         return None
 
-    source_number = (
-        f"{task.get('source_type') or '-'} #{task.get('source_number') or '-'}"
-    )
+    source_number = f"{task.get('source_type') or '-'} #{task.get('source_number') or '-'}"
     lines = [
         f"## Task {task['task_id']}",
         "",
@@ -180,8 +170,7 @@ def format_task(data, task_id):
         lines.extend(["", "### Artifacts"])
         for artifact_type, artifact in sorted(artifacts.items()):
             lines.append(
-                f"- {artifact_type}: {artifact.get('bytes') or 'unknown'} bytes "
-                f"at {artifact.get('path') or '-'}"
+                f"- {artifact_type}: {artifact.get('bytes') or 'unknown'} bytes at {artifact.get('path') or '-'}"
             )
 
     return "\n".join(lines)
@@ -209,9 +198,7 @@ def format_run(data, run_id):
     if repo_summaries:
         lines.extend(["", "Repos:"])
         for repo in repo_summaries[:8]:
-            lines.append(
-                f"- {repo.get('full_name') or repo.get('repo_id')}: {repo.get('status')}"
-            )
+            lines.append(f"- {repo.get('full_name') or repo.get('repo_id')}: {repo.get('status')}")
     steps = run.get("steps") or []
     if steps:
         lines.extend(["", "### Steps"])

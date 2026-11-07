@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 
-
 VALID_PHASES = {"prepare", "analyze", "plan", "execute", "verify", "publish", "handoff"}
 
 
@@ -29,7 +28,8 @@ def record_snapshot(db_path, task_id, attempt_id, phase, status, summary, next_s
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("BEGIN IMMEDIATE")
         attempt = conn.execute(
-            "SELECT task_id FROM attempts WHERE attempt_id = ?", (attempt_id,),
+            "SELECT task_id FROM attempts WHERE attempt_id = ?",
+            (attempt_id,),
         ).fetchone()
         if not attempt:
             raise ValueError("attempt_id does not exist")
@@ -48,8 +48,15 @@ def record_snapshot(db_path, task_id, attempt_id, phase, status, summary, next_s
                 """INSERT INTO worker_phases(
                   phase_id, attempt_id, phase, status, summary, next_step, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (f"phase-{uuid4().hex[:12]}", attempt_id, phase, status,
-                 summary, next_step, created_at),
+                (
+                    f"phase-{uuid4().hex[:12]}",
+                    attempt_id,
+                    phase,
+                    status,
+                    summary,
+                    next_step,
+                    created_at,
+                ),
             )
         conn.execute(
             "UPDATE attempts SET heartbeat_at = ? WHERE attempt_id = ? AND task_id = ?",

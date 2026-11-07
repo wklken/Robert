@@ -1,4 +1,5 @@
 """application delivery effects responsibilities."""
+
 from robert_agent.adapters.git.remotes import github_owner
 import re
 import subprocess
@@ -34,11 +35,9 @@ def issue_comment_endpoint(target_url):
     return f"repos/{owner}/{repo}/issues/{number}/comments"
 
 
-
 def hidden_marker(body, marker_re):
     match = marker_re.search(body or "")
     return match.group(0) if match else ""
-
 
 
 def iter_json_objects(value):
@@ -50,12 +49,10 @@ def iter_json_objects(value):
             yield from iter_json_objects(item)
 
 
-
 def command_failure(completed, fallback):
     if getattr(completed, "returncode", 0) == 0:
         return None
     return (getattr(completed, "stderr", "") or fallback).strip()
-
 
 
 def find_existing_comment(endpoint, marker, run_command):
@@ -83,7 +80,6 @@ def find_existing_comment(endpoint, marker, run_command):
                 "command": command,
             }
     return {"ok": True, "status": "not_found", "command": command}
-
 
 
 def publish_comment(action, run_command, conn=None, recovery_guard=None):
@@ -138,11 +134,9 @@ def publish_comment(action, run_command, conn=None, recovery_guard=None):
     }
 
 
-
 def pr_number_from_url(url):
     match = re.search(r"/pull/(\d+)(?:$|[/?#])", url or "")
     return match.group(1) if match else ""
-
 
 
 def metadata_value(metadata, *keys):
@@ -153,12 +147,10 @@ def metadata_value(metadata, *keys):
     return ""
 
 
-
 def head_branch(head):
     if ":" in head:
         return head.split(":", 1)[1]
     return head
-
 
 
 def owner_login(value):
@@ -175,15 +167,12 @@ def owner_login(value):
     return ""
 
 
-
 def owners_match(expected, actual):
     return bool(expected and actual and expected.lower() == actual.lower())
 
 
-
 def pr_head_owner(pr):
     return owner_login(pr.get("headRepositoryOwner")) or owner_login(pr.get("headRepository"))
-
 
 
 def find_existing_open_pr(repo, head, marker, run_command, base="", head_owner=""):
@@ -277,7 +266,6 @@ def find_existing_open_pr(repo, head, marker, run_command, base="", head_owner="
     return {"ok": True, "status": "not_found", "command": command}
 
 
-
 def head_owner_from_push_metadata(metadata, head, run_command):
     branch = metadata_value(metadata, "branch", "head", "head_branch")
     if branch and branch != head:
@@ -295,7 +283,6 @@ def head_owner_from_push_metadata(metadata, head, run_command):
     if command_failure(completed, "git remote get-url failed"):
         return ""
     return github_owner(getattr(completed, "stdout", ""))
-
 
 
 def sibling_push_metadata(conn, action, head):
@@ -319,7 +306,6 @@ def sibling_push_metadata(conn, action, head):
     return {}
 
 
-
 def head_owner_for_action(metadata, head, action, conn, run_command):
     scope = publication_scope.trusted_action_scope(conn, action) or {}
     if scope.get("head_owner"):
@@ -333,13 +319,10 @@ def head_owner_for_action(metadata, head, action, conn, run_command):
     return owner
 
 
-
 def trusted_head_owner_for_intent(conn, action, action_scope, run_command):
     """Resolve the immutable PR head owner without trusting Worker metadata."""
 
-    scoped_owner = (
-        action_scope.get("head_owner") if isinstance(action_scope, dict) else ""
-    )
+    scoped_owner = action_scope.get("head_owner") if isinstance(action_scope, dict) else ""
     if isinstance(scoped_owner, str) and scoped_owner:
         return scoped_owner
     if isinstance(action_scope, dict) and action_scope.get("supervision_repair"):
@@ -358,7 +341,6 @@ def trusted_head_owner_for_intent(conn, action, action_scope, run_command):
     return repo.split("/", 1)[0] if isinstance(repo, str) and "/" in repo else ""
 
 
-
 def head_for_pr_create(repo, head, owner):
     if ":" in head:
         return head
@@ -366,7 +348,6 @@ def head_for_pr_create(repo, head, owner):
     if owner and owner.lower() == repo_owner.lower():
         return head
     return f"{owner}:{head}" if owner else head
-
 
 
 def publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, recovery_guard=None):
@@ -461,7 +442,6 @@ def publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, rec
     }
 
 
-
 def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", recovery_guard=None):
     metadata = publication_values.decode_json(action["metadata_json"])
     worktree_path = metadata_value(metadata, "worktree_path")
@@ -487,8 +467,11 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
     source_ref = result_head_sha or source_ref
     destination_ref = f"refs/heads/{branch}"
     if action_scope and not result_head_sha:
-        return {"ok": False, "status": "publish_failed",
-                "safe_error": "audited result SHA is missing; retry the task to obtain a new audited result"}
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": "audited result SHA is missing; retry the task to obtain a new audited result",
+        }
     if action_scope.get("supervision_repair"):
         blocked = None
 
@@ -498,17 +481,29 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
             return blocked is None
 
         try:
-            completed = supervision_git.push(action_scope, result_head_sha, before_push=before_push, runner=run_command)
+            completed = supervision_git.push(
+                action_scope,
+                result_head_sha,
+                before_push=before_push,
+                runner=run_command,
+            )
         except (OSError, subprocess.SubprocessError):
-            return {"ok": False, "status": "publish_failed", "safe_error": "Maintenance Git push unavailable"}
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "safe_error": "Maintenance Git push unavailable",
+            }
         if blocked:
             return blocked
         safe_error = command_failure(completed, "Maintenance Git push failed")
         if safe_error:
             return {"ok": False, "status": "publish_failed", "safe_error": safe_error}
         return {
-            "ok": True, "status": "published", "external_id": action_scope["branch_name"],
-            "target_url": action.get("target_url"), "result_head_sha": result_head_sha,
+            "ok": True,
+            "status": "published",
+            "external_id": action_scope["branch_name"],
+            "target_url": action.get("target_url"),
+            "result_head_sha": result_head_sha,
             "response": {},
         }
     if expected_remote_sha:
@@ -525,14 +520,24 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
         lookup_stdout = (getattr(lookup, "stdout", "") or "").strip()
         current_remote_sha = lookup_stdout.split()[0] if lookup_stdout else ""
         if result_head_sha and current_remote_sha == result_head_sha:
-            return {"ok": True, "status": "published", "deduplicated": True,
-                    "external_id": branch, "target_url": action.get("target_url"),
-                    "result_head_sha": result_head_sha,
-                    "response": {"head_sha": result_head_sha}, "command": lookup_command}
+            return {
+                "ok": True,
+                "status": "published",
+                "deduplicated": True,
+                "external_id": branch,
+                "target_url": action.get("target_url"),
+                "result_head_sha": result_head_sha,
+                "response": {"head_sha": result_head_sha},
+                "command": lookup_command,
+            }
         if current_remote_sha and current_remote_sha != expected_remote_sha:
             fetch_command = [
-                "git", "fetch", "--no-tags", "--no-write-fetch-head",
-                remote, destination_ref,
+                "git",
+                "fetch",
+                "--no-tags",
+                "--no-write-fetch-head",
+                remote,
+                destination_ref,
             ]
             fetched = run_command(
                 fetch_command,
@@ -549,7 +554,11 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
                     "command": fetch_command,
                 }
             ancestor_command = [
-                "git", "merge-base", "--is-ancestor", current_remote_sha, result_head_sha
+                "git",
+                "merge-base",
+                "--is-ancestor",
+                current_remote_sha,
+                result_head_sha,
             ]
             ancestor = run_command(
                 ancestor_command,
@@ -609,20 +618,13 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
     }
 
 
-
 def publish_remediation_push(action, run_command, action_scope, conn=None, recovery_guard=None):
     repo = action_scope.get("repo")
     pr_number = action_scope.get("pr_number")
     observed_head_sha = action_scope.get("observed_head_sha")
     observed_base_sha = action_scope.get("observed_base_sha")
     audited_result_head_sha = action_scope.get("result_head_sha")
-    if (
-        not repo
-        or not pr_number
-        or not observed_head_sha
-        or not observed_base_sha
-        or not audited_result_head_sha
-    ):
+    if not repo or not pr_number or not observed_head_sha or not observed_base_sha or not audited_result_head_sha:
         return {
             "ok": False,
             "status": "publish_failed",
@@ -645,10 +647,15 @@ def publish_remediation_push(action, run_command, action_scope, conn=None, recov
         and snapshot.get("head_sha") == audited_result_head_sha
         and snapshot.get("base_sha") == observed_base_sha
     ):
-        return {"ok": True, "status": "published", "deduplicated": True,
-                "external_id": str(pr_number), "target_url": action.get("target_url"),
-                "result_head_sha": audited_result_head_sha,
-                "response": {"head_sha": audited_result_head_sha}}
+        return {
+            "ok": True,
+            "status": "published",
+            "deduplicated": True,
+            "external_id": str(pr_number),
+            "target_url": action.get("target_url"),
+            "result_head_sha": audited_result_head_sha,
+            "response": {"head_sha": audited_result_head_sha},
+        }
     if (
         snapshot.get("state") != "open"
         or snapshot.get("merged")
@@ -698,7 +705,6 @@ def publish_remediation_push(action, run_command, action_scope, conn=None, recov
     return result
 
 
-
 def publish_action(
     action,
     run_command,
@@ -719,11 +725,19 @@ def publish_action(
     if scope_guard:
         return scope_guard
     if action["action_type"] == "submit_pr_review":
-        return review_publish.publish(action, publication_scope.trusted_action_scope(conn, action), run_command,
-                                      scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard))
+        return review_publish.publish(
+            action,
+            publication_scope.trusted_action_scope(conn, action),
+            run_command,
+            scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
+        )
     if action["action_type"] == "comment" and vote_publish.is_vote(action):
-        return vote_publish.publish(action, publication_scope.trusted_action_scope(conn, action), run_command,
-                                    scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard))
+        return vote_publish.publish(
+            action,
+            publication_scope.trusted_action_scope(conn, action),
+            run_command,
+            scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
+        )
     if action["action_type"] == "comment":
         return publish_comment(action, run_command, conn=conn, recovery_guard=recovery_guard)
     if action["action_type"] == "open_pr":
@@ -736,11 +750,10 @@ def publish_action(
         )
     if action["action_type"] == "push_existing_pr":
         action_scope = publication_scope.trusted_action_scope(conn, action)
-        if (
-            isinstance(action_scope, dict)
-            and action_scope.get("task_kind")
-            in {"ci_remediation", "merge_conflict_remediation"}
-        ):
+        if isinstance(action_scope, dict) and action_scope.get("task_kind") in {
+            "ci_remediation",
+            "merge_conflict_remediation",
+        }:
             return publish_remediation_push(
                 action,
                 run_command,

@@ -1,4 +1,5 @@
 import unittest
+
 REPO_CONFIG = {
     "full_name": "example/backend",
     "github_account": "robert-bot",
@@ -17,6 +18,7 @@ class DiscoveryTests(unittest.TestCase):
     def normalize_and_authorize(self, raw_events, existing_workstreams=None):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(raw_events, REPO_CONFIG)
         return authorize.authorize_events(
             events,
@@ -27,6 +29,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_live_unknown_association_is_enriched_with_repo_permission(self):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -71,6 +74,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_live_discovery_uses_gh_search_and_notification_hints(self):
         from robert_agent.adapters.github import discovery as discover
+
         calls = []
 
         def fake_runner(args, **_kwargs):
@@ -144,6 +148,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_live_assignment_is_enriched_from_timeline_actor(self):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(
@@ -199,6 +204,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_live_assignment_without_timeline_actor_stays_pending(self):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(
@@ -233,6 +239,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_live_mention_prefers_trusted_comment_over_untrusted_body(self):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -279,6 +286,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_live_pr_followup_extracts_dd_origin_workstream_and_head_branch(self):
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -331,6 +339,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_live_pr_followup_collects_all_trusted_comments(self):
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -413,6 +422,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_live_known_pr_workstream_accepts_collaborator_followup(self):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -478,9 +488,12 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(decisions[0]["authorization_status"], "context_only")
         self.assertFalse(decisions[0]["drives_execution"])
 
-    def test_live_robot_authored_pr_without_hidden_metadata_still_routes_to_existing_pr_update(self):
+    def test_live_robot_authored_pr_without_hidden_metadata_still_routes_to_existing_pr_update(
+        self,
+    ):
         from robert_agent.adapters.github import discovery as discover
         from robert_agent.workflows import routes as route
+
         def fake_runner(args, **_kwargs):
             if "--assignee" in args:
                 return _Completed(args, "[]")
@@ -534,6 +547,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_discover_cli_config_accepts_trusted_actors(self):
         from robert_agent.adapters.github import discovery as discover
+
         repo_config = discover.build_repo_config(
             "example/backend",
             "robert-bot",

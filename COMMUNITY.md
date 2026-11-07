@@ -16,7 +16,11 @@ python3 -m pip install -e '.[dev]'
 
 ### Required verification
 
+Format Python changes with `python3 -m ruff format src tests` before checking:
+
 ```bash
+python3 -m ruff check src tests
+python3 -m ruff format --check src tests
 python3 -B -m unittest discover -s tests
 python3 -m build
 git diff --check

@@ -1,4 +1,5 @@
 """Apply workflow invalidation facts and stop fenced attempts."""
+
 from robert_agent.execution import operations as execution_operations
 from robert_agent.adapters.sqlite import execution_control as execution_store
 from robert_agent.work import events as workflow_events
@@ -11,16 +12,13 @@ def _workflow_event_subject(conn, event):
     metadata = event.get("metadata") if isinstance(event, dict) else {}
     remediation_id = (
         metadata.get("remediation", {}).get("episode_id")
-        if isinstance(metadata, dict)
-        and isinstance(metadata.get("remediation"), dict)
+        if isinstance(metadata, dict) and isinstance(metadata.get("remediation"), dict)
         else None
     )
     if remediation_id:
         subject_type, subject_id = "remediation_episode", str(remediation_id)
     else:
-        task_id = event.get("task_id") or work_queries.active_task_id(
-            conn, event.get("workstream_id")
-        )
+        task_id = event.get("task_id") or work_queries.active_task_id(conn, event.get("workstream_id"))
         if not task_id:
             return None
         subject_type, subject_id = "task", str(task_id)
@@ -79,11 +77,8 @@ def apply_workflow_event_fact(conn, event, run_now):
         return {
             "classification": workflow_events.INVALIDATING,
             "fact_id": fact["fact_id"],
-
             "binding_status": "attention",
-            "attempt_id": execution_operations.bound_attempt_for_subject(
-                conn, subject_type, subject_id
-            ),
+            "attempt_id": execution_operations.bound_attempt_for_subject(conn, subject_type, subject_id),
             "validation_error": reason,
         }
     result["subject_type"] = subject_type
@@ -96,7 +91,5 @@ def terminate_invalidated_attempts(db_path, attempt_ids):
 
     outcomes = []
     for attempt_id in dict.fromkeys(attempt_ids):
-        outcomes.append(
-            (attempt_id, execution_operations.terminate_worker(db_path, attempt_id))
-        )
+        outcomes.append((attempt_id, execution_operations.terminate_worker(db_path, attempt_id)))
     return outcomes

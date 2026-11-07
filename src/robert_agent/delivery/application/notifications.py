@@ -63,67 +63,153 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
     No command is run unless configured. Secrets and command arguments are never
     included in the outbound payload or persisted error.
     """
-    command = command or os.environ.get('ROBERT_NOTIFICATION_COMMAND')
+    command = command or os.environ.get("ROBERT_NOTIFICATION_COMMAND")
     if not command:
-        return {'sent': 0, 'failed': 0, 'status': 'not_configured'}
+        return {"sent": 0, "failed": 0, "status": "not_configured"}
     argv = shlex.split(command) if isinstance(command, str) else list(command)
     now = now or datetime.now(timezone.utc).isoformat()
-    counts = {'sent': 0, 'failed': 0, 'status': 'processed'}
-    scope = ''
+    counts = {"sent": 0, "failed": 0, "status": "processed"}
+    scope = ""
     params = []
     if repo_ids:
-        scope = ' AND (task_id IS NULL OR task_id IN (SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id WHERE w.repo_id IN (' + ','.join('?' for _ in repo_ids) + ')))'
+        scope = (
+            " AND (task_id IS NULL OR task_id IN (SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id WHERE w.repo_id IN ("
+            + ",".join("?" for _ in repo_ids)
+            + ")))"
+        )
         params += list(repo_ids)
     with closing(sqlite3.connect(db_path)) as conn:
-        ids = [r[0] for r in conn.execute("SELECT notification_id FROM notifications WHERE channel='local' AND status NOT IN ('resolved','sent') AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted') AND (json_extract(metadata_json,'$.delivery.next_retry_at') IS NULL OR julianday(json_extract(metadata_json,'$.delivery.next_retry_at')) <= julianday(?))" + scope + " ORDER BY created_at, notification_id LIMIT ?", [now] + params + [limit])]
+        ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT notification_id FROM notifications WHERE channel='local' AND status NOT IN ('resolved','sent') AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted') AND (json_extract(metadata_json,'$.delivery.next_retry_at') IS NULL OR julianday(json_extract(metadata_json,'$.delivery.next_retry_at')) <= julianday(?))"
+                + scope
+                + " ORDER BY created_at, notification_id LIMIT ?",
+                [now] + params + [limit],
+            )
+        ]
     processed = 0
     deadline = time.monotonic() + 10
     for notification_id in ids:
         if processed >= limit or time.monotonic() >= deadline:
             break
-        with task_publication_lock(db_path, 'notify-' + notification_id) as acquired:
+        with task_publication_lock(db_path, "notify-" + notification_id) as acquired:
             if not acquired:
                 continue
             with closing(sqlite3.connect(db_path)) as conn:
-                row = conn.execute('SELECT task_id,notification_type,status,metadata_json FROM notifications WHERE notification_id=?', (notification_id,)).fetchone()
-            if not row or row[2] == 'resolved':
+                row = conn.execute(
+                    "SELECT task_id,notification_type,status,metadata_json FROM notifications WHERE notification_id=?",
+                    (notification_id,),
+                ).fetchone()
+            if not row or row[2] == "resolved":
                 continue
-            metadata = json.loads(row[3] or '{}')
-            state = {key: metadata[key] for key in ('reason_code','error_class','required_action','retryable') if key in metadata}
+            metadata = json.loads(row[3] or "{}")
+            state = {
+                key: metadata[key]
+                for key in (
+                    "reason_code",
+                    "error_class",
+                    "required_action",
+                    "retryable",
+                )
+                if key in metadata
+            }
             digest = hashlib.sha256(json.dumps([row[1], state], sort_keys=True).encode()).hexdigest()[:16]
-            delivery_id = notification_id + ':' + digest
-            previous = metadata.get('delivery', {})
-            if previous.get('delivery_id') != delivery_id:
+            delivery_id = notification_id + ":" + digest
+            previous = metadata.get("delivery", {})
+            if previous.get("delivery_id") != delivery_id:
                 previous = {}
-            if previous.get('status') in {'sent','exhausted'} or (previous.get('next_retry_at') and retry_policy.timestamp(previous['next_retry_at']) > retry_policy.timestamp(now)):
+            if previous.get("status") in {"sent", "exhausted"} or (
+                previous.get("next_retry_at")
+                and retry_policy.timestamp(previous["next_retry_at"]) > retry_policy.timestamp(now)
+            ):
                 continue
-            if int(previous.get('attempt_count', 0)) >= retry_policy.MAX_ATTEMPTS or (previous.get('first_failed_at') and (retry_policy.timestamp(now) - retry_policy.timestamp(previous['first_failed_at'])).total_seconds() >= retry_policy.MAX_ELAPSED_SECONDS):
-                previous.update(status='exhausted', retryable=False, next_retry_at=None)
-                metadata['delivery'] = previous
+            if int(previous.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS or (
+                previous.get("first_failed_at")
+                and (retry_policy.timestamp(now) - retry_policy.timestamp(previous["first_failed_at"])).total_seconds()
+                >= retry_policy.MAX_ELAPSED_SECONDS
+            ):
+                previous.update(status="exhausted", retryable=False, next_retry_at=None)
+                metadata["delivery"] = previous
                 with closing(sqlite3.connect(db_path)) as conn, conn:
-                    conn.execute('UPDATE notifications SET metadata_json=? WHERE notification_id=?', (json.dumps(metadata), notification_id))
+                    conn.execute(
+                        "UPDATE notifications SET metadata_json=? WHERE notification_id=?",
+                        (json.dumps(metadata), notification_id),
+                    )
                 continue
-            safe = redaction.redact_text(json.dumps({'task_id':row[0], 'type':row[1], **state,
-                'safe_error':str(metadata.get('safe_error', ''))[:2000], 'delivery_id':delivery_id}, ensure_ascii=False))
+            safe = redaction.redact_text(
+                json.dumps(
+                    {
+                        "task_id": row[0],
+                        "type": row[1],
+                        **state,
+                        "safe_error": str(metadata.get("safe_error", ""))[:2000],
+                        "delivery_id": delivery_id,
+                    },
+                    ensure_ascii=False,
+                )
+            )
             # High-risk fields are omitted rather than delivered as raw text.
-            payload = safe['text'] if safe['ok'] else json.dumps({'task_id':row[0], 'type':row[1], 'delivery_id':delivery_id, 'reason':'Details require local inspection.'})
+            payload = (
+                safe["text"]
+                if safe["ok"]
+                else json.dumps(
+                    {
+                        "task_id": row[0],
+                        "type": row[1],
+                        "delivery_id": delivery_id,
+                        "reason": "Details require local inspection.",
+                    }
+                )
+            )
             processed += 1
-            state = retry_policy.failure_state(previous, 'delivery unavailable', now)
-            state.update(delivery_id=delivery_id, status='sending')
+            state = retry_policy.failure_state(previous, "delivery unavailable", now)
+            state.update(delivery_id=delivery_id, status="sending")
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                fresh = json.loads(conn.execute('SELECT metadata_json FROM notifications WHERE notification_id=?',(notification_id,)).fetchone()[0] or '{}')
-                fresh['delivery'] = state
-                conn.execute('UPDATE notifications SET metadata_json=? WHERE notification_id=?', (json.dumps(fresh), notification_id))
+                fresh = json.loads(
+                    conn.execute(
+                        "SELECT metadata_json FROM notifications WHERE notification_id=?",
+                        (notification_id,),
+                    ).fetchone()[0]
+                    or "{}"
+                )
+                fresh["delivery"] = state
+                conn.execute(
+                    "UPDATE notifications SET metadata_json=? WHERE notification_id=?",
+                    (json.dumps(fresh), notification_id),
+                )
             try:
-                sent = runner(argv, input=payload, text=True, capture_output=True, timeout=5, check=False).returncode == 0
+                sent = (
+                    runner(
+                        argv,
+                        input=payload,
+                        text=True,
+                        capture_output=True,
+                        timeout=5,
+                        check=False,
+                    ).returncode
+                    == 0
+                )
             except (OSError, subprocess.SubprocessError):
                 sent = False
-            state.update(status='sent' if sent else ('failed' if state['retryable'] else 'exhausted'), sent_at=now if sent else None)
+            state.update(
+                status="sent" if sent else ("failed" if state["retryable"] else "exhausted"),
+                sent_at=now if sent else None,
+            )
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                fresh = json.loads(conn.execute('SELECT metadata_json FROM notifications WHERE notification_id=?',(notification_id,)).fetchone()[0] or '{}')
-                fresh['delivery'] = state
-                conn.execute('UPDATE notifications SET metadata_json=? WHERE notification_id=?', (json.dumps(fresh), notification_id))
-            counts['sent' if sent else 'failed'] += 1
+                fresh = json.loads(
+                    conn.execute(
+                        "SELECT metadata_json FROM notifications WHERE notification_id=?",
+                        (notification_id,),
+                    ).fetchone()[0]
+                    or "{}"
+                )
+                fresh["delivery"] = state
+                conn.execute(
+                    "UPDATE notifications SET metadata_json=? WHERE notification_id=?",
+                    (json.dumps(fresh), notification_id),
+                )
+            counts["sent" if sent else "failed"] += 1
     return counts
 
 

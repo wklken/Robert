@@ -71,7 +71,7 @@ Robert 使用已认证的 `gh` CLI 轮询 GitHub，规范化事件，应用仓�
 ## 环境要求
 
 - Linux 或 macOS；Windows 通过 WSL 使用。
-- Python 3.10 或更高版本。
+- Python 3.11 或更高的官方仍维护稳定版本（当前为 3.11–3.15）。
 - Git 和已登录的 GitHub CLI。
 - 至少一个本地 Worker 命令。
 - 推荐使用 `pipx` 安装。

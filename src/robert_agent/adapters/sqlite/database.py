@@ -12,26 +12,18 @@ from robert_agent.resource_files import resource
 SCHEMA_RESOURCE = resource("db", "schema.sql")
 WORK_ITEM_MIGRATION_VERSION = 2
 WORK_ITEM_MIGRATION_NAME = "robert-work-item-control-v1"
-WORK_ITEM_MIGRATION_CHECKSUM = hashlib.sha256(
-    WORK_ITEM_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+WORK_ITEM_MIGRATION_CHECKSUM = hashlib.sha256(WORK_ITEM_MIGRATION_NAME.encode("utf-8")).hexdigest()
 WORKFLOW_MIGRATION_VERSION = 3
 WORKFLOW_MIGRATION_NAME = "robert-dbos-workflow-v1"
-WORKFLOW_MIGRATION_CHECKSUM = hashlib.sha256(
-    WORKFLOW_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+WORKFLOW_MIGRATION_CHECKSUM = hashlib.sha256(WORKFLOW_MIGRATION_NAME.encode("utf-8")).hexdigest()
 
 
 PR_MAINLINE_MIGRATION_VERSION = 4
 PR_MAINLINE_MIGRATION_NAME = "robert-pr-mainline-workstreams-v1"
-PR_MAINLINE_MIGRATION_CHECKSUM = hashlib.sha256(
-    PR_MAINLINE_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+PR_MAINLINE_MIGRATION_CHECKSUM = hashlib.sha256(PR_MAINLINE_MIGRATION_NAME.encode("utf-8")).hexdigest()
 RECOMMENDED_SKILLS_MIGRATION_VERSION = 5
 RECOMMENDED_SKILLS_MIGRATION_NAME = "robert-route-recommended-skills-v1"
-RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(
-    RECOMMENDED_SKILLS_MIGRATION_NAME.encode("utf-8")
-).hexdigest()
+RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(RECOMMENDED_SKILLS_MIGRATION_NAME.encode("utf-8")).hexdigest()
 SUPERVISION_MIGRATION_VERSION = 6
 SUPERVISION_MIGRATION_NAME = "robert-supervision-v1"
 SUPERVISION_MIGRATION_CHECKSUM = hashlib.sha256(SUPERVISION_MIGRATION_NAME.encode("utf-8")).hexdigest()
@@ -126,13 +118,18 @@ def _migrate_pr_mainline_workstreams(conn):
         origin_workstream_id = _origin_workstream_id(payload)
         if not origin_workstream_id:
             continue
-        active_task_id = task_id if task_lifecycle in {
-            "detected",
-            "authorized",
-            "classified",
-            "queued",
-            "running",
-        } else None
+        active_task_id = (
+            task_id
+            if task_lifecycle
+            in {
+                "detected",
+                "authorized",
+                "classified",
+                "queued",
+                "running",
+            }
+            else None
+        )
         workstream_lifecycle = "active" if active_task_id else "completed"
         conn.execute(
             """
@@ -548,6 +545,7 @@ def _migrate_workflow_storage(conn):
 
 def schema_sql() -> str:
     from robert_agent.adapters.sqlite import execution_control as execution_store
+
     return SCHEMA_RESOURCE.read_text(encoding="utf-8") + "\n" + execution_store.SCHEMA
 
 
@@ -564,30 +562,62 @@ def init_database(db_path, schema_path=None):
 
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.executescript(schema)
-        _ensure_column(conn, 'github_scan_batches', 'retry_count', 'retry_count INTEGER NOT NULL DEFAULT 0')
-        _ensure_column(conn, 'github_scan_batches', 'attention_reason', 'attention_reason TEXT')
+        _ensure_column(
+            conn,
+            "github_scan_batches",
+            "retry_count",
+            "retry_count INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(conn, "github_scan_batches", "attention_reason", "attention_reason TEXT")
         pending = []
         pr_pending = _data_migration_pending(conn, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM)
-        skills_pending = _data_migration_pending(conn, RECOMMENDED_SKILLS_MIGRATION_NAME, RECOMMENDED_SKILLS_MIGRATION_CHECKSUM)
+        skills_pending = _data_migration_pending(
+            conn,
+            RECOMMENDED_SKILLS_MIGRATION_NAME,
+            RECOMMENDED_SKILLS_MIGRATION_CHECKSUM,
+        )
         if pr_pending:
             _migrate_pr_mainline_workstreams(conn)
-            pending.append((PR_MAINLINE_MIGRATION_VERSION, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM))
+            pending.append(
+                (
+                    PR_MAINLINE_MIGRATION_VERSION,
+                    PR_MAINLINE_MIGRATION_NAME,
+                    PR_MAINLINE_MIGRATION_CHECKSUM,
+                )
+            )
         _migrate_github_action_publish_status(conn)
         if skills_pending:
             _migrate_route_recommended_skills(conn)
-            pending.append((RECOMMENDED_SKILLS_MIGRATION_VERSION, RECOMMENDED_SKILLS_MIGRATION_NAME, RECOMMENDED_SKILLS_MIGRATION_CHECKSUM))
+            pending.append(
+                (
+                    RECOMMENDED_SKILLS_MIGRATION_VERSION,
+                    RECOMMENDED_SKILLS_MIGRATION_NAME,
+                    RECOMMENDED_SKILLS_MIGRATION_CHECKSUM,
+                )
+            )
         _migrate_work_item_control(conn)
         _migrate_workflow_storage(conn)
         from robert_agent.adapters.sqlite import execution_control as execution_store
+
         execution_store.import_legacy_controls(conn)
         _migrate_project_memory_fts(conn)
         _migrate_pr_remediation(conn)
         from robert_agent.adapters.sqlite import review_rounds as review_store
+
         review_store.initialize(conn)
         from robert_agent.adapters.sqlite import vote_rounds as vote_store
+
         vote_store.initialize(conn)
-        if built_in_schema and _data_migration_pending(conn, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM):
-            pending.append((SUPERVISION_MIGRATION_VERSION, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM))
+        if built_in_schema and _data_migration_pending(
+            conn, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM
+        ):
+            pending.append(
+                (
+                    SUPERVISION_MIGRATION_VERSION,
+                    SUPERVISION_MIGRATION_NAME,
+                    SUPERVISION_MIGRATION_CHECKSUM,
+                )
+            )
         # Keep data conversions before work-item backfill, but record their
         # success only after all initialization completes. This preserves old
         # work-item/workflow ordinals and leaves failed upgrades retryable.
@@ -598,10 +628,7 @@ def init_database(db_path, schema_path=None):
                     (_migration_version(conn, preferred), name, checksum),
                 )
         tables = sorted(
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
-            )
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         )
 
     return {
