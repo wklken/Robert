@@ -17,9 +17,7 @@ from tests.support.pending_handoff_recovery import PendingHandoffRecoveryFixture
 class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
     def test_transient_handoff_backs_off_then_recovers_once(self):
         with mock.patch.object(
-            assigned_workspace,
-            "prepare_worktree",
-            side_effect=subprocess.TimeoutExpired(["git", "fetch"], 1),
+            assigned_workspace, "prepare_worktree", side_effect=subprocess.TimeoutExpired(["git", "fetch"], 1)
         ):
             self.cycle(self.empty)
         lifecycle, handoff = self.state()
@@ -28,18 +26,12 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertFalse(
                 loop_engine.has_runnable_local_work(
-                    conn,
-                    repo_ids=["repo:example/backend"],
-                    config_result=self.config,
-                    now=handoff["failed_at"],
+                    conn, repo_ids=["repo:example/backend"], config_result=self.config, now=handoff["failed_at"]
                 )
             )
             self.assertTrue(
                 loop_engine.has_runnable_local_work(
-                    conn,
-                    repo_ids=["repo:example/backend"],
-                    config_result=self.config,
-                    now=handoff["next_retry_at"],
+                    conn, repo_ids=["repo:example/backend"], config_result=self.config, now=handoff["next_retry_at"]
                 )
             )
         with mock.patch.object(values, "utc_now", return_value=handoff["next_retry_at"]):
@@ -76,10 +68,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         card = board.get_work_item_detail(self.db, item_id)
         self.assertIn("retry", card["valid_commands"], card)
         context = work_items.CommandContext(
-            "operator",
-            "owner",
-            frozenset({"repo:example/backend"}),
-            frozenset({"default"}),
+            "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"default"})
         )
         retry = work_items.execute_command(
             self.db,
@@ -105,8 +94,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         self.cycle(self.empty)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks WHERE parent_task_id=?", (self.task,)).fetchone()[0],
-                1,
+                conn.execute("SELECT COUNT(*) FROM tasks WHERE parent_task_id=?", (self.task,)).fetchone()[0], 1
             )
 
     def test_transient_budget_stops_and_explicit_retry_processes_pending_request(self):
@@ -115,9 +103,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
             with (
                 mock.patch.object(values, "utc_now", return_value=due),
                 mock.patch.object(
-                    assigned_workspace,
-                    "prepare_worktree",
-                    side_effect=subprocess.TimeoutExpired(["git", "fetch"], 1),
+                    assigned_workspace, "prepare_worktree", side_effect=subprocess.TimeoutExpired(["git", "fetch"], 1)
                 ),
             ):
                 self.cycle(self.empty)
@@ -131,10 +117,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
             item = conn.execute("SELECT work_item_id FROM work_items").fetchone()[0]
         card = board.get_work_item_detail(self.db, item)
         context = work_items.CommandContext(
-            "operator",
-            "owner",
-            frozenset({"repo:example/backend"}),
-            frozenset({"default"}),
+            "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"default"})
         )
         work_items.execute_command(
             self.db,
@@ -151,14 +134,12 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
             self.assertIsNotNone(child)
             self.assertEqual(
                 conn.execute(
-                    "SELECT event_id FROM task_events WHERE task_id=? AND relationship='trigger'",
-                    child,
+                    "SELECT event_id FROM task_events WHERE task_id=? AND relationship='trigger'", child
                 ).fetchone()[0],
                 "event:comment:pending",
             )
             self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task,)).fetchone()[0],
-                "completed",
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task,)).fetchone()[0], "completed"
             )
 
     def test_cancel_during_worktree_preparation_cannot_create_child(self):
@@ -182,9 +163,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         import yaml
 
         with mock.patch.object(
-            assigned_workspace,
-            "prepare_worktree",
-            side_effect=subprocess.TimeoutExpired(["git", "fetch"], 1),
+            assigned_workspace, "prepare_worktree", side_effect=subprocess.TimeoutExpired(["git", "fetch"], 1)
         ):
             self.cycle(self.empty)
         due = self.state()[1]["next_retry_at"]
@@ -196,19 +175,17 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT lifecycle,active_task_id FROM workstreams").fetchone(),
-                ("completed", None),
+                conn.execute("SELECT lifecycle,active_task_id FROM workstreams").fetchone(), ("completed", None)
             )
             self.assertEqual(
                 conn.execute(
-                    "SELECT binding_status FROM execution_subjects WHERE subject_id=?",
-                    (self.task,),
+                    "SELECT binding_status FROM execution_subjects WHERE subject_id=?", (self.task,)
                 ).fetchone()[0],
                 "terminal",
             )
 
     def test_completed_episode_owned_task_preserves_human_handoff(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
@@ -218,13 +195,7 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
             conn.execute("""INSERT INTO pr_remediation_episodes(episode_id,workstream_id,episode_kind,subject_key,
                 observed_head_sha,observed_base_sha,status,first_seen_at,updated_at,last_task_id)
                 SELECT 'episode',workstream_id,'ci','key','head','base','waiting_for_signal',created_at,updated_at,task_id FROM tasks""")
-            execution_store.ensure_subject(
-                conn,
-                "remediation_episode",
-                "episode",
-                "pr_remediation",
-                values.utc_now(),
-            )
+            execution_store.ensure_subject(conn, "remediation_episode", "episode", "pr_remediation", values.utc_now())
             conn.execute("UPDATE github_actions SET audit_status='accepted'")
             conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit.status','accepted')")
         with closing(sqlite3.connect(self.db)) as conn:
@@ -238,6 +209,5 @@ class PendingHandoffRecoveryTests(PendingHandoffRecoveryFixture):
                 "human_request",
             )
             self.assertEqual(
-                execution_store.get_binding(conn, "remediation_episode", "episode")["binding_status"],
-                "active",
+                execution_store.get_binding(conn, "remediation_episode", "episode")["binding_status"], "active"
             )

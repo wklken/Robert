@@ -1,4 +1,5 @@
 import unittest
+
 import tomllib
 
 
@@ -25,6 +26,7 @@ class DistributionTests(unittest.TestCase):
             data["project"]["dependencies"],
             [
                 "PyYAML>=6.0,<7",
+                "SQLAlchemy>=2.0.47,<2.1",
                 "supervisor>=4.2,<5",
             ],
         )

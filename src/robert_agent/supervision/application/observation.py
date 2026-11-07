@@ -1,5 +1,29 @@
 """Collect bounded supervision evidence without advancing Robert's workflows."""
 
+from robert_agent.persistence.queries import observation as observation_queries
+
+from robert_agent.persistence.queries import repos as db_read_repos
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import retries as db_read_retries
+from robert_agent.persistence.queries import task_events as db_read_task_events
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import daemon_events as db_read_daemon_events
+from robert_agent.persistence.queries import leases as db_read_leases
+from robert_agent.persistence.queries import run_repo_steps as db_read_run_repo_steps
+from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
+from robert_agent.persistence.queries import supervision_checkpoints as db_read_supervision_checkpoints
+from robert_agent.persistence.queries import supervision_incidents as db_read_supervision_incidents
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import work_item_events as db_read_work_item_events
+
 from collections import Counter
 from contextlib import closing
 from datetime import timedelta
@@ -8,17 +32,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import sqlite3
 import stat
 import subprocess
 import time
 
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.execution import capacity as execution_capacity
-from robert_agent.adapters.sqlite import execution_control as execution_store
 from robert_agent.work import operator_queries as github_operator
 from robert_agent.execution import spool as result_spool
-from robert_agent.execution import retry as retry_policy
 from robert_agent.workflows import routes as route
 from robert_agent.supervision import receipts
 from robert_agent.supervision import rules as supervision_rules
@@ -54,7 +75,7 @@ def _database_error(exc):
     name = getattr(exc, "sqlite_errorname", "")
     message = str(exc)
     if not name:
-        # Explicitly constructed SQLite errors may not have a symbolic name.
+        # Python 3.10 exposes SQLite's message but no symbolic error name.
         name = {
             "database is locked": "SQLITE_BUSY",
             "database table is locked": "SQLITE_LOCKED",
@@ -79,13 +100,7 @@ def _database_error(exc):
 
 
 def _controller_facts(conn, db_path, now, config):
-    lease = conn.execute(
-        """SELECT l.lease_id,l.owner_id,l.status AS lease_status,l.acquired_at,l.expires_at,l.heartbeat_at,
-        d.status AS run_status FROM leases l LEFT JOIN daemon_runs d ON d.daemon_run_id=l.owner_id
-        WHERE l.resource_type='daemon' AND l.resource_key=?
-        ORDER BY (l.status='active') DESC,l.acquired_at DESC,l.lease_id DESC LIMIT 1""",
-        ("database:" + str(db_path),),
-    ).fetchone()
+    lease = db_records.first(db_read_leases.find_for_controller_facts(conn, "database:" + str(db_path)))
     configured = config.get("daemon", {}).get("enabled", True)
     status, run_id = "unverified", lease["owner_id"] if lease else None
     if not configured:
@@ -113,117 +128,39 @@ def _controller_facts(conn, db_path, now, config):
         }
         if run_id and configured and status not in {"failed", "stopped"}:
             # A same-run child completion cannot clear a daemon attention latch.
-            attention = conn.execute(
-                """SELECT daemon_event_id,json_extract(metadata_json,'$.cause_status') AS cause
-                FROM daemon_events WHERE daemon_run_id=?
-                AND event_type='control_plane_attention' AND json_extract(metadata_json,'$.control_lane')=?
-                ORDER BY created_at DESC,daemon_event_id DESC LIMIT 1""",
-                (run_id, lane),
-            ).fetchone()
+            attention = db_records.first(db_read_daemon_events.find_for_controller_facts(conn, run_id, lane))
             if attention:
-                lane_fact.update(
-                    status="attention",
-                    event_id=attention["daemon_event_id"],
-                    cause=attention["cause"],
-                )
+                lane_fact.update(status="attention", event_id=attention["daemon_event_id"], cause=attention["cause"])
             elif status == "fresh":
-                kinds = ",".join("?" for _ in event_types)
-                event = conn.execute(
-                    f"""SELECT daemon_event_id,status,created_at FROM daemon_events WHERE daemon_run_id=?
-                    AND event_type IN ({kinds}) ORDER BY created_at DESC,daemon_event_id DESC LIMIT 1""",
-                    (run_id, *event_types),
-                ).fetchone()
+                event = db_records.first(db_read_daemon_events.controller_facts_filtered(conn, event_types, run_id))
                 if event and event["status"] == "ok":
                     lane_fact.update(
-                        status="completed",
-                        event_id=event["daemon_event_id"],
-                        completed_at=event["created_at"],
+                        status="completed", event_id=event["daemon_event_id"], completed_at=event["created_at"]
                     )
         facts.append(lane_fact)
     return facts
 
 
 def _task_page(conn, now, cursor, limit, config):
-    has_incidents = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE name='supervision_incidents' AND type='table'"
-    ).fetchone()
-    with_incident = (
-        """OR EXISTS (SELECT 1 FROM supervision_incidents i WHERE i.scope_type='task'
-          AND i.scope_id=t.task_id AND i.status NOT IN ('resolved','dismissed'))"""
-        if has_incidents
-        else ""
-    )
+    has_incidents = bool(db_read_sqlite_master.table_exists(conn, "supervision_incidents"))
     repos = [repo["full_name"] for repo in config.get("repos", ())]
-    repo_filter = "AND r.full_name IN (" + ",".join("?" for _ in repos) + ")" if repos else ""
-    return conn.execute(
-        f"""SELECT t.task_id,t.lifecycle,t.updated_at AS task_updated_at,t.route_id,t.expected_output,
-        w.lifecycle AS stream_lifecycle,w.active_task_id,w.repo_id,r.full_name,r.enabled AS repo_enabled,
-        COALESCE(lower(s.state)='closed',0) AS source_closed,
-        EXISTS(SELECT 1 FROM work_items wi WHERE wi.workstream_id=w.workstream_id AND wi.canceled_at IS NOT NULL) AS canceled,
-        {execution_store.runnable_sql()} AS runnable,
-        json_extract(t.metadata_json,'$.supervision_lineage_key') AS lineage_key,
-        json_extract(t.metadata_json,'$.audit_retry_required') AS audit_retry_required,
-        json_extract(t.metadata_json,'$.dispatch_wait') AS dispatch_wait,
-        json_extract(t.metadata_json,'$.wait_state.lease_expires_at') AS repository_busy_until,
-        json_extract(t.metadata_json,'$.pending_handoff') AS pending_handoff
-        FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-        JOIN repos r ON r.repo_id=w.repo_id LEFT JOIN github_sources s ON s.source_id=w.primary_source_id
-        WHERE t.task_id>? {repo_filter} AND (
-            t.lifecycle IN ('detected','authorized','classified','queued','running','waiting_for_user')
-            OR (w.active_task_id=t.task_id AND w.lifecycle='active')
-            OR julianday(t.updated_at)>=julianday(?) {with_incident})
-        ORDER BY t.task_id LIMIT ?""",
-        (cursor, *repos, (now - timedelta(hours=1)).isoformat(), limit),
-    ).fetchall()
+    return observation_queries.task_page(
+        conn, cursor, limit, (now - timedelta(hours=1)).isoformat(), repos, has_incidents
+    )
 
 
 def _attempt_facts(conn, task_id):
-    return conn.execute(
-        """SELECT a.attempt_id,a.status AS attempt_status,a.started_at,a.heartbeat_at,a.finished_at,
-        a.worktree_path,json_extract(a.failure_json,'$.status') AS attempt_failure,
-        json_extract(a.metadata_json,'$.worker_started_at') AS worker_started_at,
-        json_extract(a.metadata_json,'$.dispatch') AS dispatch,
-        json_extract(a.metadata_json,'$.process_stopped_at') AS process_stopped_at,
-        json_extract(a.metadata_json,'$.resume.not_before_at') AS dispatch_not_before,
-        wr.result_id,wr.output_type,wr.created_at AS result_created_at,
-        json_extract(wr.metadata_json,'$.audit.status') AS audit_status,
-        json_extract(wr.metadata_json,'$.audit.audited_at') AS audited_at,
-        json_extract(wr.metadata_json,'$.audit.reason_code') AS audit_reason,
-        json_extract(wr.metadata_json,'$.audit_observation.retryable') AS audit_retryable,
-        json_extract(wr.metadata_json,'$.audit.action_scope') AS audited_scope,
-        json_extract(wr.metadata_json,'$.normalized_payload.planned_github_actions') AS planned_actions,
-        json_extract(wr.metadata_json,'$.audit_observation.next_retry_at') AS audit_retry_at
-        FROM attempts a LEFT JOIN worker_results wr ON wr.task_id=a.task_id AND wr.attempt_id=a.attempt_id
-        WHERE a.task_id=? ORDER BY a.attempt_no DESC LIMIT 1""",
-        (task_id,),
-    ).fetchone()
+    return db_records.first(db_read_attempts.find_for_attempt_facts(conn, task_id))
 
 
 def _publication_facts(conn, facts, now):
-    actions = conn.execute(
-        f"""SELECT a.action_id,a.task_id,a.action_type,a.audit_status,a.publish_status,a.created_at,
-        a.external_id,a.target_url,a.metadata_json,
-        pi.status AS intent_status,pi.started_at AS intent_started_at,
-        json_extract(pi.remote_evidence_json,'$.receipt') AS intent_receipt,
-        json_extract(a.metadata_json,'$.publish.next_retry_at') AS retry_at,
-        json_extract(a.metadata_json,'$.publish.retryable') AS retryable,
-        json_extract(a.metadata_json,'$.publish.reconcile_required') AS reconcile_required,
-        json_extract(a.metadata_json,'$.publish.reason_code') AS publish_reason,
-        json_extract(a.metadata_json,'$.publish.published_at') AS published_at,
-        {retry_policy.publication_ready_sql("a")} AS eligible
-        FROM github_actions a LEFT JOIN publication_intents pi ON pi.action_id=a.action_id
-        WHERE a.result_id=? ORDER BY a.created_at,a.action_id LIMIT ?""",
-        (now, facts["result_id"], MAX_ACTIONS_PER_RESULT + 1),
-    ).fetchall()
+    actions = db_read_github_actions.find_for_publication_facts(
+        conn, now, facts["result_id"], MAX_ACTIONS_PER_RESULT + 1
+    )
     pending = [action for action in actions if action["publish_status"] == "not_published"]
     if pending:
         action = next((row for row in pending if row["eligible"]), pending[0])
-        relevant = (
-            action["retry_at"],
-            facts.get("process_stopped_at"),
-            facts.get("audited_at"),
-            action["created_at"],
-        )
+        relevant = (action["retry_at"], facts.get("process_stopped_at"), facts.get("audited_at"), action["created_at"])
         eligible_at = max(filter(None, map(supervision_rules.timestamp, relevant)), default=None)
         facts.update(
             pending_action_id=action["action_id"],
@@ -309,16 +246,9 @@ def _delivery_facts(facts, actions):
 
 
 def _checkpoints(conn, scope_type, scope_id):
-    rows = conn.execute(
-        """SELECT rule_id,evidence_json,eligible_since FROM supervision_checkpoints
-        WHERE scope_type=? AND scope_id=? AND rule_id!='admission'""",
-        (scope_type, scope_id),
-    ).fetchall()
+    rows = db_read_supervision_checkpoints.find_for_checkpoints(conn, scope_type, scope_id)
     return {
-        row["rule_id"]: {
-            "evidence": _object(row["evidence_json"]),
-            "eligible_since": row["eligible_since"],
-        }
+        row["rule_id"]: {"evidence": _object(row["evidence_json"]), "eligible_since": row["eligible_since"]}
         for row in rows
     }
 
@@ -328,28 +258,11 @@ def _execution_recovery(conn, facts, now):
     lineage = facts.get("lineage_key")
     if not lineage or facts["lifecycle"] not in {"completed", "failed"} or facts.get("canceled"):
         return None
-    if not conn.execute(
-        """SELECT 1 FROM supervision_incidents WHERE scope_type='task' AND scope_id=?
-        AND rule_id='execution_failed' AND lineage_key=? AND status!='dismissed'""",
-        (facts["task_id"], lineage),
-    ).fetchone():
+    if not db_records.first(db_read_supervision_incidents.find_for_execution_recovery(conn, facts["task_id"], lineage)):
         return None
     # Bounded traversal through durable parents. A separate request may share
     # a repository or source without being a continuation of this failure.
-    candidates = conn.execute(
-        """WITH RECURSIVE retries(task_id,depth) AS (
-        SELECT ?,0 UNION ALL SELECT child.task_id,retries.depth+1 FROM retries
-        JOIN tasks child ON child.parent_task_id=retries.task_id
-        JOIN workstreams w ON w.workstream_id=child.workstream_id AND w.repo_id=?
-        WHERE retries.depth<16 AND json_extract(child.metadata_json,'$.supervision_lineage_key')=?
-        LIMIT 64)
-        SELECT t.task_id,t.lifecycle,t.expected_output,t.parent_task_id FROM retries
-        JOIN tasks t ON t.task_id=retries.task_id
-        WHERE t.lifecycle='completed' AND NOT EXISTS(SELECT 1 FROM work_items wi
-            WHERE wi.workstream_id=t.workstream_id AND wi.canceled_at IS NOT NULL)
-        ORDER BY retries.depth DESC,t.task_id LIMIT 8""",
-        (facts["task_id"], facts["repo_id"], lineage),
-    ).fetchall()
+    candidates = db_read_retries.find_for_execution_recovery(conn, facts["task_id"], facts["repo_id"], lineage)
     failed_at = supervision_rules.timestamp(facts.get("finished_at")) if facts["lifecycle"] == "failed" else None
     for candidate in candidates:
         completed = _completed_execution(conn, candidate, now)
@@ -361,18 +274,11 @@ def _execution_recovery(conn, facts, now):
 
 def _completed_execution(conn, candidate, now):
     attempt = _attempt_facts(conn, candidate["task_id"])
-    if not attempt or attempt["output_type"] in {
-        "classification_result",
-        "waiting_for_user",
-    }:
+    if not attempt or attempt["output_type"] in {"classification_result", "waiting_for_user"}:
         return None
     proof = _completed_attempt_delivery(conn, candidate, attempt, now)
     return (
-        {
-            **proof,
-            "successor_task_id": candidate["task_id"],
-            "successor_parent_task_id": candidate["parent_task_id"],
-        }
+        {**proof, "successor_task_id": candidate["task_id"], "successor_parent_task_id": candidate["parent_task_id"]}
         if proof
         else None
     )
@@ -415,21 +321,13 @@ def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
         "kind": "task",
         **{
             key: facts.get(key)
-            for key in (
-                "lifecycle",
-                "task_updated_at",
-                "attempt_id",
-                "attempt_status",
-                "result_id",
-                "audit_status",
-            )
+            for key in ("lifecycle", "task_updated_at", "attempt_id", "attempt_status", "result_id", "audit_status")
         },
     }
     if handoff:
-        child = conn.execute(
-            "SELECT task_id,created_at FROM tasks WHERE parent_task_id=? AND task_id=? AND lifecycle NOT IN ('canceled','ignored')",
-            (facts["task_id"], handoff.get("child_task_id")),
-        ).fetchone()
+        child = db_records.first(
+            db_read_tasks.find_for_task_facts(conn, facts["task_id"], handoff.get("child_task_id"))
+        )
         facts.update(
             handoff_status=handoff.get("status"),
             handoff_retry_at=handoff.get("next_retry_at"),
@@ -448,11 +346,7 @@ def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
 
 def _dispatch_facts(conn, facts, capacity):
     facts["has_prompt"] = bool(
-        conn.execute(
-            """SELECT 1 FROM artifacts WHERE task_id=? AND artifact_type='prompt'
-        AND (attempt_id=? OR attempt_id IS NULL) LIMIT 1""",
-            (facts["task_id"], facts["attempt_id"]),
-        ).fetchone()
+        db_records.first(db_read_artifacts.find_for_dispatch_facts(conn, facts["task_id"], facts["attempt_id"]))
     )
     route_info = route.ROUTES.get(facts["route_id"], {})
     facts["has_worktree"] = bool(facts["worktree_path"] or not route_info.get("needs_worktree", True))
@@ -462,12 +356,7 @@ def _dispatch_facts(conn, facts, capacity):
 
 
 def _milestones(conn, facts):
-    rows = conn.execute(
-        """SELECT artifact_type,sha256,created_at FROM artifacts WHERE task_id=? AND attempt_id=?
-        AND (artifact_type LIKE 'review_%' OR artifact_type LIKE 'vote_%') AND sha256 IS NOT NULL
-        ORDER BY created_at DESC,artifact_id DESC LIMIT 65""",
-        (facts["task_id"], facts["attempt_id"]),
-    ).fetchall()
+    rows = db_read_artifacts.find_for_milestones(conn, facts["task_id"], facts["attempt_id"])
     if rows and len(rows) <= 64:
         facts["milestones"] = sorted({(a["artifact_type"], a["sha256"]) for a in rows})
         facts["milestone_observed_at"] = rows[0]["created_at"]
@@ -475,23 +364,7 @@ def _milestones(conn, facts):
 
 def _receipt_page(conn, now, position, limit, config):
     repos = [repo["full_name"] for repo in config.get("repos", ())]
-    repo_filter = "AND r.full_name IN (" + ",".join("?" for _ in repos) + ")" if repos else ""
-    return conn.execute(
-        f"""SELECT c.scope_type,c.scope_id,c.lineage_key,c.metadata_json,c.updated_at AS disposition_at,
-        COALESCE(lower(gs.state)='closed',0) AS source_closed,r.enabled AS repo_enabled
-        FROM supervision_checkpoints c
-        JOIN repos r ON r.repo_id=json_extract(c.metadata_json,'$.repo_id')
-        LEFT JOIN github_sources gs ON gs.source_id=json_extract(c.metadata_json,'$.source_id')
-        WHERE c.scope_type IN ('github_event','work_item_event') AND c.rule_id='admission'
-          AND (c.scope_type,c.scope_id)>(?,?) {repo_filter}
-          AND (julianday(c.updated_at)>=julianday(?)
-               OR json_extract(c.metadata_json,'$.disposition') IS NULL
-               OR json_extract(c.metadata_json,'$.disposition') IN ('deferred','linked_pending')
-               OR EXISTS(SELECT 1 FROM supervision_incidents i WHERE i.scope_type=c.scope_type
-                    AND i.scope_id=c.scope_id AND i.status NOT IN ('resolved','dismissed')))
-        ORDER BY c.scope_type,c.scope_id LIMIT ?""",
-        (*position, *repos, (now - timedelta(hours=1)).isoformat(), limit),
-    ).fetchall()
+    return observation_queries.receipt_page(conn, *position, (now - timedelta(hours=1)).isoformat(), limit, repos)
 
 
 def _receipt_facts(conn, row, consumer_completed, wait):
@@ -503,56 +376,22 @@ def _receipt_facts(conn, row, consumer_completed, wait):
         "disposition_at": row["disposition_at"],
     }
     scope, key = facts["scope_type"], facts["scope_id"]
-    facts["generation"] = {
-        "kind": "admission",
-        "metadata_digest": supervision_rules._digest(row["metadata_json"]),
-    }
+    facts["generation"] = {"kind": "admission", "metadata_digest": supervision_rules._digest(row["metadata_json"])}
     if row["source_closed"] or not row["repo_enabled"]:
         wait = "request_no_longer_active"
-    elif (
-        scope == "work_item_event"
-        and conn.execute(
-            """SELECT 1 FROM work_item_events e
-        JOIN work_items wi ON wi.work_item_id=e.work_item_id
-        WHERE e.event_id=? AND wi.canceled_at IS NOT NULL""",
-            (key,),
-        ).fetchone()
-    ):
+    elif scope == "work_item_event" and db_records.first(db_read_work_item_events.find_for_receipt_facts(conn, key)):
         wait = "request_no_longer_active"
     facts["wait_reason"] = wait
     facts["checkpoints"] = _checkpoints(conn, scope, key)
     target, target_id = facts.get("target_type"), facts.get("target_id")
     disposition = facts.get("disposition")
     if target in {"review_round", "vote_round"}:
-        table = "review_sessions" if target == "review_round" else "vote_sessions"
-        facts["target_exists"] = bool(
-            conn.execute(
-                f"""SELECT 1 FROM {table} n JOIN repos r ON r.full_name=n.repo
-            WHERE n.round_id=? AND r.repo_id=?""",
-                (target_id, facts.get("repo_id")),
-            ).fetchone()
-        )
+        facts["target_exists"] = observation_queries.round_exists(conn, target, target_id, facts.get("repo_id"))
     elif target == "task":
-        owner = conn.execute(
-            """SELECT t.lifecycle,w.active_task_id,w.lifecycle AS stream_lifecycle
-            FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-            WHERE t.task_id=? AND w.repo_id=?""",
-            (target_id, facts.get("repo_id")),
-        ).fetchone()
+        owner = db_records.first(db_read_tasks.find_for_receipt_facts(conn, target_id, facts.get("repo_id")))
         facts["target_exists"] = bool(owner)
         if owner and disposition == "linked_pending" and scope == "github_event":
-            successor = conn.execute(
-                """SELECT te.task_id,
-                CASE WHEN te.relationship='trigger' THEN te.created_at ELSE (
-                    SELECT MAX(wr.created_at) FROM worker_results wr JOIN github_events ge ON ge.event_id=te.event_id
-                    WHERE wr.task_id=te.task_id AND EXISTS(SELECT 1 FROM json_each(wr.consumed_event_fingerprints_json)
-                        WHERE value=ge.event_fingerprint)) END AS occurred_at
-                FROM task_events te JOIN tasks t ON t.task_id=te.task_id
-                WHERE te.event_id=? AND ((te.task_id=? AND te.relationship='consumed') OR
-                    (t.parent_task_id=? AND te.relationship='trigger' AND t.lifecycle NOT IN ('canceled','ignored')))
-                LIMIT 1""",
-                (key, target_id, target_id),
-            ).fetchone()
+            successor = db_records.first(db_read_task_events.find_for_receipt_facts(conn, key, target_id, target_id))
             facts["successor_task_id"] = successor["task_id"] if successor else None
             facts["successor_occurred_at"] = successor["occurred_at"] if successor else None
             facts["pending_eligible"] = (
@@ -568,15 +407,9 @@ def _receipt_facts(conn, row, consumer_completed, wait):
                     observed, response = github_operator.source_read(conn, pending[0])
                     facts["operator_handoff_eligible"] = bool(observed and response)
             else:
-                attempt = conn.execute(
-                    "SELECT started_at FROM attempts WHERE task_id=? ORDER BY attempt_no LIMIT 1",
-                    (target_id,),
-                ).fetchone()
+                attempt = db_records.first(db_read_attempts.find_started_at_by_task_id(conn, target_id))
                 if attempt:
-                    facts.update(
-                        successor_task_id=target_id,
-                        successor_occurred_at=attempt["started_at"],
-                    )
+                    facts.update(successor_task_id=target_id, successor_occurred_at=attempt["started_at"])
     if disposition in {None, "deferred", "linked_pending"} or facts.get("operator_handoff_eligible"):
         facts["consumer_completed_at"] = consumer_completed(facts.get("repo_id"), facts.get("consumer"))
     return facts
@@ -642,10 +475,7 @@ def _command_facts(db_path, facts, pgid, deadline):
                 except (OSError, ValueError, RecursionError):
                     limited = True
                     continue
-                if not isinstance(record, dict) or (
-                    record.get("task_id"),
-                    record.get("attempt_id"),
-                ) != (task, attempt):
+                if not isinstance(record, dict) or (record.get("task_id"), record.get("attempt_id")) != (task, attempt):
                     continue
                 if record.get("status") in {"running", "starting"}:
                     wrapper_pid = record.get("wrapper_pid")
@@ -656,11 +486,7 @@ def _command_facts(db_path, facts, pgid, deadline):
                         pass
                 elif record.get("status") == "failed":
                     signature = supervision_rules._digest(
-                        [
-                            record.get("phase"),
-                            record.get("argv"),
-                            record.get("returncode"),
-                        ]
+                        [record.get("phase"), record.get("argv"), record.get("returncode")]
                     )
                     failures[signature] += 1
     except OSError:
@@ -714,8 +540,7 @@ def _spool_facts(db_path, task_id, attempt_id):
 def _dead_worker_snapshot_current(db_path, facts, dispatch):
     # Spool replay may have committed a result and removed its file since the
     # first snapshot. Do not report a result-less exit from that mixed view.
-    with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(db_database.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
         fresh = _attempt_facts(conn, facts["task_id"])
     return bool(
         fresh
@@ -733,46 +558,29 @@ def is_current(conn, observation):
         return True
     scope = observation["scope_id"]
     if generation.get("kind") == "admission":
-        row = conn.execute(
-            """SELECT metadata_json FROM supervision_checkpoints
-            WHERE scope_type=? AND scope_id=? AND rule_id='admission'""",
-            (observation["scope_type"], scope),
-        ).fetchone()
+        row = db_records.first(
+            db_read_supervision_checkpoints.find_for_is_current(conn, observation["scope_type"], scope)
+        )
         return bool(row and supervision_rules._digest(row[0]) == generation["metadata_digest"])
-    row = conn.execute("SELECT lifecycle,updated_at FROM tasks WHERE task_id=?", (scope,)).fetchone()
-    if not row or tuple(row) != (
-        generation["lifecycle"],
-        generation["task_updated_at"],
-    ):
+    row = db_records.first(db_read_tasks.find_lifecycle_and_updated_at_by_task_id(conn, scope))
+    if not row or tuple(row) != (generation["lifecycle"], generation["task_updated_at"]):
         return False
-    attempt = conn.execute(
-        """SELECT a.attempt_id,a.status,wr.result_id,json_extract(wr.metadata_json,'$.audit.status')
-        FROM attempts a LEFT JOIN worker_results wr ON wr.task_id=a.task_id AND wr.attempt_id=a.attempt_id
-        WHERE a.task_id=? ORDER BY a.attempt_no DESC LIMIT 1""",
-        (scope,),
-    ).fetchone()
+    attempt = db_records.first(db_read_attempts.find_for_is_current(conn, scope))
     current = tuple(attempt) if attempt else (None, None, None, None)
     if current != tuple(generation[key] for key in ("attempt_id", "attempt_status", "result_id", "audit_status")):
         return False
     rule = observation["rule_id"]
     if rule == "ready_not_dispatched" and observation["classification"] == "confirmed":
         return bool(
-            conn.execute(
-                """SELECT 1 FROM leases l JOIN daemon_runs d ON d.daemon_run_id=l.owner_id
-            WHERE l.resource_type='daemon' AND l.status='active' AND d.status='running' AND l.owner_id=?""",
-                (observation["evidence"].get("local_daemon_run_id"),),
-            ).fetchone()
+            db_records.first(
+                db_read_leases.find_for_is_current(conn, observation["evidence"].get("local_daemon_run_id"))
+            )
         )
     proof = observation.get("positive_evidence")
     if not proof:
         return True
     if rule == "ready_not_dispatched" and observation["reason_code"] == "prepared_attempt_delivery_verified":
-        candidate = conn.execute(
-            """SELECT t.task_id,t.lifecycle,t.expected_output FROM tasks t
-            WHERE t.task_id=? AND t.lifecycle='completed' AND NOT EXISTS (SELECT 1 FROM work_items wi
-                WHERE wi.workstream_id=t.workstream_id AND wi.canceled_at IS NOT NULL)""",
-            (scope,),
-        ).fetchone()
+        candidate = db_records.first(db_read_tasks.find_for_is_current_2(conn, scope))
         return bool(
             candidate
             and _completed_attempt_delivery(conn, candidate, _attempt_facts(conn, scope), proof["occurred_at"]) == proof
@@ -781,15 +589,11 @@ def is_current(conn, observation):
         return True
     # Recheck the exact completed retry and the receipt version before closing
     # the original incident. A changed result waits for the next observation.
-    cursor = conn.execute(
-        """SELECT task_id,lifecycle,expected_output,parent_task_id FROM tasks
-        WHERE task_id=? AND lifecycle='completed' AND json_extract(metadata_json,'$.supervision_lineage_key')=?""",
-        (proof["successor_task_id"], observation["lineage_key"]),
-    )
-    candidate = cursor.fetchone()
+    cursor = db_read_tasks.find_for_is_current(conn, proof["successor_task_id"], observation["lineage_key"])
+    candidate = db_records.first(cursor)
     if candidate is None:
         return False
-    facts = dict(zip((column[0] for column in cursor.description), candidate))
+    facts = dict(candidate)
     return _completed_execution(conn, facts, proof["occurred_at"]) == proof
 
 
@@ -811,17 +615,13 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
     deadline = started + OBSERVATION_SECONDS
     db_deadline = started + DB_SECONDS
     try:
-        with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
-            conn.row_factory = sqlite3.Row
+        with closing(db_database.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
             conn.set_progress_handler(lambda: int(time.monotonic() >= db_deadline), 1000)
-            conn.execute("BEGIN")
+            db_transactions.begin(conn, immediate=False)
             controllers = _controller_facts(conn, db_path, now, config)
             controller_wait = {}
             if controllers[0]["status"] != "fresh" and config:
-                controller_wait.update(
-                    local_wait="controller_unavailable",
-                    publish_wait="controller_unavailable",
-                )
+                controller_wait.update(local_wait="controller_unavailable", publish_wait="controller_unavailable")
             for facts in controllers[1:]:
                 lane = facts["scope_id"].split(":", 1)[1]
                 if lane == "local":
@@ -835,8 +635,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
                     controller_wait[lane + "_wait"] = "controller_lane_latched"
                     if facts.get("cause") == "blocked_result_contract_cutover":
                         controller_wait.update(
-                            local_wait="result_contract_cutover",
-                            publish_wait="result_contract_cutover",
+                            local_wait="result_contract_cutover", publish_wait="result_contract_cutover"
                         )
             pages = {
                 "task": []
@@ -853,14 +652,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
             def full():
                 if max_concurrency is None or not repos:
                     return False
-                placeholders = ",".join("?" for _ in repos)
-                repo_ids = [
-                    row[0]
-                    for row in conn.execute(
-                        f"SELECT repo_id FROM repos WHERE full_name IN ({placeholders})",
-                        tuple(repos),
-                    )
-                ]
+                repo_ids = [row[0] for row in db_read_repos.full_filtered(conn, repos)]
                 return execution_capacity.capacity_full_for_repos(conn, repo_ids, max_concurrency)
 
             @lru_cache(maxsize=limit)
@@ -876,30 +668,19 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
             def consumer_completed(repo_id, consumer):
                 if consumer not in (None, "github_route"):
                     return None
-                row = conn.execute(
-                    """SELECT MAX(finished_at) FROM run_repo_steps
-                    WHERE repo_id=? AND step_key='route' AND status='succeeded'""",
-                    (repo_id,),
-                ).fetchone()
+                row = db_records.first(db_read_run_repo_steps.find_for_consumer_completed(conn, repo_id))
                 return row[0]
 
             candidates = [
                 (
                     kind,
-                    _task_facts(
-                        conn,
-                        row,
-                        controller_wait,
-                        now.isoformat(),
-                        capacity,
-                        consumer_completed,
-                    )
+                    _task_facts(conn, row, controller_wait, now.isoformat(), capacity, consumer_completed)
                     if kind == "task"
                     else _receipt_facts(conn, row, consumer_completed, controller_wait.get("local_wait")),
                 )
                 for kind, row in _mix_pages(pages, positions["next"], limit)
             ]
-    except sqlite3.Error as exc:
+    except db_errors.Error as exc:
         raise ObservationUnavailable(_database_error(exc)) from exc
     except (ValueError, RecursionError) as exc:
         raise ObservationUnavailable("database_evidence_invalid") from exc
@@ -952,7 +733,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
         if facts.get("process_status") == "dead" and facts.get("spool_status") == "missing":
             try:
                 current = time.monotonic() < deadline and _dead_worker_snapshot_current(db_path, facts, dispatch)
-            except (sqlite3.Error, ValueError):
+            except (db_errors.Error, ValueError):
                 current = False
             if not current:
                 facts["spool_status"] = "unverified"

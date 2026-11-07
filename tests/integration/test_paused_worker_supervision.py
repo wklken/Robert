@@ -36,15 +36,9 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
 
         proc = self.process(age=0)
         with (
+            mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=AssertionError("no preparation")),
             mock.patch.object(
-                assigned_workspace,
-                "prepare_worktree",
-                side_effect=AssertionError("no preparation"),
-            ),
-            mock.patch.object(
-                evidence,
-                "inspect_attempt_recovery_with_metadata",
-                side_effect=AssertionError("no Git recovery"),
+                evidence, "inspect_attempt_recovery_with_metadata", side_effect=AssertionError("no Git recovery")
             ),
         ):
             result = worker_supervision.run(self.config_path)
@@ -62,13 +56,7 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
 
         proc = self.process()
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            execution_leases.acquire(
-                conn,
-                self.fixture.fixture.repo_id,
-                "other-owner",
-                self.now.isoformat(),
-                60,
-            )
+            execution_leases.acquire(conn, self.fixture.fixture.repo_id, "other-owner", self.now.isoformat(), 60)
         result = worker_supervision.run(self.config_path)
         self.assertTrue(result["ok"], result)
         self.assertIsNone(proc.poll())
@@ -112,23 +100,16 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
         proc = self.process()
         with (
             mock.patch.object(attempt_process, "dispatch_status", return_value={"status": "unknown"}),
-            mock.patch.object(
-                monitor,
-                "terminate_owned_attempt",
-                side_effect=AssertionError("unverified identity"),
-            ),
+            mock.patch.object(monitor, "terminate_owned_attempt", side_effect=AssertionError("unverified identity")),
         ):
             self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         self.assertIsNone(proc.poll())
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
-            self.assertEqual(
-                conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0],
-                "attention",
-            )
+            self.assertEqual(conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0], "attention")
 
     def test_busy_task_lock_does_not_prevent_other_worker_cleanup(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
         from robert_agent.runtime import paused_monitor as worker_supervision
         from robert_agent.delivery.lock import task_publication_lock
 
@@ -151,8 +132,7 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
         self.assertIsNotNone(proc.poll())
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
-                conn.execute("SELECT status FROM attempts WHERE task_id=?", (task,)).fetchone()[0],
-                "failed",
+                conn.execute("SELECT status FROM attempts WHERE task_id=?", (task,)).fetchone()[0], "failed"
             )
 
     def test_deferred_result_is_ingested_before_paused_exit_finalization(self):
@@ -175,11 +155,7 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
                 "used_skills": [],
             },
         }
-        with mock.patch.object(
-            result,
-            "_record_result_db",
-            side_effect=sqlite3.OperationalError("database is locked"),
-        ):
+        with mock.patch.object(result, "_record_result_db", side_effect=sqlite3.OperationalError("database is locked")):
             self.assertEqual(result.record_result(self.db, payload)["status"], "deferred")
         self.stop(proc)
         self.assertTrue(worker_supervision.run(self.config_path)["ok"])
@@ -213,11 +189,7 @@ class PausedWorkerSupervisionTests(PausedWorkerSupervisionFixture):
                 "used_skills": [],
             },
         }
-        with mock.patch.object(
-            result,
-            "_record_result_db",
-            side_effect=sqlite3.OperationalError("database is locked"),
-        ):
+        with mock.patch.object(result, "_record_result_db", side_effect=sqlite3.OperationalError("database is locked")):
             self.assertEqual(result.record_result(self.db, payload)["status"], "deferred")
             self.assertTrue(worker_supervision.run(self.config_path)["ok"])
         with closing(sqlite3.connect(self.db)) as conn:

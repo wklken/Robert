@@ -1,10 +1,16 @@
 """application delivery intents responsibilities."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import tasks as db_read_tasks
+
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import publication_intents as db_read_publication_intents
 from contextlib import closing
 import re
-import sqlite3
 from robert_agent.delivery.application import reconcile as publication_reconcile
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.supervision import git as supervision_git
 
 from robert_agent.delivery.application import effects as publication_effects
@@ -47,23 +53,12 @@ def prepare_publication_intent(db_path, action_id, run_command):
     """Prepare and execute an intent in committed local transactions."""
 
     now = publication_values.now()
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        action_row = conn.execute(
-            """
-            SELECT action_id, result_id, task_id, action_type, target_url, external_id,
-                   audit_status, publish_status, created_at, metadata_json
-            FROM github_actions WHERE action_id = ?
-            """,
-            (action_id,),
-        ).fetchone()
+    with closing(db_database.connect(db_path)) as conn:
+        action_row = db_records.first(db_read_github_actions.find_for_prepare_publication_intent_2(conn, action_id))
         if not action_row:
             return {"state": "missing", "action": None, "intent": None, "scope": None}
         action = dict(action_row)
-        if not conn.execute(
-            "SELECT 1 FROM tasks t WHERE t.task_id=? AND " + execution_store.runnable_sql(),
-            (action["task_id"],),
-        ).fetchone():
+        if not db_records.first(db_read_tasks.find_for_prepare_publication_intent(conn, action["task_id"])):
             return {"state": "missing", "action": action, "intent": None, "scope": None}
         if action["publish_status"] != "not_published" or action["audit_status"] != "accepted":
             return {"state": "missing", "action": action, "intent": None, "scope": None}
@@ -73,28 +68,13 @@ def prepare_publication_intent(db_path, action_id, run_command):
         try:
             supervision_git.binding(scope)
         except OSError:
-            return {
-                "state": "scope_missing",
-                "action": action,
-                "intent": intent,
-                "scope": scope,
-            }
+            return {"state": "scope_missing", "action": action, "intent": intent, "scope": scope}
     source_sha = None
     head_owner = None
     if intent is None and (scope is None or not isinstance(scope, dict)):
-        return {
-            "state": "scope_missing",
-            "action": action,
-            "intent": None,
-            "scope": None,
-        }
+        return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
     if intent is not None and intent["status"] == "prepared" and not isinstance(scope, dict):
-        return {
-            "state": "scope_missing",
-            "action": action,
-            "intent": intent,
-            "scope": scope,
-        }
+        return {"state": "scope_missing", "action": action, "intent": intent, "scope": scope}
     if intent is not None:
         persisted_evidence = publication_values.decode_json(intent.get("remote_evidence_json"))
         source_sha = persisted_evidence.get("source_sha") or None
@@ -106,8 +86,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
         if isinstance(scope, dict):
             scope, source_sha = derive_push_source_sha(action, scope, run_command)
             if action.get("action_type") == "open_pr":
-                with closing(sqlite3.connect(db_path)) as conn:
-                    conn.row_factory = sqlite3.Row
+                with closing(db_database.connect(db_path)) as conn:
                     head_owner = publication_effects.trusted_head_owner_for_intent(
                         conn,
                         action,
@@ -122,12 +101,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
         and not scope.get("result_head_sha")
         and not source_sha
     ):
-        return {
-            "state": "source_sha_missing",
-            "action": action,
-            "intent": intent,
-            "scope": scope,
-        }
+        return {"state": "source_sha_missing", "action": action, "intent": intent, "scope": scope}
     if action.get("action_type") == "open_pr" and not head_owner:
         return {
             "state": "head_owner_missing",
@@ -137,34 +111,17 @@ def prepare_publication_intent(db_path, action_id, run_command):
         }
     if intent is None:
         if scope is None or not isinstance(scope, dict):
-            return {
-                "state": "scope_missing",
-                "action": action,
-                "intent": None,
-                "scope": None,
-            }
+            return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
         try:
             idempotency_key, request_fingerprint = publication_reconcile.derive_publication_keys(action, scope)
         except ValueError:
-            return {
-                "state": "scope_missing",
-                "action": action,
-                "intent": None,
-                "scope": None,
-            }
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.row_factory = sqlite3.Row
-            conflicting = conn.execute(
-                "SELECT action_id FROM publication_intents WHERE idempotency_key=? AND action_id!=?",
-                (idempotency_key, action_id),
-            ).fetchone()
+            return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
+        with closing(db_database.connect(db_path)) as conn, conn:
+            conflicting = db_records.first(
+                db_read_publication_intents.find_for_prepare_publication_intent(conn, idempotency_key, action_id)
+            )
             if conflicting:
-                return {
-                    "state": "scope_missing",
-                    "action": action,
-                    "intent": None,
-                    "scope": scope,
-                }
+                return {"state": "scope_missing", "action": action, "intent": None, "scope": scope}
             intent = dict(
                 execution_store.prepare_publication_intent(
                     conn,
@@ -177,19 +134,9 @@ def prepare_publication_intent(db_path, action_id, run_command):
     # A terminal published intent is replay success.  Backfill the action if
     # a process crashed after intent completion but before the action update.
     if intent["status"] == "published":
-        return {
-            "state": "published",
-            "action": action,
-            "intent": intent,
-            "scope": scope,
-        }
+        return {"state": "published", "action": action, "intent": intent, "scope": scope}
     if intent["status"] == "attention":
-        return {
-            "state": "attention",
-            "action": action,
-            "intent": intent,
-            "scope": scope,
-        }
+        return {"state": "attention", "action": action, "intent": intent, "scope": scope}
 
     if intent["status"] == "executing":
         return {
@@ -206,8 +153,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
         evidence["source_sha"] = source_sha
     if head_owner:
         evidence["head_owner"] = head_owner
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.row_factory = sqlite3.Row
+    with closing(db_database.connect(db_path)) as conn, conn:
         latest = intent_facts.load_intent(conn, action_id)
         if latest["status"] == "prepared":
             latest = dict(

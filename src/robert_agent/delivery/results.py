@@ -1,8 +1,13 @@
 """Read worker results and persist audit and result bookkeeping."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
+from robert_agent.persistence.stores import worker_results as db_write_worker_results
 from robert_agent.foundation import values
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import vote as vote_store
 import json
 
 
@@ -18,15 +23,7 @@ def load_result_payload(conn, result_row):
         metadata_json,
     ) = result_row
     actions = []
-    for row in conn.execute(
-        """
-        SELECT metadata_json, target_url, external_id
-        FROM github_actions
-        WHERE result_id = ?
-        ORDER BY created_at, action_id
-        """,
-        (result_id,),
-    ):
+    for row in db_read_github_actions.find_metadata_json_and_target_url_and_external_id_by_result_id(conn, result_id):
         action = json.loads(row[0])
         if row[1]:
             action["target_url"] = row[1]
@@ -63,59 +60,29 @@ def load_result_payload(conn, result_row):
 
 
 def set_github_actions_status(conn, result_id, status):
-    conn.execute(
-        """
-        UPDATE github_actions
-        SET audit_status = ?
-        WHERE result_id = ?
-        """,
-        (status, result_id),
-    )
+    db_write_github_actions.set_audit_status_by_result_id(conn, status, result_id)
 
 
 def record_result_audit(conn, result_id, audit):
-    row = conn.execute(
-        "SELECT metadata_json FROM worker_results WHERE result_id = ?",
-        (result_id,),
-    ).fetchone()
+    row = db_records.first(db_read_worker_results.find_metadata_json_by_result_id(conn, result_id))
     metadata = json.loads(row[0]) if row and row[0] else {}
     metadata["audit"] = {**audit, "audited_at": values.utc_now()}
-    conn.execute(
-        """
-        UPDATE worker_results
-        SET metadata_json = ?
-        WHERE result_id = ?
-        """,
-        (json.dumps(metadata, ensure_ascii=False, sort_keys=True), result_id),
+    db_write_worker_results.set_metadata_json_by_result_id(
+        conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), result_id
     )
 
 
 def record_result_project_memory_status(conn, result_id, status):
-    row = conn.execute(
-        "SELECT metadata_json FROM worker_results WHERE result_id = ?",
-        (result_id,),
-    ).fetchone()
+    row = db_records.first(db_read_worker_results.find_metadata_json_by_result_id(conn, result_id))
     metadata = json.loads(row[0]) if row and row[0] else {}
     metadata["project_memory"] = status
-    conn.execute(
-        """
-        UPDATE worker_results
-        SET metadata_json = ?
-        WHERE result_id = ?
-        """,
-        (json.dumps(metadata, ensure_ascii=False, sort_keys=True), result_id),
+    db_write_worker_results.set_metadata_json_by_result_id(
+        conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), result_id
     )
 
 
 def result_actions_all_published(conn, result_id):
-    rows = conn.execute(
-        """
-        SELECT audit_status, publish_status
-        FROM github_actions
-        WHERE result_id = ?
-        """,
-        (result_id,),
-    ).fetchall()
+    rows = db_read_github_actions.find_audit_status_and_publish_status_by_result_id(conn, result_id)
     if not rows:
         return True
     if all(audit_status == "accepted" and publish_status == "published" for audit_status, publish_status in rows):
@@ -125,14 +92,7 @@ def result_actions_all_published(conn, result_id):
         for audit_status, publish_status in rows
     ):
         return False
-    result_row = conn.execute(
-        """
-        SELECT metadata_json
-        FROM worker_results
-        WHERE result_id = ?
-        """,
-        (result_id,),
-    ).fetchone()
+    result_row = db_records.first(db_read_worker_results.find_metadata_json_by_result_id(conn, result_id))
     metadata = values.json_object(result_row[0] if result_row else None)
     action_scope = (metadata.get("audit") or {}).get("action_scope")
     if isinstance(action_scope, dict) and action_scope.get("vote_round_id"):
@@ -148,9 +108,6 @@ def result_actions_all_published(conn, result_id):
 
 
 def result_audit_accepted(conn, result_id):
-    row = conn.execute(
-        "SELECT metadata_json FROM worker_results WHERE result_id = ?",
-        (result_id,),
-    ).fetchone()
+    row = db_records.first(db_read_worker_results.find_metadata_json_by_result_id(conn, result_id))
     metadata = json.loads(row[0]) if row and row[0] else {}
     return (metadata.get("audit") or {}).get("status") == "accepted"

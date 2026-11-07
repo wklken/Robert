@@ -2,7 +2,7 @@ from contextlib import closing
 import sqlite3
 import unittest
 
-from robert_agent.adapters.sqlite.database import schema_sql
+from robert_agent.persistence.schema.database import schema_sql
 from robert_agent.work.queries import sources_for_workstream
 
 
@@ -38,9 +38,6 @@ class WorkstreamSourceQueryTests(unittest.TestCase):
 
             self.assertEqual(
                 sources_for_workstream(conn, "work-1"),
-                [
-                    {"source_type": "issue", "number": 4},
-                    {"source_type": "pull_request", "number": 4},
-                ],
+                [{"source_type": "issue", "number": 4}, {"source_type": "pull_request", "number": 4}],
             )
             self.assertEqual(sources_for_workstream(conn, "missing"), [])

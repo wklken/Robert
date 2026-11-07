@@ -13,7 +13,7 @@ from robert_agent.execution.application import readiness
 from robert_agent.execution import journal as run_journal
 from robert_agent.readmodels import progress
 from robert_agent.work import repositories as work_repositories
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.runtime import cycle as run_once_module
 from robert_agent.work import queries as work_queries
 from robert_agent.configuration import command as validate_config
@@ -71,10 +71,7 @@ def has_runnable_local_work(
 
 def _write_latest_loop(db_path, summary):
     path = Path(db_path).parent / "latest-loop.json"
-    path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     return str(path)
 
 
@@ -231,10 +228,7 @@ def main(argv=None):
             max_publish_actions=args.max_publish_actions,
         )
     except ValueError as exc:
-        return emit(
-            {"ok": False, "status": "failed_config", "safe_error": str(exc)},
-            exit_code=3,
-        )
+        return emit({"ok": False, "status": "failed_config", "safe_error": str(exc)}, exit_code=3)
     return emit(result, 0 if result.get("ok") else 3)
 
 

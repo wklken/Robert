@@ -8,7 +8,7 @@ import unittest
 
 class RemediationTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -276,13 +276,9 @@ class RemediationTests(unittest.TestCase):
                         now=f"2026-07-26T00:0{minute}:00Z",
                     )
                 self.assertEqual(
-                    remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T00:05:00Z"),
-                    [],
+                    remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T00:05:00Z"), []
                 )
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0],
-                    1,
-                )
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0], 1)
                 remediation.upsert_health_episodes(
                     conn,
                     repo=self.repo,
@@ -292,8 +288,7 @@ class RemediationTests(unittest.TestCase):
                     now="2026-07-26T00:06:00Z",
                 )
                 self.assertEqual(
-                    len(remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T00:06:00Z")),
-                    1,
+                    len(remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T00:06:00Z")), 1
                 )
 
     def test_waiting_conflict_exhausts_when_result_head_is_still_conflicted(self):

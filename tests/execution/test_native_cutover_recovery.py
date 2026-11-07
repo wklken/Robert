@@ -2,6 +2,7 @@
 
 from robert_agent.adapters.processes import attempt as attempt_process
 from robert_agent.adapters.processes import identity as worker_identity
+from tests.support import database as fixture_database
 from contextlib import closing
 import json
 import os
@@ -16,7 +17,6 @@ from unittest.mock import patch
 
 from robert_agent.execution import rounds as native_rounds
 from robert_agent.execution.application import cutover as result_cutover
-from robert_agent.execution import inspection as supervise
 from robert_agent.delivery.lock import task_publication_lock
 from tests.support import cutover_recovery as cutover_fixture
 from tests.support import review_coordinator as review_fixture
@@ -31,16 +31,11 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
         fixture = cutover_fixture.CutoverRecoveryFixture()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        with store.connect(fixture.db) as conn:
+        with fixture_database.connect(fixture.db) as conn:
             entry = store.enqueue(
                 conn,
                 {"full_name": "x/y"},
-                {
-                    "number": 205,
-                    "source_type": "issue",
-                    "workstream_id": "bad",
-                    "event_fingerprint": "native-cutover",
-                },
+                {"number": 205, "source_type": "issue", "workstream_id": "bad", "event_fingerprint": "native-cutover"},
                 {},
                 [],
             )
@@ -52,30 +47,19 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
         return fixture, entry["round_id"]
 
     def run_record(self, fixture, store, round_id, *, status="running", reserved=1, dispatch=EXITED):
-        with store.connect(fixture.db) as conn:
-            run = store.new_run(
-                conn,
-                round_id,
-                "prepare",
-                "model",
-                "bad",
-                fixture.tmp.name,
-                "prompt-sha",
-            )
+        with fixture_database.connect(fixture.db) as conn:
+            run = store.new_run(conn, round_id, "prepare", "model", "bad", fixture.tmp.name, "prompt-sha")
             store.update_run(
-                conn,
-                run["run_id"],
-                status=status,
-                slot_reserved=reserved,
-                dispatch_json=json.dumps(dispatch),
+                conn, run["run_id"], status=status, slot_reserved=reserved, dispatch_json=json.dumps(dispatch)
             )
         return run["run_id"]
 
     def state(self, fixture, store, round_id):
-        with store.connect(fixture.db) as conn:
+        with fixture_database.connect(fixture.db) as conn:
             parent = dict(conn.execute("SELECT * FROM attempts WHERE attempt_id='bad'").fetchone())
             occupied = conn.execute(
-                "SELECT COUNT(*) FROM attempts a WHERE task_id='bad' AND " + supervise.occupied_attempt_sql()
+                "SELECT COUNT(*) FROM attempts a WHERE task_id='bad' AND "
+                + "(a.status IN ('running', 'stale') OR\n      (a.status='completed'\n       AND json_type(a.metadata_json,'$.dispatch.pid')='integer'\n       AND json_extract(a.metadata_json,'$.process_stopped_at') IS NULL))"
             ).fetchone()[0]
             return parent, occupied, store.runs(conn, round_id)
 
@@ -92,10 +76,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
             stop_children.assert_not_called()
 
     def test_historical_review_and_vote_results_release_dead_parent(self):
-        for fixture_type in (
-            review_fixture.ReviewCoordinatorFixture,
-            vote_fixture.VoteCoordinatorFixture,
-        ):
+        for fixture_type in (review_fixture.ReviewCoordinatorFixture, vote_fixture.VoteCoordinatorFixture):
             for status in ("running", "completed"):
                 with self.subTest(workflow=fixture_type.__name__, parent=status):
                     fixture = fixture_type()
@@ -109,7 +90,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     report = driver.run()
                     report_bytes = report.read_bytes()
                     identity = self.process_identity(stopped=True)
-                    with driver.store.connect(fixture.db) as conn:
+                    with fixture_database.connect(fixture.db) as conn:
                         results = [tuple(row) for row in conn.execute("SELECT * FROM worker_results")]
                         before_runs = driver.store.runs(conn, driver.round_id)
                         before_session = driver.store.session(conn, task_id=driver.task_id)
@@ -128,48 +109,33 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                             conn.execute(
                                 "UPDATE tasks SET metadata_json=json_set(metadata_json,"
                                 "'$.execution_attention',json(?)) WHERE task_id=?",
-                                (
-                                    json.dumps({"reason_code": "result_contract_cutover"}),
-                                    driver.task_id,
-                                ),
+                                (json.dumps({"reason_code": "result_contract_cutover"}), driver.task_id),
                             )
                     for _ in range(2):
                         result = result_cutover.prepare(fixture.db)
                         self.assertTrue(result["ok"], result)
-                    with driver.store.connect(fixture.db) as conn:
+                    with fixture_database.connect(fixture.db) as conn:
                         parent = conn.execute(
-                            "SELECT * FROM attempts WHERE attempt_id=?",
-                            (driver.attempt_id,),
+                            "SELECT * FROM attempts WHERE attempt_id=?", (driver.attempt_id,)
                         ).fetchone()
-                        self.assertEqual(
-                            parent["status"],
-                            "failed" if status == "running" else "completed",
-                        )
+                        self.assertEqual(parent["status"], "failed" if status == "running" else "completed")
                         self.assertTrue(json.loads(parent["metadata_json"]).get("process_stopped_at"))
                         if status == "completed":
                             self.assertEqual(parent["finished_at"], "original")
                         self.assertEqual(
                             conn.execute(
-                                "SELECT COUNT(*) FROM attempts a WHERE " + supervise.occupied_attempt_sql()
+                                "SELECT COUNT(*) FROM attempts a WHERE "
+                                + "(a.status IN ('running', 'stale') OR\n      (a.status='completed'\n       AND json_type(a.metadata_json,'$.dispatch.pid')='integer'\n       AND json_extract(a.metadata_json,'$.process_stopped_at') IS NULL))"
                             ).fetchone()[0],
                             0,
                         )
-                        self.assertEqual(
-                            [tuple(row) for row in conn.execute("SELECT * FROM worker_results")],
-                            results,
-                        )
+                        self.assertEqual([tuple(row) for row in conn.execute("SELECT * FROM worker_results")], results)
                         self.assertEqual(driver.store.runs(conn, driver.round_id), before_runs)
-                        self.assertEqual(
-                            driver.store.session(conn, task_id=driver.task_id),
-                            before_session,
-                        )
+                        self.assertEqual(driver.store.session(conn, task_id=driver.task_id), before_session)
                     self.assertEqual(report.read_bytes(), report_bytes)
 
     def process_identity(self, *, stopped=False):
-        process = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
-            start_new_session=True,
-        )
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
 
         def cleanup():
             if process.poll() is None:
@@ -182,9 +148,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
             cleanup()
         return identity
 
-    def test_releases_only_proven_stopped_slots_while_unknown_child_retains_parent(
-        self,
-    ):
+    def test_releases_only_proven_stopped_slots_while_unknown_child_retains_parent(self):
         for store in native_rounds.STORES:
             with self.subTest(store=store.__name__):
                 fixture, round_id = self.fixture(store)
@@ -198,19 +162,13 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     {r["run_id"]: int(r["run_id"] == unknown_id) for r in runs},
                 )
 
-    def test_stopped_reserved_model_releases_parent_and_slot_without_changing_run_result(
-        self,
-    ):
+    def test_stopped_reserved_model_releases_parent_and_slot_without_changing_run_result(self):
         for store in native_rounds.STORES:
             for status in ("running", "failed", "succeeded", "superseded"):
                 with self.subTest(store=store.__name__, status=status):
                     fixture, round_id = self.fixture(store)
                     self.run_record(
-                        fixture,
-                        store,
-                        round_id,
-                        status=status,
-                        dispatch=self.process_identity(stopped=True),
+                        fixture, store, round_id, status=status, dispatch=self.process_identity(stopped=True)
                     )
                     before = self.state(fixture, store, round_id)[2][0]
                     self.observe(fixture)
@@ -237,10 +195,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     self.run_record(fixture, store, round_id, status=status, dispatch=dispatch)
                     self.observe(fixture)
                     parent, occupied, runs = self.state(fixture, store, round_id)
-                    self.assertEqual(
-                        (parent["status"], occupied, runs[0]["slot_reserved"]),
-                        ("running", 1, 1),
-                    )
+                    self.assertEqual((parent["status"], occupied, runs[0]["slot_reserved"]), ("running", 1, 1))
 
     def test_prelaunch_and_known_failed_start_do_not_pin_parent(self):
         cases = [
@@ -254,24 +209,12 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
             for status, reserved, dispatch in cases:
                 with self.subTest(store=store.__name__, status=status):
                     fixture, round_id = self.fixture(store)
-                    self.run_record(
-                        fixture,
-                        store,
-                        round_id,
-                        status=status,
-                        reserved=reserved,
-                        dispatch=dispatch,
-                    )
+                    self.run_record(fixture, store, round_id, status=status, reserved=reserved, dispatch=dispatch)
                     self.observe(fixture)
                     parent, occupied, runs = self.state(fixture, store, round_id)
-                    self.assertEqual(
-                        (parent["status"], occupied, runs[0]["slot_reserved"]),
-                        ("failed", 0, 0),
-                    )
+                    self.assertEqual((parent["status"], occupied, runs[0]["slot_reserved"]), ("failed", 0, 0))
 
-    def test_child_changes_during_read_only_observation_invalidate_parent_and_slot_updates(
-        self,
-    ):
+    def test_child_changes_during_read_only_observation_invalidate_parent_and_slot_updates(self):
         for store, table in zip(native_rounds.STORES, ("review_runs", "vote_runs")):
             for change in ("dispatch", "owner", "session", "insert"):
                 with self.subTest(store=store.__name__, change=change):
@@ -284,20 +227,13 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     def inspect(metadata):
                         if metadata["dispatch"].get("pid") == identity["pid"] and not changed:
                             # This writer must succeed while the OS observation runs.
-                            with (
-                                closing(sqlite3.connect(fixture.db, timeout=0.05)) as conn,
-                                conn,
-                            ):
+                            with closing(sqlite3.connect(fixture.db, timeout=0.05)) as conn, conn:
                                 conn.execute("BEGIN IMMEDIATE")
                                 if change == "dispatch":
-                                    conn.execute(
-                                        f"UPDATE {table} SET dispatch_json='{{}}' WHERE run_id=?",
-                                        (run_id,),
-                                    )
+                                    conn.execute(f"UPDATE {table} SET dispatch_json='{{}}' WHERE run_id=?", (run_id,))
                                 elif change == "owner":
                                     conn.execute(
-                                        f"UPDATE {table} SET owner_attempt_id='good' WHERE run_id=?",
-                                        (run_id,),
+                                        f"UPDATE {table} SET owner_attempt_id='good' WHERE run_id=?", (run_id,)
                                     )
                                 elif change == "session":
                                     conn.execute(
@@ -306,20 +242,9 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                                     )
                                 else:
                                     new = store.new_run(
-                                        conn,
-                                        round_id,
-                                        "prepare",
-                                        "other",
-                                        "bad",
-                                        fixture.tmp.name,
-                                        "sha",
+                                        conn, round_id, "prepare", "other", "bad", fixture.tmp.name, "sha"
                                     )
-                                    store.update_run(
-                                        conn,
-                                        new["run_id"],
-                                        status="starting",
-                                        slot_reserved=1,
-                                    )
+                                    store.update_run(conn, new["run_id"], status="starting", slot_reserved=1)
                             changed.append(True)
                         return original(metadata)
 
@@ -366,10 +291,7 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                     self.run_record(fixture, store, round_id, dispatch=identity)
                     self.observe(fixture)
                     parent, occupied, runs = self.state(fixture, store, round_id)
-                    self.assertEqual(
-                        (parent["status"], occupied, runs[0]["slot_reserved"]),
-                        ("running", 1, 1),
-                    )
+                    self.assertEqual((parent["status"], occupied, runs[0]["slot_reserved"]), ("running", 1, 1))
                 finally:
                     # Test-owned group only; recovery itself has no signal authority.
                     try:

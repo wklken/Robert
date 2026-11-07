@@ -17,7 +17,7 @@ class WorkerProtocolFixture(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def _init_attempt_db(self, *, output_type="comment_analysis", route_id="comment-analysis"):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
         from robert_agent.workflows import routes as route
 
         db_path = self.root / "dd.sqlite3"
@@ -59,12 +59,7 @@ class WorkerProtocolFixture(unittest.TestCase):
             conn.execute("UPDATE workstreams SET primary_source_id='source-1'")
             conn.execute(
                 "INSERT INTO route_decisions(route_decision_id,task_id,route_id,expected_output,allowed_github_actions_json,confidence,created_at) VALUES('route-1','task-1',?,?,?,'high',?)",
-                (
-                    route_id,
-                    output_type,
-                    json.dumps(route.ROUTES[route_id]["allowed_github_actions"]),
-                    now,
-                ),
+                (route_id, output_type, json.dumps(route.ROUTES[route_id]["allowed_github_actions"]), now),
             )
         return db_path
 

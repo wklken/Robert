@@ -10,10 +10,10 @@ from unittest import mock
 
 from tests.support import publication_budget as publication_fixture
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.delivery import values as publication_values
 from robert_agent.delivery.application import publish
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import actions as supervision_actions
 from robert_agent.supervision.application import publication as supervision_publication
 
@@ -140,12 +140,7 @@ class SupervisedPublicationTests(unittest.TestCase):
                 ("github_actions", "push", "push2", "action_id"),
             ]:
                 columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
-                row = dict(
-                    zip(
-                        columns,
-                        conn.execute(f"SELECT * FROM {table} WHERE {key}=?", (old,)).fetchone(),
-                    )
-                )
+                row = dict(zip(columns, conn.execute(f"SELECT * FROM {table} WHERE {key}=?", (old,)).fetchone()))
                 row[key] = new
                 for field, value in [
                     ("task_id", "t2"),
@@ -157,8 +152,7 @@ class SupervisedPublicationTests(unittest.TestCase):
                     if field in row:
                         row[field] = value
                 conn.execute(
-                    f"INSERT INTO {table}({','.join(row)}) VALUES ({','.join('?' for _ in row)})",
-                    list(row.values()),
+                    f"INSERT INTO {table}({','.join(row)}) VALUES ({','.join('?' for _ in row)})", list(row.values())
                 )
         original = supervision_publication.begin
 
@@ -203,11 +197,7 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.assertEqual(self.intent()[0], "published")
         self.verify()
         self.assertEqual(
-            self.actions(),
-            [
-                ("publication_reconcile", "succeeded", 1),
-                ("publication_retry", "succeeded", 1),
-            ],
+            self.actions(), [("publication_reconcile", "succeeded", 1), ("publication_retry", "succeeded", 1)]
         )
 
     def test_confirmed_remote_effect_repairs_receipt_without_duplicate_push(self):

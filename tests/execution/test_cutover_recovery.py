@@ -10,20 +10,22 @@ import time
 import unittest
 from unittest.mock import patch
 
+from sqlalchemy import select
+
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.readmodels import board
 from robert_agent.runtime import daemon
 from robert_agent.execution.application import cutover as result_cutover
 from robert_agent.work import queries as work_queries
 from robert_agent.context import attempt as attempt_context
-from robert_agent.adapters.sqlite import execution_control as store
+from robert_agent.models.work import Task
+from robert_agent.persistence import statements
+from robert_agent.persistence.predicates import runnable_task
 from tests.support.cutover_recovery import CutoverRecoveryFixture
 
 
 class CutoverRecoveryTests(CutoverRecoveryFixture):
-    def test_quarantine_preserves_result_and_shows_waiting_without_blocking_good_task(
-        self,
-    ):
+    def test_quarantine_preserves_result_and_shows_waiting_without_blocking_good_task(self):
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             first = result_cutover.prepare(self.db, now=self.now)
             second = result_cutover.prepare(self.db, now=self.now)
@@ -38,22 +40,13 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 ],
                 ("classification_result", "{}"),
             )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0],
-                "failed",
-            )
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts WHERE task_id='good'").fetchone()[0],
-                "running",
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], "failed")
+            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='good'").fetchone()[0], "running")
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0], 1)
-            self.assertEqual(
-                conn.execute(
-                    "SELECT COUNT(*) FROM tasks t WHERE t.task_id='good' AND " + store.runnable_sql()
-                ).fetchone()[0],
-                1,
-            )
+            tasks = Task.__table__
+            good = select(tasks.c.task_id).where(tasks.c.task_id == "good", runnable_task(tasks))
+            self.assertEqual(statements.read(conn, good), [("good",)])
         card = board.get_work_item_detail(self.db, "item")
         self.assertEqual(card["column"], "waiting", card)
 
@@ -69,8 +62,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 terminate.assert_not_called()
                 with closing(sqlite3.connect(self.db)) as conn:
                     self.assertEqual(
-                        conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0],
-                        "running",
+                        conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], "running"
                     )
 
     def test_unidentifiable_spool_remains_global_and_preserved(self):
@@ -83,31 +75,17 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
         self.assertFalse(checked["ok"], checked)
         self.assertEqual(record.read_text(), '{"payload": {}}')
 
-    def test_control_failure_stops_after_three_attempts_and_deduplicates_attention(
-        self,
-    ):
+    def test_control_failure_stops_after_three_attempts_and_deduplicates_attention(self):
         context = self.context()
-        failure = {
-            "ok": False,
-            "status": "child_failed",
-            "safe_error": "database unavailable",
-        }
-        with (
-            patch.object(daemon, "_reconcile_child_result"),
-            patch.object(daemon.time, "monotonic", return_value=100),
-        ):
+        failure = {"ok": False, "status": "child_failed", "safe_error": "database unavailable"}
+        with patch.object(daemon, "_reconcile_child_result"), patch.object(daemon.time, "monotonic", return_value=100):
             for _ in range(3):
                 context.control_retry_at["local"] = 0
                 daemon._run_local_drain(context, child_runner=lambda *a, **k: failure, now=self.now)
         self.assertIn("local", context.control_attention)
-        with (
-            patch.object(daemon, "_reconcile_child_result"),
-            patch.object(daemon.time, "monotonic", return_value=100),
-        ):
+        with patch.object(daemon, "_reconcile_child_result"), patch.object(daemon.time, "monotonic", return_value=100):
             result = daemon._run_local_drain(
-                context,
-                child_runner=lambda *a, **k: self.fail("must not launch a fourth child"),
-                now=self.now,
+                context, child_runner=lambda *a, **k: self.fail("must not launch a fourth child"), now=self.now
             )
         self.assertEqual(result["status"], "control_plane_attention")
         with closing(sqlite3.connect(self.db)) as conn:
@@ -117,17 +95,11 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 ).fetchone()[0],
                 1,
             )
-        self.assertGreaterEqual(
-            daemon._sleep_seconds_after_decision(context, {"decision": "control_attention"}),
-            5,
-        )
+        self.assertGreaterEqual(daemon._sleep_seconds_after_decision(context, {"decision": "control_attention"}), 5)
 
     def test_success_resets_failure_budget(self):
         context = self.context()
-        with (
-            patch.object(daemon, "_reconcile_child_result"),
-            patch.object(daemon.time, "monotonic", return_value=100),
-        ):
+        with patch.object(daemon, "_reconcile_child_result"), patch.object(daemon.time, "monotonic", return_value=100):
             daemon._run_local_drain(context, child_runner=lambda *a, **k: {"ok": False}, now=self.now)
             context.control_retry_at["local"] = 0
             daemon._run_local_drain(context, child_runner=lambda *a, **k: {"ok": True}, now=self.now)
@@ -154,15 +126,10 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
 
     def test_local_backoff_does_not_pause_scan_lane(self):
         context = self.context()
-        with (
-            patch.object(daemon, "_reconcile_child_result"),
-            patch.object(daemon.time, "monotonic", return_value=100),
-        ):
+        with patch.object(daemon, "_reconcile_child_result"), patch.object(daemon.time, "monotonic", return_value=100):
             daemon._run_local_drain(context, child_runner=lambda *a, **k: {"ok": False}, now=self.now)
             result = daemon._run_local_drain(
-                context,
-                child_runner=lambda *a, **k: self.fail("backoff bypassed"),
-                now=self.now,
+                context, child_runner=lambda *a, **k: self.fail("backoff bypassed"), now=self.now
             )
             self.assertEqual(result["status"], "control_backoff")
             self.assertTrue(
@@ -179,12 +146,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
             )
             conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
-            event = {
-                "event_type": "assigned",
-                "number": 205,
-                "body": "",
-                "event_fingerprint": "assignment:205",
-            }
+            event = {"event_type": "assigned", "number": 205, "body": "", "event_fingerprint": "assignment:205"}
             conn.execute(
                 "INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)",
                 (json.dumps(event), self.now),
@@ -198,10 +160,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
             with patch.object(
                 discover,
                 "_source_metadata",
-                return_value=(
-                    {**event, "body": "suppress specified plugin warning"},
-                    "open",
-                ),
+                return_value=({**event, "body": "suppress specified plugin warning"}, "open"),
             ):
                 result = work_items.retrigger_failed_github_task(
                     self.db,
@@ -214,15 +173,11 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["repo"]))
             metadata = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM wakeups WHERE wakeup_id=?",
-                    (result["wakeup_id"],),
-                ).fetchone()[0]
+                conn.execute("SELECT metadata_json FROM wakeups WHERE wakeup_id=?", (result["wakeup_id"],)).fetchone()[
+                    0
+                ]
             )
-            self.assertEqual(
-                metadata["refreshed_context"][0]["body"],
-                "suppress specified plugin warning",
-            )
+            self.assertEqual(metadata["refreshed_context"][0]["body"], "suppress specified plugin warning")
             self.assertEqual(
                 json.loads(conn.execute("SELECT payload_json FROM github_events WHERE event_id='event'").fetchone()[0])[
                     "body"
@@ -231,14 +186,8 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
             )
             self.assertIsNotNone(conn.execute("SELECT 1 FROM worker_results WHERE result_id='old'").fetchone())
 
-    def test_refreshed_context_reaches_followup_without_changing_trigger_authority(
-        self,
-    ):
-        event = {
-            "body": "",
-            "event_fingerprint": "assignment:205",
-            "authorization_status": "authorized_trigger",
-        }
+    def test_refreshed_context_reaches_followup_without_changing_trigger_authority(self):
+        event = {"body": "", "event_fingerprint": "assignment:205", "authorization_status": "authorized_trigger"}
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
@@ -257,11 +206,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                     json.dumps(
                         {
                             "refreshed_context": [
-                                {
-                                    **event,
-                                    "body": "actual issue body",
-                                    "authorization_status": "ignored",
-                                }
+                                {**event, "body": "actual issue body", "authorization_status": "ignored"}
                             ]
                         }
                     ),
@@ -280,11 +225,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
             )
             conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
-            event = {
-                "event_type": "notification",
-                "number": 205,
-                "event_fingerprint": "assignment:205",
-            }
+            event = {"event_type": "notification", "number": 205, "event_fingerprint": "assignment:205"}
             conn.execute(
                 "INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','notification','assignment:205',?,?)",
                 (json.dumps(event), self.now),
@@ -317,27 +258,16 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
 
     def test_unknown_spool_stops_control_immediately_and_stays_latched(self):
         context = self.context()
-        failure = {
-            "ok": False,
-            "status": "blocked_result_contract_cutover",
-            "required_action": "Inspect spool.",
-        }
+        failure = {"ok": False, "status": "blocked_result_contract_cutover", "required_action": "Inspect spool."}
         with patch.object(daemon.time, "monotonic", return_value=100):
             daemon._record_control_outcome(context, "local", failure, now=self.now)
         self.assertEqual(context.control_failures["local"], 1)
         with (
-            patch.object(
-                result_cutover,
-                "check",
-                side_effect=AssertionError("must not repeat blocked guard"),
-            ),
+            patch.object(result_cutover, "check", side_effect=AssertionError("must not repeat blocked guard")),
             patch.object(daemon, "_maybe_prune"),
             patch.object(daemon.notify, "deliver_pending"),
         ):
-            self.assertEqual(
-                daemon.run_once_decision(context, now=self.now)["decision"],
-                "control_attention",
-            )
+            self.assertEqual(daemon.run_once_decision(context, now=self.now)["decision"], "control_attention")
 
     def test_loop_error_diagnostics_keep_the_contract_blocker(self):
         payload = daemon._event_result(
@@ -348,13 +278,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                     {
                         "ok": False,
                         "status": "blocked_result_contract_cutover",
-                        "blockers": [
-                            {
-                                "kind": "legacy_unresolved_result",
-                                "task_id": "bad",
-                                "result_id": "old",
-                            }
-                        ],
+                        "blockers": [{"kind": "legacy_unresolved_result", "task_id": "bad", "result_id": "old"}],
                         "required_action": "Inspect incompatible task results.",
                     }
                 ],
@@ -365,7 +289,6 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
 
     def test_isolated_worker_exit_releases_capacity_and_allows_retrigger(self):
         from robert_agent.adapters.github import discovery as discover
-        from robert_agent.execution import inspection as supervise
         from robert_agent.work.application import commands as work_items
 
         self.github_item()
@@ -376,34 +299,23 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
             with closing(sqlite3.connect(self.db)) as conn:
                 self.assertEqual(
                     conn.execute(
-                        "SELECT COUNT(*) FROM attempts a WHERE task_id='bad' AND " + supervise.occupied_attempt_sql()
-                    ).fetchone()[0],
-                    0,
+                        "SELECT status,json_extract(metadata_json,'$.process_stopped_at') FROM attempts WHERE task_id='bad'"
+                    ).fetchone(),
+                    ("failed", self.now),
                 )
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0],
-                    1,
-                )
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0], 1)
                 self.assertEqual(
                     conn.execute("SELECT output_type FROM worker_results WHERE result_id='old'").fetchone()[0],
                     "classification_result",
                 )
             context = work_items.CommandContext("operator", "owner", frozenset({"repo"}), frozenset())
-            with patch.object(
-                discover,
-                "_source_metadata",
-                return_value=({"body": "refreshed"}, "open"),
-            ):
+            with patch.object(discover, "_source_metadata", return_value=({"body": "refreshed"}, "open")):
                 requested = work_items.retrigger_failed_github_task(
                     self.db, "bad", context=context, idempotency_key="after-exit"
                 )
             self.assertTrue(requested["ok"], requested)
 
-    def test_isolated_completed_worker_exit_releases_capacity_without_rewriting_result(
-        self,
-    ):
-        from robert_agent.execution import inspection as supervise
-
+    def test_isolated_completed_worker_exit_releases_capacity_without_rewriting_result(self):
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "alive_same"}):
             result_cutover.prepare(self.db, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -413,13 +325,9 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
                 conn.execute(
-                    "SELECT COUNT(*) FROM attempts a WHERE task_id='bad' AND " + supervise.occupied_attempt_sql()
-                ).fetchone()[0],
-                0,
-            )
-            self.assertEqual(
-                conn.execute("SELECT status,finished_at FROM attempts WHERE task_id='bad'").fetchone(),
-                ("completed", "original"),
+                    "SELECT status,finished_at,json_extract(metadata_json,'$.process_stopped_at') FROM attempts WHERE task_id='bad'"
+                ).fetchone(),
+                ("completed", "original", self.now),
             )
 
     def test_global_cutover_pause_still_times_out_real_control_children(self):
@@ -432,10 +340,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 lane = ControlLane(self.db, "scan", context.daemon_run_id)
                 self.addCleanup(lane.stop)
                 context.background_lanes = {"scan": lane}
-                lane.start(
-                    [sys.executable, "-c", "import time; time.sleep(30)"],
-                    timeout_seconds=10,
-                )
+                lane.start([sys.executable, "-c", "import time; time.sleep(30)"], timeout_seconds=10)
                 process = lane.process
                 deadline = time.monotonic() + 5
                 while lane._state() == "starting" and time.monotonic() < deadline:
@@ -449,24 +354,16 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                     patch.object(result_cutover, "prepare", return_value=failure),
                     patch.object(daemon, "_maybe_prune"),
                     patch.object(daemon.notify, "deliver_pending"),
-                    patch.object(
-                        lane,
-                        "start",
-                        side_effect=AssertionError("paused lane must not start"),
-                    ),
+                    patch.object(lane, "start", side_effect=AssertionError("paused lane must not start")),
                 ):
                     decision = daemon.run_once_decision(context, now=self.now)
                 self.assertEqual(decision["decision"], "control_attention")
-                self.assertIsNotNone(
-                    process.poll(),
-                    "existing child exceeded its deadline while globally paused",
-                )
+                self.assertIsNotNone(process.poll(), "existing child exceeded its deadline while globally paused")
                 self.assertIsNone(lane.process)
                 with closing(sqlite3.connect(self.db)) as conn:
                     self.assertEqual(
                         conn.execute(
-                            "SELECT status FROM github_control_children WHERE child_id=?",
-                            (lane.identifier,),
+                            "SELECT status FROM github_control_children WHERE child_id=?", (lane.identifier,)
                         ).fetchone()[0],
                         "stopped",
                     )
@@ -481,27 +378,17 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
             result_cutover.prepare(self.db, now=self.now)
         context = self.context()
         daemon._record_control_outcome(
-            context,
-            "local",
-            {"ok": False, "status": "blocked_result_contract_cutover"},
-            now=self.now,
+            context, "local", {"ok": False, "status": "blocked_result_contract_cutover"}, now=self.now
         )
         with (
             patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}),
-            patch.object(
-                result_cutover,
-                "check",
-                side_effect=AssertionError("latched guard must not resume"),
-            ),
+            patch.object(result_cutover, "check", side_effect=AssertionError("latched guard must not resume")),
             patch.object(daemon, "_maybe_prune"),
             patch.object(daemon.notify, "deliver_pending"),
         ):
             daemon.run_once_decision(context, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0],
-                "failed",
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], "failed")
         self.assertIn("local", context.control_attention)
 
     def test_main_board_offers_retrigger_only_after_isolated_worker_stops(self):
@@ -511,10 +398,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
         self.assertEqual(board.get_work_item_detail(self.db, "item")["valid_commands"], ["cancel"])
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
             result_cutover.prepare(self.db, now=self.now)
-        self.assertEqual(
-            board.get_work_item_detail(self.db, "item")["valid_commands"],
-            ["retrigger", "cancel"],
-        )
+        self.assertEqual(board.get_work_item_detail(self.db, "item")["valid_commands"], ["retrigger", "cancel"])
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,created_at) VALUES('pending','old','bad','comment','pending','not_published',?)",
@@ -553,8 +437,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
             terminate.assert_not_called()
             with closing(sqlite3.connect(self.db)) as conn:
                 self.assertEqual(
-                    conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0],
-                    "running",
+                    conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], "running"
                 )
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0], 1)
 
@@ -572,14 +455,9 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
         with patch.object(attempt_process, "dispatch_status", side_effect=process_changed):
             result_cutover.prepare(self.db, now=self.now)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0],
-                "running",
-            )
+            self.assertEqual(conn.execute("SELECT status FROM attempts WHERE task_id='bad'").fetchone()[0], "running")
 
-    def test_main_board_retrigger_route_creates_one_recovery_and_hides_pending_action(
-        self,
-    ):
+    def test_main_board_retrigger_route_creates_one_recovery_and_hides_pending_action(self):
         from robert_agent.adapters.github import discovery as discover
         from robert_agent.interfaces.web import server as web
 
@@ -603,21 +481,10 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 "X-Robert-CSRF-Token": "csrf",
                 "X-Idempotency-Key": "board-recovery",
             }
-            self.assertIn(
-                "retrigger",
-                board.get_work_item_detail(self.db, "item")["valid_commands"],
-            )
-            with patch.object(
-                discover,
-                "_source_metadata",
-                return_value=({"body": "fresh source"}, "open"),
-            ):
+            self.assertIn("retrigger", board.get_work_item_detail(self.db, "item")["valid_commands"])
+            with patch.object(discover, "_source_metadata", return_value=({"body": "fresh source"}, "open")):
                 status, _, body = web.handle_dashboard_post(
-                    "/api/tasks/bad/retrigger",
-                    b"{}",
-                    self.db,
-                    control_context=context,
-                    request_headers=headers,
+                    "/api/tasks/bad/retrigger", b"{}", self.db, control_context=context, request_headers=headers
                 )
             self.assertEqual(status, 202, body)
             self.assertTrue(json.loads(body)["ok"])
@@ -629,41 +496,25 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 ).fetchone()[0],
                 1,
             )
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM wakeups WHERE status='pending'").fetchone()[0],
-                1,
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups WHERE status='pending'").fetchone()[0], 1)
 
     def test_completion_during_pause_preserves_global_latch_and_notification(self):
         from unittest.mock import Mock
 
         context = self.context()
         daemon._record_control_outcome(
-            context,
-            "scan",
-            {"ok": False, "status": "blocked_result_contract_cutover"},
-            now=self.now,
+            context, "scan", {"ok": False, "status": "blocked_result_contract_cutover"}, now=self.now
         )
         lane = Mock()
         lane.poll.return_value = {"ok": True, "status": "done"}
         context.background_lanes = {"scan": lane}
         with (
-            patch.object(
-                result_cutover,
-                "check",
-                side_effect=AssertionError("must remain paused"),
-            ),
+            patch.object(result_cutover, "check", side_effect=AssertionError("must remain paused")),
             patch.object(daemon, "_maybe_prune"),
             patch.object(daemon.notify, "deliver_pending"),
         ):
-            self.assertEqual(
-                daemon.run_once_decision(context, now=self.now)["decision"],
-                "control_attention",
-            )
-        self.assertEqual(
-            context.control_attention["scan"]["cause_status"],
-            "blocked_result_contract_cutover",
-        )
+            self.assertEqual(daemon.run_once_decision(context, now=self.now)["decision"], "control_attention")
+        self.assertEqual(context.control_attention["scan"]["cause_status"], "blocked_result_contract_cutover")
         lane.start.assert_not_called()
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
@@ -682,8 +533,7 @@ class RuntimeAndContextTests(unittest.TestCase):
 
         with patch.object(sys, "executable", "/opt/current/bin/python"):
             runtime = attempt_context.runtime_context(
-                "/tmp/db",
-                {"python_bin": "/opt/old/bin/python", "default_base_branch": "main"},
+                "/tmp/db", {"python_bin": "/opt/old/bin/python", "default_base_branch": "main"}
             )
             prompt = render_prompt.render_prompt(
                 {"task_id": "task", "attempt_id": "attempt", "workstream_id": "ws"},

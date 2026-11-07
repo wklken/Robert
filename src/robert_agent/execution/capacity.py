@@ -1,41 +1,18 @@
 """Count attempts that still own worker capacity."""
 
-from robert_agent.execution import inspection as supervise
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
 
 
 def running_attempt_count(conn, repo_id):
-    return conn.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        WHERE w.repo_id = ?
-          AND {supervise.occupied_attempt_sql()}
-          AND t.lifecycle IN ('queued', 'running')
-        """,
-        (repo_id,),
-    ).fetchone()[0]
+    return db_records.first(db_read_attempts.find_for_running_attempt_count(conn, repo_id))[0]
 
 
 def running_attempt_count_for_repos(conn, repo_ids):
     repo_ids = [repo_id for repo_id in repo_ids if repo_id]
     if not repo_ids:
         return 0
-    placeholders = ",".join("?" for _repo_id in repo_ids)
-    return conn.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        WHERE w.repo_id IN ({placeholders})
-          AND {supervise.occupied_attempt_sql()}
-          AND t.lifecycle IN ('queued', 'running')
-        """,
-        repo_ids,
-    ).fetchone()[0]
+    return db_records.first(db_read_attempts.running_attempt_count_for_repos_filtered(conn, repo_ids))[0]
 
 
 def capacity_full(conn, repo_id, max_concurrency):
@@ -47,13 +24,4 @@ def capacity_full_for_repos(conn, repo_ids, max_concurrency):
 
 
 def has_occupied_runnable_attempt(conn, repo_ids):
-    placeholders = ",".join("?" for _ in repo_ids)
-    return bool(
-        conn.execute(
-            f"""SELECT 1 FROM attempts a JOIN tasks t ON t.task_id=a.task_id
-        JOIN workstreams w ON w.workstream_id=t.workstream_id
-        WHERE w.repo_id IN ({placeholders}) AND t.lifecycle IN ('queued','running')
-          AND {supervise.occupied_attempt_sql()} AND {execution_store.runnable_sql()} LIMIT 1""",
-            repo_ids,
-        ).fetchone()
-    )
+    return bool(db_records.first(db_read_attempts.has_occupied_runnable_attempt_filtered(conn, repo_ids)))

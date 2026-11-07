@@ -1,5 +1,12 @@
 """Human-approved runtime knowledge helpers for DD GitHub agent."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import knowledge_candidates as db_read_knowledge_candidates
+from robert_agent.persistence.queries import project_memory_entries as db_read_project_memory_entries
+from robert_agent.persistence.queries import runtime_knowledge as db_read_runtime_knowledge
+from robert_agent.persistence.stores import knowledge_candidates as db_write_knowledge_candidates
+from robert_agent.persistence.stores import runtime_knowledge as db_write_runtime_knowledge
+
 import json
 import re
 from uuid import uuid4
@@ -84,15 +91,7 @@ def _candidate_retrieval_boost(metadata):
 
 
 def propose_candidates(conn, repo_id, run_now):
-    rows = conn.execute(
-        """
-        SELECT memory_id, kind, title, short_summary, confidence, metadata_json
-        FROM project_memory_entries
-        WHERE repo_id = ?
-        ORDER BY updated_at DESC, memory_id
-        """,
-        (repo_id,),
-    ).fetchall()
+    rows = db_read_project_memory_entries.find_for_propose_candidates(conn, repo_id)
     proposed = []
     for row in rows:
         row = {
@@ -105,144 +104,70 @@ def propose_candidates(conn, repo_id, run_now):
         }
         source_memory_ids = [row["memory_id"]]
         source_json = json.dumps(source_memory_ids, sort_keys=True)
-        exists = conn.execute(
-            """
-            SELECT candidate_id
-            FROM knowledge_candidates
-            WHERE repo_id = ?
-              AND title = ?
-              AND source_memory_ids_json = ?
-            """,
-            (repo_id, row["title"], source_json),
-        ).fetchone()
+        exists = db_records.first(
+            db_read_knowledge_candidates.find_for_propose_candidates(conn, repo_id, row["title"], source_json)
+        )
         if exists:
             continue
         metadata = _decode_json(row["metadata_json"], {})
         candidate_id = _id("kc")
         retrieval_boost = _candidate_retrieval_boost(metadata)
-        conn.execute(
-            """
-            INSERT INTO knowledge_candidates(
-              candidate_id, repo_id, title, summary, prompt_text, candidate_type,
-              source_memory_ids_json, evidence_json, confidence, status,
-              created_at, metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-            """,
-            (
-                candidate_id,
-                repo_id,
-                row["title"],
-                row["short_summary"],
-                _candidate_prompt_text(row, metadata),
-                _candidate_type(row["kind"]),
-                source_json,
-                json.dumps(metadata.get("evidence") or [], ensure_ascii=False, sort_keys=True),
-                row["confidence"],
-                run_now,
-                json.dumps(
-                    {"retrieval_boost": retrieval_boost},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-            ),
+        db_write_knowledge_candidates.insert_for_propose_candidates(
+            conn,
+            candidate_id,
+            repo_id,
+            row["title"],
+            row["short_summary"],
+            _candidate_prompt_text(row, metadata),
+            _candidate_type(row["kind"]),
+            source_json,
+            json.dumps(metadata.get("evidence") or [], ensure_ascii=False, sort_keys=True),
+            row["confidence"],
+            run_now,
+            json.dumps({"retrieval_boost": retrieval_boost}, ensure_ascii=False, sort_keys=True),
         )
         proposed.append(candidate_id)
-    return {
-        "ok": True,
-        "status": "proposed",
-        "candidate_count": len(proposed),
-        "candidate_ids": proposed,
-    }
+    return {"ok": True, "status": "proposed", "candidate_count": len(proposed), "candidate_ids": proposed}
 
 
 def approve_candidate(conn, candidate_id, scope_type, scope_value, approved_by, run_now):
     scope_type = _text(scope_type)
     if scope_type not in VALID_SCOPE_TYPES:
-        return {
-            "ok": False,
-            "status": "failed_validation",
-            "safe_error": f"invalid scope_type: {scope_type}",
-        }
+        return {"ok": False, "status": "failed_validation", "safe_error": f"invalid scope_type: {scope_type}"}
     if scope_type == "global":
         scope_value = ""
     else:
         scope_value = _text(scope_value)
         if not scope_value:
-            return {
-                "ok": False,
-                "status": "failed_validation",
-                "safe_error": "scope_value is required",
-            }
+            return {"ok": False, "status": "failed_validation", "safe_error": "scope_value is required"}
     approved_by = _text(approved_by)
     if not approved_by:
-        return {
-            "ok": False,
-            "status": "failed_validation",
-            "safe_error": "approved_by is required",
-        }
-    row = conn.execute(
-        """
-        SELECT repo_id, title, prompt_text, metadata_json, status
-        FROM knowledge_candidates
-        WHERE candidate_id = ?
-        """,
-        (candidate_id,),
-    ).fetchone()
+        return {"ok": False, "status": "failed_validation", "safe_error": "approved_by is required"}
+    row = db_records.first(db_read_knowledge_candidates.find_for_approve_candidate(conn, candidate_id))
     if not row:
-        return {
-            "ok": False,
-            "status": "not_found",
-            "safe_error": f"candidate not found: {candidate_id}",
-        }
+        return {"ok": False, "status": "not_found", "safe_error": f"candidate not found: {candidate_id}"}
     repo_id, title, prompt_text, metadata_json, status = row
     if status != "pending":
-        return {
-            "ok": False,
-            "status": "not_pending",
-            "safe_error": f"candidate is {status}",
-        }
+        return {"ok": False, "status": "not_pending", "safe_error": f"candidate is {status}"}
     metadata = _decode_json(metadata_json, {})
     knowledge_id = _id("rk")
-    conn.execute(
-        """
-        INSERT INTO runtime_knowledge(
-          knowledge_id, candidate_id, repo_id, scope_type, scope_value,
-          title, prompt_text, retrieval_boost_json, active,
-          approved_by, approved_at, created_at, updated_at, metadata_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-        """,
-        (
-            knowledge_id,
-            candidate_id,
-            repo_id,
-            scope_type,
-            scope_value,
-            title,
-            prompt_text,
-            json.dumps(
-                _json_object(metadata.get("retrieval_boost")),
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-            approved_by,
-            run_now,
-            run_now,
-            run_now,
-            "{}",
-        ),
+    db_write_runtime_knowledge.insert_for_approve_candidate(
+        conn,
+        knowledge_id,
+        candidate_id,
+        repo_id,
+        scope_type,
+        scope_value,
+        title,
+        prompt_text,
+        json.dumps(_json_object(metadata.get("retrieval_boost")), ensure_ascii=False, sort_keys=True),
+        approved_by,
+        run_now,
+        run_now,
+        run_now,
+        "{}",
     )
-    conn.execute(
-        """
-        UPDATE knowledge_candidates
-        SET status = 'approved',
-            reviewed_at = ?,
-            reviewer = ?
-        WHERE candidate_id = ?
-        """,
-        (run_now, approved_by, candidate_id),
-    )
+    db_write_knowledge_candidates.update_for_approve_candidate(conn, run_now, approved_by, candidate_id)
     return {
         "ok": True,
         "status": "approved",
@@ -254,38 +179,13 @@ def approve_candidate(conn, candidate_id, scope_type, scope_value, approved_by, 
 def reject_candidate(conn, candidate_id, reviewer, review_note, run_now):
     reviewer = _text(reviewer)
     if not reviewer:
-        return {
-            "ok": False,
-            "status": "failed_validation",
-            "safe_error": "reviewer is required",
-        }
-    row = conn.execute(
-        "SELECT status FROM knowledge_candidates WHERE candidate_id = ?",
-        (candidate_id,),
-    ).fetchone()
+        return {"ok": False, "status": "failed_validation", "safe_error": "reviewer is required"}
+    row = db_records.first(db_read_knowledge_candidates.find_status_by_candidate_id(conn, candidate_id))
     if not row:
-        return {
-            "ok": False,
-            "status": "not_found",
-            "safe_error": f"candidate not found: {candidate_id}",
-        }
+        return {"ok": False, "status": "not_found", "safe_error": f"candidate not found: {candidate_id}"}
     if row[0] != "pending":
-        return {
-            "ok": False,
-            "status": "not_pending",
-            "safe_error": f"candidate is {row[0]}",
-        }
-    conn.execute(
-        """
-        UPDATE knowledge_candidates
-        SET status = 'rejected',
-            reviewed_at = ?,
-            reviewer = ?,
-            review_note = ?
-        WHERE candidate_id = ?
-        """,
-        (run_now, reviewer, _text(review_note), candidate_id),
-    )
+        return {"ok": False, "status": "not_pending", "safe_error": f"candidate is {row[0]}"}
+    db_write_knowledge_candidates.update_for_reject_candidate(conn, run_now, reviewer, _text(review_note), candidate_id)
     return {"ok": True, "status": "rejected", "candidate_id": candidate_id}
 
 
@@ -324,17 +224,7 @@ def _knowledge_score(row, route_result, event_terms, workstream_id):
 
 
 def load_runtime_knowledge(conn, repo_id, route_result, events, workstream_id=None, limit=5):
-    rows = conn.execute(
-        """
-        SELECT knowledge_id, candidate_id, repo_id, scope_type, scope_value,
-               title, prompt_text, retrieval_boost_json, approved_by, approved_at
-        FROM runtime_knowledge
-        WHERE repo_id = ?
-          AND active = 1
-        ORDER BY approved_at DESC, knowledge_id
-        """,
-        (repo_id,),
-    ).fetchall()
+    rows = db_read_runtime_knowledge.load_runtime_knowledge(conn, repo_id)
     terms = _event_terms(events)
     matched = []
     for row in rows:
@@ -360,25 +250,7 @@ def load_runtime_knowledge(conn, repo_id, route_result, events, workstream_id=No
 
 
 def list_candidates(conn, repo_id=None, status=None):
-    clauses = []
-    params = []
-    if repo_id:
-        clauses.append("repo_id = ?")
-        params.append(repo_id)
-    if status:
-        clauses.append("status = ?")
-        params.append(status)
-    where = "WHERE " + " AND ".join(clauses) if clauses else ""
-    rows = conn.execute(
-        f"""
-        SELECT candidate_id, repo_id, title, summary, candidate_type,
-               confidence, status, created_at, reviewed_at, reviewer
-        FROM knowledge_candidates
-        {where}
-        ORDER BY created_at DESC, candidate_id
-        """,
-        params,
-    ).fetchall()
+    rows = db_read_knowledge_candidates.list_candidates(conn, repo_id, status)
     return [
         {
             "candidate_id": row[0],
@@ -397,17 +269,7 @@ def list_candidates(conn, repo_id=None, status=None):
 
 
 def show_candidate(conn, candidate_id):
-    row = conn.execute(
-        """
-        SELECT candidate_id, repo_id, title, summary, prompt_text,
-               candidate_type, source_memory_ids_json, evidence_json,
-               confidence, status, created_at, reviewed_at, reviewer,
-               review_note, metadata_json
-        FROM knowledge_candidates
-        WHERE candidate_id = ?
-        """,
-        (candidate_id,),
-    ).fetchone()
+    row = db_records.first(db_read_knowledge_candidates.find_for_show_candidate(conn, candidate_id))
     if not row:
         return None
     return {

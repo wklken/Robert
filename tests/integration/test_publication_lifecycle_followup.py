@@ -11,7 +11,7 @@ from tests.support import review_input_workflow as review_fixtures
 from robert_agent.delivery.application import publish
 from robert_agent.runtime import cycle as run_once
 from robert_agent.configuration import command as validate_config
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.execution import ownership as execution_ownership
 from tests.support import terminal_github_followup as terminal_fixtures
 from robert_agent.delivery.application import submission as result

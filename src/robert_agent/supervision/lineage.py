@@ -1,5 +1,9 @@
 """Durable request identity and admission evidence written by business producers."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.stores import supervision_checkpoints as db_write_supervision_checkpoints
+
 from dataclasses import dataclass
 import hashlib
 import json
@@ -39,18 +43,12 @@ def episode_key(episode_id):
 def get_task_lineage(conn, task_id):
     if not task_id:
         return None
-    row = conn.execute(
-        "SELECT json_extract(metadata_json,'$.supervision_lineage_key') FROM tasks WHERE task_id=?",
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_for_get_task_lineage(conn, task_id))
     return row[0] if row and isinstance(row[0], str) and row[0] else None
 
 
 def is_driving_github_input(event):
-    return event.get("authorization_status") in {
-        "authorized_trigger",
-        "authorized_system_trigger",
-    } or (
+    return event.get("authorization_status") in {"authorized_trigger", "authorized_system_trigger"} or (
         event.get("authorization_status") in {"accepted_context", "accepted_review_participant"}
         and event.get("drives_execution") is True
     )
@@ -82,20 +80,8 @@ def _record_received(conn, admission, repo_id, source_id, lineage_key, now):
         },
         sort_keys=True,
     )
-    conn.execute(
-        """INSERT INTO supervision_checkpoints(scope_type,scope_id,rule_id,lineage_key,updated_at,metadata_json)
-        VALUES (?,?,?,?,?,?) ON CONFLICT(scope_type,scope_id,rule_id) DO UPDATE SET
-        lineage_key=excluded.lineage_key,updated_at=excluded.updated_at,metadata_json=excluded.metadata_json
-        WHERE json_extract(supervision_checkpoints.metadata_json,'$.input_generation')
-           IS NOT json_extract(excluded.metadata_json,'$.input_generation')""",
-        (
-            admission.scope_type,
-            admission.scope_id,
-            _ADMISSION_RULE,
-            lineage_key or "",
-            now,
-            metadata,
-        ),
+    db_write_supervision_checkpoints.record_received(
+        conn, admission.scope_type, admission.scope_id, _ADMISSION_RULE, lineage_key or "", now, metadata
     )
 
 
@@ -140,26 +126,19 @@ def record_disposition(
     )
     # Replayed duplicate and source decisions cannot erase established ownership.
     # Only a pending disposition may advance to a different kind of owner.
-    result = conn.execute(
-        """UPDATE supervision_checkpoints SET metadata_json=json_patch(metadata_json,?),updated_at=?,
-          lineage_key=COALESCE(?,lineage_key)
-        WHERE scope_type=? AND scope_id=? AND rule_id=? AND json_extract(metadata_json,'$.input_generation')=?
-          AND COALESCE(json_extract(metadata_json,'$.disposition'),'') NOT IN ('admitted_task','queued_native_round')
-          AND (COALESCE(json_extract(metadata_json,'$.disposition'),'')!='linked_pending' OR ?='admitted_task')
-          AND metadata_json != json_patch(metadata_json,?)""",
-        (
-            patch,
-            now,
-            (lineage_key or "") if disposition in _OWNED_DISPOSITIONS else None,
-            admission.scope_type,
-            admission.scope_id,
-            _ADMISSION_RULE,
-            admission.generation,
-            disposition,
-            patch,
-        ),
+    result = db_write_supervision_checkpoints.record_disposition(
+        conn,
+        patch,
+        now,
+        lineage_key or "" if disposition in _OWNED_DISPOSITIONS else None,
+        admission.scope_type,
+        admission.scope_id,
+        _ADMISSION_RULE,
+        admission.generation,
+        disposition,
+        patch,
     )
-    return result.rowcount == 1
+    return result == 1
 
 
 def record_operator_admission(conn, item, command_event, task_id, now):
@@ -168,14 +147,7 @@ def record_operator_admission(conn, item, command_event, task_id, now):
         return
     event_id = command_event["event_id"]
     admission = Admission("work_item_event", event_id, event_id)
-    _record_received(
-        conn,
-        admission,
-        item["repo_id"],
-        item["origin_source_id"],
-        get_task_lineage(conn, task_id),
-        now,
-    )
+    _record_received(conn, admission, item["repo_id"], item["origin_source_id"], get_task_lineage(conn, task_id), now)
     record_task_disposition(conn, admission, task_id, now)
 
 

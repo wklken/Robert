@@ -1,5 +1,10 @@
 """Durable local wakeup hints for the DD GitHub agent."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
+from robert_agent.persistence.queries import wakeups as db_read_wakeups
+from robert_agent.persistence.stores import wakeups as db_write_wakeups
+
 from datetime import datetime, timezone
 import json
 from uuid import uuid4
@@ -7,11 +12,6 @@ from uuid import uuid4
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
-
-
-def _table_exists(conn):
-    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'wakeups'").fetchone()
-    return bool(row)
 
 
 def _decode_json(value, default):
@@ -87,48 +87,28 @@ def request_wakeup(
     due_at = not_before_at or now
     metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
     wakeup_id = f"wakeup-{uuid4().hex[:12]}"
-    existing = conn.execute(
-        """
-        SELECT wakeup_id, repo_id, reason, dedupe_key, work_item_id, task_id, attempt_id,
-               result_id, source_run_id, consumed_run_id, status, not_before_at,
-               expires_at, attempt_count, created_at, updated_at, metadata_json
-        FROM wakeups
-        WHERE repo_id = ?
-          AND reason = ?
-          AND dedupe_key = ?
-        """,
-        (repo_id, reason, dedupe_key),
-    ).fetchone()
+    existing = db_records.first(db_read_wakeups.find_for_request_wakeup(conn, repo_id, reason, dedupe_key))
     if existing:
         payload = _wakeup_from_row(existing)
         if payload["status"] == "pending":
             payload["status"] = "already_pending"
         return payload
-    conn.execute(
-        """
-        INSERT INTO wakeups(
-          wakeup_id, repo_id, reason, dedupe_key, work_item_id, task_id, attempt_id,
-          result_id, source_run_id, status, not_before_at, expires_at,
-          created_at, updated_at, metadata_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-        """,
-        (
-            wakeup_id,
-            repo_id,
-            reason,
-            dedupe_key,
-            work_item_id,
-            task_id,
-            attempt_id,
-            result_id,
-            source_run_id,
-            due_at,
-            expires_at,
-            now,
-            now,
-            metadata_json,
-        ),
+    db_write_wakeups.insert_for_request_wakeup(
+        conn,
+        wakeup_id,
+        repo_id,
+        reason,
+        dedupe_key,
+        work_item_id,
+        task_id,
+        attempt_id,
+        result_id,
+        source_run_id,
+        due_at,
+        expires_at,
+        now,
+        now,
+        metadata_json,
     )
     return {
         "wakeup_id": wakeup_id,
@@ -152,43 +132,13 @@ def request_wakeup(
 
 
 def list_wakeups(conn, *, status=None, limit=20, now=None):
-    if not _table_exists(conn):
+    if not db_read_sqlite_master.table_exists(conn, "wakeups"):
         return []
-    clauses = []
-    params = []
-    if status:
-        clauses.append("status = ?")
-        params.append(status)
-    if now:
-        clauses.append("(expires_at IS NULL OR expires_at > ?)")
-        params.append(now)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(
-        f"""
-        SELECT wakeup_id, repo_id, reason, dedupe_key, work_item_id, task_id, attempt_id,
-               result_id, source_run_id, consumed_run_id, status, not_before_at,
-               expires_at, attempt_count, created_at, updated_at, metadata_json
-        FROM wakeups
-        {where}
-        ORDER BY
-          CASE status
-            WHEN 'pending' THEN 0
-            WHEN 'expired' THEN 1
-            WHEN 'consumed' THEN 2
-            ELSE 3
-          END,
-          not_before_at,
-          created_at,
-          wakeup_id
-        LIMIT ?
-        """,
-        params + [limit],
-    ).fetchall()
-    return [_wakeup_from_row(row) for row in rows]
+    return [_wakeup_from_row(row) for row in db_read_wakeups.list_wakeups(conn, status, limit, now)]
 
 
 def summarize_wakeups(conn, now=None):
-    if not _table_exists(conn):
+    if not db_read_sqlite_master.table_exists(conn, "wakeups"):
         return {
             "available": False,
             "total": 0,
@@ -198,30 +148,9 @@ def summarize_wakeups(conn, now=None):
             "by_reason": {},
         }
     now = now or utc_now()
-    by_status = {row[0]: row[1] for row in conn.execute("SELECT status, COUNT(*) FROM wakeups GROUP BY status")}
-    by_reason = {
-        row[0]: row[1]
-        for row in conn.execute(
-            """SELECT CASE
-                WHEN reason='manual_operator_request'
-                  AND CASE WHEN json_valid(metadata_json)
-                      THEN json_extract(metadata_json,'$.kind') END
-                      IN ('github_observation_ready','github_context_refresh')
-                THEN json_extract(metadata_json,'$.kind')
-                ELSE reason END AS logical_reason,
-                COUNT(*) FROM wakeups GROUP BY logical_reason"""
-        )
-    }
-    due = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM wakeups
-        WHERE status = 'pending'
-          AND not_before_at <= ?
-          AND (expires_at IS NULL OR expires_at > ?)
-        """,
-        (now, now),
-    ).fetchone()[0]
+    by_status = {row[0]: row[1] for row in db_read_wakeups.find_for_summarize_wakeups(conn)}
+    by_reason = {row[0]: row[1] for row in db_read_wakeups.find_for_summarize_wakeups_2(conn)}
+    due = db_records.first(db_read_wakeups.find_for_summarize_wakeups_3(conn, now, now))[0]
     total = sum(by_status.values())
     return {
         "available": True,
@@ -234,51 +163,20 @@ def summarize_wakeups(conn, now=None):
 
 
 def consume_wakeups_for_results(conn, *, result_ids, run_id, now=None):
-    if not result_ids or not _table_exists(conn):
+    if not result_ids or not db_read_sqlite_master.table_exists(conn, "wakeups"):
         return 0
     now = now or utc_now()
-    placeholders = ",".join("?" for _result_id in result_ids)
-    cur = conn.execute(
-        f"""
-        UPDATE wakeups
-        SET status = 'consumed',
-            consumed_run_id = ?,
-            updated_at = ?
-        WHERE reason = 'worker_result_ready'
-          AND status = 'pending'
-          AND result_id IN ({placeholders})
-        """,
-        [run_id, now] + list(result_ids),
-    )
-    return cur.rowcount
+    cur = db_write_wakeups.consume_wakeups_for_results_filtered(conn, result_ids, run_id, now)
+    return cur
 
 
 def expire_due_wakeups(conn, *, now=None):
-    if not _table_exists(conn):
+    if not db_read_sqlite_master.table_exists(conn, "wakeups"):
         return 0
     now = now or utc_now()
-    cur = conn.execute(
-        """
-        UPDATE wakeups
-        SET status = 'expired',
-            updated_at = ?
-        WHERE status = 'pending'
-          AND expires_at IS NOT NULL
-          AND expires_at <= ?
-        """,
-        (now, now),
-    )
-    return cur.rowcount
+    cur = db_write_wakeups.update_for_expire_due_wakeups(conn, now, now)
+    return cur
 
 
 def has_due_context_refresh(conn, repo_ids, now):
-    placeholders = ",".join("?" for _ in repo_ids)
-    return bool(
-        conn.execute(
-            f"""SELECT 1 FROM wakeups WHERE repo_id IN ({placeholders}) AND status='pending'
-            AND json_extract(metadata_json,'$.kind')='github_context_refresh'
-            AND julianday(not_before_at)<=julianday(?)
-            AND (expires_at IS NULL OR julianday(expires_at)>julianday(?)) LIMIT 1""",
-            [*repo_ids, now, now],
-        ).fetchone()
-    )
+    return bool(db_records.first(db_read_wakeups.has_due_context_refresh_filtered(conn, repo_ids, now, now)))

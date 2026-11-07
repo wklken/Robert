@@ -12,6 +12,8 @@ license = "Apache-2.0"
 authors = [{name = "Robert contributors"}]
 dependencies = [
   "PyYAML>=6.0,<7",
+  # Shared model mappings and parameterized persistence expressions replace handwritten SQL.
+  "SQLAlchemy>=2.0.47,<2.1",
   # Supervisor provides restart/status control when Linux user systemd is unavailable.
   "supervisor>=4.2,<5",
 ]
@@ -148,3 +150,12 @@ forbidden_modules = ["robert_agent.workflows"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/robert_agent"]
+
+[[tool.importlinter.contracts]]
+name = "Persistence owns database details below domain capabilities"
+type = "layers"
+layers = [
+  "robert_agent.work : robert_agent.execution : robert_agent.delivery : robert_agent.supervision : robert_agent.context : robert_agent.readmodels : robert_agent.adapters",
+  "robert_agent.persistence",
+  "robert_agent.models",
+]

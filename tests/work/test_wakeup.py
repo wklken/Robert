@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.work import wakeup
 
 
@@ -43,15 +43,11 @@ class WakeupReasonTests(unittest.TestCase):
                 self.assertEqual(duplicate["wakeup_id"], created["wakeup_id"])
                 self.assertEqual(duplicate["status"], "already_pending")
                 stored_reason, stored_dedupe = self.conn.execute(
-                    "SELECT reason,dedupe_key FROM wakeups WHERE wakeup_id=?",
-                    (created["wakeup_id"],),
+                    "SELECT reason,dedupe_key FROM wakeups WHERE wakeup_id=?", (created["wakeup_id"],)
                 ).fetchone()
                 self.assertEqual((stored_reason, stored_dedupe), ("manual_operator_request", kind))
         rows = wakeup.list_wakeups(self.conn)
-        self.assertEqual(
-            {row["reason"] for row in rows},
-            {"github_observation_ready", "github_context_refresh"},
-        )
+        self.assertEqual({row["reason"] for row in rows}, {"github_observation_ready", "github_context_refresh"})
         self.conn.row_factory = sqlite3.Row
         self.assertEqual(
             {row["reason"] for row in wakeup.list_wakeups(self.conn)},
@@ -59,17 +55,9 @@ class WakeupReasonTests(unittest.TestCase):
         )
 
     def test_statistics_keep_machine_and_manual_requests_separate(self):
-        for kind in (
-            "github_observation_ready",
-            "github_context_refresh",
-            "operator_decision",
-        ):
+        for kind in ("github_observation_ready", "github_context_refresh", "operator_decision"):
             wakeup.request_wakeup(
-                self.conn,
-                repo_id="repo",
-                reason="manual_operator_request",
-                dedupe_key=kind,
-                metadata={"kind": kind},
+                self.conn, repo_id="repo", reason="manual_operator_request", dedupe_key=kind, metadata={"kind": kind}
             )
         self.conn.execute("UPDATE wakeups SET metadata_json='bad-json' WHERE dedupe_key='operator_decision'")
         wakeup.request_wakeup(

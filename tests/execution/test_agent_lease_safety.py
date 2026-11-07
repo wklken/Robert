@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.execution import leases as execution_leases
 from robert_agent.adapters.processes import identity
 

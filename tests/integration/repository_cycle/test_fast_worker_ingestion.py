@@ -215,7 +215,8 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
         self.assertEqual(relationship, "consumed")
 
     def test_live_dispatch_accepts_fast_successful_worker_subprocess_result(self):
-        import os
+        import shlex
+        import sys
         from robert_agent.runtime import cycle as run_once
 
         self.fixture_path.write_text(
@@ -277,9 +278,8 @@ raise SystemExit(0 if record["ok"] else 1)
 """,
             encoding="utf-8",
         )
-        os.chmod(worker_command, 0o755)
         config = yaml.safe_load(self.config_path.read_text())
-        config["workers"]["default"].update(adapter="cbc", command=str(worker_command))
+        config["workers"]["default"].update(adapter="cbc", command=shlex.join([sys.executable, str(worker_command)]))
         self.config_path.write_text(yaml.safe_dump(config))
 
         first = run_once.run_once(
@@ -298,14 +298,18 @@ raise SystemExit(0 if record["ok"] else 1)
                 attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
                 result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
                 if result_count:
-                    monitor.supervise_running_attempts(
-                        conn,
-                        "repo:example/backend",
-                        {},
-                        values.utc_now(),
-                        resume_attempt=preparation.create_resume_attempt_and_prompt,
-                    )
-                    attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
+                    metadata = json.loads(conn.execute("SELECT metadata_json FROM attempts").fetchone()[0])
+                    # Submission and process exit are separate events. Exercise
+                    # final ingestion only after the OS confirms this worker exited.
+                    if attempt_process.dispatch_status(metadata)["status"] == "dead":
+                        monitor.supervise_running_attempts(
+                            conn,
+                            "repo:example/backend",
+                            {},
+                            values.utc_now(),
+                            resume_attempt=preparation.create_resume_attempt_and_prompt,
+                        )
+                        attempt_status = conn.execute("SELECT status FROM attempts").fetchone()[0]
             if attempt_status == "completed" and result_count == 1:
                 break
             time.sleep(0.1)

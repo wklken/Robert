@@ -1,5 +1,6 @@
 """Regressions for PR #46 routing and handoff review findings PR-1 through PR-7."""
 
+from tests.support import database as fixture_database
 from robert_agent.workflows import routing as workflow_routing
 import json
 from pathlib import Path
@@ -8,7 +9,7 @@ import unittest
 
 import yaml
 from robert_agent.adapters.github import discovery as discover
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.workflows.vote import workspace as vote_workspace
 from robert_agent.workflows.vote import publish as vote_publish
 from tests.support import vote_coordinator as coordinator_fixture
@@ -30,9 +31,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
         self.vote.fixture.cycle([], skip_publish=False)
         return driver
 
-    def test_pr1_ordinary_comparison_fix_keeps_original_route_with_vote_disabled_or_enabled(
-        self,
-    ):
+    def test_pr1_ordinary_comparison_fix_keeps_original_route_with_vote_disabled_or_enabled(self):
         body = "@robert-bot compare main and this branch and fix the regression"
         intent = discover.infer_intent("", body, "comment", "robert-bot")
         self.assertEqual(intent, "bug_fix")
@@ -41,34 +40,19 @@ class VoteRequestRemediationTests(unittest.TestCase):
         config["routes"] = {}
         path.write_text(yaml.safe_dump(config))
         self.vote.fixture.cycle([{**self.vote.event(), "body": body, "intent": intent}])
-        with vote_store.connect(self.vote.db) as conn:
+        with fixture_database.connect(self.vote.db) as conn:
             self.assertEqual(conn.execute("SELECT route_id FROM tasks").fetchone()[0], "new-pr")
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
         task, _ = self.vote.fixture.current()
         self.vote.fixture.finish_task(task)
         config["routes"] = {
-            "vote": {
-                "worker": "codex",
-                "multi_agent_vote": {"enabled": True, "workers": ["codex", "claude"]},
-            }
+            "vote": {"worker": "codex", "multi_agent_vote": {"enabled": True, "workers": ["codex", "claude"]}}
         }
         path.write_text(yaml.safe_dump(config))
-        self.vote.fixture.cycle(
-            [
-                {
-                    **self.vote.event("enabled-fix"),
-                    "number": 43,
-                    "body": body,
-                    "intent": intent,
-                }
-            ]
-        )
-        with vote_store.connect(self.vote.db) as conn:
+        self.vote.fixture.cycle([{**self.vote.event("enabled-fix"), "number": 43, "body": body, "intent": intent}])
+        with fixture_database.connect(self.vote.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM tasks WHERE route_id='new-pr'").fetchone()[0],
-                2,
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks WHERE route_id='new-pr'").fetchone()[0], 2)
 
     def test_pr1_other_mentions_email_and_background_do_not_trigger_vote(self):
         for body in [
@@ -82,34 +66,22 @@ class VoteRequestRemediationTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertNotEqual(discover.infer_intent("", body, "comment", "robert-bot"), "vote")
 
-    def test_pr1_configured_account_is_required_in_discovery_and_classifier_routing(
-        self,
-    ):
+    def test_pr1_configured_account_is_required_in_discovery_and_classifier_routing(self):
         body = "@custom-bot 投票 A/B"
         self.assertEqual(discover.infer_intent("", body, "comment", "custom-bot"), "vote")
         self.assertNotEqual(discover.infer_intent("", body, "comment", "robert-bot"), "vote")
-        self.assertNotEqual(
-            discover.infer_intent("", "@robert-bot-other vote A/B", "comment", "robert-bot"),
-            "vote",
-        )
+        self.assertNotEqual(discover.infer_intent("", "@robert-bot-other vote A/B", "comment", "robert-bot"), "vote")
         self.assertEqual(
-            discover._issue_search_to_raw({"number": 42, "body": body}, "mention", "custom-bot")["intent"],
-            "vote",
+            discover._issue_search_to_raw({"number": 42, "body": body}, "mention", "custom-bot")["intent"], "vote"
         )
         from robert_agent.configuration import command as validate_config
 
         config = validate_config.validate_config(self.vote.fixture.config_path, skip_external=True)
-        event = {
-            **self.vote.event(),
-            "body": "@alice choose A or B",
-            "mentions_dd": True,
-        }
+        event = {**self.vote.event(), "body": "@alice choose A or B", "mentions_dd": True}
         route = workflow_routing.effective_route(config, config["repos"][0], event, route_id="vote")
         self.assertNotIn("native_vote_workers", route)
 
-    def test_pr1_polite_fix_and_explanation_requests_do_not_vote_on_a_function_name(
-        self,
-    ):
+    def test_pr1_polite_fix_and_explanation_requests_do_not_vote_on_a_function_name(self):
         for body in [
             "@robert-bot can you fix the vote implementation",
             "@robert-bot please help fix the vote bug",
@@ -131,7 +103,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
                 }
             ]
         )
-        with vote_store.connect(self.vote.db) as conn:
+        with fixture_database.connect(self.vote.db) as conn:
             entry = vote_store.session(conn, round_id=driver.round_id)
             self.assertEqual(entry["status"], "superseded")
             self.assertEqual(entry["request"]["event"].get("clarifications", []), [])
@@ -146,7 +118,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
         task, _ = self.vote.fixture.current()
         self.vote.fixture.finish_task(task)
         self.vote.fixture.cycle([event])
-        with vote_store.connect(self.vote.db) as conn:
+        with fixture_database.connect(self.vote.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
@@ -163,7 +135,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
         config["routes"] = enabled_routes
         path.write_text(yaml.safe_dump(config))
         self.vote.fixture.cycle([event])
-        with vote_store.connect(self.vote.db) as conn:
+        with fixture_database.connect(self.vote.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
@@ -173,11 +145,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
         config = yaml.safe_load(path.read_text())
         config["routes"]["review-pr"] = {
             "worker": "codex",
-            "multi_agent_review": {
-                "enabled": True,
-                "workers": ["codex", "claude"],
-                "author_allowlist": ["author"],
-            },
+            "multi_agent_review": {"enabled": True, "workers": ["codex", "claude"], "author_allowlist": ["author"]},
         }
         path.write_text(yaml.safe_dump(config))
         driver = self.waiting()
@@ -191,7 +159,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
                 }
             ]
         )
-        with vote_store.connect(self.vote.db) as conn:
+        with fixture_database.connect(self.vote.db) as conn:
             entry = vote_store.session(conn, round_id=driver.round_id)
             self.assertEqual(entry["status"], "waiting_for_user")
             self.assertEqual(entry["request"]["event"].get("clarifications", []), [])
@@ -210,19 +178,17 @@ class VoteRequestRemediationTests(unittest.TestCase):
                 }
             ]
         )
-        with vote_store.connect(self.vote.db) as conn:
+        with fixture_database.connect(self.vote.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
         resumed = self.vote.driver()
         self.assertEqual(resumed.round_id, driver.round_id)
         self.assertTrue(resumed.run().is_file())
-        with vote_store.connect(self.vote.db) as conn:
+        with fixture_database.connect(self.vote.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
             entry = vote_store.session(conn, round_id=driver.round_id)
             self.assertEqual(len(entry["request"]["event"]["clarifications"]), 1)
 
-    def test_pr5_issue_code_is_pinned_in_a_new_checkout_after_clarification_and_head_move(
-        self,
-    ):
+    def test_pr5_issue_code_is_pinned_in_a_new_checkout_after_clarification_and_head_move(self):
         self.vote.need_code = True
         first = self.waiting()
         original_tree = Path(first.manifest["source_worktree"])
@@ -230,13 +196,7 @@ class VoteRequestRemediationTests(unittest.TestCase):
         self.vote.fixture.git_fixture.commit("value = 9\n")
         self.vote.clarify = False
         self.vote.fixture.cycle(
-            [
-                {
-                    **self.vote.event("answer"),
-                    "body": "@robert-bot latency is one second",
-                    "intent": "analysis",
-                }
-            ]
+            [{**self.vote.event("answer"), "body": "@robert-bot latency is one second", "intent": "analysis"}]
         )
         resumed = self.vote.driver()
         self.assertTrue(resumed.run().is_file())
@@ -265,12 +225,7 @@ class VotePublicationRemediationTests(unittest.TestCase):
     def make_report(self, count=1):
         source = self.vote.source()
         adopted = [
-            {
-                "id": i,
-                "kind": "comment",
-                "body": f"context-{i}",
-                "user": {"login": "maintainer"},
-            }
+            {"id": i, "kind": "comment", "body": f"context-{i}", "user": {"login": "maintainer"}}
             for i in range(1, count + 1)
         ]
         source["discussion"] = adopted
@@ -331,7 +286,4 @@ class VotePublicationRemediationTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout=json.dumps(source))
 
             with self.subTest(timed_out=timed_out):
-                self.assertEqual(
-                    vote_publish.publish(action, scope, transport)["status"],
-                    "publish_failed",
-                )
+                self.assertEqual(vote_publish.publish(action, scope, transport)["status"], "publish_failed")

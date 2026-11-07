@@ -149,10 +149,7 @@ class DashboardFixture(SummaryFixture):
                   'local', 'recorded', ?, ?
                 )
                 """,
-                (
-                    now,
-                    json.dumps({"audit": audit, "result_id": "result-failed"}, sort_keys=True),
-                ),
+                (now, json.dumps({"audit": audit, "result_id": "result-failed"}, sort_keys=True)),
             )
             conn.execute(
                 """
@@ -169,7 +166,7 @@ class DashboardFixture(SummaryFixture):
             )
 
     def _init_operator_overview_db(self, db_path):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         storage.init_database(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -272,10 +269,7 @@ class DashboardFixture(SummaryFixture):
                         "task-failed",
                         "worker_result_rejected",
                         now,
-                        json.dumps(
-                            {"audit": audit, "result_id": "result-failed"},
-                            sort_keys=True,
-                        ),
+                        json.dumps({"audit": audit, "result_id": "result-failed"}, sort_keys=True),
                     ),
                 ],
             )
@@ -471,13 +465,7 @@ class DashboardFixture(SummaryFixture):
                 "status": "publish_failed",
                 "failed_at": "2026-06-17T04:00:00+00:00",
                 "safe_error": "gh: authentication failed",
-                "command": [
-                    "gh",
-                    "api",
-                    "repos/x/y/issues/1/comments",
-                    "-f",
-                    "body=ready",
-                ],
+                "command": ["gh", "api", "repos/x/y/issues/1/comments", "-f", "body=ready"],
             },
         }
         notification_metadata = {
@@ -623,13 +611,7 @@ class DashboardFixture(SummaryFixture):
                 "status": "publish_failed",
                 "failed_at": "2026-06-17T04:00:00+00:00",
                 "safe_error": "gh: authentication failed",
-                "command": [
-                    "gh",
-                    "api",
-                    "repos/x/y/issues/1/comments",
-                    "-f",
-                    "body=ready",
-                ],
+                "command": ["gh", "api", "repos/x/y/issues/1/comments", "-f", "body=ready"],
             },
         }
         now = datetime.now(timezone.utc).isoformat()

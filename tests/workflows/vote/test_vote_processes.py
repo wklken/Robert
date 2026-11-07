@@ -1,3 +1,4 @@
+from tests.support import database as fixture_database
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -7,7 +8,7 @@ import unittest
 
 from robert_agent.adapters.processes import worker as dispatch
 from robert_agent.execution import rounds as native_rounds
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.adapters.processes import identity as worker_identity
 from tests.support import vote_coordinator as fixture_module
 
@@ -82,21 +83,19 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
         self.wait_started()
         end = time.monotonic() + 5
         while time.monotonic() < end:
-            with vote_store.connect(self.fixture.db) as conn:
+            with fixture_database.connect(self.fixture.db) as conn:
                 runs = [r for r in vote_store.runs(conn, self.driver.round_id) if r["stage"] == "vote"]
             if len(runs) == 2 and all(r["status"] == "running" and r["dispatch"].get("pid") for r in runs):
                 return
             time.sleep(0.01)
         self.fail("both real voters were not registered")
 
-    def test_two_adapters_run_concurrently_with_identical_input_and_private_output(
-        self,
-    ):
+    def test_two_adapters_run_concurrently_with_identical_input_and_private_output(self):
         with ThreadPoolExecutor(1) as executor:
             future = executor.submit(self.driver.vote)
             try:
                 self.wait_started()
-                with vote_store.connect(self.fixture.db) as conn:
+                with fixture_database.connect(self.fixture.db) as conn:
                     self.assertEqual(vote_store.process_pool_status(conn)["in_use"], 2)
                 self.assertEqual(len({(p / "started").read_text() for _, p in self.started}), 1)
                 self.assertEqual(len({p for _, p in self.started}), 2)
@@ -104,7 +103,7 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
                 self.gate.touch()
             records = future.result(timeout=10)
         self.assertEqual(len(records), 2)
-        with vote_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             self.assertEqual(vote_store.process_pool_status(conn)["in_use"], 0)
         self.assertEqual({r["adapter"] for r in records}, {"codex", "claude"})
 
@@ -116,16 +115,13 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
             try:
                 self.wait_registered()
                 self.driver.stopping.set()
-                with vote_store.connect(self.fixture.db) as conn:
-                    self.assertNotEqual(
-                        native_rounds.terminate_children(conn, self.driver.task_id),
-                        "attention",
-                    )
+                with fixture_database.connect(self.fixture.db) as conn:
+                    self.assertNotEqual(native_rounds.terminate_children(conn, self.driver.task_id), "attention")
                 with self.assertRaises(StageStopped):
                     future.result(timeout=10)
             finally:
                 self.gate.touch()
-        with vote_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             self.assertFalse(
                 any(
                     r["status"] == "succeeded" and r["stage"] == "vote"

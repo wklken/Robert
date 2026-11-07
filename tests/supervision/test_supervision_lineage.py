@@ -1,3 +1,4 @@
+from tests.support import database as fixture_database
 from contextlib import closing
 import json
 import sqlite3
@@ -8,7 +9,7 @@ from unittest.mock import patch
 from tests.support import github_board_recovery
 from tests.support import review_coordinator
 from tests.support import repository_cycle as test_run_once
-from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.persistence.rounds import review as review_store
 from robert_agent.runtime import cycle as run_once
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work.application import commands as work_items
@@ -30,8 +31,7 @@ def _receipt(conn, scope_type, event_id):
 
 def _task_lineage(conn, task_id):
     return conn.execute(
-        "SELECT json_extract(metadata_json,'$.supervision_lineage_key') FROM tasks WHERE task_id=?",
-        (task_id,),
+        "SELECT json_extract(metadata_json,'$.supervision_lineage_key') FROM tasks WHERE task_id=?", (task_id,)
     ).fetchone()[0]
 
 
@@ -44,11 +44,7 @@ class SupervisionLineageTests(unittest.TestCase):
 
     def cycle(self, fixture):
         return run_once.run_once(
-            fixture.config_path,
-            fixture_path=fixture.fixture_path,
-            dry_run=True,
-            skip_external=True,
-            skip_publish=True,
+            fixture.config_path, fixture_path=fixture.fixture_path, dry_run=True, skip_external=True, skip_publish=True
         )
 
     def test_github_receipt_survives_preparation_failure_and_replay_admits_once(self):
@@ -60,10 +56,7 @@ class SupervisionLineageTests(unittest.TestCase):
         def fail_after_commit(*_args):
             with closing(sqlite3.connect(db)) as conn:
                 observed.append(
-                    (
-                        _receipt(conn, "github_event", event_id),
-                        conn.execute("SELECT count(*) FROM tasks").fetchone()[0],
-                    )
+                    (_receipt(conn, "github_event", event_id), conn.execute("SELECT count(*) FROM tasks").fetchone()[0])
                 )
             raise subprocess.CalledProcessError(1, "git", stderr="preparation failed")
 
@@ -117,10 +110,7 @@ class SupervisionLineageTests(unittest.TestCase):
             self.assertTrue(current)
             self.assertNotEqual(current, original)
             self.assertEqual(_receipt(conn, "github_event", "event:comment:next")["target_id"], child)
-            self.assertEqual(
-                _receipt(conn, "github_event", "event:comment:comment-1")["target_id"],
-                parent,
-            )
+            self.assertEqual(_receipt(conn, "github_event", "event:comment:comment-1")["target_id"], parent)
 
     def test_operator_reply_receipt_and_existing_task_keep_parent_lineage(self):
         fixture = self.fixture(github_board_recovery.GitHubBoardRecoveryFixture)
@@ -161,17 +151,13 @@ class SupervisionLineageTests(unittest.TestCase):
         fixture = self.fixture(review_coordinator.ReviewCoordinatorFixture)
         fixture.cycle([fixture.event()])
         parent, attempt_id = fixture.current()
-        with review_store.connect(fixture.db) as conn:
+        with fixture_database.connect(fixture.db) as conn:
             round_entry = review_store.session(conn, task_id=parent)
             lineage = _task_lineage(conn, parent)
             now = values.utc_now()
             review_store.update(conn, round_entry["round_id"], status="superseded")
             work_application_lifecycle.finalize_failed_task(
-                conn,
-                parent,
-                round_entry["workstream_id"],
-                now,
-                {"status": "failed_worker_process_exited"},
+                conn, parent, round_entry["workstream_id"], now, {"status": "failed_worker_process_exited"}
             )
             # The dry-run launcher recorded synthetic dispatch metadata; it started no worker.
             conn.execute(
@@ -185,7 +171,7 @@ class SupervisionLineageTests(unittest.TestCase):
         fixture.cycle([])
         child, _ = fixture.current()
         self.assertNotEqual(child, parent)
-        with review_store.connect(fixture.db) as conn:
+        with fixture_database.connect(fixture.db) as conn:
             replacement = review_store.session(conn, task_id=child)
             self.assertNotEqual(replacement["round_id"], round_entry["round_id"])
             self.assertTrue(lineage)
@@ -203,22 +189,12 @@ class SupervisionLineageTests(unittest.TestCase):
             now = values.utc_now()
             older = supervision_lineage.github_admission(event, event_id)
             current = supervision_lineage.record_github_received(
-                conn,
-                {**event, "body": "Edited instruction"},
-                event_id,
-                repo_id,
-                source_id,
-                now,
+                conn, {**event, "body": "Edited instruction"}, event_id, repo_id, source_id, now
             )
             self.assertNotEqual(older.generation, current.generation)
             self.assertFalse(
                 supervision_lineage.record_disposition(
-                    conn,
-                    older,
-                    disposition="admitted_task",
-                    target_type="task",
-                    target_id="stale",
-                    now=now,
+                    conn, older, disposition="admitted_task", target_type="task", target_id="stale", now=now
                 )
             )
             receipt = _receipt(conn, "github_event", event_id)

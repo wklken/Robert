@@ -1,5 +1,21 @@
 """Finish work from accepted results and resume durable continuations."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import work_item_events as db_read_work_item_events
+from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.stores import github_sources as db_write_github_sources
+from robert_agent.persistence.stores import task_events as db_write_task_events
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import work_items as db_write_work_items
+from robert_agent.persistence.stores import workstream_sources as db_write_workstream_sources
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.execution.application import dispatch as dispatcher
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.delivery import results
@@ -24,38 +40,17 @@ from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
 import json
 import re
-import sqlite3
 import subprocess
 
 
 def _mark_consumed_events(conn, task_id, consumed_fingerprints):
     for fingerprint in consumed_fingerprints:
-        conn.execute(
-            """
-            UPDATE task_events
-            SET relationship = 'consumed'
-            WHERE task_id = ?
-              AND event_id IN (
-                SELECT event_id FROM github_events WHERE event_fingerprint = ?
-              )
-            """,
-            (task_id, fingerprint),
-        )
+        db_write_task_events.mark_consumed_events(conn, task_id, fingerprint)
 
 
 def pending_events_for_task(conn, task_id, consumed_fingerprints):
     consumed = set(consumed_fingerprints)
-    rows = conn.execute(
-        """
-        SELECT ge.payload_json, ge.event_fingerprint
-        FROM task_events te
-        JOIN github_events ge ON ge.event_id = te.event_id
-        WHERE te.task_id = ?
-          AND te.relationship IN ('pending', 'context')
-        ORDER BY ge.event_at, ge.event_id
-        """,
-        (task_id,),
-    ).fetchall()
+    rows = db_read_task_events.find_for_pending_events_for_task(conn, task_id)
     return [json.loads(payload) for payload, fingerprint in rows if fingerprint not in consumed]
 
 
@@ -66,40 +61,13 @@ def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workst
     pr_number = int(match.group(1))
     pr_source_key = discover.source_key(repo_full_name, "pull_request", pr_number)
     pr_source_id = values.github_source_id(pr_source_key)
-    conn.execute(
-        """
-        INSERT INTO github_sources(
-          source_id, repo_id, source_key, source_type, number, html_url, title, state, author_login
-        )
-        VALUES (?, ?, ?, 'pull_request', ?, ?, '', 'open', NULL)
-        ON CONFLICT(source_key) DO UPDATE SET
-          html_url = excluded.html_url,
-          state = 'open'
-        """,
-        (pr_source_id, repo_id, pr_source_key, pr_number, action.get("url")),
+    db_write_github_sources.insert_for_materialize_open_pr_workstream(
+        conn, pr_source_id, repo_id, pr_source_key, pr_number, action.get("url")
     )
-    conn.execute(
-        """
-        INSERT INTO workstreams(
-          workstream_id, repo_id, primary_source_id, origin_workstream_id, lifecycle,
-          active_task_id, created_at, updated_at, metadata_json
-        )
-        VALUES (?, ?, ?, ?, 'completed', NULL, ?, ?, '{}')
-        ON CONFLICT(workstream_id) DO UPDATE SET
-          origin_workstream_id = excluded.origin_workstream_id,
-          primary_source_id = excluded.primary_source_id,
-          updated_at = excluded.updated_at
-        """,
-        (pr_source_key, repo_id, pr_source_id, origin_workstream_id, run_now, run_now),
+    db_write_workstreams.insert_for_materialize_open_pr_workstream(
+        conn, pr_source_key, repo_id, pr_source_id, origin_workstream_id, run_now, run_now
     )
-    conn.execute(
-        """
-        INSERT INTO workstream_sources(workstream_id, source_id, relationship, created_at)
-        VALUES (?, ?, 'derived_pr', ?)
-        ON CONFLICT(workstream_id, source_id) DO NOTHING
-        """,
-        (pr_source_key, pr_source_id, run_now),
-    )
+    db_write_workstream_sources.insert_for_materialize_open_pr_workstream(conn, pr_source_key, pr_source_id, run_now)
     item = work_items.resolve_work_item_for_workstream(conn, pr_source_key)
     if item:
         work_items.record_system_event(
@@ -118,40 +86,18 @@ def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workst
 
 
 def _save_pending_handoff(conn, task_id, state):
-    conn.execute(
-        "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.pending_handoff',json(?)) WHERE task_id=?",
-        (json.dumps(state), task_id),
-    )
+    db_write_tasks.update_for_save_pending_handoff(conn, json.dumps(state), task_id)
 
 
 def _pending_handoff_current(conn, task_id, workstream_id):
     return bool(
         execution_ownership.parent_allows_child(conn, task_id)
-        and conn.execute(
-            """SELECT 1
-        FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-        LEFT JOIN work_items wi ON wi.workstream_id=w.workstream_id
-        LEFT JOIN github_sources gs ON gs.source_id=w.primary_source_id
-        WHERE t.task_id=? AND t.workstream_id=? AND t.lifecycle='completed'
-          AND w.lifecycle='active' AND w.active_task_id=t.task_id
-          AND wi.canceled_at IS NULL AND COALESCE(lower(gs.state),'open')!='closed'
-          AND NOT EXISTS(SELECT 1 FROM tasks child WHERE child.parent_task_id=t.task_id)""",
-            (task_id, workstream_id),
-        ).fetchone()
+        and db_records.first(db_read_tasks.find_for_pending_handoff_current(conn, task_id, workstream_id))
     )
 
 
 def recover_pending_handoffs(
-    conn,
-    repo_id,
-    data_dir,
-    db_path,
-    repo,
-    run_now,
-    dry_run,
-    dispatch_queue,
-    dispatch_budget,
-    config_result,
+    conn, repo_id, data_dir, db_path, repo, run_now, dry_run, dispatch_queue, dispatch_budget, config_result
 ):
     recovered = 0
     for task_id, stream_id in pending_handoff.ready_rows(
@@ -176,9 +122,9 @@ def recover_pending_handoffs(
         )
         if child:
             recovered += 1
-        state = values.json_object(
-            conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0]
-        ).get("pending_handoff", {})
+        state = values.json_object(db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, task_id))[0]).get(
+            "pending_handoff", {}
+        )
         if state.get("status") not in {"pending", "attention"}:
             execution_ownership.close_terminal_task(conn, task_id, run_now)
     return recovered
@@ -212,14 +158,7 @@ def _create_child_task_for_pending_events(
         return None
     if not pending_events:
         _save_pending_handoff(conn, parent_task_id, {"status": "completed", "retryable": False})
-        conn.execute(
-            """
-            UPDATE workstreams
-            SET lifecycle = 'completed', active_task_id = NULL, updated_at = ?
-            WHERE workstream_id = ?
-            """,
-            (run_now, workstream_id),
-        )
+        db_write_workstreams.update_for_execute_command(conn, run_now, workstream_id)
         return None
 
     # Saved discussion is data; only a current trusted request may drive its child.
@@ -243,21 +182,14 @@ def _create_child_task_for_pending_events(
     )
     if child_event is None:
         _save_pending_handoff(conn, parent_task_id, {"status": "completed", "retryable": False})
-        conn.execute(
-            """
-            UPDATE workstreams
-            SET lifecycle = 'completed', active_task_id = NULL, updated_at = ?
-            WHERE workstream_id = ?
-            """,
-            (run_now, workstream_id),
-        )
+        db_write_workstreams.update_for_execute_command(conn, run_now, workstream_id)
         return None
     stream = {
         "workstream_id": workstream_id,
         "source_relationship": workstream.source_relationship(child_event),
     }
     route_result = workflow_routing.effective_route(config_result, repo, child_event)
-    parent = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (parent_task_id,)).fetchone()
+    parent = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
     metadata = values.json_object(parent[0]) if parent else {}
     handoff = metadata.get("pending_handoff") or {}
     if not handoff.get("retryable", True) or (
@@ -288,7 +220,7 @@ def _create_child_task_for_pending_events(
         if not parent_task_id:
             raise
         if not conn.in_transaction:
-            conn.execute("BEGIN IMMEDIATE")
+            db_transactions.begin(conn, immediate=True)
         checked_at = values.utc_now() if claim else run_now
         if not _pending_handoff_current(conn, parent_task_id, workstream_id) or (
             claim and not supervision_actions.current(conn, claim, config=recovery_config, now=checked_at)
@@ -303,15 +235,10 @@ def _create_child_task_for_pending_events(
                 )
             return None
         failure = retry_policy.failure_state(
-            handoff,
-            getattr(exc, "stderr", None) or str(exc),
-            run_now,
-            retryable=not isinstance(exc, FileNotFoundError),
+            handoff, getattr(exc, "stderr", None) or str(exc), run_now, retryable=not isinstance(exc, FileNotFoundError)
         )
         _save_pending_handoff(
-            conn,
-            parent_task_id,
-            {**failure, "status": "pending" if failure["retryable"] else "attention"},
+            conn, parent_task_id, {**failure, "status": "pending" if failure["retryable"] else "attention"}
         )
         if claim:
             supervision_actions.finish(
@@ -319,18 +246,11 @@ def _create_child_task_for_pending_events(
                 claim,
                 outcome="failed",
                 now=checked_at,
-                receipt={
-                    "reason_code": "handoff_preparation_failed",
-                    "native_retryable": failure["retryable"],
-                },
+                receipt={"reason_code": "handoff_preparation_failed", "native_retryable": failure["retryable"]},
             )
         if not failure["retryable"]:
             execution_notifications.insert(
-                conn,
-                "pending_handoff_failed",
-                "recorded",
-                run_now,
-                {"task_id": parent_task_id, **failure},
+                conn, "pending_handoff_failed", "recorded", run_now, {"task_id": parent_task_id, **failure}
             )
             item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
             if item:
@@ -340,16 +260,12 @@ def _create_child_task_for_pending_events(
                     event_type="execution_failed",
                     idempotency_key="pending-handoff:" + parent_task_id + ":" + failure["first_failed_at"],
                     body="Pending request preparation stopped. " + failure["required_action"],
-                    metadata={
-                        "kind": "pending_handoff",
-                        "task_id": parent_task_id,
-                        **failure,
-                    },
+                    metadata={"kind": "pending_handoff", "task_id": parent_task_id, **failure},
                     now=run_now,
                 )
         return None
     if not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
+        db_transactions.begin(conn, immediate=True)
     checked_at = values.utc_now() if claim else run_now
     if (parent_task_id and not _pending_handoff_current(conn, parent_task_id, workstream_id)) or (
         claim and not supervision_actions.current(conn, claim, config=recovery_config, now=checked_at)
@@ -385,11 +301,7 @@ def _create_child_task_for_pending_events(
     if task_info is None:
         if claim:
             supervision_actions.finish(
-                conn,
-                claim,
-                outcome="failed",
-                now=checked_at,
-                receipt={"reason_code": "handoff_successor_not_admitted"},
+                conn, claim, outcome="failed", now=checked_at, receipt={"reason_code": "handoff_successor_not_admitted"}
             )
         return None
     _save_pending_handoff(
@@ -408,10 +320,7 @@ def _create_child_task_for_pending_events(
         claim,
         outcome="observing",
         now=checked_at,
-        receipt={
-            "child_task_id": task_info["task_id"],
-            "event_fingerprint": child_event["event_fingerprint"],
-        },
+        receipt={"child_task_id": task_info["task_id"], "event_fingerprint": child_event["event_fingerprint"]},
     ):
         conn.rollback()
         return None
@@ -427,28 +336,9 @@ def _create_child_task_for_pending_events(
 
 
 def _latest_workstream_update_branch(conn, workstream_id, exclude_task_id=None):
-    params = [workstream_id]
-    exclude_clause = ""
-    if exclude_task_id:
-        exclude_clause = "AND t.task_id != ?"
-        params.append(exclude_task_id)
-    row = conn.execute(
-        f"""
-        SELECT a.branch_name
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        WHERE t.workstream_id = ?
-          AND t.route_id = 'update-existing-pr'
-          AND a.branch_name IS NOT NULL
-          AND a.branch_name != ''
-          {exclude_clause}
-        ORDER BY COALESCE(a.finished_at, a.started_at, a.heartbeat_at, t.updated_at, t.created_at) DESC,
-                 a.attempt_no DESC,
-                 a.attempt_id DESC
-        LIMIT 1
-        """,
-        params,
-    ).fetchone()
+    row = db_records.first(
+        db_read_attempts.find_for_latest_workstream_update_branch(conn, workstream_id, exclude_task_id)
+    )
     return row[0] if row else ""
 
 
@@ -503,10 +393,7 @@ def _create_child_task_for_recommended_route(
         if branch_name:
             worktree_event["existing_pr_head_branch"] = branch_name
     parent_metadata = values.json_object(
-        conn.execute(
-            "SELECT metadata_json FROM tasks WHERE task_id=?",
-            (parent_task_id,),
-        ).fetchone()[0]
+        db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))[0]
     )
     handoff = parent_metadata.get("classification_handoff") or {}
     if not handoff.get("retryable", True) or (
@@ -514,10 +401,8 @@ def _create_child_task_for_recommended_route(
         and retry_policy.timestamp(handoff["next_retry_at"]) > retry_policy.timestamp(run_now)
     ):
         return None
-    conn.execute(
-        """UPDATE tasks SET metadata_json=json_set(metadata_json,
-        '$.classification_handoff',json(?)) WHERE task_id=?""",
-        (json.dumps({**handoff, "status": "pending"}), parent_task_id),
+    db_write_tasks.update_for_create_child_task_for_recommended_route(
+        conn, json.dumps({**handoff, "status": "pending"}), parent_task_id
     )
     conn.commit()  # Persist the handoff before external Git; do not pin the writer.
     try:
@@ -526,27 +411,13 @@ def _create_child_task_for_recommended_route(
         raise
     except (OSError, subprocess.SubprocessError) as exc:
         failure = retry_policy.failure_state(handoff, getattr(exc, "stderr", None) or str(exc), run_now)
-        conn.execute(
-            """UPDATE tasks SET metadata_json=json_set(metadata_json,
-            '$.classification_handoff',json(?)) WHERE task_id=?""",
-            (
-                json.dumps(
-                    {
-                        **failure,
-                        "status": "pending" if failure["retryable"] else "attention",
-                    }
-                ),
-                parent_task_id,
-            ),
+        db_write_tasks.update_for_create_child_task_for_recommended_route(
+            conn, json.dumps({**failure, "status": "pending" if failure["retryable"] else "attention"}), parent_task_id
         )
         if not failure["retryable"]:
             execution_ownership.mark_attention(conn, parent_task_id, run_now)
             execution_notifications.insert(
-                conn,
-                "classification_handoff_attention",
-                "recorded",
-                run_now,
-                {"task_id": parent_task_id, **failure},
+                conn, "classification_handoff_attention", "recorded", run_now, {"task_id": parent_task_id, **failure}
             )
         conn.commit()
         raise
@@ -568,21 +439,18 @@ def _create_child_task_for_recommended_route(
     )
     if task_info is None:
         return None
-    conn.execute(
-        """UPDATE tasks SET metadata_json=json_set(metadata_json,
-        '$.classification_handoff',json(?)) WHERE task_id=?""",
-        (
-            json.dumps(
-                {
-                    **handoff,
-                    "status": "completed",
-                    "retryable": False,
-                    "next_retry_at": None,
-                    "child_task_id": task_info["task_id"],
-                }
-            ),
-            parent_task_id,
+    db_write_tasks.update_for_create_child_task_for_recommended_route(
+        conn,
+        json.dumps(
+            {
+                **handoff,
+                "status": "completed",
+                "retryable": False,
+                "next_retry_at": None,
+                "child_task_id": task_info["task_id"],
+            }
         ),
+        parent_task_id,
     )
     dispatcher.queue_dispatch(
         dispatch_queue,
@@ -611,10 +479,9 @@ def finalize_accepted_result(
 ):
     if not execution_ownership.claim_task(conn, payload["task_id"], run_now):
         return False
-    work_item_row = conn.execute(
-        "SELECT work_item_id, origin_type FROM work_items WHERE workstream_id = ?",
-        (workstream_id,),
-    ).fetchone()
+    work_item_row = db_records.first(
+        db_read_work_items.find_work_item_id_and_origin_type_by_workstream_id(conn, workstream_id)
+    )
     if work_item_row is None:
         related_item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
         if related_item:
@@ -639,12 +506,7 @@ def finalize_accepted_result(
         work_application_lifecycle.mark_task_waiting_for_user(conn, payload["task_id"], workstream_id, run_now)
         subject_type, subject_id = execution_ownership.subject_for_task(conn, payload["task_id"])
         if subject_type == "remediation_episode":
-            remediation.exhaust_episode(
-                conn,
-                episode_id=subject_id,
-                reason="worker_waiting_for_user",
-                now=run_now,
-            )
+            remediation.exhaust_episode(conn, episode_id=subject_id, reason="worker_waiting_for_user", now=run_now)
         return True
     for action in payload["planned_github_actions"]:
         if action.get("type") == "open_pr":
@@ -667,10 +529,7 @@ def finalize_accepted_result(
         payload["task_id"],
         payload["consumed_event_fingerprints"],
     )
-    conn.execute(
-        "UPDATE tasks SET lifecycle = 'completed', updated_at = ? WHERE task_id = ?",
-        (run_now, payload["task_id"]),
-    )
+    db_write_tasks.update_for_finish_parent_for_child(conn, run_now, payload["task_id"])
     if work_item_row and work_item_row[1] == "web" and payload["output_type"] == "local_result":
         work_items.record_system_event(
             conn,
@@ -681,14 +540,7 @@ def finalize_accepted_result(
             metadata={"task_id": payload["task_id"], "result_id": payload["result_id"]},
             now=run_now,
         )
-        conn.execute(
-            """
-            UPDATE work_items
-            SET completed_at = ?, updated_at = ?, version = version + 1
-            WHERE work_item_id = ? AND completed_at IS NULL
-            """,
-            (run_now, run_now, work_item_row[0]),
-        )
+        db_write_work_items.update_for_finalize_accepted_result(conn, run_now, run_now, work_item_row[0])
     if payload["output_type"] == "classification_result":
         child_task = _create_child_task_for_recommended_route(
             conn,
@@ -710,21 +562,9 @@ def finalize_accepted_result(
         )
         if child_task:
             if work_item_row:
-                decision = conn.execute(
-                    """
-                    SELECT e.event_id
-                    FROM work_item_events e
-                    WHERE e.work_item_id = ?
-                      AND e.event_type = 'operator_decision_required'
-                      AND NOT EXISTS (
-                        SELECT 1 FROM work_item_events response
-                        WHERE response.resolves_event_id = e.event_id
-                      )
-                    ORDER BY e.created_at DESC, e.event_id DESC
-                    LIMIT 1
-                    """,
-                    (work_item_row[0],),
-                ).fetchone()
+                decision = db_records.first(
+                    db_read_work_item_events.find_for_finalize_accepted_result(conn, work_item_row[0])
+                )
                 if decision:
                     work_items.record_system_event(
                         conn,
@@ -739,16 +579,7 @@ def finalize_accepted_result(
                         },
                         now=run_now,
                     )
-                    conn.execute(
-                        """
-                        UPDATE work_items
-                        SET activated_at = COALESCE(activated_at, ?),
-                            updated_at = ?,
-                            version = version + 1
-                        WHERE work_item_id = ?
-                        """,
-                        (run_now, run_now, work_item_row[0]),
-                    )
+                    db_write_work_items.update_for_execute_command_4(conn, run_now, run_now, work_item_row[0])
             execution_ownership.close_terminal_task(conn, payload["task_id"], run_now)
             return True
     _create_child_task_for_pending_events(
@@ -767,7 +598,7 @@ def finalize_accepted_result(
         config_result=config_result,
     )
     handoff = values.json_object(
-        conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (payload["task_id"],)).fetchone()[0]
+        db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, payload["task_id"]))[0]
     ).get("pending_handoff", {})
     if handoff.get("status") not in {"pending", "attention"}:
         execution_ownership.close_terminal_task(conn, payload["task_id"], run_now)
@@ -777,39 +608,7 @@ def finalize_accepted_result(
 def _orphaned_classification_rows(conn, repo_ids, now):
     if not repo_ids:
         return []
-    placeholders = ",".join("?" for _ in repo_ids)
-    return conn.execute(
-        f"""
-        SELECT
-          wr.result_id,
-          wr.task_id,
-          wr.attempt_id,
-          wr.output_type,
-          wr.consumed_event_fingerprints_json,
-          wr.verification_json,
-          wr.handoff,
-          wr.metadata_json,
-          t.workstream_id
-        FROM worker_results wr
-        JOIN tasks t ON t.task_id = wr.task_id
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        WHERE w.repo_id IN ({placeholders})
-          AND w.lifecycle = 'active'
-          AND w.active_task_id = t.task_id
-          AND t.lifecycle = 'completed'
-          AND wr.output_type = 'classification_result'
-          AND COALESCE(json_extract(t.metadata_json,'$.classification_handoff.retryable'),1)!=0
-          AND (json_extract(t.metadata_json,'$.classification_handoff.next_retry_at') IS NULL
-               OR julianday(json_extract(t.metadata_json,'$.classification_handoff.next_retry_at'))<=julianday(?))
-          AND NOT EXISTS (
-            SELECT 1
-            FROM tasks child
-            WHERE child.parent_task_id = t.task_id
-          )
-        ORDER BY wr.created_at, wr.result_id
-        """,
-        [*repo_ids, now],
-    ).fetchall()
+    return db_read_worker_results.orphaned_classification_rows_filtered(conn, repo_ids, now)
 
 
 def has_orphaned_classification_result(conn, repo_ids, now):
@@ -861,10 +660,9 @@ def recover_orphaned_classification_results(
             run_id=run_id,
             now=run_now,
         )
-        before_children = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
-            (payload["task_id"],),
-        ).fetchone()[0]
+        before_children = db_records.first(
+            db_read_tasks.find_for_recover_orphaned_classification_results(conn, payload["task_id"])
+        )[0]
         try:
             finalize_accepted_result(
                 conn,
@@ -884,86 +682,42 @@ def recover_orphaned_classification_results(
             raise
         except subprocess.TimeoutExpired:
             continue
-        after_children = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
-            (payload["task_id"],),
-        ).fetchone()[0]
+        after_children = db_records.first(
+            db_read_tasks.find_for_recover_orphaned_classification_results(conn, payload["task_id"])
+        )[0]
         if after_children > before_children:
             recovered += 1
     return recovered
 
 
 def _complete_published_analysis_items(conn, repo_id, run_now):
-    cursor = conn.execute(
-        """
-        SELECT wi.*, t.task_id AS analysis_task_id, wr.result_id AS analysis_result_id
-        FROM work_items wi
-        JOIN github_sources gs ON gs.source_id=wi.origin_source_id
-        JOIN workstreams w ON w.workstream_id=wi.workstream_id
-        JOIN tasks t ON t.workstream_id=w.workstream_id
-        JOIN worker_results wr ON wr.task_id=t.task_id
-        WHERE wi.repo_id=? AND wi.origin_type='github'
-          AND wi.completed_at IS NULL AND wi.canceled_at IS NULL
-          AND gs.source_type='issue' AND lower(gs.state)='open'
-          AND w.lifecycle='completed' AND w.active_task_id IS NULL
-          AND t.lifecycle='completed' AND wr.output_type='comment_analysis'
-          AND json_extract(wr.metadata_json,'$.audit.status')='accepted'
-          AND EXISTS (SELECT 1 FROM github_actions ga WHERE ga.result_id=wr.result_id
-            AND ga.action_type='comment' AND ga.audit_status='accepted' AND ga.publish_status='published')
-          AND NOT EXISTS (SELECT 1 FROM github_actions ga WHERE ga.result_id=wr.result_id
-            AND (ga.audit_status!='accepted' OR ga.publish_status!='published'))
-          AND NOT EXISTS (SELECT 1 FROM workstreams related
-            JOIN github_sources pr ON pr.source_id=related.primary_source_id
-            WHERE (related.workstream_id=w.workstream_id OR related.origin_workstream_id=w.workstream_id)
-              AND pr.source_type='pull_request')
-          AND NOT EXISTS (SELECT 1 FROM tasks newer WHERE newer.workstream_id=t.workstream_id
-            AND (newer.created_at, newer.task_id)>(t.created_at, t.task_id))
-          AND NOT EXISTS (SELECT 1 FROM task_events te WHERE te.task_id=t.task_id
-            AND te.relationship IN ('pending','context'))
-        """,
-        (repo_id,),
-    )
-    columns = [column[0] for column in cursor.description]
-    rows = cursor.fetchall()
+    cursor = db_read_work_items.find_for_complete_published_analysis_items(conn, repo_id)
+    rows = cursor
     completed = 0
-    previous_row_factory = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        for row in rows:
-            item = dict(zip(columns, row))
-            facts = control_queries.lifecycle_facts(conn, item)
-            current = work_items._active_or_latest_task(conn, item["workstream_id"])
-            if not current or current["task_id"] != item["analysis_task_id"]:
-                continue
-            if facts["running"] or facts["actions"] or facts["cleanup_pending"] or facts["workflow_attention"]:
-                continue
-            if work_items._unresolved_event(
-                conn,
-                item["work_item_id"],
-                work_items.QUESTION_EVENTS | work_items.DECISION_EVENTS,
-            ):
-                continue
-            work_items.record_system_event(
-                conn,
-                item["work_item_id"],
-                event_type="completed",
-                idempotency_key=f"analysis-completed:{item['analysis_result_id']}",
-                body="Analysis result was accepted and published to GitHub.",
-                metadata={
-                    "task_id": item["analysis_task_id"],
-                    "result_id": item["analysis_result_id"],
-                },
-                now=run_now,
-            )
-            conn.execute(
-                """UPDATE work_items SET completed_at=?, updated_at=?, version=version+1
-                WHERE work_item_id=? AND completed_at IS NULL AND canceled_at IS NULL""",
-                (run_now, run_now, item["work_item_id"]),
-            )
-            completed += 1
-        return completed
-    finally:
-        conn.row_factory = previous_row_factory
+    for row in rows:
+        item = dict(row)
+        facts = control_queries.lifecycle_facts(conn, item)
+        current = work_items._active_or_latest_task(conn, item["workstream_id"])
+        if not current or current["task_id"] != item["analysis_task_id"]:
+            continue
+        if facts["running"] or facts["actions"] or facts["cleanup_pending"] or facts["workflow_attention"]:
+            continue
+        if work_items._unresolved_event(
+            conn, item["work_item_id"], work_items.QUESTION_EVENTS | work_items.DECISION_EVENTS
+        ):
+            continue
+        work_items.record_system_event(
+            conn,
+            item["work_item_id"],
+            event_type="completed",
+            idempotency_key=f"analysis-completed:{item['analysis_result_id']}",
+            body="Analysis result was accepted and published to GitHub.",
+            metadata={"task_id": item["analysis_task_id"], "result_id": item["analysis_result_id"]},
+            now=run_now,
+        )
+        db_write_work_items.update_for_complete_published_analysis_items(conn, run_now, run_now, item["work_item_id"])
+        completed += 1
+    return completed
 
 
 def finalize_published_results(
@@ -979,32 +733,7 @@ def finalize_published_results(
     dispatch_budget,
     config_result=None,
 ):
-    rows = conn.execute(
-        """
-        SELECT
-          wr.result_id,
-          wr.task_id,
-          wr.attempt_id,
-          wr.output_type,
-          wr.consumed_event_fingerprints_json,
-          wr.verification_json,
-          wr.handoff,
-          wr.metadata_json,
-          t.workstream_id
-        FROM worker_results wr
-        JOIN tasks t ON t.task_id = wr.task_id
-        JOIN attempts a ON a.attempt_id = wr.attempt_id
-        WHERE t.workstream_id IN (
-          SELECT workstream_id FROM workstreams WHERE repo_id = ?
-        )
-          AND t.lifecycle IN ('queued', 'running')
-          AND a.status = 'completed'
-          AND (json_type(a.metadata_json,'$.dispatch.pid') IS NOT 'integer'
-               OR json_extract(a.metadata_json,'$.process_stopped_at') IS NOT NULL)
-        ORDER BY wr.created_at, wr.result_id
-        """,
-        (repo_id,),
-    ).fetchall()
+    rows = db_read_worker_results.find_for_finalize_published_results(conn, repo_id)
     finalized = 0
     for row in rows:
         result_row = row[:8]

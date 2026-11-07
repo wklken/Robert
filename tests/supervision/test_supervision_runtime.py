@@ -9,7 +9,7 @@ import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.runtime import daemon
 from robert_agent.execution import runtime_state as daemon_state
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class RuntimeTickTests(unittest.TestCase):
@@ -38,16 +38,10 @@ class RuntimeTickTests(unittest.TestCase):
             config = {"data_dir": directory, "db_path": str(db), "supervision": {}}
             with closing(sqlite3.connect(db)) as conn, conn:
                 daemon_state.start_daemon_run(
-                    conn,
-                    config_path="/fixture",
-                    owner_id="run",
-                    now="2026-11-06T10:00:00+00:00",
+                    conn, config_path="/fixture", owner_id="run", now="2026-11-06T10:00:00+00:00"
                 )
                 lease = daemon_state.acquire_daemon_lease(
-                    conn,
-                    resource_key="database:" + str(db),
-                    owner_id="run",
-                    ttl_seconds=60,
+                    conn, resource_key="database:" + str(db), owner_id="run", ttl_seconds=60
                 )
             context = daemon.DaemonContext(
                 config_path="/fixture",

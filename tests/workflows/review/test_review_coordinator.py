@@ -1,3 +1,4 @@
+from tests.support import database as fixture_database
 from robert_agent.workflows import routing as workflow_routing
 from robert_agent.adapters.processes import identity as worker_identity
 from collections import Counter
@@ -19,7 +20,7 @@ from robert_agent.runtime import loop as loop_engine
 from robert_agent.delivery.application import publish
 from robert_agent.workflows.review import coordinator as review_coordinator
 from robert_agent.workflows.review import files as review_files
-from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.persistence.rounds import review as review_store
 from robert_agent.runtime import cycle as run_once
 from robert_agent.configuration import command as validate_config
 from robert_agent.work.application import commands as work_items
@@ -46,12 +47,11 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.assertNotEqual(reviewer_calls[0][4], reviewer_calls[1][4])
         self.assertIn("Code Review 汇总报告", report1.read_text())
         self.cycle([self.event("second"), self.event("second")])
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM task_events WHERE relationship='pending'").fetchone()[0],
-                0,
+                conn.execute("SELECT COUNT(*) FROM task_events WHERE relationship='pending'").fetchone()[0], 0
             )
         self.finish_task(first.task_id)
         self.git_fixture.commit("value = 3\n")
@@ -87,18 +87,13 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.git_fixture.commit("value = 3\n")
         with self.assertRaises(review_coordinator.StageSuperseded):
             driver.run()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             now = review_store.now()
             work_application_lifecycle.finalize_failed_task(
-                conn,
-                driver.task_id,
-                driver.session["workstream_id"],
-                now,
-                {"status": "failed_worker_process_exited"},
+                conn, driver.task_id, driver.session["workstream_id"], now, {"status": "failed_worker_process_exited"}
             )
             conn.execute(
-                "UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=?",
-                (now, driver.attempt_id),
+                "UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=?", (now, driver.attempt_id)
             )
             # The fixture launcher does not start a real coordinator process.
             conn.execute(
@@ -106,15 +101,11 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
                 (driver.attempt_id,),
             )
             repo_id = conn.execute(
-                "SELECT repo_id FROM workstreams WHERE workstream_id=?",
-                (driver.session["workstream_id"],),
+                "SELECT repo_id FROM workstreams WHERE workstream_id=?", (driver.session["workstream_id"],)
             ).fetchone()[0]
         context = work_items.CommandContext("operator", "maintainer", frozenset({repo_id}), frozenset())
         work_items.retrigger_failed_github_task(
-            self.db,
-            driver.task_id,
-            context=context,
-            idempotency_key="retry-current-revision",
+            self.db, driver.task_id, context=context, idempotency_key="retry-current-revision"
         )
         self.cycle([])
         retried = self.coordinator()
@@ -123,7 +114,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.assertNotEqual(retried.manifest["head_sha"], old_manifest["head_sha"])
         self.assertEqual(retried.manifest["head_sha"], self.git_fixture.head)
         self.cycle([])
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             original = review_store.session(conn, round_id=driver.round_id)
             self.assertEqual(original["status"], "superseded")
             self.assertEqual(original["task_id"], driver.task_id)
@@ -144,14 +135,13 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.assertIn("password=<redacted>", body)
         self.assertIn("<local-path>", body)
         self.assertIn("<internal-ip>", body)
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             session = review_store.session(conn, task_id=driver.task_id)
             self.assertEqual(session["report_sha256"], review_store.digest(path))
             action = json.loads(
-                conn.execute(
-                    "SELECT metadata_json FROM github_actions WHERE task_id=?",
-                    (driver.task_id,),
-                ).fetchone()[0]
+                conn.execute("SELECT metadata_json FROM github_actions WHERE task_id=?", (driver.task_id,)).fetchone()[
+                    0
+                ]
             )
             self.assertEqual(action["body"], body)
             self.assertEqual(action["report_sha256"], session["report_sha256"])
@@ -167,7 +157,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         with patch.object(review_files, "render_merged", side_effect=report):
             with self.assertRaisesRegex(RuntimeError, "redaction_blocked.*credential_assignment.*line"):
                 driver.run()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             session = review_store.session(conn, task_id=driver.task_id)
             self.assertEqual(session["status"], "attention")
             self.assertNotIn("private-example-value", session["error"])
@@ -175,10 +165,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
             recovery = evidence.inspect_attempt_recovery(
-                conn,
-                driver.attempt_id,
-                driver.task_id,
-                driver.manifest["worktree_path"],
+                conn, driver.attempt_id, driver.task_id, driver.manifest["worktree_path"]
             )
             self.assertEqual(recovery["status"], "unrecoverable")
             self.assertEqual(recovery["reason_code"], "redaction_blocked")
@@ -187,9 +174,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.coordinator().run()
         self.assertEqual(Counter((call[0], call[1]) for call in self.calls), counts)
 
-    def test_daemon_preserves_submission_rejection_in_task_failure_and_notification(
-        self,
-    ):
+    def test_daemon_preserves_submission_rejection_in_task_failure_and_notification(self):
         self.cycle([self.event()])
         driver = self.coordinator()
         diagnostic = {
@@ -204,31 +189,24 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         with patch.object(review_coordinator.worker_result, "record_result", return_value=diagnostic):
             with self.assertRaisesRegex(RuntimeError, "redaction_blocked"):
                 driver.run()
-        process = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            start_new_session=True,
-        )
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
         self.addCleanup(process.kill)
         self.addCleanup(process.wait, 5)
         identity = worker_identity.capture_process_identity(process.pid)
         process.kill()
         process.wait(timeout=5)
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             now = review_store.now()
             conn.execute(
                 """UPDATE attempts SET status='running',started_at=?,heartbeat_at=?,
                 metadata_json=json_set(metadata_json,'$.dispatch',json(?)) WHERE attempt_id=?""",
                 (now, now, json.dumps(identity), driver.attempt_id),
             )
-            conn.execute(
-                "UPDATE tasks SET lifecycle='running' WHERE task_id=?",
-                (driver.task_id,),
-            )
+            conn.execute("UPDATE tasks SET lifecycle='running' WHERE task_id=?", (driver.task_id,))
             repo_id = conn.execute(
-                "SELECT repo_id FROM workstreams WHERE workstream_id=?",
-                (driver.session["workstream_id"],),
+                "SELECT repo_id FROM workstreams WHERE workstream_id=?", (driver.session["workstream_id"],)
             ).fetchone()[0]
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             monitor.supervise_running_attempts(
                 conn,
                 repo_id,
@@ -240,10 +218,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
                 resume_attempt=preparation.create_resume_attempt_and_prompt,
             )
             failure = json.loads(
-                conn.execute(
-                    "SELECT failure_json FROM attempts WHERE attempt_id=?",
-                    (driver.attempt_id,),
-                ).fetchone()[0]
+                conn.execute("SELECT failure_json FROM attempts WHERE attempt_id=?", (driver.attempt_id,)).fetchone()[0]
             )
             self.assertEqual(failure["status"], "failed_validation")
             self.assertEqual(failure["reason_code"], "redaction_blocked")
@@ -257,10 +232,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         counts = Counter((call[0], call[1]) for call in self.calls)
         context = work_items.CommandContext("operator", "maintainer", frozenset({repo_id}), frozenset())
         work_items.retrigger_failed_github_task(
-            self.db,
-            driver.task_id,
-            context=context,
-            idempotency_key="retry-redacted-report",
+            self.db, driver.task_id, context=context, idempotency_key="retry-redacted-report"
         )
         self.cycle([])
         retried = self.coordinator()
@@ -282,7 +254,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.assertTrue(report.is_file())
         self.assertEqual(driver.manifest["base_sha"], self.git_fixture.base)
         self.assertTrue(review_coordinator.same_revision(driver.manifest, self.pr("", 42)))
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(review_store.session(conn, round_id=driver.round_id)["status"], "ready")
 
     def test_timeout_fallback_is_per_reviewer_and_survives_file_recovery(self):
@@ -310,21 +282,17 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
                 raise KeyboardInterrupt("fallback file before registration")
             return original_register(run, artifact)
 
-        with (
-            patch.object(driver, "register", side_effect=crash),
-            self.assertRaises(KeyboardInterrupt),
-        ):
+        with patch.object(driver, "register", side_effect=crash), self.assertRaises(KeyboardInterrupt):
             driver.run()
         report = self.coordinator().run()
         reviews = [call for call in self.calls if call[0] == "review"]
         self.assertEqual(
-            [call[5] for call in reviews if call[1] == "claude"],
-            ["primary-model", "primary-model", "fallback-model"],
+            [call[5] for call in reviews if call[1] == "claude"], ["primary-model", "primary-model", "fallback-model"]
         )
         self.assertEqual(sum(call[1] == "codex" for call in reviews), 1)
         self.assertEqual(len({call[2] for call in reviews}), 1)
         self.assertIn("fallback-model", report.read_text())
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             selected = [
                 run
                 for run in review_store.runs(conn, driver.round_id)
@@ -333,10 +301,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
             fallback = next(run for run in selected if run["worker_id"] == "claude")
             self.assertEqual(fallback["model"], "fallback-model")
             self.assertEqual(fallback["artifact"]["model"], "fallback-model")
-            self.assertIn(
-                "fallback-model",
-                json.dumps(review_store.board_status(conn, driver.task_id)),
-            )
+            self.assertIn("fallback-model", json.dumps(review_store.board_status(conn, driver.task_id)))
 
     def test_rate_limit_automatically_switches_only_affected_reviewer(self):
         config = yaml.safe_load(self.config_path.read_text())
@@ -351,13 +316,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
                 output = Path(kwargs["log_dir"])
                 log = output / "stdout.log"
                 log.write_text(
-                    json.dumps(
-                        {
-                            "type": "turn.failed",
-                            "error": {"message": "429 Too Many Requests"},
-                        }
-                    )
-                    + "\n"
+                    json.dumps({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}}) + "\n"
                 )
                 self.calls.append(
                     (
@@ -382,10 +341,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         driver.launcher = limited
         report = driver.run()
         reviews = [call for call in self.calls if call[0] == "review"]
-        self.assertEqual(
-            [call[5] for call in reviews if call[1] == "claude"],
-            ["primary-model", "fallback-model"],
-        )
+        self.assertEqual([call[5] for call in reviews if call[1] == "claude"], ["primary-model", "fallback-model"])
         self.assertEqual(sum(call[1] == "codex" for call in reviews), 1)
         self.assertEqual(len({call[2] for call in reviews}), 1)
         self.assertIn("fallback-model", report.read_text())
@@ -437,14 +393,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
                 models.append(kwargs["model"])
                 if kwargs["model"] == "primary-model":
                     log = Path(kwargs["log_dir"]) / "stdout.log"
-                    log.write_text(
-                        json.dumps(
-                            {
-                                "type": "turn.failed",
-                                "error": {"message": "429 Too Many Requests"},
-                            }
-                        )
-                    )
+                    log.write_text(json.dumps({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}}))
                     return {
                         "ok": True,
                         "pid": 1073741824,
@@ -479,12 +428,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
                         calls.append(kwargs["model"])
                         log = Path(kwargs["log_dir"]) / "stdout.log"
                         log.write_text(
-                            json.dumps(
-                                {
-                                    "type": "turn.failed",
-                                    "error": {"message": "429 Too Many Requests"},
-                                }
-                            )
+                            json.dumps({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}})
                         )
                         return {
                             "ok": False,
@@ -505,7 +449,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.cycle([self.event()])
         driver = self.coordinator()
         driver.prepare()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             run = review_store.new_run(
                 conn,
                 driver.round_id,
@@ -528,13 +472,7 @@ else:
     raise AssertionError('FIFO accepted')
 """
         result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                script,
-                json.dumps(driver.manifest),
-                json.dumps(run),
-            ],
+            [sys.executable, "-c", script, json.dumps(driver.manifest), json.dumps(run)],
             timeout=2,
             capture_output=True,
             text=True,
@@ -560,9 +498,7 @@ else:
         self.coordinator().run()
         self.assertEqual({call[5] for call in self.calls if call[0] == "review"}, {"primary-model"})
 
-    def test_assignment_then_comment_runs_two_binaries_and_publishes_each_revision_once(
-        self,
-    ):
+    def test_assignment_then_comment_runs_two_binaries_and_publishes_each_revision_once(self):
         binary = self.root / "file_reviewer.py"
         binary.write_text("""import hashlib,json,os,re,sys
 from pathlib import Path
@@ -645,12 +581,9 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
             self.cycle([])
             result = publish.publish_ready_actions(self.db, run_command=api)
             self.assertEqual(result["published_count"], 1, result)
-            self.assertEqual(
-                publish.publish_ready_actions(self.db, run_command=api)["published_count"],
-                0,
-            )
+            self.assertEqual(publish.publish_ready_actions(self.db, run_command=api)["published_count"], 0)
             self.cycle([], skip_publish=False)
-            with review_store.connect(self.db) as conn:
+            with fixture_database.connect(self.db) as conn:
                 session = review_store.session(conn, task_id=task)
                 self.assertEqual(session["status"], "published")
                 runs = review_store.runs(conn, driver.round_id)
@@ -661,22 +594,17 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
             self.assertEqual({item["source"] for item in observed}, {f"value = {value}\n"})
             self.assertTrue(all(driver.round_id in path for item in observed for path in item["selected"]))
         self.cycle([first_event, self.event("second")])
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
         self.assertEqual(len(remote_reviews), 2)
         self.assertEqual(
-            [item["commit_id"] for item in remote_reviews],
-            [driver.manifest["head_sha"] for driver, _ in rounds],
+            [item["commit_id"] for item in remote_reviews], [driver.manifest["head_sha"] for driver, _ in rounds]
         )
         self.assertNotEqual(rounds[0][0].manifest["head_sha"], rounds[1][0].manifest["head_sha"])
-        self.assertNotEqual(
-            rounds[0][0].manifest["worktree_path"],
-            rounds[1][0].manifest["worktree_path"],
-        )
+        self.assertNotEqual(rounds[0][0].manifest["worktree_path"], rounds[1][0].manifest["worktree_path"])
         self.assertEqual(
-            Path(rounds[0][0].manifest["artifact_root"], "synthesis", "merged-review.md").read_bytes(),
-            rounds[0][1],
+            Path(rounds[0][0].manifest["artifact_root"], "synthesis", "merged-review.md").read_bytes(), rounds[0][1]
         )
 
     def test_stdout_only_and_wrong_round_never_publish(self):
@@ -687,7 +615,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         self.stdout_only, self.bad_round = False, True
         with self.assertRaises((ValueError, RuntimeError, OSError)):
             self.coordinator().run()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
 
     def test_file_landed_before_registration_is_adopted(self):
@@ -701,10 +629,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
                 raise KeyboardInterrupt("simulated crash after file rename")
             return original_register(run, artifact)
 
-        with (
-            patch.object(driver, "register", side_effect=crash),
-            self.assertRaises(KeyboardInterrupt),
-        ):
+        with patch.object(driver, "register", side_effect=crash), self.assertRaises(KeyboardInterrupt):
             driver.review()
         self.coordinator().run()
         self.assertEqual(Counter((c[0], c[1]) for c in self.calls)[("review", "codex")], 1)
@@ -736,16 +661,13 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         result = self.cycle([self.event(author="other")])
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 0)
-            self.assertEqual(
-                conn.execute("SELECT expected_output FROM tasks").fetchone()[0],
-                "pr_review_comment",
-            )
+            self.assertEqual(conn.execute("SELECT expected_output FROM tasks").fetchone()[0], "pr_review_comment")
         self.assertEqual(result["dispatch_count"], 1)
 
     def test_new_same_sha_trigger_is_new_round_and_untrusted_trigger_is_not(self):
         self.cycle([self.event(), self.event("untrusted", actor="stranger")])
         self.cycle([self.event(), self.event("second")])
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
 
     def test_enabling_native_review_does_not_replay_consumed_legacy_triggers(self):
@@ -768,14 +690,10 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
                 fixture.cycle([event])
                 task, _ = fixture.current()
                 fixture.finish_task(task)
-                with review_store.connect(fixture.db) as conn:
-                    conn.execute(
-                        "UPDATE task_events SET relationship='consumed' WHERE task_id=?",
-                        (task,),
-                    )
+                with fixture_database.connect(fixture.db) as conn:
+                    conn.execute("UPDATE task_events SET relationship='consumed' WHERE task_id=?", (task,))
                     self.assertEqual(
-                        conn.execute("SELECT COUNT(*) FROM task_events WHERE task_id=?", (task,)).fetchone()[0],
-                        1,
+                        conn.execute("SELECT COUNT(*) FROM task_events WHERE task_id=?", (task,)).fetchone()[0], 1
                     )
                     before = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
                 config["routes"]["review-pr"]["multi_agent_review"]["enabled"] = True
@@ -783,11 +701,8 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
 
                 fixture.cycle([event, event])
 
-                with review_store.connect(fixture.db) as conn:
-                    self.assertEqual(
-                        conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0],
-                        0,
-                    )
+                with fixture_database.connect(fixture.db) as conn:
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 0)
                     self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], before)
 
     def test_queued_legacy_replay_is_canceled_without_creating_a_task(self):
@@ -801,21 +716,21 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         self.config_path.write_text(yaml.safe_dump(config))
         runtime = validate_config.validate_config(self.config_path, skip_external=True)
         repo = runtime["repos"][0]
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             event = json.loads(conn.execute("SELECT payload_json FROM github_events LIMIT 1").fetchone()[0])
             route = workflow_routing.effective_route(runtime, repo, event)
             queued = review_store.enqueue(conn, repo, event, route, route["native_review_workers"])
 
         self.cycle([])
 
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             entry = review_store.session(conn, round_id=queued["round_id"])
             self.assertEqual(entry["status"], "canceled")
             self.assertEqual(entry["error"], "trigger_already_processed")
             self.assertIsNone(entry["task_id"])
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
         self.cycle([self.event("fresh")])
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
 
     def test_known_pr_review_request_uses_requester_trust_and_native_author_gate(self):
@@ -830,16 +745,11 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
             [
                 request,
                 request,
-                request
-                | {
-                    "id": "untrusted",
-                    "actor_login": "stranger",
-                    "requester_login": "stranger",
-                },
+                request | {"id": "untrusted", "actor_login": "stranger", "requester_login": "stranger"},
                 request | {"id": "wrong-target", "requested_reviewer": "someone-else"},
             ]
         )
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
         config = yaml.safe_load(self.config_path.read_text())
         config["routes"]["review-pr"]["multi_agent_review"]["enabled"] = False
@@ -848,7 +758,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         config["routes"]["review-pr"]["multi_agent_review"]["enabled"] = True
         self.config_path.write_text(yaml.safe_dump(config))
         self.cycle([request | {"id": "unmatched", "pr_author_login": "other"}])
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
 
     def test_live_review_request_follows_old_assignment_and_uses_requester(self):
@@ -899,10 +809,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
                         }
                     ]
                 ]
-            elif command[2] in {
-                "repos/example/backend/pulls/42",
-                "repos/example/backend/issues/42",
-            }:
+            elif command[2] in {"repos/example/backend/pulls/42", "repos/example/backend/issues/42"}:
                 value = self.pr("", 42) | {
                     "user": {"login": "robert-bot"},
                     "title": "PR",
@@ -918,11 +825,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         def poll():
             with (
                 patch.object(source_lifecycle, "reconcile_remote_source_states", return_value=0),
-                patch.object(
-                    remediation_requests,
-                    "collect_pr_remediation_decisions",
-                    return_value=[],
-                ),
+                patch.object(remediation_requests, "collect_pr_remediation_decisions", return_value=[]),
             ):
                 result = run_once.run_once(
                     self.config_path,
@@ -936,13 +839,13 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         config["routes"]["review-pr"]["multi_agent_review"]["enabled"] = False
         self.config_path.write_text(yaml.safe_dump(config))
         poll()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 1)
         config["routes"]["review-pr"]["multi_agent_review"]["enabled"] = True
         self.config_path.write_text(yaml.safe_dump(config))
         poll()
         poll()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             sessions = conn.execute("SELECT trigger_fingerprint FROM review_sessions").fetchall()
             self.assertEqual({row[0] for row in sessions}, {"assigned:10", "review_request:11"})
         timeline.append(
@@ -955,7 +858,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
             }
         )
         poll()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
 
     def test_record_audit_publish_finalize_and_drain_next_round(self):
@@ -963,11 +866,8 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         first = self.coordinator()
         first.run()
         self.cycle([self.event("second")])
-        with review_store.connect(self.db) as conn:
-            self.assertEqual(
-                conn.execute("SELECT audit_status FROM github_actions").fetchone()[0],
-                "accepted",
-            )
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT audit_status FROM github_actions").fetchone()[0], "accepted")
         calls = []
 
         def api(command, **kwargs):
@@ -990,10 +890,9 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         self.assertEqual(result["published_count"], 1, result)
         self.assertEqual(sum("--method" in call for call in calls), 1)
         self.cycle([], skip_publish=False)
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(
-                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (first.task_id,)).fetchone()[0],
-                "completed",
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (first.task_id,)).fetchone()[0], "completed"
             )
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
             self.assertEqual(review_store.session(conn, task_id=first.task_id)["status"], "published")
@@ -1008,19 +907,14 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         def api(command, **kwargs):
             self.assertNotIn("--method", command)
             return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps([[]] if "--paginate" in command else self.pr("", 42)),
-                stderr="",
+                returncode=0, stdout=json.dumps([[]] if "--paginate" in command else self.pr("", 42)), stderr=""
             )
 
         outcome = publish.publish_ready_actions(self.db, run_command=api)
         self.assertEqual(outcome["skipped_count"], 1, outcome)
         self.cycle([], skip_publish=False)
-        with review_store.connect(self.db) as conn:
-            self.assertEqual(
-                review_store.session(conn, task_id=first.task_id)["status"],
-                "superseded",
-            )
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(review_store.session(conn, task_id=first.task_id)["status"], "superseded")
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
 
     def test_synthesis_retry_does_not_rerun_reviewers(self):
@@ -1048,17 +942,14 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
 
         def cancel(**kwargs):
             result = original(**kwargs)
-            with review_store.connect(self.db) as conn:
-                conn.execute(
-                    "UPDATE tasks SET lifecycle='canceled' WHERE task_id=?",
-                    (driver.task_id,),
-                )
+            with fixture_database.connect(self.db) as conn:
+                conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (driver.task_id,))
             return result
 
         driver.launcher = cancel
         with self.assertRaises(review_coordinator.StageStopped):
             driver.run()
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
             self.assertEqual(review_store.session(conn, task_id=driver.task_id)["status"], "canceled")
 
@@ -1067,7 +958,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         task, _ = self.current()
         self.cycle([self.event("second")])
         self.finish_task(task)
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             repo_id = conn.execute("SELECT repo_id FROM repos").fetchone()[0]
             self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_id=repo_id))
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_id="different-repo"))
@@ -1077,10 +968,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
     def test_disabled_or_unmatched_followup_preserves_legacy_route(self):
         config = validate_config.validate_config(self.config_path, skip_external=True)
         event = {**self.event(), "authorization_status": "accepted_context"}
-        self.assertEqual(
-            workflow_routing.effective_route(config, config["repos"][0], event)["route_id"],
-            "review-pr",
-        )
+        self.assertEqual(workflow_routing.effective_route(config, config["repos"][0], event)["route_id"], "review-pr")
         for author, enabled in [("other", True), ("author", False)]:
             config["routes"]["review-pr"]["multi_agent_review"]["enabled"] = enabled
             result = workflow_routing.effective_route(config, config["repos"][0], {**event, "pr_author_login": author})
@@ -1092,19 +980,13 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         driver = self.coordinator()
         driver.prepare()
         records = driver.review()
-        driver.launcher = lambda **kwargs: {
-            "ok": False,
-            "safe_error": "synthesis unavailable",
-        }
+        driver.launcher = lambda **kwargs: {"ok": False, "safe_error": "synthesis unavailable"}
         with self.assertRaisesRegex(RuntimeError, "synthesis unavailable"):
             driver.synthesize(records)
         original = Path(driver.manifest["artifact_root"], "synthesis", "inputs.json").read_bytes()
         Path(records[0]["result_path"]).write_text("{}")
         self.coordinator().run()
-        self.assertEqual(
-            Path(driver.manifest["artifact_root"], "synthesis", "inputs.json").read_bytes(),
-            original,
-        )
+        self.assertEqual(Path(driver.manifest["artifact_root"], "synthesis", "inputs.json").read_bytes(), original)
         counts = Counter((c[0], c[1]) for c in self.calls)
         self.assertEqual(counts[("review", "codex")], 2)
         self.assertEqual(counts[("review", "claude")], 1)
@@ -1114,16 +996,13 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         task, _ = self.current()
         self.cycle([self.event("second")])
         self.finish_task(task)
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             conn.execute("UPDATE tasks SET lifecycle='failed' WHERE task_id=?", (task,))
-            conn.execute(
-                "UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?",
-                (task,),
-            )
+            conn.execute("UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?", (task,))
             conn.execute("UPDATE review_sessions SET status='reviewing' WHERE task_id=?", (task,))
             self.assertFalse(loop_engine.has_runnable_local_work(conn))
         self.cycle([])
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
     def test_unregistered_old_synthesis_is_not_adopted_after_input_repair(self):
@@ -1131,18 +1010,14 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         driver = self.coordinator()
         driver.prepare()
         records = driver.review()
-        with patch.object(
-            driver,
-            "register",
-            side_effect=KeyboardInterrupt("crash before synthesis registration"),
-        ):
+        with patch.object(driver, "register", side_effect=KeyboardInterrupt("crash before synthesis registration")):
             with self.assertRaises(KeyboardInterrupt):
                 driver.synthesize(records)
         Path(records[0]["result_path"]).write_text("{}")
         self.coordinator().run()
         counts = Counter((c[0], c[1]) for c in self.calls)
         self.assertEqual(counts[("synthesis", "codex")], 2)
-        with review_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             syntheses = [r for r in review_store.runs(conn, driver.round_id) if r["stage"] == "synthesis"]
         self.assertEqual(len(syntheses), 2)
         self.assertNotEqual(syntheses[0]["prompt_sha256"], syntheses[1]["prompt_sha256"])

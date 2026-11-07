@@ -6,7 +6,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class LoopRunnableScopeTests(TemporaryWorkspace):
     def test_loop_engine_local_work_accepts_repo_id_list(self):
         from robert_agent.runtime import loop as loop_engine
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         data_dir = self.root / "data"
         repo_root = self.root / "repo-a"

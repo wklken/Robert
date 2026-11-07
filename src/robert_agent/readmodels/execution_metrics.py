@@ -4,10 +4,13 @@ Intervals are independently sampled, not additive: retries and manual waits can
 leave uninstrumented gaps. Never infer historical downtime from a queue delay.
 """
 
-from collections import defaultdict
-from datetime import datetime, timezone
 import json
 import math
+from collections import defaultdict
+from datetime import datetime, timezone
+
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries.readviews import task_history
 
 
 def _time(value):
@@ -23,31 +26,13 @@ def _seconds(start, end):
     return round((end - start).total_seconds(), 3) if start and end and end >= start else None
 
 
-def _rows(conn, query, args=()):
-    cursor = conn.execute(query, args)
-    names = [col[0] for col in cursor.description]
-    return [dict(zip(names, row)) for row in cursor]
-
-
 def task_timing(conn, task_id):
-    tasks = _rows(
-        conn,
-        "SELECT task_id,task_kind,route_id,lifecycle,created_at,updated_at,metadata_json FROM tasks WHERE task_id=?",
-        (task_id,),
-    )
+    tasks = db_read_tasks.find_record_by_task_id(conn, task_id)
     if not tasks:
         return None
     task = tasks[0]
-    attempts = _rows(
-        conn,
-        "SELECT attempt_id,status,started_at,finished_at,metadata_json FROM attempts WHERE task_id=? ORDER BY attempt_no",
-        (task_id,),
-    )
-    results = _rows(
-        conn,
-        "SELECT attempt_id,created_at,metadata_json FROM worker_results WHERE task_id=? ORDER BY created_at",
-        (task_id,),
-    )
+    attempts = [dict(row) for row in task_history.attempt_timing_for_task(conn, task_id)]
+    results = [dict(row) for row in task_history.result_timing_for_task(conn, task_id)]
     for attempt in attempts:
         metadata = json.loads(attempt["metadata_json"] or "{}")
         dispatch = metadata.get("dispatch") or {}
@@ -59,10 +44,7 @@ def task_timing(conn, task_id):
     for attempt in attempts:
         result = result_by_attempt.get(attempt["attempt_id"], {})
         metadata = json.loads(result.get("metadata_json") or "{}")
-        elapsed = _seconds(
-            attempt["worker_started_at"],
-            metadata.get("result_saved_at") or attempt["finished_at"],
-        )
+        elapsed = _seconds(attempt["worker_started_at"], metadata.get("result_saved_at") or attempt["finished_at"])
         if elapsed is not None:
             worker.append(elapsed)
         elapsed = _seconds(metadata.get("result_saved_at"), metadata.get("result_ingested_at"))
@@ -74,11 +56,7 @@ def task_timing(conn, task_id):
         )
         if elapsed is not None:
             audit.append(elapsed)
-    actions = _rows(
-        conn,
-        "SELECT publish_status,metadata_json FROM github_actions WHERE task_id=?",
-        (task_id,),
-    )
+    actions = task_history.actions_for_tasks(conn, (task_id,))
     publication = [json.loads(row["metadata_json"]).get("publish", {}) for row in actions]
     published = [row.get("published_at") for row in publication if _time(row.get("published_at"))]
     next_retry = [row["next_retry_at"] for row in publication if row.get("next_retry_at")]
@@ -112,11 +90,7 @@ def task_timing(conn, task_id):
         "lease_expires_at": wait.get("lease_expires_at"),
         "next_retry_at": min(next_retry) if next_retry else None,
         "queue_seconds": _seconds(
-            task["created_at"],
-            next(
-                (row["worker_started_at"] for row in attempts if row["worker_started_at"]),
-                None,
-            ),
+            task["created_at"], next((row["worker_started_at"] for row in attempts if row["worker_started_at"]), None)
         ),
         "worker_seconds": round(sum(worker), 3) if worker else None,
         "result_ingestion_seconds": round(sum(ingestion), 3) if ingestion else None,
@@ -131,10 +105,7 @@ def task_timing(conn, task_id):
 def summarize(conn, limit=500):
     """Bound recent tasks and group classification separately from execution."""
     groups = defaultdict(list)
-    for (task_id,) in conn.execute(
-        "SELECT task_id FROM tasks ORDER BY created_at DESC,task_id DESC LIMIT ?",
-        (limit,),
-    ).fetchall():
+    for (task_id,) in db_read_tasks.find_for_summarize(conn, limit):
         timing = task_timing(conn, task_id)
         groups[timing["task_kind"] + ":" + str(timing["route_id"] or "unknown") + ":" + timing["lifecycle"]].append(
             timing

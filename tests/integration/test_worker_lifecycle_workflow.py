@@ -7,7 +7,7 @@ from tests.support.worker_lifecycle_workflow import WorkerLifecycleWorkflowFixtu
 class WorkerLifecycleWorkflowTests(WorkerLifecycleWorkflowFixture):
     def test_dead_recoverable_progress_consumes_quota_once_then_attention(self):
         from robert_agent.execution import operations as execution_operations
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         db_path = self._database()
         evidence = {
@@ -38,7 +38,7 @@ class WorkerLifecycleWorkflowTests(WorkerLifecycleWorkflowFixture):
 
     def test_alive_same_never_consumes_recovery_quota(self):
         from robert_agent.execution import operations as execution_operations
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         db_path = self._database()
         evidence = {

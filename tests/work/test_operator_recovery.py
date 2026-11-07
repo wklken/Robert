@@ -12,7 +12,7 @@ import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
 
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 
 
 class RecoveryEntryTests(unittest.TestCase):

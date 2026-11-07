@@ -1,88 +1,51 @@
 """Persist the startup handshake and ownership of managed control children."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_control_children as db_read_github_control_children
+from robert_agent.persistence.queries import leases as db_read_leases
+from robert_agent.persistence.stores import github_control_children as db_write_github_control_children
 import json
 
 
 def owner_lease_active(conn, owner):
-    return bool(
-        conn.execute(
-            """SELECT 1 FROM leases WHERE owner_id=?
-        AND resource_type='daemon' AND status='active'
-        AND (julianday(expires_at) IS NULL OR julianday(expires_at)>julianday('now')) LIMIT 1""",
-            (owner,),
-        ).fetchone()
-    )
+    return bool(db_records.first(db_read_leases.find_for_owner_lease_active(conn, owner)))
 
 
 def list_children(conn):
-    return conn.execute(
-        "SELECT child_id,owner_id,lane,identity_json,status FROM github_control_children ORDER BY owner_id,lane,child_id"
-    ).fetchall()
+    return db_read_github_control_children.list_children(conn)
 
 
 def child(conn, identifier):
-    return conn.execute(
-        "SELECT child_id,owner_id,lane,identity_json,status FROM github_control_children WHERE child_id=?",
-        (identifier,),
-    ).fetchone()
+    return db_records.first(db_read_github_control_children.find_for_child(conn, identifier))
 
 
 def state(conn, identifier):
-    return conn.execute(
-        "SELECT status,identity_json FROM github_control_children WHERE child_id=?",
-        (identifier,),
-    ).fetchone()
+    return db_records.first(db_read_github_control_children.find_status_and_identity_json_by_child_id(conn, identifier))
 
 
 def record_starting(conn, identifier, owner, lane):
-    conn.execute(
-        """INSERT INTO github_control_children
-        (child_id,owner_id,lane,identity_json,status) VALUES (?,?,?,'{}','starting')""",
-        (identifier, owner, lane),
-    )
+    db_write_github_control_children.record_starting(conn, identifier, owner, lane)
 
 
 def claim_starting(conn, identifier, identity):
-    return conn.execute(
-        "UPDATE github_control_children SET status='running',identity_json=? WHERE child_id=? AND status='starting'",
-        (json.dumps(identity), identifier),
-    ).rowcount
+    return db_write_github_control_children.update_for_claim_starting(conn, json.dumps(identity), identifier)
 
 
 def cancel_starting(conn, identifier):
-    return conn.execute(
-        "UPDATE github_control_children SET status='stopped' WHERE child_id=? AND status='starting'",
-        (identifier,),
-    ).rowcount
+    return db_write_github_control_children.update_for_cancel_starting(conn, identifier)
 
 
 def mark_retired(conn, identifier):
-    return conn.execute(
-        "UPDATE github_control_children SET status='stopped' WHERE child_id=? AND status IN ('starting','running')",
-        (identifier,),
-    ).rowcount
+    return db_write_github_control_children.mark_retired(conn, identifier)
 
 
 def mark_stopped(conn, identifier):
-    conn.execute(
-        "UPDATE github_control_children SET status='stopped' WHERE child_id=?",
-        (identifier,),
-    )
+    db_write_github_control_children.mark_stopped(conn, identifier)
 
 
 def prune_stopped(conn, owner, *, keep):
-    conn.execute(
-        "DELETE FROM github_control_children WHERE owner_id=? AND status='stopped' AND child_id!=?",
-        (owner, keep),
-    )
+    db_write_github_control_children.delete_for_prune_stopped(conn, owner, keep)
 
 
 def previous_owner_children(conn, *, scope_key, current_owner):
-    return conn.execute(
-        """SELECT DISTINCT c.child_id,c.identity_json,c.status,c.owner_id,c.lane
-        FROM github_control_children c JOIN leases l ON l.owner_id=c.owner_id
-        WHERE c.status IN ('starting','running') AND c.owner_id!=?
-          AND l.resource_type='daemon' AND l.resource_key=?
-          AND (l.status!='active' OR julianday(l.expires_at)<=julianday('now'))""",
-        (current_owner, scope_key),
-    ).fetchall()
+    return db_read_github_control_children.find_for_previous_owner_children(conn, current_owner, scope_key)

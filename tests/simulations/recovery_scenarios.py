@@ -12,10 +12,10 @@ import sys
 import tempfile
 import time
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.delivery import contract as result_contract
 from robert_agent.execution import spool as result_spool
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import actions as supervision_actions
 from robert_agent.work.application import commands as work_items
 from robert_agent.delivery.application import submission as result
@@ -60,10 +60,7 @@ def _task(db, task_id, lineage, *, parent=None, work_item=False):
         if parent:
             (stream,) = conn.execute("SELECT workstream_id FROM tasks WHERE task_id=?", (parent,)).fetchone()
             conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (parent,))
-            conn.execute(
-                "UPDATE workstreams SET active_task_id=? WHERE workstream_id=?",
-                (task_id, stream),
-            )
+            conn.execute("UPDATE workstreams SET active_task_id=? WHERE workstream_id=?", (task_id, stream))
         else:
             stream = "stream-" + task_id
             conn.execute(
@@ -74,22 +71,11 @@ def _task(db, task_id, lineage, *, parent=None, work_item=False):
         conn.execute(
             """INSERT INTO tasks(task_id,workstream_id,lifecycle,parent_task_id,created_at,updated_at,metadata_json)
             VALUES(?,?,'queued',?,?,?,?)""",
-            (
-                task_id,
-                stream,
-                parent,
-                now,
-                now,
-                json.dumps({"supervision_lineage_key": lineage}),
-            ),
+            (task_id, stream, parent, now, now, json.dumps({"supervision_lineage_key": lineage})),
         )
         conn.execute(
             "INSERT INTO attempts(attempt_id,task_id,attempt_no,status,metadata_json) VALUES(?,?,1,'prepared',?)",
-            (
-                attempt,
-                task_id,
-                json.dumps({"result_contract": result_contract.CONTRACT_ID}),
-            ),
+            (attempt, task_id, json.dumps({"result_contract": result_contract.CONTRACT_ID})),
         )
         execution_store.ensure_subject(conn, "task", task_id, "human_request", now)
         if work_item:
@@ -177,15 +163,7 @@ def _fixture(root, db, config, *, task, kind, target, generation=None):
 
 
 def _command(mode, fixture, *arguments):
-    return [
-        sys.executable,
-        "-B",
-        str(Path(__file__).resolve()),
-        "--child",
-        mode,
-        str(fixture),
-        *arguments,
-    ]
+    return [sys.executable, "-B", str(Path(__file__).resolve()), "--child", mode, str(fixture), *arguments]
 
 
 def _environment():
@@ -196,11 +174,7 @@ def _environment():
 
 def _call(mode, fixture, *arguments):
     child = subprocess.run(
-        _command(mode, fixture, *arguments),
-        env=_environment(),
-        capture_output=True,
-        text=True,
-        timeout=10,
+        _command(mode, fixture, *arguments), env=_environment(), capture_output=True, text=True, timeout=10
     )
     if child.returncode:
         raise AssertionError(f"{mode} subprocess failed ({child.returncode}): {child.stderr}")
@@ -272,38 +246,22 @@ def _crash(root):
     attempt = _task(db, "crash", "request-crash")
     fingerprint, path = _save_spool(db, "crash", attempt)
     (request,) = _plan(
-        db,
-        config,
-        task="crash",
-        lineage="request-crash",
-        kind="spool_replay",
-        target=attempt,
-        generation=fingerprint,
+        db, config, task="crash", lineage="request-crash", kind="spool_replay", target=attempt, generation=fingerprint
     )
-    fixture = _fixture(
-        root,
-        db,
-        config,
-        task="crash",
-        kind="spool_replay",
-        target=attempt,
-        generation=fingerprint,
-    )
+    fixture = _fixture(root, db, config, task="crash", kind="spool_replay", target=attempt, generation=fingerprint)
     claim = _race_claims(root, fixture, 4)
     assert claim["action_id"] == request["action_id"]
-    assert _read(
-        db,
-        "SELECT status,budget_cost,claim_generation FROM supervision_recovery_actions",
-    ) == [("applying", 1, 1)]
+    assert _read(db, "SELECT status,budget_cost,claim_generation FROM supervision_recovery_actions") == [
+        ("applying", 1, 1)
+    ]
     expired = _later(claim["claim_expires_at"], 1)
     verified = _call("verify", fixture, expired)
     assert verified == [{"action_id": request["action_id"], "status": "unknown"}], verified
     restarted = _call("claim", fixture, expired)
     assert restarted["status"] == "blocked", restarted
-    assert _read(
-        db,
-        "SELECT status,budget_cost,claim_generation FROM supervision_recovery_actions",
-    ) == [("unknown", 1, 1)]
+    assert _read(db, "SELECT status,budget_cost,claim_generation FROM supervision_recovery_actions") == [
+        ("unknown", 1, 1)
+    ]
     assert not _read(db, "SELECT result_id FROM worker_results") and path.exists()
     return _report(
         "concurrent_claim_crash_restart",
@@ -327,14 +285,7 @@ def _cancel(root):
     _save_spool(db, "cancel", attempt)
     assert result.replay_pending_results(db, attempt_id=attempt)["recorded"] == 1
     [(result_id,)] = _read(db, "SELECT result_id FROM worker_results")
-    _plan(
-        db,
-        config,
-        task="cancel",
-        lineage="request-cancel",
-        kind="audit_retry",
-        target=result_id,
-    )
+    _plan(db, config, task="cancel", lineage="request-cancel", kind="audit_retry", target=result_id)
     fixture = _fixture(root, db, config, task="cancel", kind="audit_retry", target=result_id)
     claim_result = _call("claim", fixture, _now())
     assert claim_result["status"] == "claimed", claim_result
@@ -346,11 +297,7 @@ def _cancel(root):
         now = _now()
         assert not supervision_actions.current(conn, claim, config=config, now=now)
         assert supervision_actions.finish(
-            conn,
-            claim,
-            outcome="rejected",
-            receipt={"reason_code": "operator_canceled"},
-            now=now,
+            conn, claim, outcome="rejected", receipt={"reason_code": "operator_canceled"}, now=now
         )
     assert _read(db, "SELECT status,budget_cost FROM supervision_recovery_actions") == [("rejected", 0)]
     assert _read(db, "SELECT lifecycle FROM tasks WHERE task_id='cancel'") == [("canceled",)]
@@ -358,12 +305,7 @@ def _cancel(root):
     return _report(
         "operator_cancel_fences_older_audit",
         start,
-        [
-            "real_work_item_cancel",
-            "stale_claim_rejected",
-            "unused_budget_released",
-            "saved_result_preserved",
-        ],
+        ["real_work_item_cancel", "stale_claim_rejected", "unused_budget_released", "saved_result_preserved"],
     )
 
 
@@ -373,29 +315,14 @@ def _replay_and_successor(root):
     attempt = _task(db, "saved", "request-shared")
     fingerprint, path = _save_spool(db, "saved", attempt)
     (request,) = _plan(
-        db,
-        config,
-        task="saved",
-        lineage="request-shared",
-        kind="spool_replay",
-        target=attempt,
-        generation=fingerprint,
+        db, config, task="saved", lineage="request-shared", kind="spool_replay", target=attempt, generation=fingerprint
     )
-    fixture = _fixture(
-        root,
-        db,
-        config,
-        task="saved",
-        kind="spool_replay",
-        target=attempt,
-        generation=fingerprint,
-    )
+    fixture = _fixture(root, db, config, task="saved", kind="spool_replay", target=attempt, generation=fingerprint)
     assert _call("replay", fixture) == {"recorded": 1, "deferred": 0, "rejected": 0}
     [(state, budget, due)] = _read(db, "SELECT status,budget_cost,next_check_at FROM supervision_recovery_actions")
     assert (state, budget) == ("observing", 1) and not path.exists()
     [(result_id, occurred_at, observed_fingerprint)] = _read(
-        db,
-        "SELECT result_id,created_at,json_extract(metadata_json,'$.submission_fingerprint') FROM worker_results",
+        db, "SELECT result_id,created_at,json_extract(metadata_json,'$.submission_fingerprint') FROM worker_results"
     )
     assert observed_fingerprint == fingerprint
     assert _read(db, "SELECT result_id FROM wakeups WHERE reason='worker_result_ready'") == [(result_id,)]
@@ -404,11 +331,7 @@ def _replay_and_successor(root):
         {
             "action_id": request["action_id"],
             "status": "succeeded",
-            "evidence": {
-                "result_id": result_id,
-                "attempt_id": attempt,
-                "occurred_at": occurred_at,
-            },
+            "evidence": {"result_id": result_id, "attempt_id": attempt, "occurred_at": occurred_at},
         }
     ], verified
     successor = _task(db, "successor", "request-shared", parent="saved")

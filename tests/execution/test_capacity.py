@@ -8,18 +8,14 @@ from tests.support.repository_cycle import (
 
 class CapacityTests(RepositoryCycleFixture):
     def test_running_attempt_count_for_repos_counts_all_configured_repos(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         now = "2026-07-04T00:00:00+00:00"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("PRAGMA foreign_keys = ON")
-            for repo_id, full_name in [
-                ("repo:a", "Org/a"),
-                ("repo:b", "Org/b"),
-                ("repo:c", "Org/c"),
-            ]:
+            for repo_id, full_name in [("repo:a", "Org/a"), ("repo:b", "Org/b"), ("repo:c", "Org/c")]:
                 conn.execute(
                     "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES (?, ?, 'robot', 'main', ?, ?)",
                     (repo_id, full_name, str(self.repo_root), str(self.worktree_root)),

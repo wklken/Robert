@@ -1,3 +1,4 @@
+from tests.support import database as fixture_database
 from contextlib import closing
 from robert_agent.execution import capacity
 from tests.support.daemon import DaemonFixture
@@ -67,7 +68,7 @@ class DaemonStateTests(DaemonFixture):
         from robert_agent.execution import runtime_state as daemon_state
 
         self._init_db()
-        with closing(daemon_state.connect(self.db_path)) as conn, conn:
+        with fixture_database.connect(self.db_path) as conn, conn:
             lease = daemon_state.acquire_daemon_lease(
                 conn,
                 resource_key="repo-1",
@@ -100,11 +101,10 @@ class DaemonStateTests(DaemonFixture):
         self.assertEqual(status, "released")
 
     def test_capacity_full_counts_running_and_stale_attempts(self):
-        from robert_agent.execution import runtime_state as daemon_state
 
         self._init_db()
         now = "2026-07-03T00:00:00+00:00"
-        with closing(daemon_state.connect(self.db_path)) as conn, conn:
+        with fixture_database.connect(self.db_path) as conn, conn:
             self._insert_repo(conn)
             conn.execute(
                 """

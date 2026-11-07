@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision.application import observation as supervision_observe
 from robert_agent.supervision import rules as supervision_rules
 
@@ -38,25 +38,14 @@ def evaluate(rule, facts):
 
 class SupervisionProgressRulesTests(unittest.TestCase):
     def test_expired_daemon_lease_reports_missing_progress_after_grace(self):
-        facts = {
-            "scope_id": "daemon",
-            "status": "expired",
-            "lease_id": "lease",
-            "lease_expires_at": OLD,
-        }
+        facts = {"scope_id": "daemon", "status": "expired", "lease_id": "lease", "lease_expires_at": OLD}
         row = supervision_rules.evaluate_controller(facts, now=NOW)
-        self.assertEqual(
-            (row["classification"], row["reason_code"]),
-            ("confirmed", "controller_progress_stalled"),
-        )
+        self.assertEqual((row["classification"], row["reason_code"]), ("confirmed", "controller_progress_stalled"))
         self.assertNotIn("positive_evidence", row)
 
     def test_stale_work_starts_eligibility_clock_when_backoff_ends(self):
         facts = task_facts(
-            pending_action_id="action",
-            publication_eligible=True,
-            action_created_at=OLD,
-            publication_retry_at=LATER,
+            pending_action_id="action", publication_eligible=True, action_created_at=OLD, publication_retry_at=LATER
         )
         waiting = evaluate("publication_stalled", facts)
         self.assertIsNone(waiting["eligible_since"])
@@ -67,19 +56,14 @@ class SupervisionProgressRulesTests(unittest.TestCase):
 
     def test_repeated_failed_activity_does_not_reset_worker_progress(self):
         facts = task_facts(
-            milestones=[["review_result", "known-digest"]],
-            milestone_observed_at=OLD,
-            command_failures=2,
+            milestones=[["review_result", "known-digest"]], milestone_observed_at=OLD, command_failures=2
         )
         first = evaluate("worker_no_progress", facts)
         facts.update(command_failures=9, heartbeat_at=NOW.isoformat())
         second = evaluate("worker_no_progress", facts)
         self.assertEqual(second["progress_token"], first["progress_token"])
         facts["milestones"].append(["review_report", "new-digest"])
-        self.assertNotEqual(
-            evaluate("worker_no_progress", facts)["progress_token"],
-            first["progress_token"],
-        )
+        self.assertNotEqual(evaluate("worker_no_progress", facts)["progress_token"], first["progress_token"])
 
     def test_prepared_capacity_wait_does_not_become_ready_stall(self):
         row = evaluate(
@@ -146,9 +130,32 @@ class _SupervisionDatabaseFixture(unittest.TestCase):
 
 
 class SupervisionAdmissionObservationTests(_SupervisionDatabaseFixture):
-    def test_missing_and_deferred_dispositions_are_distinct_and_never_claim_progress(
-        self,
-    ):
+    def test_native_round_admission_receipts_keep_their_recorded_owner(self):
+        from robert_agent.persistence.rounds import review, vote
+
+        for kind, store in [("review_round", review), ("vote_round", vote)]:
+            with closing(sqlite3.connect(self.db)) as conn, conn:
+                entry = store.enqueue(
+                    conn,
+                    {"full_name": "example/repo"},
+                    {"number": 1, "source_type": "issue", "workstream_id": "stream", "event_fingerprint": kind},
+                    {},
+                    [],
+                )
+            self.receipt(
+                kind,
+                disposition="queued_native_round",
+                target_type=kind,
+                target_id=entry["round_id"],
+                consumer="github_route",
+            )
+        rows = supervision_observe.collect(self.db, now=NOW)["observations"]
+        by_scope = {row["scope_id"]: row for row in rows}
+        for kind in ("review_round", "vote_round"):
+            self.assertEqual(by_scope[kind]["classification"], "healthy")
+            self.assertEqual(by_scope[kind]["reason_code"], "admission_owner_recorded")
+
+    def test_missing_and_deferred_dispositions_are_distinct_and_never_claim_progress(self):
         self.receipt("missing")
         self.receipt("deferred", disposition="deferred", consumer="github_route", due_at=LATER)
         rows = supervision_observe.collect(self.db, now=NOW)["observations"]
@@ -243,9 +250,7 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
                 "SELECT scope_id,rule_id,status,resolution_evidence_json FROM supervision_incidents ORDER BY scope_id"
             ).fetchall()
 
-    def test_ready_queue_opens_incident_and_notice_only_after_current_local_opportunity(
-        self,
-    ):
+    def test_ready_queue_opens_incident_and_notice_only_after_current_local_opportunity(self):
         self.daemon()
         self.task("queued", "queued")
         self.execute(
@@ -333,9 +338,7 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
         self.assertTrue(self.check(LATER, max_concurrency=1)["ok"])
         self.assertEqual(self.incidents(), [])
 
-    def test_failure_resolves_only_from_bound_completed_successor_with_domain_time(
-        self,
-    ):
+    def test_failure_resolves_only_from_bound_completed_successor_with_domain_time(self):
         self.task("failed", "failed")
         self.assertTrue(self.check(NOW.isoformat())["ok"])
         self.assertEqual(self.incidents(), [("failed", "execution_failed", "open", "{}")])
@@ -343,8 +346,7 @@ class SupervisionClosureTests(_SupervisionDatabaseFixture):
         self.task("successor", "completed", parent="failed")
         for key in ("unrelated", "successor"):
             self.execute(
-                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES(?,?,1,'completed')",
-                (key, key),
+                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES(?,?,1,'completed')", (key, key)
             )
             self.execute(
                 """INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json)

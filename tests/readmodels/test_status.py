@@ -12,7 +12,7 @@ class StatusTests(SummaryFixture):
         from robert_agent.readmodels import chat as chat_status
         from robert_agent.readmodels import status
         from robert_agent.execution import runtime_state as daemon_state
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.root / "daemon-status.sqlite3"
         storage.init_database(db_path)
@@ -56,14 +56,8 @@ class StatusTests(SummaryFixture):
             "live_poll_skipped_rate_limit",
         )
         self.assertEqual(dashboard_data["daemon"]["latest_lease"]["status"], "active")
-        self.assertEqual(
-            dashboard_data["daemon"]["recent_events"][0]["event_type"],
-            "live_poll_skipped_rate_limit",
-        )
-        self.assertEqual(
-            dashboard_data["daemon"]["recent_events"][1]["event_type"],
-            "run_once_triggered",
-        )
+        self.assertEqual(dashboard_data["daemon"]["recent_events"][0]["event_type"], "live_poll_skipped_rate_limit")
+        self.assertEqual(dashboard_data["daemon"]["recent_events"][1]["event_type"], "run_once_triggered")
         self.assertEqual(status["daemon"]["latest_run"]["status"], "running")
         self.assertIn("Daemon:", message)
         self.assertIn("live_poll_skipped_rate_limit", message)
@@ -156,25 +150,16 @@ class StatusTests(SummaryFixture):
         self.assertEqual(event_payload["data"]["tasks"][0]["task_id"], "task-1")
         self.assertEqual(event_payload["data"]["tasks"][0]["workstream_id"], "ws-1")
         self.assertIsNone(event_payload["data"]["tasks"][0]["parent_task_id"])
-        self.assertEqual(
-            event_payload["data"]["tasks"][0]["worktree_path"],
-            "/repo/.worktrees/task-1",
-        )
+        self.assertEqual(event_payload["data"]["tasks"][0]["worktree_path"], "/repo/.worktrees/task-1")
         self.assertEqual(event_payload["data"]["tasks"][0]["branch_name"], "codex/dd-1-task")
         self.assertEqual(events_code, 0)
         self.assertEqual(events_payload["data"][0]["event_fingerprint"], "comment:1")
         self.assertEqual(events_payload["data"][0]["linked_task_count"], 1)
         self.assertEqual(source_code, 0)
-        self.assertEqual(
-            source_payload["data"]["sources"][0]["source_key"],
-            "github:example/backend#1",
-        )
+        self.assertEqual(source_payload["data"]["sources"][0]["source_key"], "github:example/backend#1")
         self.assertEqual(source_payload["data"]["workstreams"][0]["workstream_id"], "ws-1")
         self.assertEqual(source_payload["data"]["tasks"][0]["task_id"], "task-1")
-        self.assertEqual(
-            source_payload["data"]["tasks"][0]["worktree_path"],
-            "/repo/.worktrees/task-1",
-        )
+        self.assertEqual(source_payload["data"]["tasks"][0]["worktree_path"], "/repo/.worktrees/task-1")
         self.assertEqual(artifact_code, 0)
         self.assertIn("stderr tail", artifact_payload["data"]["content"])
         self.assertEqual(artifact_payload["data"]["artifact_type"], "worker_stderr")
@@ -206,10 +191,7 @@ class StatusTests(SummaryFixture):
                 )
                 VALUES ('audit-current-state-closed', 'repo-1', NULL, NULL, 'current_state_closed', ?, ?)
                 """,
-                (
-                    datetime.now(timezone.utc).isoformat(),
-                    json.dumps(payload, sort_keys=True),
-                ),
+                (datetime.now(timezone.utc).isoformat(), json.dumps(payload, sort_keys=True)),
             )
 
         status_code, status_payload = self._run_status("--db", str(db_path), "status")
@@ -241,7 +223,7 @@ class StatusTests(SummaryFixture):
 
     def test_status_run_includes_repo_steps(self):
         from robert_agent.readmodels import status
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         data_dir = self.root / "data"
         repo_root = self.root / "repo-a"

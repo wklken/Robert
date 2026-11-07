@@ -1,5 +1,9 @@
 """delivery notifications responsibilities."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import notifications as db_read_notifications
+from robert_agent.persistence.stores import notifications as db_write_notifications
+
 from robert_agent.delivery import values as publication_values
 
 
@@ -26,17 +30,7 @@ def notification_metadata(action, result):
 
 
 def existing_action_notification(conn, action, notification_type):
-    for row in conn.execute(
-        """
-        SELECT notification_id, metadata_json
-        FROM notifications
-        WHERE task_id = ?
-          AND notification_type = ?
-          AND channel = 'local'
-        ORDER BY created_at DESC, notification_id DESC
-        """,
-        (action["task_id"], notification_type),
-    ):
+    for row in db_read_notifications.find_for_existing_action_notification(conn, action["task_id"], notification_type):
         metadata = publication_values.decode_json(row["metadata_json"])
         if metadata.get("action_id") == action["action_id"]:
             return row["notification_id"]
@@ -47,41 +41,26 @@ def insert_notification(conn, action, notification_type, result, now):
     metadata = notification_metadata(action, result)
     notification_id = existing_action_notification(conn, action, notification_type)
     if notification_id:
-        existing_metadata = conn.execute(
-            "SELECT metadata_json FROM notifications WHERE notification_id=?",
-            (notification_id,),
-        ).fetchone()
+        existing_metadata = db_records.first(
+            db_read_notifications.find_metadata_json_by_notification_id(conn, notification_id)
+        )
         previous = publication_values.decode_json(existing_metadata[0])
         if previous.get("delivery") and all(
             previous.get(key) == metadata.get(key)
             for key in ("reason_code", "error_class", "required_action", "retryable")
         ):
             metadata["delivery"] = previous["delivery"]
-        conn.execute(
-            """
-            UPDATE notifications
-            SET status = 'recorded',
-                created_at = ?,
-                metadata_json = ?
-            WHERE notification_id = ?
-            """,
-            (now, publication_values.encode_json(metadata), notification_id),
+        db_write_notifications.insert_notification_2(
+            conn, now, publication_values.encode_json(metadata), notification_id
         )
         return
-    conn.execute(
-        """
-        INSERT INTO notifications(
-          notification_id, task_id, notification_type, channel, status, created_at, metadata_json
-        )
-        VALUES (?, ?, ?, 'local', 'recorded', ?, ?)
-        """,
-        (
-            publication_values.id("notification"),
-            action["task_id"],
-            notification_type,
-            now,
-            publication_values.encode_json(metadata),
-        ),
+    db_write_notifications.insert_notification(
+        conn,
+        publication_values.id("notification"),
+        action["task_id"],
+        notification_type,
+        now,
+        publication_values.encode_json(metadata),
     )
 
 
@@ -89,22 +68,12 @@ def resolve_action_notification(conn, action, notification_type, result, now):
     notification_id = existing_action_notification(conn, action, notification_type)
     if not notification_id:
         return
-    row = conn.execute(
-        "SELECT metadata_json FROM notifications WHERE notification_id = ?",
-        (notification_id,),
-    ).fetchone()
+    row = db_records.first(db_read_notifications.find_metadata_json_by_notification_id(conn, notification_id))
     metadata = publication_values.decode_json(row[0] if row else "{}")
     metadata["resolved_at"] = now
     metadata["resolved_publish_status"] = result.get("status", "")
     metadata["resolved_external_id"] = result.get("external_id", "")
     metadata["resolved_target_url"] = result.get("target_url", "")
-    conn.execute(
-        """
-        UPDATE notifications
-        SET status = 'resolved',
-            created_at = ?,
-            metadata_json = ?
-        WHERE notification_id = ?
-        """,
-        (now, publication_values.encode_json(metadata), notification_id),
+    db_write_notifications.update_for_resolve_action_notification(
+        conn, now, publication_values.encode_json(metadata), notification_id
     )

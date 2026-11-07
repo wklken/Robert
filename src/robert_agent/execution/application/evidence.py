@@ -1,5 +1,12 @@
 """Collect attempt and command evidence for recovery."""
 
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
+from robert_agent.persistence.stores import worker_phases as db_write_worker_phases
 from robert_agent.supervision import store as supervision_store
 from pathlib import Path
 from robert_agent.adapters.processes import attempt as attempt_process
@@ -90,16 +97,7 @@ def git_recovery_summary(worktree_path):
 
 
 def _attempt_log_tails(conn, attempt_id):
-    rows = conn.execute(
-        """
-        SELECT artifact_type, path
-        FROM artifacts
-        WHERE attempt_id = ?
-          AND artifact_type IN ('worker_stdout', 'worker_stderr')
-        ORDER BY created_at DESC, artifact_id DESC
-        """,
-        (attempt_id,),
-    ).fetchall()
+    rows = db_read_artifacts.find_for_attempt_log_tails(conn, attempt_id)
     tails = {}
     for artifact_type, path in rows:
         if artifact_type in tails:
@@ -112,16 +110,7 @@ def _attempt_log_tails(conn, attempt_id):
 
 
 def _latest_worker_phases(conn, attempt_id, limit=8):
-    rows = conn.execute(
-        """
-        SELECT phase, status, summary, next_step, created_at
-        FROM worker_phases
-        WHERE attempt_id = ?
-        ORDER BY created_at DESC, phase_id DESC
-        LIMIT ?
-        """,
-        (attempt_id, limit),
-    ).fetchall()
+    rows = db_read_worker_phases.find_for_latest_worker_phases(conn, attempt_id, limit)
     return [
         {
             "phase": phase,
@@ -154,9 +143,9 @@ def _command_process_status(pid, identity):
 
 def attempt_command_records(conn, attempt_id, task_id, *, persist=True):
     directories = set()
-    for (path,) in conn.execute("SELECT path FROM artifacts WHERE attempt_id = ?", (attempt_id,)):
+    for (path,) in db_read_artifacts.find_path_by_attempt_id(conn, attempt_id):
         directories.add(Path(path).parent.resolve())
-    for _seq, name, path in conn.execute("PRAGMA database_list"):
+    for _seq, name, path in db_sqlite.database_list(conn):
         if name == "main" and path:
             directories.add((Path(path).parent / "artifacts" / task_id).resolve())
     commands = []
@@ -213,26 +202,22 @@ def _backfill_command_phases(conn, attempt_id, commands):
         except (ValueError, TypeError, AttributeError):
             continue
         summary = record.get("summary") or f"Command exited {record.get('returncode')}"
-        if conn.execute(
-            "SELECT 1 FROM worker_phases WHERE attempt_id=? AND phase=? AND status=?"
-            " AND summary=? AND created_at>=? LIMIT 1",
-            (attempt_id, record["phase"], record["status"], summary, finished_at),
-        ).fetchone():
+        if db_records.first(
+            db_read_worker_phases.find_for_backfill_command_phases(
+                conn, attempt_id, record["phase"], record["status"], summary, finished_at
+            )
+        ):
             continue
         phase_id = "phase-command-" + hashlib.sha256(record["command_record_path"].encode()).hexdigest()[:24]
-        conn.execute(
-            """INSERT OR IGNORE INTO worker_phases(
-                 phase_id,attempt_id,phase,status,summary,next_step,created_at
-               ) VALUES (?,?,?,?,?,?,?)""",
-            (
-                phase_id,
-                attempt_id,
-                record["phase"],
-                record["status"],
-                summary,
-                "Inspect saved command output and record result",
-                finished_at,
-            ),
+        db_write_worker_phases.insert_for_backfill_command_phases(
+            conn,
+            phase_id,
+            attempt_id,
+            record["phase"],
+            record["status"],
+            summary,
+            "Inspect saved command output and record result",
+            finished_at,
         )
 
 
@@ -271,7 +256,7 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
 
     review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
     if review:
-        row = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+        row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
         diagnostic = values.json_object(row[0] if row else None).get("submission_validation", {})
         return {
             "status": "recoverable_progress"
@@ -288,13 +273,7 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
             **(
                 {
                     key: diagnostic[key]
-                    for key in (
-                        "reason_code",
-                        "field_path",
-                        "findings",
-                        "safe_error",
-                        "required_action",
-                    )
+                    for key in ("reason_code", "field_path", "findings", "safe_error", "required_action")
                     if key in diagnostic
                 }
                 if review["status"] == "attention"

@@ -1,11 +1,22 @@
 """Persist controller run steps and deadline cleanup."""
 
+from robert_agent.persistence.stores import diagnostics as diagnostic_store
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import agent_runs as db_read_agent_runs
+from robert_agent.persistence.queries import run_repo_steps as db_read_run_repo_steps
+from robert_agent.persistence.stores import agent_runs as db_write_agent_runs
+from robert_agent.persistence.stores import leases as db_write_leases
+from robert_agent.persistence.stores import run_repo_steps as db_write_run_repo_steps
+from robert_agent.persistence.stores import run_steps as db_write_run_steps
 from contextlib import closing
 from contextlib import contextmanager
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 import json
-import sqlite3
 import time
 
 
@@ -13,13 +24,7 @@ SUMMARY_REFERENCE = {"summary_ref": "agent_runs.summary_json"}
 
 
 def insert_run_step(conn, run_id, key, status="pending"):
-    conn.execute(
-        """
-        INSERT INTO run_steps(step_id, run_id, step_key, status)
-        VALUES (?, ?, ?, ?)
-        """,
-        (values.new_id("step"), run_id, key, status),
-    )
+    db_write_run_steps.insert_run_step(conn, values.new_id("step"), run_id, key, status)
 
 
 _STEP_CLOCKS: dict[tuple[str, str | None, str], float] = {}
@@ -46,29 +51,11 @@ def mark_run_step(conn, run_id, key, status, run_now=None, output=None, error=No
     output_json = json.dumps(output, ensure_ascii=False, sort_keys=True) if output is not None else None
     error_json = json.dumps(error, ensure_ascii=False, sort_keys=True) if error is not None else None
     finished_at = run_now if status in {"succeeded", "failed", "skipped"} else None
-    conn.execute(
-        """
-        UPDATE run_steps
-        SET status = ?,
-            started_at = COALESCE(started_at, ?),
-            finished_at = ?,
-            output_json = COALESCE(?, output_json),
-            error_json = COALESCE(?, error_json)
-        WHERE run_id = ?
-          AND step_key = ?
-        """,
-        (status, run_now, finished_at, output_json, error_json, run_id, key),
-    )
+    db_write_run_steps.mark_run_step(conn, status, run_now, finished_at, output_json, error_json, run_id, key)
 
 
 def _insert_repo_run_step(conn, run_id, repo_id, key, status="pending"):
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO run_repo_steps(step_id, run_id, repo_id, step_key, status)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (values.new_id("repo-step"), run_id, repo_id, key, status),
-    )
+    db_write_run_repo_steps.insert_repo_run_step(conn, values.new_id("repo-step"), run_id, repo_id, key, status)
 
 
 def mark_repo_run_step(conn, run_id, repo_id, key, status, run_now=None, output=None, error=None):
@@ -77,19 +64,8 @@ def mark_repo_run_step(conn, run_id, repo_id, key, status, run_now=None, output=
     finished_at = run_now if status in {"succeeded", "failed", "skipped"} else None
     output_json = json.dumps(output, ensure_ascii=False, sort_keys=True) if output is not None else None
     error_json = json.dumps(error, ensure_ascii=False, sort_keys=True) if error is not None else None
-    conn.execute(
-        """
-        UPDATE run_repo_steps
-        SET status = ?,
-            started_at = COALESCE(started_at, ?),
-            finished_at = COALESCE(?, finished_at),
-            output_json = COALESCE(?, output_json),
-            error_json = COALESCE(?, error_json)
-        WHERE run_id = ?
-          AND repo_id = ?
-          AND step_key = ?
-        """,
-        (status, run_now, finished_at, output_json, error_json, run_id, repo_id, key),
+    db_write_run_repo_steps.mark_repo_run_step(
+        conn, status, run_now, finished_at, output_json, error_json, run_id, repo_id, key
     )
 
 
@@ -111,15 +87,7 @@ def init_repo_steps(conn, run_id, repo_id):
 
 
 def aggregate_repo_step_status(conn, run_id, step_key):
-    rows = conn.execute(
-        """
-        SELECT status
-        FROM run_repo_steps
-        WHERE run_id = ?
-          AND step_key = ?
-        """,
-        (run_id, step_key),
-    ).fetchall()
+    rows = db_read_run_repo_steps.find_for_aggregate_repo_step_status(conn, run_id, step_key)
     statuses = [row[0] for row in rows]
     if not statuses:
         return "pending"
@@ -144,10 +112,7 @@ def run_transaction(db_path, run_id):
         except ControlDeadlineExceeded:
             now = values.utc_now()
             error = json.dumps(
-                {
-                    "status": "execution_deadline",
-                    "safe_error": "Control command exceeded its execution deadline.",
-                }
+                {"status": "execution_deadline", "safe_error": "Control command exceeded its execution deadline."}
             )
             with conn:
                 interrupt_run(conn, run_id, now, error)
@@ -155,77 +120,43 @@ def run_transaction(db_path, run_id):
 
 
 def connect(db_path):
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn = db_database.connect(db_path)
+    db_sqlite.configure(conn, foreign_keys=True)
+    db_sqlite.configure(conn, busy_timeout_ms=5000)
     return conn
 
 
 def start_run(conn, run_id, started_at, config_path, summary_json, *, dry_run=False):
-    conn.execute(
-        """INSERT INTO agent_runs(run_id, status, started_at, config_path, dry_run, summary_json)
-           VALUES (?, 'running', ?, ?, ?, ?)""",
-        (run_id, started_at, str(config_path), int(bool(dry_run)), summary_json),
+    db_write_agent_runs.insert_for_start_run(
+        conn, run_id, started_at, str(config_path), int(bool(dry_run)), summary_json
     )
 
 
 def finish_run(conn, run_id, status, finished_at, summary, *, error=None, sort_keys=True):
     summary_json = json.dumps(summary, sort_keys=sort_keys)
     if error is None:
-        conn.execute(
-            """UPDATE agent_runs SET status=?,finished_at=?,summary_json=? WHERE run_id=?""",
-            (status, finished_at, summary_json, run_id),
-        )
+        db_write_agent_runs.update_for_finish_run(conn, status, finished_at, summary_json, run_id)
     else:
-        conn.execute(
-            """UPDATE agent_runs SET status=?,finished_at=?,summary_json=?,error_json=? WHERE run_id=?""",
-            (
-                status,
-                finished_at,
-                summary_json,
-                json.dumps(error, ensure_ascii=False, sort_keys=True),
-                run_id,
-            ),
+        db_write_agent_runs.update_for_finish_run_2(
+            conn, status, finished_at, summary_json, json.dumps(error, ensure_ascii=False, sort_keys=True), run_id
         )
 
 
 def running_repo_step(conn, run_id, repo_id):
-    row = conn.execute(
-        "SELECT step_key FROM run_repo_steps WHERE run_id=? AND repo_id=? AND status='running'",
-        (run_id, repo_id),
-    ).fetchone()
+    row = db_records.first(db_read_run_repo_steps.find_for_running_repo_step(conn, run_id, repo_id))
     return row[0] if row else None
 
 
 def mark_repo_failure(conn, run_id, repo_id, failed_step, run_now, error):
     for step in REPO_STEP_ORDER:
-        row = conn.execute(
-            "SELECT status FROM run_repo_steps WHERE run_id=? AND repo_id=? AND step_key=?",
-            (run_id, repo_id, step),
-        ).fetchone()
+        row = db_records.first(db_read_run_repo_steps.mark_repo_failure(conn, run_id, repo_id, step))
         if row and (row[0] in {"pending", "running"} or step == failed_step):
             mark_repo_run_step(
-                conn,
-                run_id,
-                repo_id,
-                step,
-                "failed" if step == failed_step else "skipped",
-                run_now,
-                error=error,
+                conn, run_id, repo_id, step, "failed" if step == failed_step else "skipped", run_now, error=error
             )
 
 
-def summarize_repositories(
-    conn,
-    run_id,
-    run_now,
-    repo_summaries,
-    prompt_count,
-    queued_count,
-    *,
-    dry_run,
-    skip_publish,
-):
+def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, queued_count, *, dry_run, skip_publish):
     aggregate_counts = {
         "supervised_count": sum(item["supervised_count"] for item in repo_summaries),
         "failed_timeout_recovered_count": sum(item["failed_timeout_recovered_count"] for item in repo_summaries),
@@ -373,13 +304,7 @@ def finish_dispatch(
     }
     if failure:
         mark_run_step(
-            conn,
-            run_id,
-            "dispatch",
-            "failed",
-            finished_at,
-            output={"dispatch_count": dispatch_count},
-            error=failure,
+            conn, run_id, "dispatch", "failed", finished_at, output={"dispatch_count": dispatch_count}, error=failure
         )
         mark_run_step(
             conn,
@@ -391,14 +316,7 @@ def finish_dispatch(
         )
         finish_run(conn, run_id, "failed", finished_at, summary, error=failure)
         return
-    mark_run_step(
-        conn,
-        run_id,
-        "dispatch",
-        "succeeded",
-        finished_at,
-        output={"dispatch_count": dispatch_count},
-    )
+    mark_run_step(conn, run_id, "dispatch", "succeeded", finished_at, output={"dispatch_count": dispatch_count})
     mark_run_step(conn, run_id, "summarize", "succeeded", finished_at, output=summary)
     if overall_status not in {"failed", "partial_failure"}:
         finish_run(conn, run_id, "completed", finished_at, summary)
@@ -416,57 +334,23 @@ def finish_dispatch(
         ),
         None,
     )
-    finish_run(
-        conn,
-        run_id,
-        "failed",
-        finished_at,
-        summary,
-        error=first_repo_error or publish_result,
-    )
+    finish_run(conn, run_id, "failed", finished_at, summary, error=first_repo_error or publish_result)
 
 
 def interrupt_run(conn, run_id, now, error_json):
-    conn.execute(
-        """UPDATE leases SET status='released',released_at=?,heartbeat_at=?
-        WHERE resource_type='agent_run' AND owner_id=? AND status='active'""",
-        (now, now, run_id),
-    )
-    for table in ("run_steps", "run_repo_steps"):
-        conn.execute(
-            f"""UPDATE {table}
-            SET status=CASE WHEN status='running' THEN 'failed' ELSE 'skipped' END,
-                finished_at=?,error_json=?
-            WHERE run_id=? AND status IN ('running','pending')""",
-            (now, error_json, run_id),
-        )
-    conn.execute(
-        """UPDATE agent_runs SET status='failed',finished_at=?,error_json=?
-        WHERE run_id=? AND status='running'""",
-        (now, error_json, run_id),
-    )
+    db_write_leases.update_for_interrupt_run(conn, now, now, run_id)
+    diagnostic_store.interrupt_steps(conn, run_id, now, error_json)
+    db_write_agent_runs.update_for_interrupt_run(conn, now, error_json, run_id)
 
 
 def finish_stopped_executor(conn, executor_id, now):
     error = json.dumps(
-        {
-            "status": "executor_interrupted",
-            "safe_error": "Control executor stopped before recording its outcome.",
-        }
+        {"status": "executor_interrupted", "safe_error": "Control executor stopped before recording its outcome."}
     )
-    run_ids = [
-        row[0]
-        for row in conn.execute(
-            """SELECT run_id FROM agent_runs
-        WHERE status='running' AND json_extract(summary_json,'$.executor_id')=?""",
-            (executor_id,),
-        )
-    ]
+    run_ids = [row[0] for row in db_read_agent_runs.find_for_finish_stopped_executor(conn, executor_id)]
     for run_id in run_ids:
         interrupt_run(conn, run_id, now, error)
 
 
 def running_executors(conn):
-    return conn.execute("""SELECT json_extract(summary_json,'$.executor_id'),
-        json_extract(summary_json,'$.executor_identity') FROM agent_runs
-        WHERE status='running' AND json_type(summary_json,'$.executor_identity')='object'""").fetchall()
+    return db_read_agent_runs.find_for_running_executors(conn)

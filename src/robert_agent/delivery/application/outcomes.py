@@ -1,12 +1,15 @@
 """application delivery outcomes responsibilities."""
 
-import sqlite3
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
+from robert_agent.persistence.stores import notifications as db_write_notifications
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
 from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.execution import retry as retry_policy
 from robert_agent.execution import operations as execution_operations
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery import intents as intent_facts
@@ -21,22 +24,8 @@ def insert_workflow_attention_notification(conn, action, reason_code, now):
         "action_type": action["action_type"],
         "reason_code": str(reason_code)[:96],
     }
-    conn.execute(
-        """
-        INSERT INTO notifications(
-          notification_id, task_id, notification_type, channel, status,
-          created_at, metadata_json
-        ) VALUES (?, ?, 'workflow_attention_required', 'local', 'recorded', ?, ?)
-        ON CONFLICT(notification_id) DO UPDATE SET
-          status = 'recorded', created_at = excluded.created_at,
-          metadata_json = excluded.metadata_json
-        """,
-        (
-            notification_id,
-            action.get("task_id"),
-            now,
-            publication_values.encode_json(metadata),
-        ),
+    db_write_notifications.insert_workflow_attention_notification(
+        conn, notification_id, action.get("task_id"), now, publication_values.encode_json(metadata)
     )
 
 
@@ -80,10 +69,7 @@ def mark_skipped(conn, action, result, now):
                 intent["publication_id"],
                 "confirmed_absent",
                 now,
-                remote_evidence={
-                    "reason_code": "publication_superseded",
-                    "status": "confirmed_absent",
-                },
+                remote_evidence={"reason_code": "publication_superseded", "status": "confirmed_absent"},
             )
     metadata = publication_values.decode_json(action["metadata_json"])
     metadata["publish"] = {
@@ -92,15 +78,7 @@ def mark_skipped(conn, action, result, now):
         "skipped_at": now,
         "safe_error": result.get("safe_error", ""),
     }
-    conn.execute(
-        """
-        UPDATE github_actions
-        SET publish_status = 'skipped',
-            metadata_json = ?
-        WHERE action_id = ?
-        """,
-        (publication_values.encode_json(metadata), action["action_id"]),
-    )
+    db_write_github_actions.mark_skipped(conn, publication_values.encode_json(metadata), action["action_id"])
     publication_notifications.insert_notification(conn, action, "github_publish_skipped", result, now)
 
 
@@ -112,19 +90,7 @@ def skip_pending_result_actions(
     result,
     now,
 ):
-    rows = conn.execute(
-        """
-        SELECT action_id, result_id, task_id, action_type, target_url,
-               external_id, audit_status, publish_status, created_at,
-               metadata_json
-        FROM github_actions
-        WHERE result_id = ?
-          AND action_id != ?
-          AND audit_status = 'accepted'
-          AND publish_status = 'not_published'
-        """,
-        (result_id, excluding_action_id),
-    ).fetchall()
+    rows = db_read_github_actions.find_for_skip_pending_result_actions(conn, result_id, excluding_action_id)
     for row in rows:
         mark_skipped(conn, dict(row), result, now)
     return len(rows)
@@ -132,49 +98,28 @@ def skip_pending_result_actions(
 
 def retire_unstarted_actions(conn, task_id, now):
     """Retire only actions whose durable intent proves no unknown external effect."""
-    previous_factory = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        actions = conn.execute(
-            "SELECT * FROM github_actions WHERE task_id=? AND publish_status='not_published'",
-            (task_id,),
-        ).fetchall()
-        for row in actions:
-            action = dict(row)
-            intent = intent_facts.load_intent(conn, action["action_id"])
-            if intent and intent["status"] not in {
-                "prepared",
-                "confirmed_absent",
-                "failed",
-            }:
-                continue
-            if intent and intent["status"] != "confirmed_absent":
-                execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
-                execution_store.transition_publication_intent(
-                    conn,
-                    intent["publication_id"],
-                    "confirmed_absent",
-                    now,
-                    remote_evidence={"reason_code": "source_closed_before_publication"},
-                )
-            mark_skipped(
+    actions = db_read_github_actions.find_for_retire_unstarted_actions(conn, task_id)
+    for row in actions:
+        action = dict(row)
+        intent = intent_facts.load_intent(conn, action["action_id"])
+        if intent and intent["status"] not in {"prepared", "confirmed_absent", "failed"}:
+            continue
+        if intent and intent["status"] != "confirmed_absent":
+            execution_store.transition_publication_intent(conn, intent["publication_id"], "executing", now)
+            execution_store.transition_publication_intent(
                 conn,
-                action,
-                {
-                    "status": "source_closed",
-                    "safe_error": "Source closed before publication began.",
-                },
+                intent["publication_id"],
+                "confirmed_absent",
                 now,
+                remote_evidence={"reason_code": "source_closed_before_publication"},
             )
-    finally:
-        conn.row_factory = previous_factory
+        mark_skipped(
+            conn, action, {"status": "source_closed", "safe_error": "Source closed before publication began."}, now
+        )
 
 
 def record_failure(conn, action, result, now, *, reconcile_required=False):
-    fresh = conn.execute(
-        "SELECT metadata_json FROM github_actions WHERE action_id=?",
-        (action["action_id"],),
-    ).fetchone()
+    fresh = db_records.first(db_read_github_actions.find_metadata_json_by_action_id(conn, action["action_id"]))
     metadata = publication_values.decode_json(fresh[0] if fresh else action["metadata_json"])
     prior = dict(metadata.get("publish") or {})
     if prior.get("attempt_charged"):
@@ -199,24 +144,15 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
         "safe_error": result.get("safe_error", ""),
         "command": result.get("command", []),
     }
-    conn.execute(
-        """
-        UPDATE github_actions
-        SET metadata_json = ?
-        WHERE action_id = ?
-        """,
-        (publication_values.encode_json(metadata), action["action_id"]),
+    db_write_github_actions.set_metadata_json_by_action_id(
+        conn, publication_values.encode_json(metadata), action["action_id"]
     )
     publication_notifications.insert_notification(conn, action, "github_publish_failed", {**result, **state}, now)
     if not state["retryable"] and not reconcile_required:
         intent = intent_facts.load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
             execution_store.transition_publication_intent(
-                conn,
-                intent["publication_id"],
-                "attention",
-                now,
-                error={"reason_code": state["reason_code"]},
+                conn, intent["publication_id"], "attention", now, error={"reason_code": state["reason_code"]}
             )
         execution_operations.mark_publication_attention(
             conn,

@@ -280,16 +280,7 @@ class SubmissionTests(WorkerProtocolFixture):
                 FROM github_actions
                 """
             ).fetchone()
-        self.assertEqual(
-            action[:5],
-            (
-                "comment",
-                "https://github.com/x/y/issues/1",
-                None,
-                "pending",
-                "not_published",
-            ),
-        )
+        self.assertEqual(action[:5], ("comment", "https://github.com/x/y/issues/1", None, "pending", "not_published"))
         self.assertTrue(json.loads(action[5])["body"].startswith("Looks good\n\n<!-- robert-comment"))
 
     def test_result_rejects_missing_used_skills(self):
@@ -440,7 +431,7 @@ class SubmissionTests(WorkerProtocolFixture):
 
     def test_result_rejects_unknown_task_or_attempt(self):
         from robert_agent.delivery.application import submission as result
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.root / "dd.sqlite3"
         storage.init_database(db_path)

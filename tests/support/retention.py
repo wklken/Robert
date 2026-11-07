@@ -7,7 +7,7 @@ import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.runtime import daemon
 from robert_agent.execution import runtime_state as daemon_state
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from tests.support import DAEMON_DEFAULTS, maintenance_config
 
 
@@ -29,11 +29,7 @@ class RetentionFixture(unittest.TestCase):
             )
             daemon_state.start_daemon_run(conn, config_path="/config.yml", owner_id="daemon", now=OLD)
             self.lease = daemon_state.acquire_daemon_lease(
-                conn,
-                resource_key="database",
-                owner_id="daemon",
-                ttl_seconds=60,
-                now=OLD,
+                conn, resource_key="database", owner_id="daemon", ttl_seconds=60, now=OLD
             )["lease_id"]
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,lifecycle,created_at,updated_at) VALUES ('ws','repo','active',?,?)",

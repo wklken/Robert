@@ -50,7 +50,7 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
         self.assertEqual(metadata["output_type"], "comment_analysis")
 
     def test_legacy_worker_result_does_not_queue_subject_signal(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
         from robert_agent.delivery.application import submission as result
 
         db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")

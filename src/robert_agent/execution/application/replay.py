@@ -4,9 +4,16 @@ The migration queue is acknowledged only after an existing result or recorded
 Task event proves a domain effect. Wakeups alone are never consumption proof.
 """
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
+from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.stores import execution_subjects as db_write_execution_subjects
+
 import json
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 
 
 def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
@@ -21,37 +28,26 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
             continue
         if control["binding_status"] == "terminal":
             if fact["subject_type"] == "task":
-                terminal = conn.execute(
-                    "SELECT 1 FROM tasks WHERE task_id=? AND lifecycle IN ('completed','failed','canceled','ignored')",
-                    (fact["subject_id"],),
-                ).fetchone()
+                terminal = db_records.first(db_read_tasks.find_for_decisions(conn, fact["subject_id"]))
             else:
-                terminal = conn.execute(
-                    "SELECT 1 FROM pr_remediation_episodes WHERE episode_id=? AND status IN ('resolved','exhausted','superseded','canceled')",
-                    (fact["subject_id"],),
-                ).fetchone()
+                terminal = db_records.first(
+                    db_read_pr_remediation_episodes.find_for_decisions(conn, fact["subject_id"])
+                )
             if terminal:
                 execution_store.consume_fact(conn, fact["source_signal_id"], now, reason="subject_terminal")
             else:
-                conn.execute(
-                    "UPDATE execution_subjects SET binding_status='attention',metadata_json=json_set(metadata_json,'$.reason_code','terminal_execution_domain_mismatch','$.required_action','Inspect task state before resuming migrated events.') WHERE subject_type=? AND subject_id=?",
-                    (fact["subject_type"], fact["subject_id"]),
-                )
+                db_write_execution_subjects.update_for_decisions_2(conn, fact["subject_type"], fact["subject_id"])
             continue
         if fact["disposition"] == "worker_result":
-            row = conn.execute(
-                "SELECT task_id FROM worker_results WHERE result_id=?",
-                (fact["fact_id"],),
-            ).fetchone()
+            row = db_records.first(db_read_worker_results.find_task_id_by_result_id(conn, fact["fact_id"]))
             if row and row[0] == fact["task_id"]:
                 execution_store.consume_fact(conn, fact["source_signal_id"], now)
             continue
         event = json.loads(fact["payload_json"])
         if fact["subject_type"] == "remediation_episode":
-            episode = conn.execute(
-                "SELECT status,attempt_count FROM pr_remediation_episodes WHERE episode_id=?",
-                (fact["subject_id"],),
-            ).fetchone()
+            episode = db_records.first(
+                db_read_pr_remediation_episodes.find_status_and_attempt_count_by_episode_id(conn, fact["subject_id"])
+            )
             if not episode:
                 continue
             if (
@@ -86,10 +82,7 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
         )
         if driving and repo is not None and not work_policies.is_trusted_actor(event, repo):
             execution_store.mark_binding_attention(conn, fact["subject_type"], fact["subject_id"], now)
-            conn.execute(
-                "UPDATE execution_subjects SET metadata_json=json_set(metadata_json,'$.reason_code','migrated_event_requires_trusted_actor','$.required_action','Review migrated event authorization before retrying.') WHERE subject_type=? AND subject_id=?",
-                (fact["subject_type"], fact["subject_id"]),
-            )
+            db_write_execution_subjects.update_for_decisions(conn, fact["subject_type"], fact["subject_id"])
             continue
         if not driving:
             # Append the whole non-driving batch before any trusted reply can
@@ -105,11 +98,6 @@ def acknowledge_effects(conn, repo_id, now):
     for fact in execution_store.pending_facts(conn, repo_id, now):
         if fact["disposition"] != "github_event":
             continue
-        linked = conn.execute(
-            """SELECT t.task_id,t.lifecycle FROM task_events te
-            JOIN github_events ge ON ge.event_id=te.event_id
-            JOIN tasks t ON t.task_id=te.task_id WHERE ge.event_fingerprint=?""",
-            (fact["fact_id"],),
-        ).fetchall()
+        linked = db_read_task_events.find_for_acknowledge_effects(conn, fact["fact_id"])
         if any(task_id != fact["task_id"] or lifecycle in {"queued", "running"} for task_id, lifecycle in linked):
             execution_store.consume_fact(conn, fact["source_signal_id"], now)

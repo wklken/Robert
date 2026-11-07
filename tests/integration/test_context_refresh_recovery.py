@@ -10,7 +10,7 @@ from unittest import mock
 
 from robert_agent.runtime import daemon
 import time
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.configuration import command as validate_config
 from robert_agent.work import wakeup
 from robert_agent.work import repositories as work_repositories
@@ -128,14 +128,7 @@ class ContextRefreshRecoveryTests(unittest.TestCase):
             return subprocess.CompletedProcess(
                 args,
                 0,
-                json.dumps(
-                    {
-                        "resources": {
-                            "core": {"remaining": 0, "reset": 1600},
-                            "search": {"remaining": 30},
-                        }
-                    }
-                ),
+                json.dumps({"resources": {"core": {"remaining": 0, "reset": 1600}, "search": {"remaining": 30}}}),
                 "",
             )
 

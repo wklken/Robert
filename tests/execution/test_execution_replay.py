@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.execution.application import replay as execution_replay
 from robert_agent.runtime import loop as loop_engine
 from robert_agent.runtime import cycle as run_once
@@ -114,16 +114,9 @@ class ExecutionReplayTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE tasks SET lifecycle='running'")
             conn.execute("UPDATE workstreams SET lifecycle='active'")
-            conn.execute(
-                "UPDATE attempts SET status='prepared',metadata_json=?",
-                (self.attempt_metadata,),
-            )
+            conn.execute("UPDATE attempts SET status='prepared',metadata_json=?", (self.attempt_metadata,))
         with (
-            patch.object(
-                worker_result.action_scope,
-                "observe_worktree_status",
-                return_value="clean",
-            ),
+            patch.object(worker_result.action_scope, "observe_worktree_status", return_value="clean"),
             patch.object(worker_result.action_scope, "observe_head", return_value="saved-head"),
         ):
             receipt = worker_result.record_result(
@@ -144,16 +137,8 @@ class ExecutionReplayTests(unittest.TestCase):
         self.assertTrue(receipt["ok"], receipt)
         with closing(sqlite3.connect(self.db)) as conn, conn:
             # Exhaust the real audit budget; only the external Git observation fails.
-            for now in (
-                "2026-11-06T00:00:00+00:00",
-                "2026-11-06T00:00:10+00:00",
-                "2026-11-06T00:00:30+00:00",
-            ):
-                with patch.object(
-                    scope,
-                    "for_result",
-                    side_effect=subprocess.TimeoutExpired(["git", "status"], 1),
-                ):
+            for now in ("2026-11-06T00:00:00+00:00", "2026-11-06T00:00:10+00:00", "2026-11-06T00:00:30+00:00"):
+                with patch.object(scope, "for_result", side_effect=subprocess.TimeoutExpired(["git", "status"], 1)):
                     result_audit.audit_completed_results(
                         conn,
                         "repo:example/backend",
@@ -168,10 +153,7 @@ class ExecutionReplayTests(unittest.TestCase):
                     )
             metadata = json.loads(conn.execute("SELECT metadata_json FROM tasks").fetchone()[0])
             self.assertEqual(metadata["audit_retry_required"], receipt["result_id"])
-            self.assertEqual(
-                execution_store.get_binding(conn, "task", self.task)["binding_status"],
-                "active",
-            )
+            self.assertEqual(execution_store.get_binding(conn, "task", self.task)["binding_status"], "active")
             conn.execute("UPDATE wakeups SET status='consumed'")
             facts = conn.execute("SELECT * FROM execution_pending_facts").fetchall()
             self.assertEqual(len(facts), 3)
@@ -186,17 +168,9 @@ class ExecutionReplayTests(unittest.TestCase):
                         now=now,
                     )
                 )
-                self.assertEqual(
-                    conn.execute("SELECT * FROM execution_pending_facts").fetchall(),
-                    facts,
-                )
+                self.assertEqual(conn.execute("SELECT * FROM execution_pending_facts").fetchall(), facts)
                 self.assertIsNone(conn.execute("SELECT consumed_at FROM execution_pending_facts LIMIT 1").fetchone()[0])
-        loop = loop_engine.run_loop(
-            self.fixture.config_path,
-            dry_run=True,
-            skip_external=True,
-            skip_publish=True,
-        )
+        loop = loop_engine.run_loop(self.fixture.config_path, dry_run=True, skip_external=True, skip_publish=True)
         self.assertEqual(loop["cycles"], 0)
         self.assertEqual(loop["stop_reason"], "no_runnable_work")
         with closing(sqlite3.connect(self.db)) as conn, conn:

@@ -1,8 +1,11 @@
 """application delivery lane responsibilities."""
 
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import repos as db_read_repos
 from contextlib import closing
 import os
-import sqlite3
 import subprocess
 from robert_agent.configuration import command as validate_config
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
@@ -26,8 +29,8 @@ def publish(config_path, *, dry_run=False):
         return cutover
     results, repo_ids = [], []
     for repo in config["repos"]:
-        with closing(sqlite3.connect(config["db_path"])) as conn:
-            row = conn.execute("SELECT repo_id FROM repos WHERE full_name=?", (repo["full_name"],)).fetchone()
+        with closing(db_database.connect(config["db_path"])) as conn:
+            row = db_records.first(db_read_repos.find_repo_id_by_full_name(conn, repo["full_name"]))
         if row:
             repo_ids.append(row[0])
     if not dry_run:
@@ -49,9 +52,7 @@ def publish(config_path, *, dry_run=False):
         except (subprocess.SubprocessError, OSError, ValueError):
             return {"ok": False, "status": "rate_limit_check_failed"}
     for repo_id in repo_ids:
-        from robert_agent.supervision.application import (
-            publication as supervision_publication,
-        )
+        from robert_agent.supervision.application import publication as supervision_publication
 
         kwargs = {"config": config} if supervision_publication.needs_config(config) else {}
         results.append(

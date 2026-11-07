@@ -1,7 +1,7 @@
 """Apply workflow invalidation facts and stop fenced attempts."""
 
 from robert_agent.execution import operations as execution_operations
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.work import events as workflow_events
 from robert_agent.work import queries as work_queries
 

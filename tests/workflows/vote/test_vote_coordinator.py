@@ -1,10 +1,11 @@
+from tests.support import database as fixture_database
 from collections import Counter
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.workflows.vote import publish as vote_publish
 from tests.support.vote_coordinator import VoteCoordinatorFixture
 
@@ -23,14 +24,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
                 models.append(kwargs["model"])
                 if kwargs["model"] == "primary-model":
                     log = Path(kwargs["log_dir"]) / "stdout.log"
-                    log.write_text(
-                        json.dumps(
-                            {
-                                "type": "turn.failed",
-                                "error": {"message": "429 Too Many Requests"},
-                            }
-                        )
-                    )
+                    log.write_text(json.dumps({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}}))
                     return {
                         "ok": False,
                         "pid": 1073741824,
@@ -57,7 +51,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertIsNone(driver.manifest["source_worktree"])
         self.assertEqual(len(set(c[2] for c in self.calls if c[0] == "vote")), 1)
         self.fixture.cycle([])
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             row = conn.execute("SELECT audit_status,target_url FROM github_actions").fetchone()
             self.assertEqual(tuple(row), ("accepted", "https://github.com/example/backend/issues/42"))
 
@@ -74,12 +68,10 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertEqual(counts[("vote", "claude")], 2)
         self.assertEqual(len(set(c[2] for c in self.calls if c[0] == "vote")), 1)
 
-    def test_new_requests_queue_as_separate_rounds_and_duplicate_events_do_not_repeat(
-        self,
-    ):
+    def test_new_requests_queue_as_separate_rounds_and_duplicate_events_do_not_repeat(self):
         first = self.start()
         self.fixture.cycle([self.event("second"), self.event("second"), self.event("third")])
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 3)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
         first.run()
@@ -97,12 +89,9 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertIsNotNone(driver.manifest["source_worktree"])
         self.assertTrue(report.is_file())
         self.fixture.cycle([])
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             row = conn.execute("SELECT action_type,target_url,audit_status FROM github_actions").fetchone()
-            self.assertEqual(
-                tuple(row),
-                ("comment", "https://github.com/example/backend/pull/42", "accepted"),
-            )
+            self.assertEqual(tuple(row), ("comment", "https://github.com/example/backend/pull/42", "accepted"))
 
     def test_report_runs_through_audit_publish_and_completion(self):
         driver = self.start()
@@ -110,7 +99,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.fixture.cycle([])
         self.assertEqual(len(self.publish_all()), 1)
         self.fixture.cycle([], skip_publish=False)
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(vote_store.session(conn, task_id=driver.task_id)["status"], "published")
             self.assertEqual(
                 conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (driver.task_id,)).fetchone()[0],
@@ -127,17 +116,13 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.publish_all()
         self.fixture.cycle([], skip_publish=False)
         self.clarify = False
-        reply = {
-            **self.event("reply"),
-            "body": "@robert-bot latency target is 1 second",
-            "intent": "analysis",
-        }
+        reply = {**self.event("reply"), "body": "@robert-bot latency target is 1 second", "intent": "analysis"}
         self.fixture.cycle([reply])
         next_driver = self.driver()
         self.assertEqual(next_driver.round_id, driver.round_id)
         self.assertNotEqual(next_driver.task_id, driver.task_id)
         next_driver.run()
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
 
     def test_repeated_or_historical_reply_cannot_answer_a_new_clarification(self):
@@ -147,24 +132,17 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.fixture.cycle([])
         self.publish_all()
         self.fixture.cycle([], skip_publish=False)
-        reply = {
-            **self.event("reply"),
-            "body": "@robert-bot target is one second",
-            "intent": "analysis",
-        }
+        reply = {**self.event("reply"), "body": "@robert-bot target is one second", "intent": "analysis"}
         self.fixture.cycle([reply])
         self.driver().run()  # Still ambiguous: ask a second question.
         self.fixture.cycle([])
         self.publish_all()
         self.fixture.cycle([], skip_publish=False)
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             before = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        for event in [
-            reply,
-            {**reply, "id": "historical", "event_at": "2020-01-01T00:00:00Z"},
-        ]:
+        for event in [reply, {**reply, "id": "historical", "event_at": "2020-01-01T00:00:00Z"}]:
             self.fixture.cycle([event])
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], before)
             entry = vote_store.session(conn, round_id=driver.round_id)
             self.assertEqual(len(entry["request"]["event"]["clarifications"]), 1)
@@ -198,11 +176,10 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         )
         self.assertTrue(result["ok"], result)
         self.fixture.cycle([])
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
             self.assertEqual(
-                conn.execute("SELECT route_id FROM tasks WHERE parent_task_id=?", (task,)).fetchone()[0],
-                "vote",
+                conn.execute("SELECT route_id FROM tasks WHERE parent_task_id=?", (task,)).fetchone()[0], "vote"
             )
 
     def test_submitted_review_vote_tracks_the_triggering_review_body(self):
@@ -227,10 +204,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
 
         with (
             patch("robert_agent.workflows.vote.workspace.api", return_value=source),
-            patch(
-                "robert_agent.workflows.vote.workspace.subprocess.run",
-                side_effect=transport,
-            ),
+            patch("robert_agent.workflows.vote.workspace.subprocess.run", side_effect=transport),
         ):
             driver.prepare()
             self.assertIn("review:123", driver.manifest["sources"])
@@ -250,7 +224,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         driver.source_reader = lambda *args: source
         driver.run()
         self.fixture.cycle([])
-        with vote_store.connect(self.db) as conn:
+        with fixture_database.connect(self.db) as conn:
             conn.row_factory = __import__("sqlite3").Row
             action = dict(conn.execute("SELECT * FROM github_actions").fetchone())
             scope = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["audit"][
@@ -291,11 +265,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
             if "--method" in command:
                 posts.append(command)
                 comments.append(
-                    {
-                        "id": 12,
-                        "body": json.loads(action["metadata_json"])["body"],
-                        "user": {"login": "robert-bot"},
-                    }
+                    {"id": 12, "body": json.loads(action["metadata_json"])["body"], "user": {"login": "robert-bot"}}
                 )
                 return SimpleNamespace(returncode=1, stdout="")
             if "comments?" in endpoint:

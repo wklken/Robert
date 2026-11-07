@@ -1,5 +1,19 @@
 """Run a bounded, advisory diagnosis outside the business worker queue."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import origins as db_read_origins
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import supervision_checkpoints as db_read_supervision_checkpoints
+from robert_agent.persistence.queries import supervision_incidents as db_read_supervision_incidents
+from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
+
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -9,7 +23,6 @@ import os
 from pathlib import Path
 import re
 import selectors
-import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -25,8 +38,7 @@ from robert_agent.worker_adapters import build_worker_launch
 
 
 _SENSITIVE_KEY = re.compile(
-    r"(?:^|_)(?:password|passwd|token|secret|credentials?|api_key|authorization|cookie)(?:$|_)",
-    re.I,
+    r"(?:^|_)(?:password|passwd|token|secret|credentials?|api_key|authorization|cookie)(?:$|_)", re.I
 )
 _DIAGNOSIS_CLASSES = {
     "transient_failure",
@@ -89,15 +101,14 @@ def _structured(row, fields):
 
 def _connect(db_path, *, readonly=False):
     mode = "ro" if readonly else "rw"
-    conn = sqlite3.connect(f"{db_path.as_uri()}?mode={mode}", uri=True, timeout=0.05)
-    conn.row_factory = sqlite3.Row
+    conn = db_database.connect(f"{db_path.as_uri()}?mode={mode}", uri=True, timeout=0.05)
     return conn
 
 
 @contextmanager
 def _write(db_path):
     with closing(_connect(db_path)) as conn, conn:
-        conn.execute("BEGIN IMMEDIATE")
+        db_transactions.begin(conn, immediate=True)
         yield conn
 
 
@@ -132,48 +143,22 @@ def _cooldown_key(target):
 
 def _targets(conn, now):
     cutoff = now.astimezone(timezone.utc).isoformat()
-    incidents = conn.execute(
-        """SELECT i.incident_id,i.scope_type,i.scope_id,i.rule_id,i.lineage_key
-        FROM supervision_incidents i LEFT JOIN supervision_checkpoints c
-          ON c.scope_type='diagnosis' AND c.scope_id=i.incident_id AND c.rule_id='analysis'
-        WHERE i.status IN ('open','needs_attention','diagnosing')
-          AND COALESCE(json_extract(c.metadata_json,'$.evidence_retry_at'),'') <= ?
-        ORDER BY COALESCE(c.updated_at,''),i.first_observed_at,i.incident_id LIMIT 32""",
-        (cutoff,),
-    ).fetchall()
-    candidates = conn.execute(
-        """SELECT c.scope_type,c.scope_id,c.rule_id,c.lineage_key
-        FROM supervision_checkpoints c JOIN tasks t ON t.task_id=c.scope_id
-        LEFT JOIN supervision_checkpoints d ON d.scope_type='diagnosis'
-          AND d.scope_id='candidate:' || c.scope_id || ':' || c.rule_id AND d.rule_id='analysis'
-        WHERE c.scope_type='task' AND c.classification='suspect' AND t.lifecycle='running'
-          AND COALESCE(json_extract(d.metadata_json,'$.evidence_retry_at'),'') <= ?
-        ORDER BY COALESCE(d.updated_at,''),c.last_progress_at,c.scope_id,c.rule_id LIMIT 32""",
-        (cutoff,),
-    ).fetchall()
+    incidents = db_read_supervision_incidents.find_for_targets(conn, cutoff)
+    candidates = db_read_supervision_checkpoints.find_for_targets(conn, cutoff)
     return [_target(row, "incident") for row in incidents] + [_target(row, "checkpoint") for row in candidates]
 
 
 def _read_subject(conn, target):
     if target["source"] == "incident":
-        row = conn.execute(
-            """SELECT scope_type,scope_id,rule_id,lineage_key,status,reason_code,
-                CASE WHEN length(evidence_json)<=12000 THEN evidence_json END AS evidence_json,
-                CASE WHEN length(expected_progress_json)<=3000 THEN expected_progress_json END AS expected_json
-            FROM supervision_incidents WHERE incident_id=?""",
-            (target["id"],),
-        ).fetchone()
+        row = db_records.first(db_read_supervision_incidents.find_for_read_subject(conn, target["id"]))
         if not row or row["status"] not in _IN_PROGRESS:
             return None
     else:
-        row = conn.execute(
-            """SELECT c.scope_type,c.scope_id,c.rule_id,c.lineage_key,c.classification AS status,c.reason_code,
-                CASE WHEN length(c.evidence_json)<=12000 THEN c.evidence_json END AS evidence_json,
-                NULL AS expected_json
-            FROM supervision_checkpoints c JOIN tasks t ON t.task_id=c.scope_id
-            WHERE c.scope_type=? AND c.scope_id=? AND c.rule_id=? AND t.lifecycle='running' """,
-            (target["scope_type"], target["scope_id"], target["rule_id"]),
-        ).fetchone()
+        row = db_records.first(
+            db_read_supervision_checkpoints.find_for_read_subject(
+                conn, target["scope_type"], target["scope_id"], target["rule_id"]
+            )
+        )
         if not row or row["status"] != "suspect":
             return None
     lineage = row["lineage_key"] or f"{row['scope_type']}:{row['scope_id']}"
@@ -190,38 +175,13 @@ def _read_subject(conn, target):
 def _task_context(conn, target):
     if target["scope_type"] != "task":
         return None, None, None
-    task = conn.execute(
-        """SELECT t.task_id,t.lifecycle,t.route_id,t.expected_output,t.workstream_id,
-            t.updated_at,w.repo_id,r.full_name AS repository,r.enabled AS repository_enabled,
-            (SELECT allowed_github_actions_json FROM route_decisions WHERE task_id=t.task_id
-             ORDER BY created_at DESC,route_decision_id DESC LIMIT 1) AS route_actions
-        FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-        JOIN repos r ON r.repo_id=w.repo_id WHERE t.task_id=?""",
-        (target["scope_id"],),
-    ).fetchone()
+    task = db_records.first(db_read_tasks.find_for_task_context(conn, target["scope_id"]))
     if not task:
         return None, None, None
-    item = conn.execute(
-        """WITH RECURSIVE origins(stream_id,depth) AS (
-            SELECT ?,0 UNION ALL
-            SELECT w.origin_workstream_id,o.depth+1 FROM origins o JOIN workstreams w ON w.workstream_id=o.stream_id
-            WHERE w.origin_workstream_id IS NOT NULL AND w.repo_id=? AND o.depth<7
-        ) SELECT wi.work_item_id,wi.title,wi.version,wi.origin_type,
-                 CASE WHEN length(wi.description)<=8000 THEN wi.description END AS description
-        FROM origins o JOIN work_items wi ON wi.workstream_id=o.stream_id
-        WHERE wi.repo_id=? ORDER BY o.depth LIMIT 1""",
-        (task["workstream_id"], task["repo_id"], task["repo_id"]),
-    ).fetchone()
-    attempt = conn.execute(
-        """SELECT a.attempt_id,a.status,a.branch_name,a.started_at,a.finished_at,
-            json_extract(a.metadata_json,'$.existing_pr_head_sha') AS input_sha,
-            wr.result_id,wr.output_type,json_extract(wr.metadata_json,'$.audit.status') AS audit_status,
-            json_extract(wr.metadata_json,'$.audit.action_scope.result_head_sha') AS result_sha,
-            CASE WHEN length(wr.verification_json)<=8000 THEN wr.verification_json END AS reported_verification
-        FROM attempts a LEFT JOIN worker_results wr ON wr.attempt_id=a.attempt_id AND wr.task_id=a.task_id
-        WHERE a.task_id=? ORDER BY a.attempt_no DESC LIMIT 1""",
-        (task["task_id"],),
-    ).fetchone()
+    item = db_records.first(
+        db_read_origins.find_for_task_context(conn, task["workstream_id"], task["repo_id"], task["repo_id"])
+    )
+    attempt = db_records.first(db_read_attempts.find_for_task_context(conn, task["task_id"]))
     return (
         _structured(task, ("route_actions",)),
         dict(item) if item else None,
@@ -236,43 +196,19 @@ def _snapshot(conn, target):
     task, item, attempt = _task_context(conn, target)
     if target["scope_type"] == "task" and not task:
         return None
-    facts = {
-        "observation": subject,
-        "task": task,
-        "work_item": item,
-        "attempt": attempt,
-    }
+    facts = {"observation": subject, "task": task, "work_item": item, "attempt": attempt}
     if task:
-        events = conn.execute(
-            """SELECT ge.event_type,ge.event_at,ge.authorization_status,
-                CASE WHEN length(json_extract(ge.payload_json,'$.title'))<=4000
-                     THEN json_extract(ge.payload_json,'$.title') END AS title,
-                CASE WHEN length(json_extract(ge.payload_json,'$.body'))<=8000
-                     THEN json_extract(ge.payload_json,'$.body') END AS body
-            FROM task_events te JOIN github_events ge ON ge.event_id=te.event_id
-            WHERE te.task_id=? AND ge.repo_id=? AND te.relationship IN ('trigger','pending','consumed')
-            ORDER BY te.relationship='trigger' DESC,ge.event_at DESC,ge.event_id DESC LIMIT 3""",
-            (task["task_id"], task["repo_id"]),
-        ).fetchall()
+        events = db_read_task_events.find_for_snapshot(conn, task["task_id"], task["repo_id"])
         facts["request_events"] = [dict(row) for row in events]
     if attempt:
-        phases = conn.execute(
-            """SELECT phase,status,created_at,
-                CASE WHEN length(summary)<=4000 THEN summary END AS summary
-            FROM worker_phases WHERE attempt_id=? ORDER BY created_at DESC,phase_id DESC LIMIT 3""",
-            (attempt["attempt_id"],),
-        ).fetchall()
+        phases = db_read_worker_phases.find_for_snapshot(conn, attempt["attempt_id"])
         facts["worker_phases"] = [dict(row) for row in phases]
     return _safe(facts, -1)
 
 
 def _bundle(snapshot, target, bundle_id):
     evidence = []
-    missing = [
-        "current_external_authorization",
-        "deployed_build",
-        "complete_worker_tool_trace",
-    ]
+    missing = ["current_external_authorization", "deployed_build", "complete_worker_tool_trace"]
     for kind, value in snapshot.items():
         if value is None:
             if target["scope_type"] == "task":
@@ -328,17 +264,8 @@ def _complete(db_path, claim, now, status, diagnosis=None, *, stopped=True, prov
             record["provider_error"] = {**provider_error, "retry_at": retry_at}
             runner["provider_not_before"] = retry_at
         _put(conn, _analysis_key(target), record, now)
-        _put(
-            conn,
-            _RUNNER,
-            {**runner, "claim": None if stopped else {**claim, "status": "attention"}},
-            now,
-        )
-    return _status(
-        status,
-        target,
-        ok=status in {"succeeded", "interrupted", "stopped", "stale_evidence"},
-    )
+        _put(conn, _RUNNER, {**runner, "claim": None if stopped else {**claim, "status": "attention"}}, now)
+    return _status(status, target, ok=status in {"succeeded", "interrupted", "stopped", "stale_evidence"})
 
 
 def _validate_output(raw, claim):
@@ -349,10 +276,7 @@ def _validate_output(raw, claim):
         return result
 
     output = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
-    if not isinstance(output, dict) or set(output) not in (
-        _OUTPUT_FIELDS,
-        {"bundle_id", "bundle_sha256", "error"},
-    ):
+    if not isinstance(output, dict) or set(output) not in (_OUTPUT_FIELDS, {"bundle_id", "bundle_sha256", "error"}):
         raise ValueError("wrong diagnosis fields")
     if output["bundle_id"] != claim["bundle_id"] or output["bundle_sha256"] != claim["bundle_sha256"]:
         raise ValueError("diagnosis references a different bundle")
@@ -367,10 +291,7 @@ def _validate_output(raw, claim):
         ):
             raise ValueError("invalid provider rate limit")
         return output
-    for key, values in (
-        ("diagnosis_class", _DIAGNOSIS_CLASSES),
-        ("recommended_action", _RECOMMENDATIONS),
-    ):
+    for key, values in (("diagnosis_class", _DIAGNOSIS_CLASSES), ("recommended_action", _RECOMMENDATIONS)):
         if not isinstance(output[key], str) or output[key] not in values:
             raise ValueError("unsupported diagnosis class or recommendation")
     ids = output["evidence_ids"]
@@ -488,22 +409,14 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                     try:
                         validated = _validate_output(output, claim)
                         if "error" in validated:
-                            status, provider_error = (
-                                "provider_rate_limited",
-                                validated["error"],
-                            )
+                            status, provider_error = "provider_rate_limited", validated["error"]
                         elif status == "read":
                             status, diagnosis = "succeeded", validated
                     except (ValueError, RecursionError):
                         status = "invalid_output"
                 elif status == "read":
                     status = "invalid_output"
-            except (
-                OSError,
-                sqlite3.Error,
-                ValueError,
-                worker_identity.IdentityReadError,
-            ):
+            except (OSError, db_errors.Error, ValueError, worker_identity.IdentityReadError):
                 status = "launch_failed" if proc is None else "process_attention"
             finally:
                 if proc is not None:
@@ -517,15 +430,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
             if not stopped:
                 status, diagnosis, provider_error = "process_attention", None, None
     finished = now + timedelta(seconds=time.monotonic() - observed_monotonic)
-    return _PendingCompletion(
-        db_path,
-        claim,
-        finished,
-        status,
-        diagnosis,
-        stopped,
-        provider_error=provider_error,
-    )
+    return _PendingCompletion(db_path, claim, finished, status, diagnosis, stopped, provider_error=provider_error)
 
 
 def _recover_previous(db_path, claim, now, stop):
@@ -564,7 +469,7 @@ def _persist_job(job):
     if isinstance(job.result, _PendingCompletion):
         try:
             job.result = job.result.persist()
-        except (OSError, sqlite3.Error):
+        except (OSError, db_errors.Error):
             return _status("completion_pending", ok=False)
     return job.result or _status("unavailable", ok=False)
 
@@ -577,7 +482,7 @@ class _Job:
         def execute():
             try:
                 self.result = callback(self.stop)
-            except (OSError, sqlite3.Error, ValueError, subprocess.SubprocessError):
+            except (OSError, db_errors.Error, ValueError, subprocess.SubprocessError):
                 self.result = _status("unavailable", ok=False)
 
         self.thread = threading.Thread(target=execute, name="robert-diagnosis", daemon=True)
@@ -642,12 +547,7 @@ def _claim(db_path, profile, target, packet, packet_bytes, now):
             evidence_ids=[item["id"] for item in packet["evidence"]],
             cooldown_seconds=profile["cooldown_seconds"],
         )
-        _put(
-            conn,
-            _RUNNER,
-            {**runner, "claim": claim, "hourly_calls": [*recent, now.isoformat()]},
-            now,
-        )
+        _put(conn, _RUNNER, {**runner, "claim": claim, "hourly_calls": [*recent, now.isoformat()]}, now)
         _put(conn, key, {"claimed_at": now.isoformat()}, now)
         _put(
             conn,
@@ -686,7 +586,7 @@ def poll(config, *, now=None):
             return result
         try:
             with closing(_connect(db_path, readonly=True)) as conn:
-                conn.execute("BEGIN")
+                db_transactions.begin(conn, immediate=False)
                 if not supervision_store.has_schema(conn):
                     return _status("unavailable", ok=False)
                 runner = _checkpoint(conn, _RUNNER)
@@ -696,15 +596,12 @@ def poll(config, *, now=None):
                     _JOBS[db_path] = _Job(lambda stop: _recover_previous(db_path, previous, current, stop))
                     return _status("checking_previous", previous["target"])
                 if _provider_wait(runner, current):
-                    return {
-                        **_status("provider_cooldown"),
-                        "retry_at": runner["provider_not_before"],
-                    }
+                    return {**_status("provider_cooldown"), "retry_at": runner["provider_not_before"]}
                 targets = _targets(conn, current)
             rejected = None
             for target in targets:
                 with closing(_connect(db_path, readonly=True)) as conn:
-                    conn.execute("BEGIN")
+                    db_transactions.begin(conn, immediate=False)
                     last = supervision_rules.timestamp(_checkpoint(conn, _cooldown_key(target)).get("claimed_at"))
                     if last is not None and current < last + timedelta(seconds=profile["cooldown_seconds"]):
                         continue
@@ -722,18 +619,12 @@ def poll(config, *, now=None):
                 if claim is not None:
                     _JOBS[db_path] = _Job(
                         lambda stop: _run(
-                            db_path,
-                            claim,
-                            packet,
-                            profile,
-                            current,
-                            stop,
-                            observed_monotonic=observed_monotonic,
+                            db_path, claim, packet, profile, current, stop, observed_monotonic=observed_monotonic
                         )
                     )
                 return _status(status, target)
             return rejected or _status("cooldown" if targets else "idle")
-        except (OSError, sqlite3.Error, ValueError, RecursionError):
+        except (OSError, db_errors.Error, ValueError, RecursionError):
             return _status("unavailable", ok=False)
 
 

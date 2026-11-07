@@ -1,5 +1,18 @@
 """Shared lifecycle facts and safe operator recovery for a work item."""
 
+from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import vote_sessions as db_write_vote_sessions
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
+
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import leases as db_read_leases
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import pr_remediation_episodes as db_write_pr_remediation_episodes
+from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.adapters.processes import attempt as attempt_process
 import json
 
@@ -9,11 +22,7 @@ from robert_agent.delivery.lock import task_publication_lock
 def require_idle_repository(conn, repo_id, now):
     from robert_agent.work.errors import WorkItemConflictError
 
-    busy = conn.execute(
-        """SELECT 1 FROM leases WHERE resource_type='agent_run' AND resource_key=?
-        AND status='active' AND expires_at>? LIMIT 1""",
-        (repo_id, now),
-    ).fetchone()
+    busy = db_records.first(db_read_leases.find_for_require_idle_repository(conn, repo_id, now))
     if busy:
         raise WorkItemConflictError("The repository is processing a cycle. Refresh and retry after it finishes.")
 
@@ -24,11 +33,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
     # The write transaction prevents a new engine lease. Publication has its
     # own task lock, held until this command commits; neither lock waits on I/O.
     require_idle_repository(conn, item["repo_id"], now)
-    placeholders = ",".join("?" for _ in facts["streams"]) or "NULL"
-    task_ids = conn.execute(
-        f"SELECT task_id FROM tasks WHERE workstream_id IN ({placeholders}) ORDER BY task_id",
-        facts["streams"],
-    )
+    task_ids = db_read_tasks.cancel_execution_filtered(conn, facts["streams"])
     task_ids = list(task_ids)
     for (task_id,) in task_ids:
         if not locks.enter_context(task_publication_lock(db_path, task_id)):
@@ -66,10 +71,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             )
         metadata["termination"] = outcome
         metadata["process_stopped_at"] = now
-        conn.execute(
-            "UPDATE attempts SET metadata_json=? WHERE attempt_id=?",
-            (json.dumps(metadata), attempt["attempt_id"]),
-        )
+        db_write_attempts.set_metadata_json_by_attempt_id(conn, json.dumps(metadata), attempt["attempt_id"])
     # This is an explicit operator attestation, never an automatic inference
     # that an unrecorded process died. The task locks prevent concurrent spawn.
     for run_id in abandon_review_run_ids:
@@ -87,11 +89,11 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             raise WorkItemConflictError(
                 "Review worker identity could not be verified. Inspect and stop residual processes, then explicitly confirm abandonment of unknown launches when canceling."
             )
-    from robert_agent.adapters.sqlite import execution_control as execution_store
+    from robert_agent.persistence import execution_control as execution_store
 
     subjects = {("task", task_id) for (task_id,) in task_ids}
     for (task_id,) in task_ids:
-        task = conn.execute("SELECT task_kind, metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        task = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
         if task and task[0] in {"ci_remediation", "merge_conflict_remediation"}:
             try:
                 metadata = json.loads(task[1]) if task[1] else {}
@@ -106,37 +108,11 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             continue
         execution_store.close_binding(conn, subject_type, subject_id, now)
         if subject_type == "remediation_episode":
-            conn.execute(
-                "UPDATE pr_remediation_episodes SET status='canceled', updated_at=? WHERE episode_id=? AND status NOT IN ('resolved','exhausted','superseded','canceled')",
-                (now, subject_id),
-            )
-    placeholders = ",".join("?" for _ in facts["streams"]) or "NULL"
-    params = [now] + facts["streams"]
-    conn.execute(
-        f"UPDATE tasks SET lifecycle='canceled', updated_at=? WHERE workstream_id IN ({placeholders}) AND lifecycle NOT IN ('completed','ignored','canceled')",
-        params,
-    )
-    conn.execute(
-        f"UPDATE attempts SET status='canceled', finished_at=? WHERE task_id IN (SELECT task_id FROM tasks WHERE workstream_id IN ({placeholders})) AND status IN ('prepared','running','stale')",
-        params,
-    )
-    conn.execute(
-        f"UPDATE workstreams SET lifecycle='canceled', active_task_id=NULL, updated_at=? WHERE workstream_id IN ({placeholders})",
-        params,
-    )
-    conn.execute(
-        f"UPDATE review_sessions SET status='canceled',error='operator canceled work item',updated_at=? WHERE workstream_id IN ({placeholders}) AND status NOT IN ('published','superseded','canceled')",
-        params,
-    )
-    conn.execute(
-        f"UPDATE vote_sessions SET status='canceled',error='operator canceled work item',updated_at=? WHERE workstream_id IN ({placeholders}) AND status NOT IN ('published','superseded','canceled')",
-        params,
-    )
-    conn.execute(
-        f"UPDATE github_actions SET publish_status='skipped' WHERE task_id IN (SELECT task_id FROM tasks WHERE workstream_id IN ({placeholders})) AND publish_status='not_published'",
-        facts["streams"],
-    )
-    conn.execute(
-        "UPDATE wakeups SET status='canceled', updated_at=? WHERE work_item_id=? AND status='pending'",
-        (now, item["work_item_id"]),
-    )
+            db_write_pr_remediation_episodes.update_for_cancel_execution(conn, now, subject_id)
+    db_write_tasks.cancel_execution_filtered(conn, facts["streams"], now)
+    db_write_attempts.cancel_execution_filtered(conn, facts["streams"], now)
+    db_write_workstreams.cancel_execution_filtered(conn, facts["streams"], now)
+    db_write_review_sessions.cancel_execution_filtered(conn, facts["streams"], now)
+    db_write_vote_sessions.cancel_execution_filtered(conn, facts["streams"], now)
+    db_write_github_actions.cancel_execution_filtered(conn, facts["streams"])
+    db_write_wakeups.update_for_cancel_execution(conn, now, item["work_item_id"])

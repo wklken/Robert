@@ -49,6 +49,6 @@ class NotificationTests(TemporaryWorkspace):
         self.assertNotIn("shell", calls[0][1])
 
     def _init_notifications_db(self, db_path):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         storage.init_database(db_path)

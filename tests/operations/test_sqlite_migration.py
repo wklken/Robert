@@ -1,3 +1,4 @@
+from robert_agent.persistence.schema import execution_control as execution_schema
 from contextlib import closing
 import json
 from pathlib import Path
@@ -5,7 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from tests.support import legacy_workflow_store as workflow_store
 from tests.support import legacy_workflow_signals as workflow_signals
 from robert_agent.operations import migration as sqlite_migration
@@ -155,10 +156,10 @@ class SQLiteMigrationTests(unittest.TestCase):
         self.assertTrue(any(b["reason"].startswith("worker_identity_") for b in plan["blockers"]))
 
     def test_unrelated_control_row_does_not_authorize_dbos_startup(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            execution_store.initialize(conn)
+            execution_schema.initialize(conn)
             execution_store.ensure_subject(conn, "task", "t", "human_request", "now")
             with self.assertRaisesRegex(RuntimeError, "offline migration"):
                 execution_store.require_migrated(conn)
@@ -244,7 +245,7 @@ class SQLiteMigrationTests(unittest.TestCase):
             sqlite_migration.run(self.db, plan_file=path)
 
     def test_conflicting_control_is_reported_before_apply(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         with closing(sqlite3.connect(self.db)) as conn, conn:
             execution_store.ensure_subject(conn, "task", "t", "human_request", "now")
@@ -273,24 +274,14 @@ class SQLiteMigrationTests(unittest.TestCase):
 
     def test_failed_handoff_rolls_back_and_can_retry_same_plan(self):
         from unittest.mock import patch
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         plan = sqlite_migration.preview(self.db)
-        with patch.object(
-            execution_store,
-            "record_historical_facts",
-            side_effect=RuntimeError("injected failure"),
-        ):
+        with patch.object(execution_store, "record_historical_facts", side_effect=RuntimeError("injected failure")):
             with self.assertRaisesRegex(RuntimeError, "injected failure"):
                 sqlite_migration.apply(self.db, plan)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[0],
-                "active",
-            )
+            self.assertEqual(conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[0], "active")
             self.assertEqual(conn.execute("SELECT count(*) FROM execution_subjects").fetchone()[0], 0)
-            self.assertEqual(
-                conn.execute("SELECT count(*) FROM execution_migrations").fetchone()[0],
-                0,
-            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM execution_migrations").fetchone()[0], 0)
         self.assertTrue(sqlite_migration.apply(self.db, plan)["ok"])

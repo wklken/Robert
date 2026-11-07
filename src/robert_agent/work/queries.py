@@ -1,62 +1,26 @@
 """Read task and source facts without importing the runtime driver."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_sources as db_read_github_sources
+from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
 import json
 
 
 def load_active_workstreams(conn, repo_id):
-    return {
-        row[0]
-        for row in conn.execute(
-            """
-            SELECT workstream_id
-            FROM workstreams
-            WHERE repo_id = ?
-              AND lifecycle IN ('active', 'waiting_for_user')
-              AND active_task_id IS NOT NULL
-            """,
-            (repo_id,),
-        )
-    }
+    return {row[0] for row in db_read_workstreams.load_active_workstreams(conn, repo_id)}
 
 
 def load_known_workstreams(conn, repo_id):
-    return {
-        row[0]
-        for row in conn.execute(
-            """
-            SELECT workstream_id
-            FROM workstreams
-            WHERE repo_id = ?
-              AND (lifecycle != 'canceled' OR json_extract(metadata_json,'$.remote_reconciliation') IS NOT NULL)
-            """,
-            (repo_id,),
-        )
-    }
+    return {row[0] for row in db_read_workstreams.load_known_workstreams(conn, repo_id)}
 
 
 def task_related_events(conn, task_id, include_consumed=False):
     relationships = ["trigger", "context", "pending"]
     if include_consumed:
         relationships.append("consumed")
-    placeholders = ", ".join("?" for _ in relationships)
-    rows = conn.execute(
-        f"""
-        SELECT te.relationship, ge.event_fingerprint, ge.payload_json
-        FROM task_events te
-        JOIN github_events ge ON ge.event_id = te.event_id
-        WHERE te.task_id = ?
-          AND te.relationship IN ({placeholders})
-        ORDER BY CASE te.relationship
-            WHEN 'trigger' THEN 0
-            WHEN 'consumed' THEN 1
-            WHEN 'context' THEN 2
-            ELSE 3
-          END,
-          ge.event_at,
-          ge.event_id
-        """,
-        (task_id, *relationships),
-    ).fetchall()
+    rows = db_read_task_events.task_related_events_filtered(conn, relationships, task_id)
     events = []
     consumed_events = []
     for relationship, event_fingerprint, payload in rows:
@@ -67,7 +31,7 @@ def task_related_events(conn, task_id, include_consumed=False):
         else:
             events.append(event)
     # Enrich recovery content while retaining the original trigger authority.
-    metadata = conn.execute("SELECT metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    metadata = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, task_id))
     refreshed = json.loads(metadata[0] or "{}").get("refreshed_context", []) if metadata else []
     by_fingerprint = {item["event_fingerprint"]: item for item in refreshed}
     for event in events + consumed_events:
@@ -93,29 +57,10 @@ def task_related_events(conn, task_id, include_consumed=False):
 def failed_parent_context_events(conn, parent_task_id):
     if not parent_task_id:
         return []
-    row = conn.execute(
-        "SELECT lifecycle FROM tasks WHERE task_id = ?",
-        (parent_task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_lifecycle_by_task_id(conn, parent_task_id))
     if not row or row[0] != "failed":
         return []
-    rows = conn.execute(
-        """
-        SELECT te.relationship, ge.event_fingerprint, ge.payload_json
-        FROM task_events te
-        JOIN github_events ge ON ge.event_id = te.event_id
-        WHERE te.task_id = ?
-          AND te.relationship IN ('trigger', 'context', 'pending')
-        ORDER BY CASE te.relationship
-            WHEN 'trigger' THEN 0
-            WHEN 'context' THEN 1
-            ELSE 2
-          END,
-          ge.event_at,
-          ge.event_id
-        """,
-        (parent_task_id,),
-    ).fetchall()
+    rows = db_read_task_events.find_for_failed_parent_context_events(conn, parent_task_id)
     events = []
     for relationship, event_fingerprint, payload in rows:
         event = json.loads(payload)
@@ -126,75 +71,20 @@ def failed_parent_context_events(conn, parent_task_id):
 
 
 def latest_task_id(conn, workstream_id):
-    row = conn.execute(
-        """
-        SELECT task_id
-        FROM tasks
-        WHERE workstream_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (workstream_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_task_id_by_workstream_id_2(conn, workstream_id))
     return row[0] if row else None
 
 
 def active_task_id(conn, workstream_id):
-    row = conn.execute(
-        "SELECT active_task_id FROM workstreams WHERE workstream_id = ?",
-        (workstream_id,),
-    ).fetchone()
+    row = db_records.first(db_read_workstreams.find_active_task_id_by_workstream_id(conn, workstream_id))
     if row and row[0]:
         return row[0]
-    row = conn.execute(
-        """
-        SELECT task_id
-        FROM tasks
-        WHERE workstream_id = ?
-          AND lifecycle IN ('detected', 'authorized', 'classified', 'queued', 'running')
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (workstream_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_for_active_task_id(conn, workstream_id))
     return row[0] if row else None
 
 
 def remote_source_rows(conn, repo_id):
-    return conn.execute(
-        """
-        SELECT
-          w.workstream_id,
-          w.active_task_id,
-          gs.source_id,
-          gs.source_key,
-          gs.source_type,
-          gs.number
-        FROM workstreams w
-        JOIN github_sources gs ON gs.source_id = w.primary_source_id
-        WHERE w.repo_id = ?
-          AND (
-            (
-              w.active_task_id IS NOT NULL
-              AND w.lifecycle IN ('active', 'waiting_for_user')
-            )
-            OR (
-              gs.source_type = 'pull_request'
-              AND gs.state = 'open'
-            )
-            OR (
-              gs.source_type = 'issue'
-              AND EXISTS (
-                SELECT 1 FROM work_items wi
-                WHERE wi.origin_source_id = gs.source_id
-                  AND wi.completed_at IS NULL AND wi.canceled_at IS NULL
-              )
-            )
-          )
-        ORDER BY w.updated_at, w.workstream_id
-        """,
-        (repo_id,),
-    ).fetchall()
+    return db_read_workstreams.find_for_remote_source_rows(conn, repo_id)
 
 
 def sources_for_workstream(conn, workstream_id):
@@ -203,21 +93,7 @@ def sources_for_workstream(conn, workstream_id):
             "source_type": source_type,
             "number": number,
         }
-        for source_type, number in conn.execute(
-            """
-            SELECT DISTINCT gs.source_type, gs.number
-            FROM github_sources gs
-            WHERE gs.source_id IN (
-              SELECT primary_source_id
-              FROM workstreams
-              WHERE workstream_id = ?
-              UNION
-              SELECT source_id
-              FROM workstream_sources
-              WHERE workstream_id = ?
-            )
-            ORDER BY gs.source_type, gs.number
-            """,
-            (workstream_id, workstream_id),
+        for source_type, number in db_read_github_sources.find_for_sources_for_workstream(
+            conn, workstream_id, workstream_id
         )
     ]

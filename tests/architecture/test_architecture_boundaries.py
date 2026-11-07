@@ -1,6 +1,7 @@
 """Keep migrated owners independent of orchestration and workflow implementations."""
 
 import ast
+import re
 import unittest
 
 
@@ -86,17 +87,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "context",
             "readmodels",
             "security",
+            "models",
+            "persistence",
         )
-        upper = (
-            "application",
-            "runtime",
-            "interfaces",
-            "cli",
-            "operations",
-            "acceptance",
-            "workflows",
-            "worker",
-        )
+        upper = ("application", "runtime", "interfaces", "cli", "operations", "acceptance", "workflows", "worker")
         for name, dependencies in self.graph.items():
             if ".application." in name or name.endswith(".application"):
                 continue
@@ -122,25 +116,84 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "worker_adapters",
             "resource_files",
             "paths",
+            "persistence",
         }
         for name, dependencies in self.graph.items():
             if name.startswith("robert_agent.adapters."):
                 for dependency in dependencies - {"robert_agent"}:
                     self.assertIn(dependency.split(".")[1], allowed, (name, dependency))
 
+    def test_models_and_persistence_have_no_domain_callers(self):
+        for name, dependencies in self.graph.items():
+            if name.startswith("robert_agent.models"):
+                allowed = {"models"}
+            elif name.startswith("robert_agent.persistence"):
+                allowed = {"models", "persistence", "resource_files", "security"}
+            else:
+                continue
+            for dependency in dependencies - {"robert_agent"}:
+                self.assertIn(dependency.split(".")[1], allowed, (name, dependency))
+
+    def test_database_expressions_are_owned_by_persistence(self):
+        sql = re.compile(
+            r"\b(?:SELECT\s+.+?\s+FROM|INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|CREATE\s+TABLE|PRAGMA\s+\w+)\b",
+            re.S,
+        )
+        for path in PACKAGE.rglob("*.py"):
+            owner = path.relative_to(PACKAGE).parts[0]
+            if owner == "persistence":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    imports = (
+                        [node.module or ""]
+                        if isinstance(node, ast.ImportFrom)
+                        else [alias.name for alias in node.names]
+                    )
+                    if isinstance(node, ast.ImportFrom):
+                        imports += [(node.module or "") + "." + alias.name for alias in node.names]
+                    for name in imports:
+                        if owner != "models":
+                            self.assertFalse(
+                                name == "robert_agent.models" or name.startswith("robert_agent.models."),
+                                (path, node.lineno),
+                            )
+                            self.assertFalse(
+                                any(
+                                    name == prefix or name.startswith(prefix + ".")
+                                    for prefix in (
+                                        "robert_agent.persistence.catalog",
+                                        "robert_agent.persistence.statements",
+                                        "robert_agent.persistence.expressions",
+                                    )
+                                ),
+                                (path, node.lineno),
+                            )
+                        self.assertFalse(name.endswith(".execute_control"), (path, node.lineno))
+                        self.assertFalse(name == "sqlite3" or name.startswith("sqlite3."), (path, node.lineno))
+                        if owner != "models":
+                            self.assertFalse(
+                                name == "sqlalchemy" or name.startswith("sqlalchemy."), (path, node.lineno)
+                            )
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    self.assertNotIn(
+                        node.func.attr,
+                        {"execute", "executemany", "executescript", "exec_driver_sql", "execute_control"},
+                        (path, node.lineno),
+                    )
+                if isinstance(node, ast.Attribute):
+                    self.assertNotIn(node.attr, {"_driver", "_connection", "driver_connection"}, (path, node.lineno))
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    self.assertIsNone(sql.search(node.value), (path, node.lineno))
+
     def test_submission_and_stages_do_not_load_workflow_implementations(self):
         self.assert_dependencies(
-            "robert_agent.delivery.contract",
-            {"robert_agent.delivery", "robert_agent.delivery.policies"},
+            "robert_agent.delivery.contract", {"robert_agent.delivery", "robert_agent.delivery.policies"}
         )
         for dependency in self.graph["robert_agent.execution.stages"]:
             self.assertFalse(
                 dependency.startswith(
-                    (
-                        "robert_agent.workflows.",
-                        "robert_agent.application.",
-                        "robert_agent.runtime.",
-                    )
+                    ("robert_agent.workflows.", "robert_agent.application.", "robert_agent.runtime.")
                 ),
                 dependency,
             )
@@ -153,10 +206,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for path in PACKAGE.rglob("*.py"):
             for node in ast.walk(ast.parse(path.read_text())):
                 if isinstance(node, ast.ImportFrom) and node.module == "robert_agent":
-                    self.assertTrue(
-                        {alias.name for alias in node.names} <= root_exports,
-                        (path, node.lineno),
-                    )
+                    self.assertTrue({alias.name for alias in node.names} <= root_exports, (path, node.lineno))
                 elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("robert_agent."):
                     self.assertIn(node.module, self.graph, (path, node.lineno))
                 elif isinstance(node, ast.Import):
@@ -165,10 +215,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                             self.assertIn(alias.name, self.graph, (path, node.lineno))
 
     def test_root_contains_only_package_primitives(self):
-        self.assertEqual(
-            {path.stem for path in PACKAGE.glob("*.py")},
-            {"__init__", "paths", "resource_files"},
-        )
+        self.assertEqual({path.stem for path in PACKAGE.glob("*.py")}, {"__init__", "paths", "resource_files"})
 
     def test_declared_commands_use_real_implementation_modules(self):
         import importlib
@@ -199,10 +246,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     )
 
     def test_runtime_and_http_do_not_execute_business_sql(self):
-        paths = [
-            *PACKAGE.joinpath("runtime").rglob("*.py"),
-            *PACKAGE.joinpath("interfaces/web").rglob("*.py"),
-        ]
+        paths = [*PACKAGE.joinpath("runtime").rglob("*.py"), *PACKAGE.joinpath("interfaces/web").rglob("*.py")]
         for path in paths:
             for node in ast.walk(ast.parse(path.read_text())):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):

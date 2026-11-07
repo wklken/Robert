@@ -1,7 +1,8 @@
+from robert_agent.persistence import errors as db_errors
+
 #!/usr/bin/env python3
 import argparse
 from pathlib import Path
-import sqlite3
 
 from robert_agent.foundation.commands import emit
 from robert_agent.readmodels import dashboard as web
@@ -257,7 +258,7 @@ def _load_data(db_path, history_limit):
         }
     try:
         return web.build_dashboard_data(path, history_limit=history_limit), None
-    except sqlite3.Error as exc:
+    except db_errors.Error as exc:
         return None, {"ok": False, "status": "database_error", "safe_error": str(exc)}
 
 

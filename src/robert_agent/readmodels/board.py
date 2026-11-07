@@ -1,25 +1,35 @@
 """Deterministic read models for the DD repository task board."""
 
-from robert_agent.work import control_queries
-
 import base64
-from contextlib import closing
 import json
+from contextlib import closing
 from pathlib import Path
-import sqlite3
 from urllib.parse import urlsplit
 
-from robert_agent.work import inputs as work_items
-from robert_agent.adapters.sqlite import execution_control as execution_store
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import execution_control as execution_store
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import github_sources as db_read_github_sources
+from robert_agent.persistence.queries import repos as db_read_repos
+from robert_agent.persistence.queries import (
+    supervision_recovery_actions as db_read_supervision_recovery_actions,
+)
+from robert_agent.persistence.queries import wakeups as db_read_wakeups
+from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
+from robert_agent.persistence.queries.readviews import task_history
+from robert_agent.persistence.queries.readviews import work_items as work_item_queries
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.readmodels.execution import (
-    execution_summary,
     attempt_history,
+    execution_summary,
     publication_history,
     safe_text,
 )
-
+from robert_agent.work import control_queries
+from robert_agent.work import inputs as work_items
 
 COLUMNS = (
     ("backlog", "Backlog"),
@@ -62,11 +72,7 @@ class BoardQueryError(ValueError):
 
 
 def _connect(db_path):
-    conn = sqlite3.connect(Path(db_path).expanduser())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+    return db_database.connect(Path(db_path).expanduser(), foreign_keys=True, busy_timeout_ms=5000)
 
 
 def _decode_json(value, default):
@@ -121,21 +127,7 @@ def _safe_http_url(value):
 
 
 def _unresolved_attention(conn, work_item_id):
-    placeholders = ",".join("?" for _event_type in ATTENTION_EVENTS)
-    rows = conn.execute(
-        f"""
-        SELECT e.event_id, e.event_type, e.body, e.created_at, e.metadata_json
-        FROM work_item_events e
-        WHERE e.work_item_id = ?
-          AND e.event_type IN ({placeholders})
-          AND NOT EXISTS (
-            SELECT 1 FROM work_item_events response
-            WHERE response.resolves_event_id = e.event_id
-          )
-        ORDER BY e.created_at DESC, e.event_id DESC
-        """,
-        [work_item_id] + sorted(ATTENTION_EVENTS),
-    ).fetchall()
+    rows = work_item_queries.unresolved_attention(conn, work_item_id, sorted(ATTENTION_EVENTS))
     return [
         {
             "event_id": row["event_id"],
@@ -149,33 +141,11 @@ def _unresolved_attention(conn, work_item_id):
 
 
 def _latest_attempt(conn, task_id):
-    return conn.execute(
-        """
-        SELECT a.attempt_id, a.status, a.branch_name, a.worktree_path,
-               a.started_at, a.finished_at
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        WHERE t.task_id = ?
-        ORDER BY a.attempt_no DESC
-        LIMIT 1
-        """,
-        (task_id,),
-    ).fetchone()
+    return db_records.first(db_read_attempts.find_for_latest_attempt(conn, task_id))
 
 
 def _derived_pr(conn, root_workstream_id):
-    return conn.execute(
-        """
-        SELECT gs.number, gs.html_url, gs.state, w.workstream_id
-        FROM workstreams w
-        JOIN github_sources gs ON gs.source_id = w.primary_source_id
-        WHERE (w.workstream_id = ? OR w.origin_workstream_id = ?)
-          AND gs.source_type = 'pull_request'
-        ORDER BY w.updated_at DESC, gs.number DESC
-        LIMIT 1
-        """,
-        (root_workstream_id, root_workstream_id),
-    ).fetchone()
+    return db_records.first(db_read_workstreams.find_for_derived_pr(conn, root_workstream_id, root_workstream_id))
 
 
 def _valid_commands(column, attention, *, running=False, publishing=False):
@@ -221,10 +191,9 @@ def _project_item(conn, row, *, controls=None, facts=None):
     work_item_id = row["work_item_id"]
     workstream_id = row["workstream_id"]
     attention = _unresolved_attention(conn, work_item_id)
-    source = conn.execute(
-        "SELECT source_type, number, html_url FROM github_sources WHERE source_id = ?",
-        (row["origin_source_id"],),
-    ).fetchone()
+    source = db_records.first(
+        db_read_github_sources.find_source_type_and_number_and_html_url_by_source_id(conn, row["origin_source_id"])
+    )
     if facts is None:
         facts = control_queries.lifecycle_facts(conn, row, controls=controls)
     task = control_queries.current_task(conn, facts["streams"])
@@ -244,17 +213,9 @@ def _project_item(conn, row, *, controls=None, facts=None):
     )
 
     if row["canceled_at"]:
-        column, reason_code, reason_summary = (
-            "history",
-            "canceled",
-            "Canceled by the operator",
-        )
+        column, reason_code, reason_summary = "history", "canceled", "Canceled by the operator"
     elif row["completed_at"]:
-        column, reason_code, reason_summary = (
-            "done",
-            "completed",
-            "Completion is satisfied",
-        )
+        column, reason_code, reason_summary = "done", "completed", "Completion is satisfied"
     elif facts["source_closed"] and running:
         column, reason_code, reason_summary = (
             "waiting",
@@ -286,11 +247,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             failures[0]["reason"] or "Publication failed; retry the existing result.",
         )
     elif unavailable and not running and not publication_in_progress:
-        column, reason_code, reason_summary = (
-            "waiting",
-            "manual_worker_unavailable",
-            unavailable["summary"],
-        )
+        column, reason_code, reason_summary = "waiting", "manual_worker_unavailable", unavailable["summary"]
     elif (
         attention
         and all(a["type"] == "operator_decision_required" for a in attention)
@@ -324,11 +281,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         and not publication_in_progress
         and not any(a["type"] == "operator_decision_required" for a in attention)
     ):
-        column, reason_code, reason_summary = (
-            "todo",
-            task["lifecycle"],
-            "Runnable work is queued",
-        )
+        column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
     elif (
         attention
         and (not running or attention[0]["type"] == "operator_decision_required")
@@ -364,30 +317,12 @@ def _project_item(conn, row, *, controls=None, facts=None):
             "source_closed",
             "Source closed; cancel this item to finish its lifecycle.",
         )
-    elif task and task["lifecycle"] in {
-        "detected",
-        "authorized",
-        "classified",
-        "queued",
-        "running",
-    }:
-        column, reason_code, reason_summary = (
-            "todo",
-            task["lifecycle"],
-            "Runnable work is queued",
-        )
+    elif task and task["lifecycle"] in {"detected", "authorized", "classified", "queued", "running"}:
+        column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
     elif pr and (pr["state"] or "open").lower() == "open":
-        column, reason_code, reason_summary = (
-            "review",
-            "open_pr",
-            f"PR #{pr['number']} is open",
-        )
+        column, reason_code, reason_summary = "review", "open_pr", f"PR #{pr['number']} is open"
     elif not row["activated_at"]:
-        column, reason_code, reason_summary = (
-            "backlog",
-            "draft",
-            "Requirement is editable",
-        )
+        column, reason_code, reason_summary = "backlog", "draft", "Requirement is editable"
     else:
         column, reason_code, reason_summary = (
             "waiting",
@@ -426,11 +361,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         "branch": attempt["branch_name"] if attempt else None,
         "worktree_label": Path(attempt["worktree_path"]).name if attempt and attempt["worktree_path"] else None,
         "source": (
-            {
-                "type": source["source_type"],
-                "number": source["number"],
-                "url": _safe_http_url(source["html_url"]),
-            }
+            {"type": source["source_type"], "number": source["number"], "url": _safe_http_url(source["html_url"])}
             if source
             else None
         ),
@@ -460,20 +391,10 @@ def _project_item(conn, row, *, controls=None, facts=None):
             from robert_agent.execution import rounds as native_rounds
 
             _, owner = native_rounds.owner(conn, task["task_id"])
-            prepared = conn.execute(
-                "SELECT 1 FROM attempts WHERE task_id=? AND status='prepared'",
-                (task["task_id"],),
-            ).fetchone()
-            pending = conn.execute(
-                "SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json,'$.kind')='github_retrigger'",
-                (task["task_id"],),
-            ).fetchone()
-            native_stopped = (
-                not owner
-                or conn.execute(
-                    "SELECT 1 FROM attempts WHERE task_id=? AND json_extract(metadata_json,'$.process_stopped_at') IS NOT NULL ORDER BY attempt_no DESC LIMIT 1",
-                    (task["task_id"],),
-                ).fetchone()
+            prepared = db_records.first(db_read_attempts.find_for_project_item(conn, task["task_id"]))
+            pending = db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"]))
+            native_stopped = not owner or db_records.first(
+                db_read_attempts.find_for_project_item_2(conn, task["task_id"])
             )
             recoverable = (
                 row["origin_type"] != "web"
@@ -497,10 +418,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
                 ownership_blocked = binding and (
                     binding["binding_status"] == "attention" or binding.get("owner_engine") == "dbos"
                 )
-                pending = conn.execute(
-                    "SELECT 1 FROM wakeups WHERE task_id=? AND status='pending' AND json_extract(metadata_json, '$.kind')='github_retrigger'",
-                    (task["task_id"],),
-                ).fetchone()
+                pending = db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"]))
                 operator_failure = json.loads(task["metadata_json"] or "{}").get("trigger_work_item_event_id") and any(
                     a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"]
                     for a in attention
@@ -518,43 +436,17 @@ def _project_item(conn, row, *, controls=None, facts=None):
 
 
 def _all_projections(conn, *, repo=None, include_history=True):
-    clauses, params = [], []
-    if repo:
-        clauses.append("(wi.repo_id = ? OR r.full_name = ?)")
-        params.extend((repo, repo))
-    if not include_history:
-        clauses.append("(wi.canceled_at IS NULL OR wi.canceled_at = '')")
-    where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    rows = conn.execute(
-        f"""
-        SELECT wi.*, r.full_name AS repo_full_name
-        FROM work_items wi
-        JOIN repos r ON r.repo_id = wi.repo_id
-        {where}
-        ORDER BY wi.updated_at DESC, wi.work_item_id DESC
-        """,
-        params,
-    ).fetchall()
+    rows = work_item_queries.work_items_with_repositories(conn, repo=repo, include_history=include_history)
     controls = execution_store.read_controls(conn) if rows else {}
     return [_project_item(conn, row, controls=controls) for row in rows]
 
 
 def workstream_projections(conn, *, workstream_ids=None, controls=None):
     """Share board lifecycle facts with the workbench without changing its buckets."""
-    clause, params = "", []
-    if workstream_ids is not None:
-        if not workstream_ids:
-            return {}
-        params = list(workstream_ids)
-        clause = " AND wi.workstream_id IN (" + ",".join("?" for _ in params) + ")"
-    rows = conn.execute(
-        f"""
-        SELECT wi.*, r.full_name AS repo_full_name
-        FROM work_items wi JOIN repos r ON r.repo_id = wi.repo_id
-        WHERE wi.workstream_id IS NOT NULL
-        {clause}
-        """,
-        params,
+    rows = work_item_queries.work_items_with_repositories(
+        conn,
+        workstream_ids=workstream_ids,
+        attached_only=True,
     )
     projections = {}
     for row in rows:
@@ -645,24 +537,11 @@ def list_board(
         next_cursor = (
             _cursor_encode([items[-1]["updated_at"], items[-1]["work_item_id"]]) if has_more and items else None
         )
-        running_rows = conn.execute(
-            """
-            SELECT w.repo_id, COUNT(*)
-            FROM attempts a
-            JOIN tasks t ON t.task_id = a.task_id
-            JOIN workstreams w ON w.workstream_id = t.workstream_id
-            WHERE a.status = 'running'
-            GROUP BY w.repo_id
-            """
-        ).fetchall()
+        running_rows = db_read_attempts.list_board(conn)
         per_repo_running = {row[0]: row[1] for row in running_rows}
         repos = [
-            {
-                "repo_id": row[0],
-                "full_name": row[1],
-                "running": per_repo_running.get(row[0], 0),
-            }
-            for row in conn.execute("SELECT repo_id, full_name FROM repos ORDER BY full_name")
+            {"repo_id": row[0], "full_name": row[1], "running": per_repo_running.get(row[0], 0)}
+            for row in db_read_repos.list_board(conn)
         ]
         agents = sorted({item["agent"] for item in projections} | {"Auto"})
     return {
@@ -688,16 +567,7 @@ def _supervision_incidents(conn, tasks, work_item_id):
     if not supervision_store.has_schema(conn):
         return []
     task_ids = [task["task_id"] for task in tasks]
-    placeholders = ",".join("?" for _ in task_ids) or "NULL"
-    rows = conn.execute(
-        f"""SELECT incident_id,scope_id,rule_id,status,reason_code,severity,
-        first_observed_at,last_observed_at,next_check_at FROM supervision_incidents
-        WHERE (scope_type='task' AND scope_id IN ({placeholders})) OR
-        (scope_type='work_item_event' AND scope_id IN
-          (SELECT event_id FROM work_item_events WHERE work_item_id=?))
-        ORDER BY last_observed_at DESC LIMIT 50""",
-        (*task_ids, work_item_id),
-    ).fetchall()
+    rows = work_item_queries.supervision_incidents(conn, work_item_id, task_ids)
     result = []
     for row in rows:
         item = dict(row)
@@ -716,9 +586,8 @@ def _supervision_incidents(conn, tasks, work_item_id):
         }
         item["recovery_actions"] = [
             dict(action)
-            for action in conn.execute(
-                "SELECT action_kind,status,budget_cost FROM supervision_recovery_actions WHERE incident_id=? ORDER BY created_at DESC LIMIT 10",
-                (row["incident_id"],),
+            for action in db_read_supervision_recovery_actions.find_action_kind_and_status_and_budget_cost_by_incident_id(
+                conn, row["incident_id"]
             )
         ]
         result.append(item)
@@ -727,30 +596,14 @@ def _supervision_incidents(conn, tasks, work_item_id):
 
 def get_work_item_detail(db_path, work_item_id):
     with closing(_connect(db_path)) as conn:
-        row = conn.execute(
-            """
-            SELECT wi.*, r.full_name AS repo_full_name
-            FROM work_items wi JOIN repos r ON r.repo_id = wi.repo_id
-            WHERE wi.work_item_id = ?
-            """,
-            (work_item_id,),
-        ).fetchone()
+        row = db_records.first(db_read_work_items.find_for_get_work_item_detail(conn, work_item_id))
         if not row:
             return None
         card = _project_item(conn, row)
         tasks = []
         if row["workstream_id"]:
             streams = control_queries.related_workstreams(conn, row["workstream_id"])
-            placeholders = ",".join("?" for _ in streams)
-            task_rows = conn.execute(
-                f"""
-                SELECT task_id, parent_task_id, lifecycle, priority, route_id,
-                       expected_output, routing_mode, requested_worker, created_at, updated_at
-                FROM tasks WHERE workstream_id IN ({placeholders})
-                ORDER BY created_at, task_id
-                """,
-                streams,
-            ).fetchall()
+            task_rows = task_history.tasks_for_workstreams(conn, streams, chronological=True)
             for task in task_rows:
                 attempts = [
                     {
@@ -761,13 +614,7 @@ def get_work_item_detail(db_path, work_item_id):
                         "started_at": attempt["started_at"],
                         "finished_at": attempt["finished_at"],
                     }
-                    for attempt in conn.execute(
-                        """
-                        SELECT *
-                        FROM attempts WHERE task_id = ? ORDER BY attempt_no
-                        """,
-                        (task["task_id"],),
-                    )
+                    for attempt in db_read_attempts.find_record_by_task_id(conn, task["task_id"])
                 ]
                 tasks.append(
                     {
@@ -807,28 +654,10 @@ def list_work_item_events(db_path, work_item_id, *, limit=50, cursor=None):
         raise BoardQueryError("limit must be between 1 and 200")
     cursor_value = _cursor_decode(cursor)
     with closing(_connect(db_path)) as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM work_items WHERE work_item_id = ?",
-            (work_item_id,),
-        ).fetchone()
+        exists = db_records.first(db_read_work_items.list_work_item_events(conn, work_item_id))
         if not exists:
             return {"events": [], "next_cursor": None}
-        params = [work_item_id]
-        cursor_clause = ""
-        if cursor_value:
-            cursor_clause = "AND (created_at, event_id) < (?, ?)"
-            params.extend(cursor_value)
-        rows = conn.execute(
-            f"""
-            SELECT event_id, event_type, actor_kind, actor_identity, body,
-                   resolves_event_id, idempotency_key, created_at, metadata_json
-            FROM work_item_events
-            WHERE work_item_id = ? {cursor_clause}
-            ORDER BY created_at DESC, event_id DESC
-            LIMIT ?
-            """,
-            params + [limit + 1],
-        ).fetchall()
+        rows = work_item_queries.event_page(conn, work_item_id, before=cursor_value, limit=limit + 1)
         has_more = len(rows) > limit
         rows = rows[:limit]
         events = [

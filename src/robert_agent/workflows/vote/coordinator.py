@@ -6,7 +6,7 @@ from pathlib import Path
 import signal
 
 from robert_agent.workflows.vote import files as vote_files
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.workflows.vote import tally as vote_tally
 from robert_agent.workflows.vote import workspace as vote_workspace
 from robert_agent.execution.stages import (
@@ -26,11 +26,7 @@ class Coordinator(StageCoordinator):
     artifact_files = vote_files
     slot_stores = SLOT_STORES
     voter_stage = "vote"
-    handoff_files = {
-        "prepare": ("prepared-request.json",),
-        "vote": ("ballot.json",),
-        "synthesis": ("synthesis.json",),
-    }
+    handoff_files = {"prepare": ("prepared-request.json",), "vote": ("ballot.json",), "synthesis": ("synthesis.json",)}
     artifact_kinds = ("prepared", "ballot", "synthesis")
     workflow_name = "vote"
 
@@ -64,17 +60,13 @@ class Coordinator(StageCoordinator):
             if self.manifest.get("frozen"):
                 return True
             prompt = self.prompt(
-                "prepare-" + self.manifest["snapshot_id"] + ".md",
-                vote_files.prepare_prompt(self.manifest),
+                "prepare-" + self.manifest["snapshot_id"] + ".md", vote_files.prepare_prompt(self.manifest)
             )
 
             def validate(output, model):
                 path = output / "prepared-request.json"
                 vote_files.read_prepared(path, self.manifest)
-                return {
-                    "prepared_path": str(path),
-                    "prepared_sha256": vote_files.digest(path),
-                }
+                return {"prepared_path": str(path), "prepared_sha256": vote_files.digest(path)}
 
             result = self.run_phase("prepare", self.request["workers"][0], prompt, validate)
             prepared = vote_files.read_prepared(result["prepared_path"], self.manifest)
@@ -96,10 +88,7 @@ class Coordinator(StageCoordinator):
                     prepared["question"],
                     [{"type": "comment", "target_url": target, "body": body}],
                     used_skills=[],
-                    operator_question={
-                        "kind": "clarification",
-                        "summary": prepared["question"],
-                    },
+                    operator_question={"kind": "clarification", "summary": prepared["question"]},
                 )
                 self.phase("waiting_for_user")
                 self.record(payload)
@@ -121,11 +110,7 @@ class Coordinator(StageCoordinator):
             def validate(output, model):
                 path = output / "ballot.json"
                 vote_files.read_ballot(path, self.manifest)
-                return {
-                    "ballot_path": str(path),
-                    "ballot_sha256": vote_files.digest(path),
-                    "adapter": worker["agent"],
-                }
+                return {"ballot_path": str(path), "ballot_sha256": vote_files.digest(path), "adapter": worker["agent"]}
 
             try:
                 return self.run_phase("vote", worker, self.manifest["prompt_path"], validate), None
@@ -163,8 +148,7 @@ class Coordinator(StageCoordinator):
         if vote_files.digest(inputs) != inputs_hash:
             raise ValueError("synthesis inputs changed")
         prompt = self.prompt(
-            f"synthesis-{inputs_hash}.md",
-            vote_files.synthesis_prompt(self.manifest, inputs, inputs_hash, records),
+            f"synthesis-{inputs_hash}.md", vote_files.synthesis_prompt(self.manifest, inputs, inputs_hash, records)
         )
 
         def validate(output, model):
@@ -172,28 +156,13 @@ class Coordinator(StageCoordinator):
                 raise ValueError("synthesis inputs changed")
             path = output / "synthesis.json"
             vote_files.read_synthesis(path, self.manifest, records, inputs_hash)
-            return {
-                "synthesis_path": str(path),
-                "synthesis_sha256": vote_files.digest(path),
-            }
+            return {"synthesis_path": str(path), "synthesis_sha256": vote_files.digest(path)}
 
-        result = self.run_phase(
-            "synthesis",
-            self.request["workers"][0],
-            prompt,
-            validate,
-            input_hash=inputs_hash,
-        )
+        result = self.run_phase("synthesis", self.request["workers"][0], prompt, validate, input_hash=inputs_hash)
         ballots = vote_files.selected_ballots(self.manifest, records)
         summary = vote_files.read_synthesis(result["synthesis_path"], self.manifest, records, inputs_hash)
         body = vote_files.render(
-            self.manifest,
-            records,
-            ballots,
-            tally,
-            summary,
-            task_id=self.task_id,
-            attempt_id=self.attempt_id,
+            self.manifest, records, ballots, tally, summary, task_id=self.task_id, attempt_id=self.attempt_id
         )
         report = root / "vote-report.md"
         report.write_text(body)
@@ -202,11 +171,7 @@ class Coordinator(StageCoordinator):
         vote_workspace.verify_snapshot(self.manifest)
         with vote_store.connect(self.db_path) as conn:
             vote_store.update(
-                conn,
-                self.round_id,
-                status="ready",
-                report_path=str(report),
-                report_sha256=vote_files.digest(report),
+                conn, self.round_id, status="ready", report_path=str(report), report_sha256=vote_files.digest(report)
             )
         action = {"type": "comment", "target_url": self.target_url(), "body": body}
         payload = worker_result.build_result(

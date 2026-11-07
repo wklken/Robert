@@ -130,10 +130,7 @@ class ReadinessTests(AcceptanceFixture):
         self.assertTrue(result["ok"], result)
         self.assertIn("/opt/homebrew/bin/codex", probed)
         self.assertEqual(gates["worker_command"]["status"], "passed")
-        self.assertEqual(
-            gates["worker_command"]["summary"],
-            "codex worker agent command is available",
-        )
+        self.assertEqual(gates["worker_command"]["summary"], "codex worker agent command is available")
         self.assertEqual(gates["worker_command"]["evidence"], "/opt/homebrew/bin/codex")
 
     def test_acceptance_preflight_checks_every_named_worker_command(self):
@@ -244,7 +241,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_prepared_dispatch_state(self):
         from robert_agent.acceptance import readiness as acceptance
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         config_path = self._write_acceptance_config()
         db_path = self.root / "data" / "dd.sqlite3"
@@ -386,10 +383,7 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(gates["worktree_root:org/repo-b"]["status"], "failed")
-        self.assertEqual(
-            gates["worktree_root:org/repo-b"]["summary"],
-            "worktree_root is not a directory",
-        )
+        self.assertEqual(gates["worktree_root:org/repo-b"]["summary"], "worktree_root is not a directory")
         self.assertEqual(gates["worktree_root:org/repo-b"]["evidence"], str(worktree_b))
         self.assertIn(
             f"Remove file or set repo org/repo-b worktrees to a directory: {worktree_b}",
@@ -483,10 +477,7 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertEqual(
-            gates["config_valid"]["summary"],
-            "invalid config: config.database must be string",
-        )
+        self.assertEqual(gates["config_valid"]["summary"], "invalid config: config.database must be string")
         self.assertEqual(
             result["next_actions"],
             [f"Set database to a SQLite filename in {config_path.resolve()}"],
@@ -538,8 +529,7 @@ class ReadinessTests(AcceptanceFixture):
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
         self.assertEqual(
-            gates["config_valid"]["summary"],
-            "invalid config: config.scheduler.max_concurrency violates minimum 1",
+            gates["config_valid"]["summary"], "invalid config: config.scheduler.max_concurrency violates minimum 1"
         )
         self.assertEqual(
             result["next_actions"],
