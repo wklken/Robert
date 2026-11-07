@@ -1,5 +1,7 @@
 """Native PR review stages using the shared supervised model executor."""
 
+from robert_agent.persistence.stores import artifacts as db_write_artifacts
+from robert_agent.persistence.stores import attempts as db_write_attempts
 import argparse
 import hashlib
 import json
@@ -11,7 +13,7 @@ from robert_agent.security import redaction
 from robert_agent.delivery.application import validation as result_validation
 from robert_agent.workflows.review import files as review_files
 from robert_agent.workflows.review import workspace as review_workspace
-from robert_agent.adapters.sqlite import review_rounds as store
+from robert_agent.persistence.rounds import review as store
 from robert_agent.adapters.github.pull_requests import read_pr
 from robert_agent.execution.stages import (
     StageStopped,
@@ -53,13 +55,7 @@ class Coordinator(StageCoordinator):
         "review": ("result.json",),
         "synthesis": ("evaluation.json",),
     }
-    artifact_kinds = (
-        "result",
-        "report",
-        "evaluation",
-        "context_summary",
-        "source_index",
-    )
+    artifact_kinds = ("result", "report", "evaluation", "context_summary", "source_index")
     workflow_name = "review"
 
     def __init__(self, db_path, task_id, attempt_id, *, fetch_pr=read_pr, **kwargs):
@@ -96,10 +92,7 @@ class Coordinator(StageCoordinator):
                         self.manifest["worker_config_sha256"] = hashlib.sha256(
                             json.dumps(self.request["workers"], sort_keys=True).encode()
                         ).hexdigest()
-                        review_files.atomic_json(
-                            Path(self.manifest["context_dir"]) / "manifest.json",
-                            self.manifest,
-                        )
+                        review_files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
                     break
                 except ValueError as exc:
                     if retry or "changed while fetching" not in str(exc):
@@ -141,10 +134,7 @@ class Coordinator(StageCoordinator):
                 }
 
             result = self.run_phase("prepare", self.request["workers"][0], prompt, validate)
-            for kind, name in [
-                ("context_summary", "context-summary.md"),
-                ("source_index", "source-index.json"),
-            ]:
+            for kind, name in [("context_summary", "context-summary.md"), ("source_index", "source-index.json")]:
                 shutil.copyfile(result[kind + "_path"], Path(self.manifest["context_dir"]) / name)
             self.manifest = review_workspace.freeze_context(self.manifest)
             self.save_manifest()
@@ -198,18 +188,9 @@ class Coordinator(StageCoordinator):
                 raise ValueError("synthesis inputs changed")
             path = output / "evaluation.json"
             review_files.read_evaluation(path, self.manifest, records)
-            return {
-                "evaluation_path": str(path),
-                "evaluation_sha256": store.digest(path),
-            }
+            return {"evaluation_path": str(path), "evaluation_sha256": store.digest(path)}
 
-        result = self.run_phase(
-            "synthesis",
-            self.request["workers"][0],
-            prompt,
-            validate,
-            input_hash=inputs["sha256"],
-        )
+        result = self.run_phase("synthesis", self.request["workers"][0], prompt, validate, input_hash=inputs["sha256"])
         evaluation = review_files.read_evaluation(result["evaluation_path"], self.manifest, records)
         body = review_files.render_merged(self.manifest, records, evaluation)
         body += f"\n<!-- robert-review round={self.round_id} -->\n"
@@ -232,26 +213,17 @@ class Coordinator(StageCoordinator):
         review_workspace.verify_snapshot(self.manifest)
         self.check_active()
         with store.connect(self.db_path) as conn:
-            store.update(
+            store.update(conn, self.round_id, status="ready", report_path=str(path), report_sha256=store.digest(path))
+            db_write_artifacts.insert_for_synthesize(
                 conn,
-                self.round_id,
-                status="ready",
-                report_path=str(path),
-                report_sha256=store.digest(path),
-            )
-            conn.execute(
-                """INSERT OR REPLACE INTO artifacts(artifact_id,task_id,attempt_id,
-                artifact_type,path,sha256,bytes,created_at) VALUES (?,?,?,?,?,?,?,?)""",
-                (
-                    self.round_id + ":merged",
-                    self.task_id,
-                    self.attempt_id,
-                    "review_report",
-                    str(path),
-                    store.digest(path),
-                    path.stat().st_size,
-                    store.now(),
-                ),
+                self.round_id + ":merged",
+                self.task_id,
+                self.attempt_id,
+                "review_report",
+                str(path),
+                store.digest(path),
+                path.stat().st_size,
+                store.now(),
             )
         action = {
             "type": "submit_pr_review",
@@ -274,10 +246,7 @@ class Coordinator(StageCoordinator):
                 raise ReviewSubmissionRejected(recorded)
             raise RuntimeError("review result was rejected: " + recorded.get("status", "unknown"))
         with store.connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.submission_validation') WHERE attempt_id=?",
-                (self.attempt_id,),
-            )
+            db_write_attempts.update_for_synthesize(conn, self.attempt_id)
         return path
 
     def run(self):
@@ -289,10 +258,7 @@ class Coordinator(StageCoordinator):
                 status = "superseded" if isinstance(exc, StageSuperseded) else "failed"
                 if isinstance(exc, ReviewSubmissionRejected):
                     status = "attention"
-                    conn.execute(
-                        "UPDATE attempts SET metadata_json=json_set(metadata_json,'$.submission_validation',json(?)) WHERE attempt_id=?",
-                        (json.dumps(exc.diagnostic), self.attempt_id),
-                    )
+                    db_write_attempts.update_for_run(conn, json.dumps(exc.diagnostic), self.attempt_id)
                 if isinstance(exc, StageStopped):
                     status = "canceled" if not attempt_is_active(conn, self.task_id, self.attempt_id) else "attention"
                 store.update(conn, self.round_id, status=status, error=str(exc))

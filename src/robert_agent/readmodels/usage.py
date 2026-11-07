@@ -1,5 +1,9 @@
 """Usage and acceptance metrics helpers for Robert worker runs."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+
 import json
 from pathlib import Path
 
@@ -41,10 +45,7 @@ def parse_cbc_stream_json_lines(lines):
             event = json.loads(text)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("type") in {
-            "result",
-            "turn.completed",
-        }:
+        if isinstance(event, dict) and event.get("type") in {"result", "turn.completed"}:
             final_result = event
     if not final_result:
         return {"usage_available": False, "source": "no_result_event"}
@@ -103,39 +104,15 @@ def extract_attempt_usage(attempt_metadata):
 
 
 def _result_counts(conn):
-    accepted = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM worker_results
-        WHERE json_extract(metadata_json, '$.audit.status') = 'accepted'
-        """
-    ).fetchone()[0]
-    rejected = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM worker_results
-        WHERE json_extract(metadata_json, '$.audit.status') IN ('failed', 'policy_violation')
-        """
-    ).fetchone()[0]
+    accepted = db_records.first(db_read_worker_results.find_for_result_counts(conn))[0]
+    rejected = db_records.first(db_read_worker_results.find_for_summarize_database(conn))[0]
     return accepted, rejected
 
 
 def _action_counts(conn):
-    published = conn.execute("SELECT COUNT(*) FROM github_actions WHERE publish_status = 'published'").fetchone()[0]
-    failed = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM github_actions
-        WHERE json_extract(metadata_json, '$.publish.status') = 'publish_failed'
-        """
-    ).fetchone()[0]
-    deduplicated = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM github_actions
-        WHERE json_extract(metadata_json, '$.publish.deduplicated') = 1
-        """
-    ).fetchone()[0]
+    published = db_records.first(db_read_github_actions.find_for_action_counts_2(conn))[0]
+    failed = db_records.first(db_read_github_actions.find_for_action_counts_3(conn))[0]
+    deduplicated = db_records.first(db_read_github_actions.find_for_action_counts_4(conn))[0]
     return published, failed, deduplicated
 
 
@@ -183,7 +160,7 @@ def summarize_acceptance_metrics(conn):
     accepted_results, rejected_results = _result_counts(conn)
     published_actions, publish_failed_actions, deduplicated_actions = _action_counts(conn)
     payloads = []
-    for row in conn.execute("SELECT metadata_json FROM worker_results"):
+    for row in db_read_worker_results.find_for_summarize_acceptance_metrics(conn):
         try:
             metadata = json.loads(row[0] or "{}")
         except ValueError:

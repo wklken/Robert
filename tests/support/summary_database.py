@@ -25,7 +25,7 @@ class SummaryFixture(TemporaryWorkspace):
         return code, json.loads(output.getvalue())
 
     def _init_summary_db(self, db_path):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         storage.init_database(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -261,10 +261,7 @@ class SummaryFixture(TemporaryWorkspace):
                   'not_published', ?, ?
                 )
                 """,
-                (
-                    now,
-                    json.dumps({"body": self._dd_comment_body("ready")}, sort_keys=True),
-                ),
+                (now, json.dumps({"body": self._dd_comment_body("ready")}, sort_keys=True)),
             )
             conn.execute(
                 """
@@ -301,27 +298,9 @@ class SummaryFixture(TemporaryWorkspace):
                 VALUES (?, 'task-1', 'attempt-1', ?, ?, ?, ?)
                 """,
                 [
-                    (
-                        "artifact-prompt",
-                        "prompt",
-                        str(prompt_path),
-                        prompt_path.stat().st_size,
-                        now,
-                    ),
-                    (
-                        "artifact-stdout",
-                        "worker_stdout",
-                        str(stdout_path),
-                        stdout_path.stat().st_size,
-                        now,
-                    ),
-                    (
-                        "artifact-stderr",
-                        "worker_stderr",
-                        str(stderr_path),
-                        stderr_path.stat().st_size,
-                        now,
-                    ),
+                    ("artifact-prompt", "prompt", str(prompt_path), prompt_path.stat().st_size, now),
+                    ("artifact-stdout", "worker_stdout", str(stdout_path), stdout_path.stat().st_size, now),
+                    ("artifact-stderr", "worker_stderr", str(stderr_path), stderr_path.stat().st_size, now),
                 ],
             )
 

@@ -1,12 +1,15 @@
 """Build the context artifacts and entrypoint paths for an attempt."""
 
+from robert_agent.persistence import errors as db_errors
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
 from pathlib import Path
 from robert_agent.context import knowledge as runtime_knowledge
 from robert_agent.context import project as project_memory
 from uuid import uuid4
 import json
 import os
-import sqlite3
 import sys
 
 
@@ -27,17 +30,7 @@ def _agent_status_script():
 
 
 def prompt_path_for_task(conn, data_dir, task_id):
-    row = conn.execute(
-        """
-        SELECT path
-        FROM artifacts
-        WHERE task_id = ?
-          AND artifact_type = 'prompt'
-        ORDER BY created_at DESC, artifact_id DESC
-        LIMIT 1
-        """,
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_artifacts.find_for_prompt_path_for_task(conn, task_id))
     if row and row[0]:
         return Path(row[0])
     prompt_dir = data_dir / "artifacts" / task_id
@@ -149,7 +142,7 @@ def load_runtime_knowledge(conn, repo_id, workstream_id, route_result, events):
             events=events,
             workstream_id=workstream_id,
         )
-    except (sqlite3.Error, TypeError, ValueError):
+    except (db_errors.Error, TypeError, ValueError):
         return []
 
 
@@ -163,5 +156,5 @@ def retrieve_project_memories(conn, repo_id, workstream_id, route_result, events
             events=events,
             runtime_knowledge=runtime_knowledge_items,
         )
-    except (sqlite3.Error, TypeError, ValueError):
+    except (db_errors.Error, TypeError, ValueError):
         return []

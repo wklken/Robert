@@ -6,7 +6,7 @@ import sqlite3
 import unittest
 from unittest import mock
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.runtime import loop as loop_engine
 from robert_agent.workflows import routes as route
 from robert_agent.runtime import cycle as run_once
@@ -53,6 +53,8 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
         return result
 
     def fail_timeout(self, conn, now):
+        # Inject a persisted timeout into the supplied transaction.
+        conn = getattr(conn, "_driver", conn)
         conn.execute(
             "UPDATE attempts SET status='failed',finished_at=?,failure_json=?",
             (now, json.dumps({"status": "failed_timeout"})),
@@ -198,12 +200,7 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                     "github": {"account": fixture.repo["github_account"]},
                     "default_worker": "default",
                     "workers": {
-                        "default": {
-                            "adapter": "cbc",
-                            "command": "cbc",
-                            "model": "default",
-                            "effort": "default",
-                        }
+                        "default": {"adapter": "cbc", "command": "cbc", "model": "default", "effort": "default"}
                     },
                     "repos": [
                         {

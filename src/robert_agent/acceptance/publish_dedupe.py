@@ -1,14 +1,25 @@
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import worker_results as db_write_worker_results
+
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.stores import github_sources as db_write_github_sources
+from robert_agent.persistence.stores import repos as db_write_repos
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
+
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
 import json
-import sqlite3
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from robert_agent.foundation.commands import emit
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.delivery.application import publish
 
 
@@ -47,13 +58,7 @@ class _DedupeRunner:
 
     def __call__(self, command, **kwargs):
         self.calls.append({"command": list(command), "kwargs": dict(kwargs)})
-        if command == [
-            "gh",
-            "api",
-            "repos/x/y/issues/1/comments?per_page=100",
-            "--paginate",
-            "--slurp",
-        ]:
+        if command == ["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"]:
             return _Completed(
                 json.dumps(
                     [
@@ -118,73 +123,23 @@ def _workspace_dir(workspace_dir):
 def _insert_fixture(db_path):
     storage.init_database(db_path)
     now = datetime.now(timezone.utc).isoformat()
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.execute(
-            """
-            INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root)
-            VALUES ('repo-1', 'x/y', 'robot', 'main', '/repo', '/repo/.worktrees')
-            """
+    with closing(db_database.connect(db_path)) as conn, conn:
+        db_write_repos.insert_fixture(conn)
+        db_write_github_sources.insert_fixture(conn)
+        db_write_workstreams.insert_fixture(conn, now, now)
+        db_write_tasks.insert_fixture(conn, [("task-comment", "completed", now, now), ("task-pr", "running", now, now)])
+        db_write_attempts.insert_fixture(
+            conn, [("attempt-comment", "task-comment", now, now), ("attempt-pr", "task-pr", now, now)]
         )
-        conn.execute(
-            """
-            INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url)
-            VALUES ('source-1', 'repo-1', 'github:x/y#1', 'issue', 1, 'https://github.com/x/y/issues/1')
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, lifecycle, created_at, updated_at)
-            VALUES ('github:x/y#1', 'repo-1', 'source-1', 'active', ?, ?)
-            """,
-            (now, now),
-        )
-        conn.executemany(
-            """
-            INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, created_at, updated_at)
-            VALUES (?, 'github:x/y#1', ?, 'P1', ?, ?)
-            """,
+        db_write_worker_results.insert_fixture(
+            conn,
             [
-                ("task-comment", "completed", now, now),
-                ("task-pr", "running", now, now),
-            ],
-        )
-        conn.executemany(
-            """
-            INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, heartbeat_at)
-            VALUES (?, ?, 1, 'completed', ?, ?)
-            """,
-            [
-                ("attempt-comment", "task-comment", now, now),
-                ("attempt-pr", "task-pr", now, now),
-            ],
-        )
-        conn.executemany(
-            """
-            INSERT INTO worker_results(
-              result_id, task_id, attempt_id, output_type,
-              consumed_event_fingerprints_json, verification_json, handoff, created_at, metadata_json
-            )
-            VALUES (?, ?, ?, ?, '["comment:1"]', '[]', 'ready', ?, json_object('result_contract','compact-v1'))
-            """,
-            [
-                (
-                    "result-comment",
-                    "task-comment",
-                    "attempt-comment",
-                    "comment_analysis",
-                    now,
-                ),
+                ("result-comment", "task-comment", "attempt-comment", "comment_analysis", now),
                 ("result-pr", "task-pr", "attempt-pr", "new_pr", now),
             ],
         )
-        conn.executemany(
-            """
-            INSERT INTO github_actions(
-              action_id, result_id, task_id, action_type, target_url,
-              audit_status, publish_status, created_at, metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, 'accepted', 'not_published', ?, ?)
-            """,
+        db_write_github_actions.insert_fixture(
+            conn,
             [
                 (
                     "action-comment",
@@ -219,14 +174,8 @@ def _insert_fixture(db_path):
 
 
 def _action_counts(db_path):
-    with closing(sqlite3.connect(db_path)) as conn:
-        rows = conn.execute(
-            """
-            SELECT publish_status, metadata_json
-            FROM github_actions
-            ORDER BY action_id
-            """
-        ).fetchall()
+    with closing(db_database.connect(db_path)) as conn:
+        rows = db_read_github_actions.find_for_action_counts(conn)
     published = 0
     deduplicated = 0
     for publish_status, metadata_json in rows:

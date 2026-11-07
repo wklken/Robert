@@ -1,88 +1,40 @@
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
-import sqlite3
 
 from robert_agent.foundation.commands import emit
-
-
-SUMMARY_TABLES = [
-    "repos",
-    "github_sources",
-    "github_events",
-    "workstreams",
-    "tasks",
-    "attempts",
-    "worker_results",
-    "github_actions",
-    "notifications",
-    "agent_runs",
-]
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import audit_events as db_read_audit_events
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import github_events as db_read_github_events
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.queries.readviews import counts
 
 
 def summarize_database(db_path):
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        summary = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in SUMMARY_TABLES}
-        summary["rejected_worker_results"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM worker_results
-            WHERE json_extract(metadata_json, '$.audit.status') IN ('failed', 'policy_violation')
-            """
-        ).fetchone()[0]
-        summary["failed_github_actions"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM github_actions
-            WHERE audit_status IN ('failed', 'policy_violation')
-            """
-        ).fetchone()[0]
-        summary["pending_publish_actions"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM github_actions
-            WHERE audit_status = 'accepted'
-              AND publish_status = 'not_published'
-            """
-        ).fetchone()[0]
-        summary["publish_failed_actions"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM github_actions
-            WHERE audit_status = 'accepted'
-              AND publish_status = 'not_published'
-              AND json_extract(metadata_json, '$.publish.status') = 'publish_failed'
-            """
-        ).fetchone()[0]
-        summary["skipped_publish_actions"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM github_actions
-            WHERE audit_status = 'accepted'
-              AND publish_status = 'skipped'
-            """
-        ).fetchone()[0]
-        summary["pending_actor_permission_events"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM github_events
-            WHERE authorization_status = 'pending_actor_permission'
-            """
-        ).fetchone()[0]
-        summary["pending_authorization_events"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM github_events
-            WHERE authorization_status = 'pending_authorization'
-            """
-        ).fetchone()[0]
-        summary["skipped_closed_sources"] = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM audit_events
-            WHERE event_type = 'current_state_closed'
-            """
-        ).fetchone()[0]
+    with closing(db_database.connect(db_path)) as conn, conn:
+        summary = counts.database_totals(conn)
+        summary["rejected_worker_results"] = db_records.first(db_read_worker_results.find_for_summarize_database(conn))[
+            0
+        ]
+        summary["failed_github_actions"] = db_records.first(db_read_github_actions.find_for_summarize_database(conn))[0]
+        summary["pending_publish_actions"] = db_records.first(
+            db_read_github_actions.find_for_control_plane_state_gate(conn)
+        )[0]
+        summary["publish_failed_actions"] = db_records.first(
+            db_read_github_actions.find_for_summarize_database_2(conn)
+        )[0]
+        summary["skipped_publish_actions"] = db_records.first(
+            db_read_github_actions.find_for_summarize_database_3(conn)
+        )[0]
+        summary["pending_actor_permission_events"] = db_records.first(
+            db_read_github_events.find_for_summarize_database(conn)
+        )[0]
+        summary["pending_authorization_events"] = db_records.first(
+            db_read_github_events.find_for_summarize_database_2(conn)
+        )[0]
+        summary["skipped_closed_sources"] = db_records.first(db_read_audit_events.find_for_summarize_database(conn))[0]
         return summary
 
 

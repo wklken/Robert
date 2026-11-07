@@ -25,7 +25,7 @@ class FixtureRunner:
 
 class PrRemediationIntegrationFixture(unittest.TestCase):
     def setUp(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -164,7 +164,7 @@ class PrRemediationIntegrationFixture(unittest.TestCase):
         )
 
     def setUp_for_non_owned(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         storage.init_database(self.db_path)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:

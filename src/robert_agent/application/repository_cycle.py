@@ -1,6 +1,6 @@
 """Run one repository cycle with its existing lease and rollback boundaries."""
 
-from robert_agent.adapters.sqlite import transactions
+from robert_agent.persistence import transactions as transactions
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution import journal as run_journal
 from robert_agent.delivery.application import publish
@@ -34,9 +34,7 @@ def _publish_ready_actions_for_repo(
     }
     if limit is not None:
         kwargs["limit"] = limit
-    from robert_agent.supervision.application import (
-        publication as supervision_publication,
-    )
+    from robert_agent.supervision.application import publication as supervision_publication
 
     if supervision_publication.needs_config(config_result):
         kwargs["config"] = config_result
@@ -229,13 +227,7 @@ def run_repo_pipeline(
                 values.utc_now(),
                 error=error,
             )
-            for step in [
-                "publish_actions",
-                "reconcile",
-                "discover",
-                "authorize",
-                "route",
-            ]:
+            for step in ["publish_actions", "reconcile", "discover", "authorize", "route"]:
                 run_journal.mark_repo_run_step(
                     conn,
                     run_id,
@@ -247,16 +239,7 @@ def run_repo_pipeline(
                 )
             return summary
         audited_result_count += completion.recover_pending_handoffs(
-            conn,
-            repo_id,
-            data_dir,
-            db_path,
-            repo,
-            run_now,
-            dry_run,
-            dispatch_queue,
-            dispatch_budget,
-            config_result,
+            conn, repo_id, data_dir, db_path, repo, run_now, dry_run, dispatch_queue, dispatch_budget, config_result
         )
         summary["audited_result_count"] = audited_result_count
         run_journal.mark_repo_run_step(

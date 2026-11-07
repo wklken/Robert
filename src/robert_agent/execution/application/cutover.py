@@ -1,15 +1,23 @@
 """Single-protocol guard and isolation of incompatible task evidence."""
 
-from robert_agent.adapters.processes import attempt as attempt_process
-from contextlib import closing
 import json
-from pathlib import Path
-import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
+from pathlib import Path
 
+from robert_agent.adapters.processes import attempt as attempt_process
 from robert_agent.delivery import contract as result_contract
 from robert_agent.execution import spool as result_spool
-
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import result_contract as contract_queries
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import notifications as db_write_notifications
+from robert_agent.persistence.stores import tasks as db_write_tasks
 
 RECOVERY = (
     "Inspect the isolated execution and confirm its workers stopped. Reconcile pending publications. "
@@ -24,43 +32,13 @@ RECOVERY = (
 
 def inspect(conn, db_path):
     blockers = []
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
-    isolation = (
-        " AND COALESCE(json_extract(t.metadata_json,'$.execution_attention.reason_code'),'') != 'result_contract_cutover'"
-        if "metadata_json" in columns
-        else ""
-    )
-    for attempt, task, status, metadata, lifecycle in conn.execute(
-        f"""
-        SELECT a.attempt_id,a.task_id,a.status,a.metadata_json,t.lifecycle
-        FROM attempts a JOIN tasks t ON t.task_id=a.task_id
-        WHERE (a.status IN ('running','stale') OR
-               (a.status='prepared' AND t.lifecycle IN ('queued','running')))
-          AND COALESCE(json_extract(a.metadata_json,'$.result_contract'),'') != ?
-          {isolation}
-        """,
-        (result_contract.CONTRACT_ID,),
-    ):
+    attempts, results = contract_queries.legacy_evidence(conn, result_contract.CONTRACT_ID)
+    for attempt, task, status, metadata, lifecycle in attempts:
         if json.loads(metadata or "{}").get("result_contract") == result_contract.CONTRACT_ID:
             continue
         if status in {"running", "stale"} or (status == "prepared" and lifecycle in {"queued", "running"}):
             blockers.append({"kind": "legacy_" + status, "task_id": task, "attempt_id": attempt})
-    # Build unresolved ID sets once. Correlated EXISTS would rescan all historical
-    # workstreams/actions for every legacy result on databases without matching indexes.
-    for result, task in conn.execute(
-        f"""
-        SELECT wr.result_id,wr.task_id FROM worker_results wr
-        JOIN tasks t ON t.task_id=wr.task_id
-        WHERE COALESCE(json_extract(wr.metadata_json,'$.result_contract'),'') != ?
-          AND (t.lifecycle IN ('queued','running') OR t.task_id IN (
-            SELECT w.active_task_id FROM workstreams w
-            WHERE w.lifecycle='active') OR wr.result_id IN (
-            SELECT ga.result_id FROM github_actions ga
-            WHERE ga.publish_status='not_published' AND ga.audit_status IN ('pending','accepted')))
-          {isolation}
-        """,
-        (result_contract.CONTRACT_ID,),
-    ):
+    for result, task in results:
         blockers.append({"kind": "legacy_unresolved_result", "task_id": task, "result_id": result})
     root = result_spool.directory(db_path)
     for path in sorted(root.glob("*.json")):
@@ -91,9 +69,9 @@ def check(db_path):
     if not path.exists():
         return {"ok": True, "status": "ready", "blockers": []}
     try:
-        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
+        with closing(db_database.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
             return inspect(conn, path)
-    except (sqlite3.Error, ValueError, OSError, TypeError):
+    except (db_errors.Error, ValueError, OSError, TypeError):
         return {
             "ok": False,
             "status": "blocked_result_contract_cutover",
@@ -105,7 +83,7 @@ def check(db_path):
 def prepare(db_path, *, now=None, isolated_only=False):
     try:
         return _prepare(db_path, now=now, isolated_only=isolated_only)
-    except (sqlite3.Error, ValueError, OSError, TypeError):
+    except (db_errors.Error, ValueError, OSError, TypeError):
         return {
             "ok": False,
             "status": "blocked_result_contract_cutover",
@@ -120,11 +98,10 @@ def _prepare(db_path, *, now=None, isolated_only=False):
     This never converts an old result or attests that a live worker stopped.
     Cancellation and replacement remain explicit operator actions.
     """
-    from robert_agent.adapters.sqlite import execution_control as execution_store
-    from robert_agent.execution import rounds as native_rounds
-    from robert_agent.execution import inspection as supervise
-    from robert_agent.work.application import commands as work_items
     from robert_agent.delivery.lock import task_publication_lock
+    from robert_agent.execution import rounds as native_rounds
+    from robert_agent.persistence import execution_control as execution_store
+    from robert_agent.work.application import commands as work_items
 
     now = now or datetime.now(timezone.utc).isoformat()
     checked = {"blockers": []} if isolated_only else check(db_path)
@@ -133,26 +110,14 @@ def _prepare(db_path, *, now=None, isolated_only=False):
     task_ids = {item["task_id"] for item in checked.get("blockers", []) if item.get("task_id")}
     # Isolation prevents admission and result consumption, but exit observation
     # must continue until every recorded process has released its capacity.
-    with closing(sqlite3.connect(db_path, timeout=5)) as reader:
-        task_ids.update(
-            row[0]
-            for row in reader.execute(f"""SELECT DISTINCT a.task_id
-            FROM attempts a JOIN tasks t ON t.task_id=a.task_id
-            WHERE json_extract(t.metadata_json,'$.execution_attention.reason_code')='result_contract_cutover'
-              AND {supervise.occupied_attempt_sql()}""")
-        )
+    with closing(db_database.connect(db_path, timeout=5)) as reader:
+        task_ids.update(row[0] for row in db_read_attempts.find_for_prepare(reader))
     for task_id in sorted(task_ids):
         with task_publication_lock(db_path, task_id) as acquired:
             if not acquired:
                 continue
-            with closing(sqlite3.connect(db_path, timeout=5)) as conn:
-                conn.row_factory = sqlite3.Row
-                snapshots = list(
-                    conn.execute(
-                        "SELECT a.* FROM attempts a WHERE task_id=? AND " + supervise.occupied_attempt_sql(),
-                        (task_id,),
-                    )
-                )
+            with closing(db_database.connect(db_path, timeout=5)) as conn:
+                snapshots = list(db_read_attempts.find_for_prepare_2(conn, task_id))
                 stopped = []
                 # Observe processes outside a writer transaction. Retain occupied
                 # capacity whenever identity or descendant cleanup is uncertain.
@@ -162,8 +127,8 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                         stopped.append(attempt)
                 native_exit = native_rounds.observe_exit(conn, task_id)
                 with conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    task = conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+                    db_transactions.begin(conn, immediate=True)
+                    task = db_records.first(db_read_tasks.find_record_by_task_id(conn, task_id))
                     if not task:
                         continue
                     isolated = (
@@ -181,10 +146,7 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                         "required_action": RECOVERY,
                     }
                     if not isolated:
-                        conn.execute(
-                            "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.execution_attention',json(?)),updated_at=? WHERE task_id=?",
-                            (json.dumps(attention), now, task_id),
-                        )
+                        db_write_tasks.update_for_prepare(conn, json.dumps(attention), now, task_id)
                         if task["task_kind"] == "human_request" and task["lifecycle"] not in {"completed", "failed"}:
                             execution_store.ensure_subject(conn, "task", task_id, "human_request", now)
                             execution_store.mark_binding_attention(conn, "task", task_id, now)
@@ -195,42 +157,23 @@ def _prepare(db_path, *, now=None, isolated_only=False):
                         # A completed result remains historical evidence. Only
                         # mark its process stopped; do not rewrite its outcome.
                         if attempt["status"] == "completed":
-                            conn.execute(
-                                """UPDATE attempts SET metadata_json=json_set(metadata_json,'$.process_stopped_at',?)
-                                WHERE attempt_id=? AND status=? AND metadata_json=?""",
-                                (
-                                    now,
-                                    attempt["attempt_id"],
-                                    attempt["status"],
-                                    attempt["metadata_json"],
-                                ),
+                            db_write_attempts.update_for_prepare_2(
+                                conn, now, attempt["attempt_id"], attempt["status"], attempt["metadata_json"]
                             )
                             continue
-                        conn.execute(
-                            """UPDATE attempts SET status='failed',finished_at=?,failure_json=?,
-                            metadata_json=json_set(metadata_json,'$.process_stopped_at',?)
-                            WHERE attempt_id=? AND status=? AND metadata_json=?""",
-                            (
-                                now,
-                                json.dumps(attention),
-                                now,
-                                attempt["attempt_id"],
-                                attempt["status"],
-                                attempt["metadata_json"],
-                            ),
+                        db_write_attempts.update_for_prepare(
+                            conn,
+                            now,
+                            json.dumps(attention),
+                            now,
+                            attempt["attempt_id"],
+                            attempt["status"],
+                            attempt["metadata_json"],
                         )
                     if isolated:
                         continue  # Existing attention remains until explicit recovery.
-                    conn.execute(
-                        """INSERT OR IGNORE INTO notifications
-                        (notification_id,task_id,notification_type,channel,status,created_at,metadata_json)
-                        VALUES (?,?,'execution_attention_required','local','recorded',?,?)""",
-                        (
-                            "notification-cutover-" + task_id,
-                            task_id,
-                            now,
-                            json.dumps(attention),
-                        ),
+                    db_write_notifications.insert_for_prepare(
+                        conn, "notification-cutover-" + task_id, task_id, now, json.dumps(attention)
                     )
                     item = work_items.resolve_work_item_for_workstream(conn, task["workstream_id"])
                     if item:

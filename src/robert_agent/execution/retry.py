@@ -108,27 +108,6 @@ def failure_state(previous, message, now, *, retryable=True):
     }
 
 
-def publication_ready_sql(alias="github_actions"):
-    """Use the same eligibility predicate before LIMIT and in scheduler probes."""
-    return f"""{alias}.audit_status = 'accepted' AND {alias}.publish_status = 'not_published'
-      AND NOT EXISTS (SELECT 1 FROM attempts process JOIN worker_results result
-          ON result.attempt_id=process.attempt_id WHERE result.result_id={alias}.result_id
-          AND json_type(process.metadata_json,'$.dispatch.pid')='integer'
-          AND json_extract(process.metadata_json,'$.process_stopped_at') IS NULL)
-      AND (COALESCE(json_extract({alias}.metadata_json, '$.publish.retryable'), 1) != 0
-           OR (json_extract({alias}.metadata_json, '$.publish.reconcile_required') = 1
-               AND EXISTS (SELECT 1 FROM publication_intents pending
-                   WHERE pending.action_id={alias}.action_id AND pending.status='executing')))
-      AND (json_extract({alias}.metadata_json, '$.publish.next_retry_at') IS NULL
-           OR julianday(json_extract({alias}.metadata_json, '$.publish.next_retry_at')) <= julianday(?))
-      AND NOT EXISTS (SELECT 1 FROM publication_intents pi WHERE pi.action_id={alias}.action_id AND pi.status='attention')
-      AND NOT EXISTS (SELECT 1 FROM github_actions earlier WHERE earlier.result_id={alias}.result_id
-          AND earlier.publish_status='not_published' AND earlier.audit_status IN ('pending','accepted')
-          AND (earlier.audit_status='pending' OR json_extract(earlier.metadata_json, '$.publish.status')='publish_failed'
-               OR EXISTS (SELECT 1 FROM publication_intents ep WHERE ep.action_id=earlier.action_id AND ep.status='attention'))
-          AND (earlier.created_at < {alias}.created_at OR (earlier.created_at={alias}.created_at AND earlier.action_id < {alias}.action_id)))"""
-
-
 def worker_error(logs):
     """Use stderr and terminal protocol errors, never quoted stdout content."""
     messages = []
@@ -177,12 +156,7 @@ def terminal_rate_limit(logs):
             if event.get("type") == "result":
                 if not event.get("is_error"):
                     return None
-                errors.append(
-                    {
-                        "type": "result",
-                        "message": str(event.get("errors") or event.get("result") or ""),
-                    }
-                )
+                errors.append({"type": "result", "message": str(event.get("errors") or event.get("result") or "")})
                 break
             if event.get("type") in {"error", "turn.failed"}:
                 error = event.get("error") or event.get("message") or ""

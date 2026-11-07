@@ -1,10 +1,16 @@
+from robert_agent.persistence.queries import notifications as db_read_notifications
+
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.stores import notifications as db_write_notifications
+
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
 import json
 import hashlib
 import os
-import sqlite3
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -19,23 +25,16 @@ from robert_agent.delivery.lock import task_publication_lock
 
 def record_notification(db_path, notification_type, status, metadata=None, channel="local"):
     metadata = metadata or {}
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.execute(
-            """
-            INSERT INTO notifications(
-              notification_id, task_id, notification_type, channel, status, created_at, metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"notification-{uuid4().hex[:12]}",
-                metadata.get("task_id"),
-                notification_type,
-                channel,
-                status,
-                datetime.now(timezone.utc).isoformat(),
-                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-            ),
+    with closing(db_database.connect(db_path)) as conn, conn:
+        db_write_notifications.record_notification(
+            conn,
+            f"notification-{uuid4().hex[:12]}",
+            metadata.get("task_id"),
+            notification_type,
+            channel,
+            status,
+            datetime.now(timezone.utc).isoformat(),
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         )
     return {"ok": True, "status": status, "notification_type": notification_type}
 
@@ -68,25 +67,11 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
         return {"sent": 0, "failed": 0, "status": "not_configured"}
     now = now or datetime.now(timezone.utc).isoformat()
     counts = {"sent": 0, "failed": 0, "status": "processed"}
-    scope = ""
-    params = []
-    if repo_ids:
-        scope = (
-            " AND (task_id IS NULL OR task_id IN (SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id WHERE w.repo_id IN ("
-            + ",".join("?" for _ in repo_ids)
-            + ")))"
-        )
-        params += list(repo_ids)
-    with closing(sqlite3.connect(db_path)) as conn:
-        messaging_scope, messaging_params = messages.pending_filter(conn, config)
+    with closing(db_database.connect(db_path)) as conn:
         ids = [
             r[0]
-            for r in conn.execute(
-                "SELECT notification_id FROM notifications WHERE channel='local' AND status NOT IN ('resolved','sent') AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted') AND (json_extract(metadata_json,'$.delivery.next_retry_at') IS NULL OR julianday(json_extract(metadata_json,'$.delivery.next_retry_at')) <= julianday(?))"
-                + scope
-                + messaging_scope
-                + " ORDER BY created_at, notification_id LIMIT ?",
-                [now] + params + messaging_params + [limit],
+            for r in db_read_notifications.find_for_deliver_pending(
+                conn, now, limit, repo_ids, messaging_repo_ids=messages.delivery_repo_ids(conn, config)
             )
         ]
     processed = 0
@@ -97,22 +82,18 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
         with task_publication_lock(db_path, "notify-" + notification_id) as acquired:
             if not acquired:
                 continue
-            with closing(sqlite3.connect(db_path)) as conn:
-                row = conn.execute(
-                    "SELECT task_id,notification_type,status,metadata_json FROM notifications WHERE notification_id=?",
-                    (notification_id,),
-                ).fetchone()
+            with closing(db_database.connect(db_path)) as conn:
+                row = db_records.first(
+                    db_read_notifications.find_task_id_and_notification_type_and_status_and_metadata_json_by_notification_id(
+                        conn, notification_id
+                    )
+                )
             if not row or row[2] == "resolved":
                 continue
             metadata = json.loads(row[3] or "{}")
             state = {
                 key: metadata[key]
-                for key in (
-                    "reason_code",
-                    "error_class",
-                    "required_action",
-                    "retryable",
-                )
+                for key in ("reason_code", "error_class", "required_action", "retryable")
                 if key in metadata
             }
             digest = hashlib.sha256(json.dumps([row[1], state], sort_keys=True).encode()).hexdigest()[:16]
@@ -131,14 +112,10 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
                 >= retry_policy.MAX_ELAPSED_SECONDS
             ):
                 previous.update(status="exhausted", retryable=False, next_retry_at=None)
-                metadata["delivery"] = previous
-                with closing(sqlite3.connect(db_path)) as conn, conn:
-                    conn.execute(
-                        "UPDATE notifications SET metadata_json=? WHERE notification_id=?",
-                        (json.dumps(metadata), notification_id),
-                    )
+                with closing(db_database.connect(db_path)) as conn, conn:
+                    db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(previous))
                 continue
-            with closing(sqlite3.connect(db_path)) as conn:
+            with closing(db_database.connect(db_path)) as conn:
                 payload = messages.envelope(
                     conn, notification_id, config=config if (config or {}).get("messaging", {}).get("enabled") else None
                 )
@@ -148,37 +125,15 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
             processed += 1
             state = retry_policy.failure_state(previous, "delivery unavailable", now)
             state.update(delivery_id=delivery_id, status="sending")
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                fresh = json.loads(
-                    conn.execute(
-                        "SELECT metadata_json FROM notifications WHERE notification_id=?",
-                        (notification_id,),
-                    ).fetchone()[0]
-                    or "{}"
-                )
-                fresh["delivery"] = state
-                conn.execute(
-                    "UPDATE notifications SET metadata_json=? WHERE notification_id=?",
-                    (json.dumps(fresh), notification_id),
-                )
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
             sent = transport.send(payload, config=config, command=command, runner=runner)
             state.update(
                 status="sent" if sent else ("failed" if state["retryable"] else "exhausted"),
                 sent_at=now if sent else None,
             )
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                fresh = json.loads(
-                    conn.execute(
-                        "SELECT metadata_json FROM notifications WHERE notification_id=?",
-                        (notification_id,),
-                    ).fetchone()[0]
-                    or "{}"
-                )
-                fresh["delivery"] = state
-                conn.execute(
-                    "UPDATE notifications SET metadata_json=? WHERE notification_id=?",
-                    (json.dumps(fresh), notification_id),
-                )
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
             counts["sent" if sent else "failed"] += 1
     return counts
 

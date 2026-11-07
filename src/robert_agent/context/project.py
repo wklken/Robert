@@ -1,8 +1,19 @@
 """Project-memory helpers for DD GitHub agent tasks."""
 
+from robert_agent.persistence.queries import project_memory_terms as db_read_project_memory_terms
+
+from robert_agent.persistence import errors as db_errors
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import project_memory_entries as db_read_project_memory_entries
+from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
+from robert_agent.persistence.stores import project_memory_entries as db_write_project_memory_entries
+from robert_agent.persistence.stores import project_memory_fts as db_write_project_memory_fts
+from robert_agent.persistence.stores import project_memory_revisions as db_write_project_memory_revisions
+from robert_agent.persistence.stores import project_memory_terms as db_write_project_memory_terms
+
 import json
 import re
-import sqlite3
 from uuid import uuid4
 
 
@@ -154,165 +165,60 @@ def _normalize_entry(raw_entry, payload, workstream_id):
     return entry, None
 
 
-def _fts_exists(conn):
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM sqlite_master
-        WHERE name = 'project_memory_fts'
-          AND type = 'table'
-        LIMIT 1
-        """
-    ).fetchone()
-    return bool(row)
-
-
 def _sync_fts(conn, memory_id, repo_id, entry):
-    if not _fts_exists(conn):
+    if not db_read_sqlite_master.table_exists(conn, "project_memory_fts"):
         return
     try:
-        conn.execute("DELETE FROM project_memory_fts WHERE memory_id = ?", (memory_id,))
-        conn.execute(
-            """
-            INSERT INTO project_memory_fts(
-              memory_id, repo_id, title, short_summary, long_summary, paths, symbols, keywords
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                memory_id,
-                repo_id,
-                entry["title"],
-                entry["short_summary"],
-                entry["long_summary"],
-                " ".join(entry["paths"]),
-                " ".join(entry["symbols"]),
-                " ".join(entry["keywords"]),
-            ),
+        db_write_project_memory_fts.delete_for_sync_fts(conn, memory_id)
+        db_write_project_memory_fts.insert_for_sync_fts(
+            conn,
+            memory_id,
+            repo_id,
+            entry["title"],
+            entry["short_summary"],
+            entry["long_summary"],
+            " ".join(entry["paths"]),
+            " ".join(entry["symbols"]),
+            " ".join(entry["keywords"]),
         )
-    except sqlite3.OperationalError:
+    except db_errors.OperationalError:
         return
 
 
 def _replace_terms(conn, memory_id, repo_id, terms_by_type, run_now):
-    conn.execute("DELETE FROM project_memory_terms WHERE memory_id = ?", (memory_id,))
+    db_write_project_memory_terms.delete_for_replace_terms(conn, memory_id)
     for term_type, terms in terms_by_type.items():
         for term in sorted(set(terms)):
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO project_memory_terms(
-                  memory_id, repo_id, term_type, term_value, created_at
-                )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (memory_id, repo_id, term_type, term, run_now),
-            )
+            db_write_project_memory_terms.insert_for_replace_terms(conn, memory_id, repo_id, term_type, term, run_now)
 
 
 def _upsert_entry(conn, payload, repo_id, workstream_id, raw_entry, run_now):
     entry, error = _normalize_entry(raw_entry, payload, workstream_id)
     if error:
         return None, error
-    row = conn.execute(
-        """
-        SELECT memory_id, revision_count
-        FROM project_memory_entries
-        WHERE repo_id = ?
-          AND memory_thread_key = ?
-          AND kind = ?
-          AND title = ?
-        """,
-        (repo_id, entry["memory_thread_key"], entry["kind"], entry["title"]),
-    ).fetchone()
+    row = db_records.first(
+        db_read_project_memory_entries.find_for_upsert_entry(
+            conn, repo_id, entry["memory_thread_key"], entry["kind"], entry["title"]
+        )
+    )
     if row:
         memory_id, revision_count = row
     else:
         memory_id = _id("pmem")
         revision_count = 0
-        conn.execute(
-            """
-            INSERT INTO project_memory_entries(
-              memory_id, repo_id, memory_thread_key, kind, title, short_summary,
-              long_summary, confidence, source_task_id, source_result_id,
-              revision_count, created_at, updated_at, metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-            """,
-            (
-                memory_id,
-                repo_id,
-                entry["memory_thread_key"],
-                entry["kind"],
-                entry["title"],
-                entry["short_summary"],
-                entry["long_summary"],
-                entry["confidence"],
-                payload.get("task_id"),
-                payload.get("result_id"),
-                run_now,
-                run_now,
-                json.dumps(
-                    {
-                        "paths": entry["paths"],
-                        "symbols": entry["symbols"],
-                        "keywords": entry["keywords"],
-                        "evidence": entry["evidence"],
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-            ),
-        )
-    revision_id = _id("pmemrev")
-    revision_payload = dict(entry)
-    revision_payload["result_id"] = payload.get("result_id")
-    revision_payload["task_id"] = payload.get("task_id")
-    revision_payload["attempt_id"] = payload.get("attempt_id")
-    conn.execute(
-        """
-        INSERT INTO project_memory_revisions(
-          revision_id, memory_id, repo_id, result_id, task_id, attempt_id,
-          operation, title, short_summary, long_summary, payload_json, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            revision_id,
+        db_write_project_memory_entries.insert_for_upsert_entry(
+            conn,
             memory_id,
             repo_id,
-            payload.get("result_id"),
-            payload.get("task_id"),
-            payload.get("attempt_id"),
-            entry["operation"],
+            entry["memory_thread_key"],
+            entry["kind"],
             entry["title"],
-            entry["short_summary"],
-            entry["long_summary"],
-            json.dumps(revision_payload, ensure_ascii=False, sort_keys=True),
-            run_now,
-        ),
-    )
-    conn.execute(
-        """
-        UPDATE project_memory_entries
-        SET short_summary = ?,
-            long_summary = ?,
-            confidence = ?,
-            source_task_id = ?,
-            source_result_id = ?,
-            current_revision_id = ?,
-            revision_count = ?,
-            updated_at = ?,
-            metadata_json = ?
-        WHERE memory_id = ?
-        """,
-        (
             entry["short_summary"],
             entry["long_summary"],
             entry["confidence"],
             payload.get("task_id"),
             payload.get("result_id"),
-            revision_id,
-            revision_count + 1,
+            run_now,
             run_now,
             json.dumps(
                 {
@@ -324,8 +230,48 @@ def _upsert_entry(conn, payload, repo_id, workstream_id, raw_entry, run_now):
                 ensure_ascii=False,
                 sort_keys=True,
             ),
-            memory_id,
+        )
+    revision_id = _id("pmemrev")
+    revision_payload = dict(entry)
+    revision_payload["result_id"] = payload.get("result_id")
+    revision_payload["task_id"] = payload.get("task_id")
+    revision_payload["attempt_id"] = payload.get("attempt_id")
+    db_write_project_memory_revisions.insert_for_upsert_entry(
+        conn,
+        revision_id,
+        memory_id,
+        repo_id,
+        payload.get("result_id"),
+        payload.get("task_id"),
+        payload.get("attempt_id"),
+        entry["operation"],
+        entry["title"],
+        entry["short_summary"],
+        entry["long_summary"],
+        json.dumps(revision_payload, ensure_ascii=False, sort_keys=True),
+        run_now,
+    )
+    db_write_project_memory_entries.update_for_upsert_entry(
+        conn,
+        entry["short_summary"],
+        entry["long_summary"],
+        entry["confidence"],
+        payload.get("task_id"),
+        payload.get("result_id"),
+        revision_id,
+        revision_count + 1,
+        run_now,
+        json.dumps(
+            {
+                "paths": entry["paths"],
+                "symbols": entry["symbols"],
+                "keywords": entry["keywords"],
+                "evidence": entry["evidence"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
         ),
+        memory_id,
     )
     _replace_terms(
         conn,
@@ -388,17 +334,9 @@ def record_memory_delta(conn, result_payload, workstream_id, repo_id, run_now):
 def _candidate_ids_from_terms(conn, repo_id, query_terms):
     if not query_terms:
         return {}
-    placeholders = ",".join("?" for _ in query_terms)
-    params = [repo_id, *sorted(query_terms)]
     scores = {}
-    for memory_id, term_type in conn.execute(
-        f"""
-        SELECT memory_id, term_type
-        FROM project_memory_terms
-        WHERE repo_id = ?
-          AND term_value IN ({placeholders})
-        """,
-        params,
+    for memory_id, term_type in db_read_project_memory_terms.candidate_ids_from_terms_filtered(
+        conn, query_terms, repo_id
     ):
         scores[memory_id] = scores.get(memory_id, 0) + TERM_WEIGHTS.get(term_type, 1)
     return scores
@@ -407,14 +345,8 @@ def _candidate_ids_from_terms(conn, repo_id, query_terms):
 def _candidate_ids_from_threads(conn, repo_id, thread_keys):
     scores = {}
     for thread_key in sorted(key for key in thread_keys if key):
-        for (memory_id,) in conn.execute(
-            """
-            SELECT memory_id
-            FROM project_memory_entries
-            WHERE repo_id = ?
-              AND memory_thread_key = ?
-            """,
-            (repo_id, thread_key),
+        for (memory_id,) in db_read_project_memory_entries.find_for_candidate_ids_from_threads(
+            conn, repo_id, thread_key
         ):
             scores[memory_id] = scores.get(memory_id, 0) + TERM_WEIGHTS["memory_thread_key"]
     return scores
@@ -451,16 +383,7 @@ def retrieve_memories(conn, repo_id, workstream_id, route_result, events, limit=
         scores[memory_id] = scores.get(memory_id, 0) + score
     if not scores:
         return []
-    placeholders = ",".join("?" for _ in scores)
-    rows = conn.execute(
-        f"""
-        SELECT memory_id, memory_thread_key, kind, title, short_summary,
-               long_summary, confidence, updated_at, metadata_json
-        FROM project_memory_entries
-        WHERE memory_id IN ({placeholders})
-        """,
-        list(scores),
-    ).fetchall()
+    rows = db_read_project_memory_entries.retrieve_memories_filtered(conn, scores)
     memories = []
     for row in rows:
         (

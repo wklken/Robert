@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from tests import support  # noqa: F401
 from robert_agent.adapters.processes import worker as dispatch
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.runtime import cycle as run_once
 from robert_agent.execution import capacity
 
@@ -24,11 +24,7 @@ class LaunchOwnershipTests(unittest.TestCase):
             prompt = Path(directory) / "prompt.md"
             prompt.write_text("test")
             with (
-                patch.object(
-                    dispatch.subprocess,
-                    "Popen",
-                    return_value=SimpleNamespace(pid=987654, poll=lambda: 2),
-                ),
+                patch.object(dispatch.subprocess, "Popen", return_value=SimpleNamespace(pid=987654, poll=lambda: 2)),
                 patch.object(dispatch.worker_identity, "cleanup_new_process", return_value=False),
             ):
                 result = dispatch.dispatch_worker("task", "attempt", prompt, dry_run=False, startup_probe_seconds=0)
@@ -45,10 +41,7 @@ class LaunchOwnershipTests(unittest.TestCase):
             with patch.object(worker_identity, "live_process_group", return_value=True):
                 self.assertEqual(attempt_process.terminate_attempt(metadata)["status"], "attention")
             with patch.object(worker_identity, "live_process_group", return_value=False):
-                self.assertEqual(
-                    attempt_process.terminate_attempt(metadata)["status"],
-                    "already_dead",
-                )
+                self.assertEqual(attempt_process.terminate_attempt(metadata)["status"], "already_dead")
 
     def test_failed_leader_cleans_up_term_resistant_descendant(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,10 +77,7 @@ class LaunchOwnershipTests(unittest.TestCase):
                         "task",
                         "attempt",
                         prompt,
-                        worker_agent_config={
-                            "agent": "command",
-                            "command_argv": [sys.executable, "-c", leader],
-                        },
+                        worker_agent_config={"agent": "command", "command_argv": [sys.executable, "-c", leader]},
                         dry_run=False,
                         startup_probe_seconds=0,
                     )
@@ -109,11 +99,7 @@ class LaunchOwnershipTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         first = run_once.run_once(
-            fixture.config_path,
-            fixture_path=fixture.fixture_path,
-            dry_run=True,
-            skip_external=True,
-            skip_publish=True,
+            fixture.config_path, fixture_path=fixture.fixture_path, dry_run=True, skip_external=True, skip_publish=True
         )
         self.assertTrue(first["ok"], first)
         with patch.object(
@@ -129,12 +115,7 @@ class LaunchOwnershipTests(unittest.TestCase):
                 "safe_error": "worker process group cleanup was not confirmed",
             },
         ):
-            result = run_once.run_once(
-                fixture.config_path,
-                dry_run=False,
-                skip_external=True,
-                skip_publish=True,
-            )
+            result = run_once.run_once(fixture.config_path, dry_run=False, skip_external=True, skip_publish=True)
         self.assertFalse(result["ok"])
         with closing(sqlite3.connect(fixture.data_dir / "dd.sqlite3")) as conn:
             status, task_id = conn.execute("SELECT status,task_id FROM attempts").fetchone()
@@ -145,11 +126,5 @@ class LaunchOwnershipTests(unittest.TestCase):
                 ),
                 1,
             )
-            self.assertEqual(
-                execution_store.get_binding(conn, "task", task_id)["binding_status"],
-                "attention",
-            )
-            self.assertIn(
-                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0],
-                ("queued", "running"),
-            )
+            self.assertEqual(execution_store.get_binding(conn, "task", task_id)["binding_status"], "attention")
+            self.assertIn(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], ("queued", "running"))

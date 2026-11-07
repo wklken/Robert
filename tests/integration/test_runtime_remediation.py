@@ -1,3 +1,6 @@
+from robert_agent.persistence.schema import review_rounds as review_schema, vote_rounds as vote_schema
+
+from tests.support import database as fixture_database
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -13,9 +16,8 @@ from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.workflows.review import files as review_files
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import database as storage
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.schema import database as storage
 from robert_agent.execution import stages as model_execution
 from robert_agent.execution import command as heartbeat
 from robert_agent.execution import progress as snapshot
@@ -62,13 +64,7 @@ class RuntimeRemediationTests(unittest.TestCase):
             clock.now.side_effect = stamps
             for _ in range(3):
                 snapshot.record_snapshot(
-                    self.db,
-                    "t",
-                    "a",
-                    "verify",
-                    "running",
-                    "Command still running",
-                    "Wait for command completion",
+                    self.db, "t", "a", "verify", "running", "Command still running", "Wait for command completion"
                 )
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM worker_phases").fetchone()[0], 1)
@@ -96,11 +92,8 @@ class RuntimeRemediationTests(unittest.TestCase):
             self.assertTrue(any("USING INDEX" in row[3] for row in plan), plan)
 
     def test_legacy_model_tables_upgrade_before_activity_index_creation(self):
-        for module in (review_store, vote_store):
-            with (
-                self.subTest(store=module.__name__),
-                closing(sqlite3.connect(":memory:")) as conn,
-            ):
+        for module in (review_schema, vote_schema):
+            with self.subTest(store=module.__name__), closing(sqlite3.connect(":memory:")) as conn:
                 legacy = (
                     module.SCHEMA.replace("  model TEXT,\n", "")
                     .replace("  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", "")
@@ -108,7 +101,7 @@ class RuntimeRemediationTests(unittest.TestCase):
                 )
                 conn.executescript(legacy)
                 module.initialize(conn)
-                table = "review_runs" if module is review_store else "vote_runs"
+                table = "review_runs" if module is review_schema else "vote_runs"
                 columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
                 self.assertTrue({"model", "slot_reserved", "started_at"} <= columns)
                 plan = conn.execute(f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE slot_reserved=1").fetchall()
@@ -150,10 +143,9 @@ class CoordinatorHeartbeatRemediationTests(unittest.TestCase):
             self.driver.check_active()
             with ThreadPoolExecutor(max_workers=4) as executor:
                 list(executor.map(lambda _: self.driver.check_active(), range(4)))
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             actual = conn.execute(
-                "SELECT heartbeat_at FROM attempts WHERE attempt_id=?",
-                (self.driver.attempt_id,),
+                "SELECT heartbeat_at FROM attempts WHERE attempt_id=?", (self.driver.attempt_id,)
             ).fetchone()[0]
         self.assertEqual(actual, timestamps[0])
 
@@ -165,10 +157,9 @@ class CoordinatorHeartbeatRemediationTests(unittest.TestCase):
         ):
             self.driver.check_active()
             self.driver.check_active()
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             actual = conn.execute(
-                "SELECT heartbeat_at FROM attempts WHERE attempt_id=?",
-                (self.driver.attempt_id,),
+                "SELECT heartbeat_at FROM attempts WHERE attempt_id=?", (self.driver.attempt_id,)
             ).fetchone()[0]
         self.assertEqual(actual, timestamps[-1])
 
@@ -176,7 +167,7 @@ class CoordinatorHeartbeatRemediationTests(unittest.TestCase):
         with closing(sqlite3.connect(self.fixture.db)) as writer, writer:
             writer.execute("BEGIN IMMEDIATE")
             self.driver.check_active()
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             conn.execute(
                 "UPDATE execution_subjects SET binding_status='attention' WHERE subject_type='task' AND subject_id=?",
                 (self.driver.task_id,),
@@ -186,22 +177,23 @@ class CoordinatorHeartbeatRemediationTests(unittest.TestCase):
 
     def test_cancellation_is_checked_even_when_heartbeat_is_not_due(self):
         self.driver.check_active()
-        with review_store.connect(self.fixture.db) as conn:
-            conn.execute(
-                "UPDATE tasks SET lifecycle='canceled' WHERE task_id=?",
-                (self.driver.task_id,),
-            )
+        with fixture_database.connect(self.fixture.db) as conn:
+            conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (self.driver.task_id,))
         with self.assertRaises(model_execution.StageStopped):
             self.driver.check_active()
 
     def test_non_contention_heartbeat_errors_remain_visible(self):
         original_connect = sqlite3.connect
 
-        class BrokenHeartbeatConnection(sqlite3.Connection):
+        class BrokenHeartbeatCursor(sqlite3.Cursor):
             def execute(self, sql, parameters=()):
                 if sql.startswith("UPDATE attempts SET heartbeat_at"):
                     raise sqlite3.OperationalError("disk I/O error")
                 return super().execute(sql, parameters)
+
+        class BrokenHeartbeatConnection(sqlite3.Connection):
+            def cursor(self, factory=BrokenHeartbeatCursor):
+                return super().cursor(factory)
 
         def connect(*args, **kwargs):
             return original_connect(*args, **kwargs, factory=BrokenHeartbeatConnection)

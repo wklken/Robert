@@ -80,6 +80,10 @@ const execFileAsync = promisify(execFile);
 
 async function runRobert(args, input) {
   try {
+    const serialized = input === undefined ? "" : JSON.stringify(input);
+    if (Buffer.byteLength(serialized, "utf8") > 65536) {
+      return { text: "Message exceeds the input limit.", isError: true };
+    }
     const pending = execFileAsync(
       "robert",
       args,
@@ -88,8 +92,11 @@ async function runRobert(args, input) {
         maxBuffer: 1024 * 1024,
       },
     );
-    pending.child.stdin.end(input === undefined ? "" : JSON.stringify(input));
+    let inputError;
+    pending.child.stdin.on("error", (error) => { inputError = error; });
+    pending.child.stdin.end(serialized);
     const { stdout } = await pending;
+    if (inputError) return { text: "Robert could not receive the request.", isError: true };
     const parsed = JSON.parse(stdout);
     if (parsed?.ok === true) {
       return { text: JSON.stringify(parsed, null, 2) };

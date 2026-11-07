@@ -1,8 +1,13 @@
 """Claim and close execution subjects in the caller-owned transaction."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import wakeups as db_read_wakeups
+from robert_agent.persistence.stores import tasks as db_write_tasks
 import json
 from datetime import datetime, timezone
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.execution import operations as execution_operations
 from robert_agent.execution import notifications as execution_notifications
 
@@ -18,7 +23,7 @@ def _json_object(value):
 
 
 def subject_for_task(conn, task_id):
-    row = conn.execute("SELECT task_kind,metadata_json FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     episode = _json_object(row[1]).get("remediation_episode_id") if row else None
     return (
         ("remediation_episode", episode)
@@ -33,10 +38,7 @@ def claim_task(conn, task_id, run_now=None):
     Remediation children share their Episode control and recovery budget.
     """
 
-    row = conn.execute(
-        "SELECT task_kind, metadata_json FROM tasks WHERE task_id = ?",
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     if not row:
         return False
     run_now = run_now or datetime.now(timezone.utc).isoformat()
@@ -64,10 +66,7 @@ def claim_task(conn, task_id, run_now=None):
                     "reason_code": "remediation_episode_missing",
                     "required_action": "Inspect the historical remediation task and restore its Episode association before retrying.",
                 }
-                conn.execute(
-                    "UPDATE tasks SET metadata_json=? WHERE task_id=?",
-                    (json.dumps(metadata), task_id),
-                )
+                db_write_tasks.set_metadata_json_by_task_id(conn, json.dumps(metadata), task_id)
                 execution_notifications.insert(
                     conn,
                     "execution_attention_required",
@@ -105,27 +104,15 @@ def claim_episode(conn, episode_id, run_now=None):
 def parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
     if not parent_task_id:
         return True
-    if conn.execute(
-        "SELECT 1 FROM tasks WHERE task_id=? AND json_extract(metadata_json,'$.execution_attention') IS NOT NULL",
-        (parent_task_id,),
-    ).fetchone():
+    if db_records.first(db_read_tasks.find_for_parent_allows_child(conn, parent_task_id)):
         return False
     binding = execution_store.get_binding(conn, "task", parent_task_id)
     if retrigger_wakeup_id is not None:
         # An audited operator request starts a new subject. It never reopens
         # the failed parent or transfers a DBOS-owned subject to legacy.
-        requested = conn.execute(
-            """SELECT 1 FROM wakeups wu JOIN tasks t ON t.task_id=wu.task_id
-            JOIN workstreams w ON w.workstream_id=t.workstream_id
-            JOIN github_sources gs ON gs.source_id=w.primary_source_id
-            WHERE wu.wakeup_id=? AND wu.task_id=? AND wu.repo_id=w.repo_id
-              AND wu.status='pending' AND wu.reason='manual_operator_request'
-              AND json_extract(wu.metadata_json,'$.kind')='github_retrigger'
-              AND t.task_kind='human_request' AND t.lifecycle='failed'
-              AND w.lifecycle='failed' AND w.active_task_id IS NULL
-              AND lower(gs.state)='open'""",
-            (retrigger_wakeup_id, parent_task_id),
-        ).fetchone()
+        requested = db_records.first(
+            db_read_wakeups.find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id)
+        )
         return bool(requested) and (
             not binding or (binding["binding_status"] == "terminal" or (binding["binding_status"] == "active"))
         )
@@ -133,10 +120,7 @@ def parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
 
 
 def reconcile_task_allowed(conn, task_id, run_now):
-    if conn.execute(
-        "SELECT 1 FROM tasks WHERE task_id=? AND json_extract(metadata_json,'$.execution_attention') IS NOT NULL",
-        (task_id,),
-    ).fetchone():
+    if db_records.first(db_read_tasks.find_for_parent_allows_child(conn, task_id)):
         return False
     binding = execution_store.get_binding(conn, "task", task_id)
     if binding:
@@ -144,10 +128,7 @@ def reconcile_task_allowed(conn, task_id, run_now):
             "active",
             "terminal",
         }
-    row = conn.execute(
-        "SELECT lifecycle FROM tasks WHERE task_id = ?",
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_lifecycle_by_task_id(conn, task_id))
     if not row:
         return False
     if row[0] in {"completed", "failed", "canceled", "ignored"}:
@@ -162,10 +143,7 @@ def close_subject(conn, subject_type, subject_id, run_now):
 
 
 def close_terminal_task(conn, task_id, run_now):
-    row = conn.execute(
-        "SELECT task_kind, lifecycle, metadata_json FROM tasks WHERE task_id = ?",
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_task_kind_and_lifecycle_and_metadata_json_by_task_id(conn, task_id))
     if not row:
         return
     task_kind, lifecycle, metadata_json = row
@@ -176,24 +154,13 @@ def close_terminal_task(conn, task_id, run_now):
         return
     episode_id = _json_object(metadata_json).get("remediation_episode_id")
     if episode_id:
-        episode = conn.execute(
-            "SELECT status FROM pr_remediation_episodes WHERE episode_id = ?",
-            (episode_id,),
-        ).fetchone()
-        if episode and episode[0] in {
-            "resolved",
-            "exhausted",
-            "superseded",
-            "canceled",
-        }:
+        episode = db_records.first(db_read_pr_remediation_episodes.find_status_by_episode_id(conn, episode_id))
+        if episode and episode[0] in {"resolved", "exhausted", "superseded", "canceled"}:
             close_subject(conn, "remediation_episode", episode_id, run_now)
 
 
 def recovery_subject(conn, task_id):
-    row = conn.execute(
-        "SELECT metadata_json FROM tasks WHERE task_id = ?",
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, task_id))
     episode_id = _json_object(row[0] if row else None).get("remediation_episode_id")
     if episode_id and execution_store.get_binding(conn, "remediation_episode", episode_id):
         return "remediation_episode", episode_id
@@ -213,18 +180,14 @@ def mark_attention(conn, task_id, run_now):
 
 
 def waiting_reply_allowed(conn, task_id, now):
-    row = conn.execute(
-        "SELECT task_kind,lifecycle,metadata_json FROM tasks WHERE task_id=?",
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_task_kind_and_lifecycle_and_metadata_json_by_task_id(conn, task_id))
     if not row or row[1] != "waiting_for_user":
         return False
     if row[0] in {"ci_remediation", "merge_conflict_remediation"}:
         episode = _json_object(row[2]).get("remediation_episode_id")
-        state = conn.execute(
-            "SELECT status,metadata_json FROM pr_remediation_episodes WHERE episode_id=?",
-            (episode,),
-        ).fetchone()
+        state = db_records.first(
+            db_read_pr_remediation_episodes.find_status_and_metadata_json_by_episode_id(conn, episode)
+        )
         if (
             state
             and state[0] == "exhausted"

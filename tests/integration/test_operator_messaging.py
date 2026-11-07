@@ -151,9 +151,7 @@ class OperatorMessagingTests(WorkItemCommandFixture):
         self.assertIsNotNone(result["task_id"])
 
     def test_supervisor_ack_is_a_receipt_not_recovery(self):
-        notifications.record_notification(
-            self.db_path, "supervision_incident", "recorded", {"reason_code": "stalled", "incident_id": "incident-1"}
-        )
+        notifications.record_notification(self.db_path, "supervision_incident", "recorded", {"reason_code": "stalled"})
         with closing(sqlite3.connect(self.db_path)) as conn:
             identifier = conn.execute(
                 "SELECT notification_id FROM notifications WHERE notification_type='supervision_incident'"
@@ -248,3 +246,141 @@ class OperatorMessagingTests(WorkItemCommandFixture):
         self.assertEqual(message["summary"], "Use <local-path>")
         self.assertEqual(message["choices"], [{"id": "one", "label": "<local-path>"}])
         self.assertTrue(messaging.respond(self.config, self.reply)["ok"])
+
+    def test_delivery_updates_preserve_a_concurrent_acknowledgement(self):
+        from robert_agent.persistence import statements
+
+        # Commit an operator acknowledgement just before the sender's write.
+        # This reproduces a separate CLI writer winning the race after a read.
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE notifications SET status='resolved'")
+        notifications.record_notification(self.db_path, "supervision_incident", "recorded")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            identifier = conn.execute(
+                "SELECT notification_id FROM notifications WHERE notification_type='supervision_incident'"
+            ).fetchone()[0]
+        request = {**self.reply, "notification_id": identifier, "version": 0, "action": "ack", "body": "Received."}
+        write = statements.write
+        acknowledged = False
+
+        def interleave(conn, stmt, parameters=()):
+            nonlocal acknowledged
+            if not acknowledged:
+                acknowledged = True
+                self.assertEqual(messaging.respond(self.config, request)["status"], "acknowledged")
+            return write(conn, stmt, parameters)
+
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', ""))
+        with patch.dict("os.environ", {}, clear=True), patch.object(statements, "write", side_effect=interleave):
+            self.assertEqual(notifications.deliver_pending(self.db_path, config=self.config, runner=runner)["sent"], 1)
+        self.assertTrue(acknowledged)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            metadata = json.loads(
+                conn.execute(
+                    "SELECT metadata_json FROM notifications WHERE notification_id=?", (identifier,)
+                ).fetchone()[0]
+            )
+        self.assertEqual(metadata["operator_response"]["body"], "Received.")
+        self.assertEqual(metadata["delivery"]["status"], "sent")
+
+    def test_admission_incident_keeps_repository_scope(self):
+        from robert_agent.persistence import database
+        from robert_agent.supervision import store
+        from robert_agent.supervision.application import checks
+
+        self.config["repos"].append({"full_name": "other/repo"})
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE notifications SET status='resolved'")
+            conn.execute(
+                "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) "
+                "VALUES ('repo-other','other/repo','robot','main','/other','/other-worktrees')"
+            )
+        now = "2026-11-07T12:00:00Z"
+        for scope_type in ("github_event", "work_item_event"):
+            for scope_id, repo_id in (("denied", "repo-other"), ("allowed", "repo-1"), ("unknown", None)):
+                with closing(database.connect(self.db_path)) as conn, conn:
+                    if repo_id:
+                        store.update_checkpoint(
+                            conn, scope_type, scope_id, "admission", now=now, metadata={"repo_id": repo_id}
+                        )
+                    checks.notify_changes(
+                        conn,
+                        [
+                            {
+                                "transition": "opened",
+                                "incident": {
+                                    "incident_id": scope_type + "-" + scope_id,
+                                    "scope_type": scope_type,
+                                    "scope_id": scope_id,
+                                    "rule_id": "admission_unobservable",
+                                },
+                            }
+                        ],
+                        now,
+                    )
+        inbox = messaging.inbox(self.config, self.identity)["messages"]
+        self.assertEqual({row["incident_id"] for row in inbox}, {"github_event-allowed", "work_item_event-allowed"})
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', ""))
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(notifications.deliver_pending(self.db_path, config=self.config, runner=runner)["sent"], 2)
+        for scope_type in ("github_event", "work_item_event"):
+            for scope_id in ("denied", "unknown"):
+                with self.assertRaises(WorkItemNotFoundError):
+                    messaging.respond(
+                        self.config,
+                        {
+                            **self.reply,
+                            "action": "ack",
+                            "version": 0,
+                            "notification_id": f"supervision-{scope_type}-{scope_id}-opened",
+                        },
+                    )
+
+    def test_legacy_admission_notices_resolve_scope_from_durable_incident(self):
+        from robert_agent.persistence import database
+        from robert_agent.supervision import store
+
+        now = "2026-11-07T12:00:00Z"
+        scopes = [
+            ("allowed", "github_event", "repo-1"),
+            ("denied", "work_item_event", "other"),
+            ("missing", "github_event", None),
+            ("global", "controller", None),
+        ]
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE notifications SET status='resolved'")
+            for identifier, scope_type, _ in scopes:
+                conn.execute(
+                    "INSERT INTO supervision_incidents(incident_id,scope_type,scope_id,rule_id,status,reason_code,"
+                    "severity,evidence_json,expected_progress_json,first_observed_at,last_observed_at) "
+                    "VALUES (?,?,?,'stalled','open','stalled','warning','{}','{}',?,?)",
+                    (identifier, scope_type, identifier, now, now),
+                )
+        with closing(database.connect(self.db_path)) as conn, conn:
+            for identifier, scope_type, repo_id in scopes:
+                if repo_id:
+                    store.update_checkpoint(
+                        conn, scope_type, identifier, "admission", now=now, metadata={"repo_id": repo_id}
+                    )
+        for identifier, _, _ in [*scopes, ("deleted", None, None)]:
+            notifications.record_notification(
+                self.db_path, "supervision_incident", "recorded", {"incident_id": identifier, "reason_code": "stalled"}
+            )
+        inbox = messaging.inbox(self.config, self.identity)["messages"]
+        self.assertEqual({row["incident_id"] for row in inbox}, {"allowed", "global"})
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', ""))
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(notifications.deliver_pending(self.db_path, config=self.config, runner=runner)["sent"], 2)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            denied = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT notification_id FROM notifications WHERE json_extract(metadata_json,'$.incident_id') "
+                    "IN ('denied','missing','deleted')"
+                )
+            ]
+        for identifier in denied:
+            with self.assertRaises(WorkItemNotFoundError):
+                messaging.respond(
+                    self.config, {**self.reply, "notification_id": identifier, "action": "ack", "version": 0}
+                )

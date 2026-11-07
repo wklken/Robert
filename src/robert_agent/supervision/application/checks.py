@@ -1,9 +1,12 @@
 """application supervision checks responsibilities."""
 
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence.stores import notifications as db_write_notifications
 from contextlib import closing
 import hashlib
 import json
-import sqlite3
 import subprocess
 import sys
 from robert_agent.security import redaction
@@ -13,9 +16,7 @@ from robert_agent.supervision.application import observation as supervision_obse
 from robert_agent.supervision import store as supervision_store
 from robert_agent.configuration import supervision as supervision_config
 
-from robert_agent.adapters.sqlite import (
-    supervision as boundary_adapters_sqlite_supervision,
-)
+from robert_agent.persistence import supervision as boundary_adapters_sqlite_supervision
 from robert_agent.supervision import health as supervision_health
 
 
@@ -41,22 +42,24 @@ def notify_changes(conn, changes, now):
             continue
         item = change["incident"]
         identifier = "supervision-" + item["incident_id"] + "-opened"
-        conn.execute(
-            """INSERT OR IGNORE INTO notifications
-            (notification_id, task_id, notification_type, channel, status, created_at, metadata_json)
-            VALUES (?,?,'supervision_incident','local','recorded',?,?)""",
-            (
-                identifier,
-                item["scope_id"] if item["scope_type"] == "task" else None,
-                now,
-                json.dumps(
-                    {
-                        "reason_code": item.get("reason_code", item["rule_id"]),
-                        "required_action": "Inspect the supervision incident and its evidence.",
-                        "incident_id": item["incident_id"],
-                        "retryable": False,
-                    }
-                ),
+        scope = {}
+        if item["scope_type"] in {"github_event", "work_item_event"}:
+            checkpoint = supervision_store.get_checkpoint(conn, item["scope_type"], item["scope_id"], "admission")
+            # Missing repository evidence must never turn a scoped incident into a global notice.
+            scope = {"repository_scoped": True, "repo_id": (checkpoint or {}).get("metadata", {}).get("repo_id")}
+        db_write_notifications.insert_for_notify_changes(
+            conn,
+            identifier,
+            item["scope_id"] if item["scope_type"] == "task" else None,
+            now,
+            json.dumps(
+                {
+                    "reason_code": item.get("reason_code", item["rule_id"]),
+                    "required_action": "Inspect the supervision incident and its evidence.",
+                    "incident_id": item["incident_id"],
+                    "retryable": False,
+                    **scope,
+                }
             ),
         )
 
@@ -70,30 +73,18 @@ def check(config, *, record=False, now=None):
             state = supervision_store.get_checkpoint(conn, "service", "supervisor", "cursor") if record else None
         cursor = (state or {}).get("metadata", {}).get("cursor", "")
         sampled = supervision_observe.collect(
-            config["db_path"],
-            now=now,
-            limit=settings["batch_size"],
-            config=config,
-            cursor=cursor,
+            config["db_path"], now=now, limit=settings["batch_size"], config=config, cursor=cursor
         )
         observations = [safe_observation(item) for item in sampled["observations"]]
         changes = []
         recovery = []
         if record:
-            with (
-                closing(boundary_adapters_sqlite_supervision.connect(config["db_path"])) as conn,
-                conn,
-            ):
-                conn.execute("BEGIN IMMEDIATE")
+            with closing(boundary_adapters_sqlite_supervision.connect(config["db_path"])) as conn, conn:
+                db_transactions.begin(conn, immediate=True)
                 observations = [item for item in observations if supervision_observe.is_current(conn, item)]
                 changes = supervision_store.apply_observations(conn, observations, now)
                 supervision_store.update_checkpoint(
-                    conn,
-                    "service",
-                    "supervisor",
-                    "cursor",
-                    now=now,
-                    metadata={"cursor": sampled.get("cursor", "")},
+                    conn, "service", "supervisor", "cursor", now=now, metadata={"cursor": sampled.get("cursor", "")}
                 )
                 supervision_actions.verify(conn, observations=observations, now=now)
                 recovery = supervision_actions.plan(conn, observations=observations, now=now, config=config)
@@ -112,7 +103,7 @@ def check(config, *, record=False, now=None):
             "recovery_requests": len(recovery),
             "coverage_complete": sampled.get("coverage_complete", False),
         }
-    except (OSError, sqlite3.Error, ValueError) as exc:
+    except (OSError, db_errors.Error, ValueError) as exc:
         result = {
             "ok": False,
             "status": "unobservable",
@@ -125,10 +116,7 @@ def check(config, *, record=False, now=None):
             supervision_health.health(config, result, now)
         except OSError:
             result["health_persisted"] = False
-            print(
-                "Robert supervision: observation health cannot be persisted",
-                file=sys.stderr,
-            )
+            print("Robert supervision: observation health cannot be persisted", file=sys.stderr)
     return result
 
 
@@ -140,18 +128,11 @@ def status(config):
             for incident in incidents:
                 analysis = supervision_store.get_checkpoint(conn, "diagnosis", incident["incident_id"], "analysis")
                 incident["diagnosis"] = (analysis or {}).get("metadata")
-                from robert_agent.workflows.maintenance import (
-                    repair as supervision_repair,
-                )
+                from robert_agent.workflows.maintenance import repair as supervision_repair
 
                 incident["repair"] = supervision_repair.status(config, incident["incident_id"])
-        return {
-            "ok": True,
-            "status": "ready",
-            "health": supervision_health.read_health(config),
-            "incidents": incidents,
-        }
-    except (OSError, sqlite3.Error, ValueError):
+        return {"ok": True, "status": "ready", "health": supervision_health.read_health(config), "incidents": incidents}
+    except (OSError, db_errors.Error, ValueError):
         return {
             "ok": False,
             "status": "unobservable",
@@ -173,27 +154,15 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
     if health.get("ok"):
         if state.get("notification_id"):
             try:
-                with (
-                    closing(boundary_adapters_sqlite_supervision.connect(db_path)) as conn,
-                    conn,
-                ):
-                    conn.execute(
-                        """INSERT OR IGNORE INTO notifications
-                        (notification_id,notification_type,channel,status,created_at,metadata_json)
-                        VALUES (?,'supervisor_unobservable','local',?,?,?)""",
-                        (
-                            state["notification_id"],
-                            "sent" if state.get("status") == "sent" else "resolved",
-                            state["created_at"],
-                            json.dumps(
-                                {
-                                    "delivery": state,
-                                    "reason_code": "observation_unavailable",
-                                }
-                            ),
-                        ),
+                with closing(boundary_adapters_sqlite_supervision.connect(db_path)) as conn, conn:
+                    db_write_notifications.insert_for_deliver_health(
+                        conn,
+                        state["notification_id"],
+                        "sent" if state.get("status") == "sent" else "resolved",
+                        state["created_at"],
+                        json.dumps({"delivery": state, "reason_code": "observation_unavailable"}),
                     )
-            except (OSError, sqlite3.Error):
+            except (OSError, db_errors.Error):
                 return
         return
     from robert_agent.supervision.rules import timestamp

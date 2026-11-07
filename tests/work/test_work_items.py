@@ -14,7 +14,7 @@ def table_columns(conn, table):
 
 class WorkItemSchemaTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -246,10 +246,8 @@ class WorkItemMigrationTests(unittest.TestCase):
                 """
             )
 
-    def test_upgrade_backfills_only_root_workstream_once_without_mutating_execution_rows(
-        self,
-    ):
-        from robert_agent.adapters.sqlite import database as storage
+    def test_upgrade_backfills_only_root_workstream_once_without_mutating_execution_rows(self):
+        from robert_agent.persistence.schema import database as storage
 
         self._create_legacy_database()
         storage.init_database(self.db_path)
@@ -283,7 +281,7 @@ class WorkItemMigrationTests(unittest.TestCase):
         self.assertEqual(migration[0][1], storage.WORK_ITEM_MIGRATION_CHECKSUM)
 
     def test_failed_backfill_does_not_record_migration_marker(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         self._create_legacy_database()
         with mock.patch.object(storage, "_backfill_work_items", side_effect=RuntimeError("stop")):

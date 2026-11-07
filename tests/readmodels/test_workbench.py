@@ -9,7 +9,7 @@ from pathlib import Path
 
 class WorkbenchTests(unittest.TestCase):
     def setUp(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -87,14 +87,7 @@ class WorkbenchTests(unittest.TestCase):
                   expected_output, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'review-pr', 'review_report', ?, ?)
                 """,
-                (
-                    task_id,
-                    workstream_id,
-                    task_lifecycle,
-                    priority,
-                    updated_at,
-                    updated_at,
-                ),
+                (task_id, workstream_id, task_lifecycle, priority, updated_at, updated_at),
             )
             conn.execute(
                 """

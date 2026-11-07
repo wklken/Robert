@@ -11,9 +11,9 @@ import tempfile
 import time
 import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.runtime import loop as loop_engine
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class SchedulerRemediationFixture(unittest.TestCase):
@@ -54,10 +54,7 @@ repos:
         self.db = self.data / "runtime.sqlite3"
         storage.init_database(self.db)
         self.now = datetime.now(timezone.utc)
-        self.process = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
-            start_new_session=True,
-        )
+        self.process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
         self.addCleanup(self.stop_process)
         time.sleep(0.1)
         self.identity = worker_identity.capture_process_identity(self.process.pid)
@@ -76,11 +73,7 @@ repos:
             )
             conn.execute(
                 "INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at,heartbeat_at,metadata_json) VALUES ('a','t',1,'running',?,?,?)",
-                (
-                    self.now.isoformat(),
-                    self.now.isoformat(),
-                    json.dumps({"dispatch": self.identity}),
-                ),
+                (self.now.isoformat(), self.now.isoformat(), json.dumps({"dispatch": self.identity})),
             )
             conn.execute(
                 "INSERT INTO worker_phases(phase_id,attempt_id,phase,status,summary,created_at) VALUES ('phase','a','analyze','running','Working',?)",

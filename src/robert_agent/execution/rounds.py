@@ -2,9 +2,9 @@
 
 import os
 
-from robert_agent.adapters.sqlite import model_pool
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import pool as model_pool
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.execution.stages import terminate_children as stop_children
 
 STORES = (review_store, vote_store)

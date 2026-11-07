@@ -82,3 +82,48 @@ console.log(JSON.stringify({ response, status, denied, malformed, auth: commands
             self.assertTrue(value["auth"])
             self.assertTrue(value["denied"]["isError"])
             self.assertTrue(value["malformed"]["isError"])
+
+    def test_generated_plugin_bounds_input_and_survives_early_cli_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_plugin(root / "plugin")
+            package = root / "plugin/node_modules/openclaw"
+            package.mkdir(parents=True)
+            (package / "package.json").write_text(
+                json.dumps({"type": "module", "exports": {"./plugin-sdk/plugin-entry": "./entry.js"}})
+            )
+            (package / "entry.js").write_text("export const definePluginEntry = (plugin) => plugin;")
+            binary = root / "bin"
+            binary.mkdir()
+            marker = root / "started"
+            executable = binary / "robert"
+            executable.write_text(
+                f"#!{sys.executable}\nfrom pathlib import Path\nimport sys\n"
+                f"Path({str(marker)!r}).touch()\n"
+                'print(\'{"ok": false, "safe_error": "Configuration unavailable."}\')\nsys.exit(1)\n'
+            )
+            executable.chmod(0o755)
+            script = root / "plugin/check.mjs"
+            script.write_text("""import plugin from './index.js';
+import fs from 'node:fs';
+const commands = {};
+plugin.register({ registerCommand: (cmd) => { commands[cmd.name] = cmd; } });
+const context = { isAuthorizedSender: true, channelId: 'telegram', accountId: 'personal',
+  from: 'telegram:42', senderId: '42', args: 'notice-1 3 reply ' + 'x'.repeat(300000) };
+const oversized = await commands['robert-respond'].handler(context);
+const startedForOversized = fs.existsSync(process.argv[2]);
+const early = await commands['robert-respond'].handler({ ...context, args: 'notice-1 3 reply ' + 'x'.repeat(60000) });
+console.log(JSON.stringify({ oversized, startedForOversized, early }));
+""")
+            result = subprocess.run(
+                ["node", str(script), str(marker)],
+                env={**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            value = json.loads(result.stdout)
+            self.assertTrue(value["oversized"]["isError"])
+            self.assertFalse(value["startedForOversized"])
+            self.assertEqual(value["early"], {"text": "Configuration unavailable.", "isError": True})

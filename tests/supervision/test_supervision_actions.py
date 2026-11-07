@@ -11,7 +11,7 @@ from unittest.mock import patch
 import yaml
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import actions
 from robert_agent.configuration.command import validate_config
 
@@ -38,10 +38,7 @@ class SupervisionActionTests(unittest.TestCase):
             "repos": [{"full_name": "example/repo"}],
             "supervision": {
                 "mode": "recover_known",
-                "recovery": {
-                    "repositories": ["example/repo"],
-                    "allowed_actions": ["spool_replay", "audit_retry"],
-                },
+                "recovery": {"repositories": ["example/repo"], "allowed_actions": ["spool_replay", "audit_retry"]},
             },
         }
 
@@ -53,13 +50,7 @@ class SupervisionActionTests(unittest.TestCase):
         )
         self.conn.execute(
             "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at,metadata_json) VALUES(?,?,'running',?,?,?)",
-            (
-                task_id,
-                stream,
-                NOW,
-                NOW,
-                json.dumps({"supervision_lineage_key": lineage}),
-            ),
+            (task_id, stream, NOW, NOW, json.dumps({"supervision_lineage_key": lineage})),
         )
         self.conn.execute(
             "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES(?,?,1,?)",
@@ -74,23 +65,12 @@ class SupervisionActionTests(unittest.TestCase):
             "lineage_key": "lineage",
             "rule_id": "result_not_consumed",
             "reason_code": "result_waiting_ingestion",
-            "evidence": {
-                "attempt_id": "attempt-" + task_id,
-                "spool_fingerprint": "fingerprint",
-            },
-            "expected_progress": {
-                "kind": "result_ingested",
-                "attempt_id": "attempt-" + task_id,
-            },
+            "evidence": {"attempt_id": "attempt-" + task_id, "spool_fingerprint": "fingerprint"},
+            "expected_progress": {"kind": "result_ingested", "attempt_id": "attempt-" + task_id},
         }
 
     def plan(self, *, config=None):
-        return actions.plan(
-            self.conn,
-            observations=[self.observation()],
-            now=NOW,
-            config=config or self.config,
-        )
+        return actions.plan(self.conn, observations=[self.observation()], now=NOW, config=config or self.config)
 
     def begin(self, *, config=None, now=NOW, generation="fingerprint"):
         return actions.begin(
@@ -114,15 +94,7 @@ class SupervisionActionTests(unittest.TestCase):
     def test_expired_unclaimed_request_cannot_repeat_same_generation(self):
         self.assertEqual(len(self.plan()), 1)
         actions.verify(self.conn, observations=[], now=LATER)
-        self.assertEqual(
-            actions.plan(
-                self.conn,
-                observations=[self.observation()],
-                now=LATER,
-                config=self.config,
-            ),
-            [],
-        )
+        self.assertEqual(actions.plan(self.conn, observations=[self.observation()], now=LATER, config=self.config), [])
         self.assertEqual(
             self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchall(),
             [("rejected", 0)],
@@ -139,10 +111,7 @@ class SupervisionActionTests(unittest.TestCase):
             "repos": self.config["repos"],
             "supervision": {
                 "mode": "recover_known",
-                "recovery": {
-                    "repositories": ["example/other"],
-                    "allowed_actions": ["spool_replay"],
-                },
+                "recovery": {"repositories": ["example/other"], "allowed_actions": ["spool_replay"]},
             },
         }
         self.assertEqual(self.plan(config=disabled), [])
@@ -153,8 +122,7 @@ class SupervisionActionTests(unittest.TestCase):
         self.plan()
         self.assertEqual(self.begin(generation="replacement")["status"], "blocked")
         self.assertEqual(
-            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(),
-            ("rejected", 0),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(), ("rejected", 0)
         )
 
     def test_fence_blocks_duplicate_and_stale_finish(self):
@@ -175,8 +143,7 @@ class SupervisionActionTests(unittest.TestCase):
         self.assertTrue(actions.finish(self.conn, claim, outcome="observing", receipt={}, now=NOW))
         actions.verify(self.conn, observations=[], now=NOW)
         self.assertEqual(
-            self.conn.execute("SELECT status FROM supervision_recovery_actions").fetchone()[0],
-            "observing",
+            self.conn.execute("SELECT status FROM supervision_recovery_actions").fetchone()[0], "observing"
         )
 
     def test_expired_claim_keeps_budget_until_same_result_is_verified(self):
@@ -186,13 +153,9 @@ class SupervisionActionTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as restarted, restarted:
             actions.verify(restarted, observations=[], now=LATER)
         self.assertEqual(
-            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(),
-            ("unknown", 1),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(), ("unknown", 1)
         )
-        self.assertEqual(
-            self.begin(config={"supervision": {"mode": "observe"}}, now=LATER)["status"],
-            "blocked",
-        )
+        self.assertEqual(self.begin(config={"supervision": {"mode": "observe"}}, now=LATER)["status"], "blocked")
         self.conn.execute(
             "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES('result','task','attempt-task','comment_analysis',?,?)",
             (LATER, json.dumps({"submission_fingerprint": "different"})),
@@ -203,13 +166,9 @@ class SupervisionActionTests(unittest.TestCase):
             (LATER, LATER, LATER),
         )
         actions.verify(self.conn, observations=[], now=RECHECK)
-        self.assertEqual(
-            self.conn.execute("SELECT status FROM supervision_recovery_actions").fetchone()[0],
-            "unknown",
-        )
+        self.assertEqual(self.conn.execute("SELECT status FROM supervision_recovery_actions").fetchone()[0], "unknown")
         self.conn.execute(
-            "UPDATE worker_results SET metadata_json=?",
-            (json.dumps({"submission_fingerprint": "fingerprint"}),),
+            "UPDATE worker_results SET metadata_json=?", (json.dumps({"submission_fingerprint": "fingerprint"}),)
         )
         actions.verify(self.conn, observations=[], now=RECHECK_AGAIN)
         self.assertEqual(
@@ -220,10 +179,7 @@ class SupervisionActionTests(unittest.TestCase):
     def test_native_retries_preserve_domain_budgets_without_supervisor_request(self):
         self.conn.commit()
         for kind in actions.STAGES:
-            with (
-                self.subTest(kind=kind),
-                patch("robert_agent.configuration.command.validate_config") as validate,
-            ):
+            with self.subTest(kind=kind), patch("robert_agent.configuration.command.validate_config") as validate:
                 config = {**self.config, "config_path": "/fixture/unused.yml"}
                 for _ in range(3):
                     self.assertFalse(
@@ -251,19 +207,13 @@ class SupervisionActionTests(unittest.TestCase):
                     )
                     self.assertFalse(self.conn.in_transaction)
                 validate.assert_not_called()
-        self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM supervision_recovery_actions").fetchone()[0],
-            0,
-        )
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM supervision_recovery_actions").fetchone()[0], 0)
 
     def test_requested_consumer_hint_does_not_reload_policy_but_claim_does(self):
         self.plan()
         self.conn.commit()
         config = {**self.config, "config_path": "/fixture/unavailable.yml"}
-        with patch(
-            "robert_agent.configuration.command.validate_config",
-            return_value={"ok": False},
-        ) as validate:
+        with patch("robert_agent.configuration.command.validate_config", return_value={"ok": False}) as validate:
             for _ in range(3):
                 self.assertFalse(
                     actions.blocks_consumer(
@@ -304,11 +254,7 @@ class SupervisionActionTests(unittest.TestCase):
         actions.plan(
             self.conn,
             observations=[
-                {
-                    **self.observation(),
-                    "reason_code": "result_waiting_audit",
-                    "evidence": {"result_id": "result"},
-                }
+                {**self.observation(), "reason_code": "result_waiting_audit", "evidence": {"result_id": "result"}}
             ],
             config=self.config,
             now=NOW,
@@ -325,15 +271,7 @@ print(json.dumps(verdict), flush=True)
 time.sleep(30)
 """
         with subprocess.Popen(
-            [
-                sys.executable,
-                "-B",
-                "-c",
-                child_script,
-                str(self.db),
-                json.dumps(self.config),
-                NOW,
-            ],
+            [sys.executable, "-B", "-c", child_script, str(self.db), json.dumps(self.config), NOW],
             stdout=subprocess.PIPE,
             text=True,
         ) as child:
@@ -346,20 +284,14 @@ time.sleep(30)
         with closing(sqlite3.connect(self.db)) as restarted, restarted:
             actions.verify(restarted, observations=[], now=LATER)
         self.assertEqual(
-            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(),
-            ("failed", 1),
+            self.conn.execute("SELECT status,budget_cost FROM supervision_recovery_actions").fetchone(), ("failed", 1)
         )
         self.assertIsNone(
             self.conn.execute("SELECT json_extract(metadata_json,'$.audit') FROM worker_results").fetchone()[0]
         )
         self.assertEqual(
             actions.begin(
-                self.conn,
-                task_id="task",
-                kind="audit_retry",
-                target_id="result",
-                config=self.config,
-                now=LATER,
+                self.conn, task_id="task", kind="audit_retry", target_id="result", config=self.config, now=LATER
             )["status"],
             "legacy",
         )
@@ -377,14 +309,7 @@ time.sleep(30)
             "database": self.db.name,
             "github": {"account": "default"},
             "default_worker": "default",
-            "workers": {
-                "default": {
-                    "adapter": "cbc",
-                    "command": "cbc",
-                    "model": "default",
-                    "effort": "default",
-                }
-            },
+            "workers": {"default": {"adapter": "cbc", "command": "cbc", "model": "default", "effort": "default"}},
             "repos": [
                 {
                     "full_name": "example/repo",
@@ -415,10 +340,7 @@ time.sleep(30)
         self.assertEqual(actions.plan(self.conn, observations=[fresh], now=NOW, config=startup), [])
         raw["supervision"] = self.config["supervision"]
         save()
-        self.assertEqual(
-            len(actions.plan(self.conn, observations=[fresh], now=NOW, config=startup)),
-            1,
-        )
+        self.assertEqual(len(actions.plan(self.conn, observations=[fresh], now=NOW, config=startup)), 1)
         raw["database"] = "other.db"
         save()
         native = actions.begin(

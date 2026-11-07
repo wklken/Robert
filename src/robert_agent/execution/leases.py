@@ -1,5 +1,9 @@
 """Acquire repository run leases only after proving prior owner exit."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import agent_runs as db_read_agent_runs
+from robert_agent.persistence.queries import leases as db_read_leases
+from robert_agent.persistence.stores import leases as db_write_leases
 from datetime import datetime, timedelta
 from uuid import uuid4
 from robert_agent.adapters.processes import identity as worker_identity
@@ -30,20 +34,13 @@ def acquire(conn, repo_id, run_id, run_now, ttl_seconds):
     expires_at = (now_dt + timedelta(seconds=ttl_seconds)).isoformat()
     # Acquire SQLite's writer lock before inspecting/inserting the unique lease.
     # Expiry is a scheduling hint, not proof that its process has stopped.
-    conn.execute(
-        "UPDATE leases SET heartbeat_at=heartbeat_at WHERE resource_type='agent_run' AND resource_key=?",
-        (resource_key,),
-    )
-    active = conn.execute(
-        """SELECT lease_id, owner_id, expires_at FROM leases
-        WHERE resource_type='agent_run' AND resource_key=? AND status='active'""",
-        (resource_key,),
-    ).fetchone()
+    db_write_leases.update_for_acquire(conn, resource_key)
+    active = db_records.first(db_read_leases.find_for_acquire(conn, resource_key))
     if active and _parse_time(active[2]) <= now_dt:
-        owner = conn.execute("SELECT summary_json FROM agent_runs WHERE run_id=?", (active[1],)).fetchone()
+        owner = db_records.first(db_read_agent_runs.find_summary_json_by_run_id(conn, active[1]))
         identity = _json_object(owner[0]).get("executor_identity") if owner else None
         if identity and worker_identity.inspect_recorded_identity(identity) == "dead":
-            conn.execute("UPDATE leases SET status='expired' WHERE lease_id=?", (active[0],))
+            db_write_leases.update_for_acquire_2(conn, active[0])
             active = None
     if active:
         return {
@@ -55,27 +52,11 @@ def acquire(conn, repo_id, run_id, run_now, ttl_seconds):
         }
 
     lease_id = f"lease-{uuid4().hex[:12]}"
-    conn.execute(
-        """
-        INSERT INTO leases(
-          lease_id, resource_type, resource_key, owner_id, status,
-          acquired_at, expires_at, heartbeat_at
-        )
-        VALUES (?, 'agent_run', ?, ?, 'active', ?, ?, ?)
-        """,
-        (lease_id, resource_key, run_id, run_now, expires_at, run_now),
-    )
+    db_write_leases.insert_for_acquire(conn, lease_id, resource_key, run_id, run_now, expires_at, run_now)
     return {"ok": True, "status": "acquired", "lease_id": lease_id}
 
 
 def release(conn, lease_id, run_now):
     if not lease_id:
         return
-    conn.execute(
-        """
-        UPDATE leases
-        SET status = 'released', released_at = ?, heartbeat_at = ?
-        WHERE lease_id = ?
-        """,
-        (run_now, run_now, lease_id),
-    )
+    db_write_leases.update_for_release(conn, run_now, run_now, lease_id)

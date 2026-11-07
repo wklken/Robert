@@ -1,5 +1,18 @@
 """Queue prepared attempts and claim launches under the task fence."""
 
+from robert_agent.persistence.queries import attempts as db_read_attempts
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
+from robert_agent.persistence.stores import artifacts as db_write_artifacts
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import execution_subjects as db_write_execution_subjects
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.supervision import store as supervision_store
 from contextlib import closing
 from pathlib import Path
@@ -17,31 +30,21 @@ from robert_agent.execution import capacity as attempt_capacity
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import retry as retry_policy
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.foundation import commands as control_commands
 from robert_agent.foundation import values
 from robert_agent.execution import rounds as native_rounds
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
-from robert_agent.adapters.sqlite import review_rounds as review_store
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import vote as vote_store
 import json
-import sqlite3
 import subprocess
 import sys
 
 
 def _prepared_attempt_dispatch_priority(conn, attempt_id):
-    row = conn.execute(
-        """
-        SELECT t.route_id, t.workstream_id
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        WHERE a.attempt_id = ?
-        LIMIT 1
-        """,
-        (attempt_id,),
-    ).fetchone()
+    row = db_records.first(db_read_attempts.find_for_prepared_attempt_dispatch_priority(conn, attempt_id))
     if not row:
         return 2
     route_id, workstream_id = row
@@ -54,58 +57,28 @@ def _prepared_attempt_dispatch_priority(conn, attempt_id):
 
 def _record_dispatch_result(conn, attempt_id, dispatch_result):
     if dispatch_result.get("cleanup_pending"):
-        row = conn.execute(
-            "SELECT task_id,metadata_json FROM attempts WHERE attempt_id=?",
-            (attempt_id,),
-        ).fetchone()
+        row = db_records.first(db_read_attempts.find_task_id_and_metadata_json_by_attempt_id(conn, attempt_id))
         if row:
             metadata = values.json_object(row[1])
             metadata["dispatch"] = dispatch_result
-            metadata["supervise"] = {
-                "status": "worker_identity_attention",
-                "reason": "startup_cleanup_unconfirmed",
-            }
+            metadata["supervise"] = {"status": "worker_identity_attention", "reason": "startup_cleanup_unconfirmed"}
             now = values.utc_now()
-            conn.execute(
-                """UPDATE attempts SET status='stale',finished_at=NULL,
-                started_at=COALESCE(started_at,?),heartbeat_at=?,metadata_json=?,failure_json=?
-                WHERE attempt_id=?""",
-                (
-                    now,
-                    now,
-                    json.dumps(metadata),
-                    json.dumps(dispatch_result),
-                    attempt_id,
-                ),
+            db_write_attempts.record_dispatch_result_3(
+                conn, now, now, json.dumps(metadata), json.dumps(dispatch_result), attempt_id
             )
             execution_ownership.mark_attention(conn, row[0], now)
         return
     status = dispatch_result.get("status", "prepared")
-    if status not in {
-        "prepared",
-        "running",
-        "completed",
-        "failed",
-        "stale",
-        "canceled",
-    }:
+    if status not in {"prepared", "running", "completed", "failed", "stale", "canceled"}:
         status = "failed" if not dispatch_result.get("ok", True) else "prepared"
-    current = conn.execute(
-        "SELECT status, metadata_json FROM attempts WHERE attempt_id = ?",
-        (attempt_id,),
-    ).fetchone()
+    current = db_records.first(db_read_attempts.find_status_and_metadata_json_by_attempt_id(conn, attempt_id))
     if current and current[0] in {"completed", "failed", "canceled"}:
         metadata = values.json_object(current[1])
         metadata["dispatch"] = dispatch_result
         if dispatch_result.get("status") == "running":
             metadata.setdefault("worker_started_at", values.utc_now())
-        conn.execute(
-            """
-            UPDATE attempts
-            SET metadata_json = ?
-            WHERE attempt_id = ?
-            """,
-            (json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id),
+        db_write_attempts.set_metadata_json_by_attempt_id(
+            conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id
         )
         return
     metadata_obj = values.json_object(current[1] if current else None)
@@ -115,52 +88,14 @@ def _record_dispatch_result(conn, attempt_id, dispatch_result):
         started_at = values.utc_now()
         metadata_obj["worker_started_at"] = started_at
         metadata = json.dumps(metadata_obj, ensure_ascii=False, sort_keys=True)
-        conn.execute(
-            """
-            UPDATE attempts
-            SET status = ?, started_at = ?, heartbeat_at = ?, finished_at = NULL,
-                metadata_json = ?
-            WHERE attempt_id = ?
-            """,
-            (
-                status,
-                started_at,
-                started_at,
-                metadata,
-                attempt_id,
-            ),
-        )
+        db_write_attempts.record_dispatch_result(conn, status, started_at, started_at, metadata, attempt_id)
         return
     if status == "failed":
         finished_at = values.utc_now()
         failure_json = json.dumps(dispatch_result, ensure_ascii=False, sort_keys=True)
-        conn.execute(
-            """
-            UPDATE attempts
-            SET status = ?, finished_at = ?, failure_json = ?, metadata_json = ?
-            WHERE attempt_id = ?
-            """,
-            (
-                status,
-                finished_at,
-                failure_json,
-                metadata,
-                attempt_id,
-            ),
-        )
+        db_write_attempts.record_dispatch_result_2(conn, status, finished_at, failure_json, metadata, attempt_id)
         return
-    conn.execute(
-        """
-        UPDATE attempts
-        SET status = ?, metadata_json = ?
-        WHERE attempt_id = ?
-        """,
-        (
-            status,
-            metadata,
-            attempt_id,
-        ),
-    )
+    db_write_attempts.set_status_and_metadata_json_by_attempt_id(conn, status, metadata, attempt_id)
 
 
 def _record_dispatch_artifacts(conn, task_info, dispatch_result, run_now):
@@ -173,37 +108,20 @@ def _record_dispatch_artifacts(conn, task_info, dispatch_result, run_now):
             continue
         path_obj = Path(path)
         bytes_size = path_obj.stat().st_size if path_obj.exists() else None
-        conn.execute(
-            """
-            INSERT INTO artifacts(
-              artifact_id, task_id, attempt_id, artifact_type, path, bytes, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                values.new_id("artifact"),
-                task_info["task_id"],
-                task_info["attempt_id"],
-                artifact_type,
-                str(path_obj),
-                bytes_size,
-                run_now,
-            ),
+        db_write_artifacts.record_dispatch_artifacts(
+            conn,
+            values.new_id("artifact"),
+            task_info["task_id"],
+            task_info["attempt_id"],
+            artifact_type,
+            str(path_obj),
+            bytes_size,
+            run_now,
         )
 
 
 def _completed_by_worker_result(conn, attempt_id):
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM attempts a
-        JOIN worker_results wr ON wr.attempt_id = a.attempt_id
-        WHERE a.attempt_id = ?
-          AND a.status = 'completed'
-        LIMIT 1
-        """,
-        (attempt_id,),
-    ).fetchone()
+    row = db_records.first(db_read_attempts.find_for_completed_by_worker_result(conn, attempt_id))
     return bool(row)
 
 
@@ -242,48 +160,11 @@ def queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
         reserved = sum(item["repo_id"] == repo_id for item in dispatch_queue)
         capacity = min(
             capacity,
-            max(
-                0,
-                int(repo["max_concurrency"]) - attempt_capacity.running_attempt_count(conn, repo_id) - reserved,
-            ),
+            max(0, int(repo["max_concurrency"]) - attempt_capacity.running_attempt_count(conn, repo_id) - reserved),
         )
     if capacity <= 0:
         return 0
-    rows = conn.execute(
-        f"""
-        SELECT a.attempt_id, a.task_id, t.workstream_id, t.route_id, a.worktree_path,
-               ar.path, t.routing_mode, t.requested_worker
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        JOIN artifacts ar ON ar.task_id = t.task_id AND ar.artifact_id = (
-            SELECT ar2.artifact_id FROM artifacts ar2
-            WHERE ar2.task_id = t.task_id AND ar2.artifact_type = 'prompt'
-              AND (ar2.attempt_id = a.attempt_id OR ar2.attempt_id IS NULL)
-            ORDER BY ar2.created_at DESC, ar2.artifact_id DESC LIMIT 1
-        )
-        WHERE w.repo_id = ?
-          AND a.status = 'prepared'
-          AND json_extract(t.metadata_json,'$.dispatch_wait') IS NULL
-          AND {execution_store.runnable_sql()}
-          AND t.lifecycle IN ('queued', 'running')
-          AND ar.artifact_type = 'prompt'
-          AND (json_extract(a.metadata_json, '$.resume.not_before_at') IS NULL
-               OR julianday(json_extract(a.metadata_json, '$.resume.not_before_at')) <= julianday('now'))
-        ORDER BY
-          (CASE t.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END)
-          - MIN(3, CAST(MAX(0, julianday('now') - julianday(t.created_at)) AS INTEGER)),
-          CASE
-            WHEN t.route_id = 'update-existing-pr' THEN 0
-            WHEN t.workstream_id LIKE 'github:%!%' THEN 1
-            ELSE 2
-          END,
-          a.started_at,
-          a.attempt_id
-        LIMIT ?
-        """,
-        (repo_id, capacity),
-    ).fetchall()
+    rows = db_read_attempts.find_for_queue_prepared_attempts(conn, repo_id, capacity)
     queued = 0
     for (
         attempt_id,
@@ -319,25 +200,7 @@ def queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
 
 
 def current_dispatch_target(conn, attempt_id):
-    row = conn.execute(
-        """
-        SELECT a.task_id, t.workstream_id, t.route_id, a.worktree_path, ar.path,
-               t.routing_mode, t.requested_worker
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        JOIN artifacts ar ON ar.task_id = t.task_id
-        WHERE a.attempt_id = ?
-          AND a.status = 'prepared'
-          AND t.lifecycle IN ('queued', 'running')
-          AND ar.artifact_type = 'prompt'
-          AND (ar.attempt_id = a.attempt_id OR ar.attempt_id IS NULL)
-          AND (json_extract(a.metadata_json, '$.resume.not_before_at') IS NULL
-               OR julianday(json_extract(a.metadata_json, '$.resume.not_before_at')) <= julianday('now'))
-        ORDER BY ar.created_at DESC, ar.artifact_id DESC
-        LIMIT 1
-        """,
-        (attempt_id,),
-    ).fetchone()
+    row = db_records.first(db_read_attempts.find_for_current_dispatch_target(conn, attempt_id))
     if not row:
         return None
     (
@@ -365,40 +228,13 @@ def current_dispatch_target(conn, attempt_id):
 
 
 def _prepared_attempt_event_and_route(conn, attempt_id):
-    row = conn.execute(
-        """
-        SELECT ge.payload_json, rd.route_id
-        FROM attempts a
-        JOIN task_events te ON te.task_id = a.task_id
-        JOIN github_events ge ON ge.event_id = te.event_id
-        JOIN route_decisions rd ON rd.task_id = a.task_id
-        WHERE a.attempt_id = ?
-        ORDER BY CASE te.relationship WHEN 'trigger' THEN 0 ELSE 1 END,
-                 te.created_at,
-                 rd.created_at DESC
-        LIMIT 1
-        """,
-        (attempt_id,),
-    ).fetchone()
+    row = db_records.first(db_read_attempts.find_for_prepared_attempt_event_and_route(conn, attempt_id))
     if row:
         event = json.loads(row[0])
         route_id = row[1]
         route_result = dict(route.ROUTES.get(route_id) or route.route_task(event))
         return event, route_result
-    row = conn.execute(
-        """
-        SELECT wi.work_item_id, wi.title, wi.description, a.branch_name, rd.route_id,
-               t.metadata_json
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        JOIN work_items wi ON wi.workstream_id = t.workstream_id
-        JOIN route_decisions rd ON rd.task_id = t.task_id
-        WHERE a.attempt_id = ? AND wi.origin_type = 'web'
-        ORDER BY rd.created_at DESC
-        LIMIT 1
-        """,
-        (attempt_id,),
-    ).fetchone()
+    row = db_records.first(db_read_attempts.find_for_prepared_attempt_event_and_route_2(conn, attempt_id))
     if not row:
         return None, None
     task_metadata = values.json_object(row[5])
@@ -435,28 +271,19 @@ def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
     if not can_materialize_worktree(repo):
         return worktree_result
 
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
+    with closing(db_database.connect(db_path)) as conn:
+        db_sqlite.configure(conn, foreign_keys=True)
+        db_sqlite.configure(conn, busy_timeout_ms=5000)
         event, route_result = _prepared_attempt_event_and_route(conn, task_info["attempt_id"])
     if not event or not route_result.get("needs_worktree"):
         return worktree_result
 
     refreshed = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run=False)
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute(
-            """
-            UPDATE attempts
-            SET worktree_path = ?, branch_name = ?
-            WHERE attempt_id = ?
-            """,
-            (
-                refreshed.get("worktree_path"),
-                refreshed.get("branch_name"),
-                task_info["attempt_id"],
-            ),
+    with closing(db_database.connect(db_path)) as conn, conn:
+        db_sqlite.configure(conn, foreign_keys=True)
+        db_sqlite.configure(conn, busy_timeout_ms=5000)
+        db_write_attempts.set_worktree_path_and_branch_name_by_attempt_id(
+            conn, refreshed.get("worktree_path"), refreshed.get("branch_name"), task_info["attempt_id"]
         )
     return refreshed
 
@@ -469,7 +296,7 @@ def _model_for_dispatch(
     primary_model,
 ):
     fallback_model = selected_worker.get("fallback_model")
-    current = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+    current = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
     model_fallback = (values.json_object(current[0] if current else None).get("resume") or {}).get("model_fallback")
     if (
         model_fallback
@@ -479,19 +306,7 @@ def _model_for_dispatch(
         return fallback_model
     if not fallback_model:
         return primary_model
-    rows = conn.execute(
-        """
-        SELECT a.failure_json
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        WHERE t.workstream_id = ?
-          AND a.attempt_id != ?
-          AND a.status IN ('completed', 'failed', 'canceled')
-        ORDER BY COALESCE(a.finished_at, a.started_at) DESC, a.attempt_id DESC
-        LIMIT 2
-        """,
-        (workstream_id, attempt_id),
-    ).fetchall()
+    rows = db_read_attempts.find_for_model_for_dispatch(conn, workstream_id, attempt_id)
     if len(rows) != 2:
         return primary_model
     failures = [values.json_object(row[0]) for row in rows]
@@ -504,14 +319,7 @@ def _model_for_dispatch(
 
 
 def dispatch_queued(
-    db_path,
-    repo_ids,
-    dispatch_queue,
-    dry_run,
-    max_concurrency,
-    workers=None,
-    default_worker=None,
-    config_result=None,
+    db_path, repo_ids, dispatch_queue, dry_run, max_concurrency, workers=None, default_worker=None, config_result=None
 ):
     # The process-owned task lock covers target validation, spawn and PID
     # persistence. Cancellation/publication take this same lock.
@@ -520,7 +328,7 @@ def dispatch_queued(
             return []
         results = []
         if not dry_run and len(dispatch_queue) > 1:
-            with closing(sqlite3.connect(db_path)) as conn:
+            with closing(db_database.connect(db_path)) as conn:
                 dispatch_queue = sorted(
                     dispatch_queue,
                     key=lambda item: _prepared_attempt_dispatch_priority(conn, item["task_info"]["attempt_id"]),
@@ -530,14 +338,7 @@ def dispatch_queued(
                 if acquired:
                     results.extend(
                         dispatch_queued_locked(
-                            db_path,
-                            repo_ids,
-                            [item],
-                            dry_run,
-                            max_concurrency,
-                            workers,
-                            default_worker,
-                            config_result,
+                            db_path, repo_ids, [item], dry_run, max_concurrency, workers, default_worker, config_result
                         )
                     )
         return results
@@ -565,9 +366,9 @@ def dispatch_queued_locked(
         repo_id = item["repo_id"]
         repo = item["repo"]
         if not dry_run:
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute("PRAGMA foreign_keys = ON")
-                conn.execute("PRAGMA busy_timeout = 5000")
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_sqlite.configure(conn, foreign_keys=True)
+                db_sqlite.configure(conn, busy_timeout_ms=5000)
                 if attempt_capacity.running_attempt_count_for_repos(conn, repo_ids) >= max_concurrency:
                     continue
                 if attempt_capacity.running_attempt_count(conn, repo_id) >= int(
@@ -579,9 +380,9 @@ def dispatch_queued_locked(
                     continue
                 task_info, worktree_result = current_target
             worktree_result = ensure_dispatch_worktree(db_path, repo, task_info, worktree_result)
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute("PRAGMA foreign_keys = ON")
-                conn.execute("PRAGMA busy_timeout = 5000")
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_sqlite.configure(conn, foreign_keys=True)
+                db_sqlite.configure(conn, busy_timeout_ms=5000)
                 if not execution_ownership.claim_task(conn, task_info["task_id"]):
                     continue
         effective_route = None
@@ -589,8 +390,7 @@ def dispatch_queued_locked(
         if task_info.get("routing_mode") == "manual":
             selected_worker = workers_by_name.get(task_info.get("requested_worker"))
             if selected_worker is None:
-                with closing(sqlite3.connect(db_path)) as conn, conn:
-                    conn.row_factory = sqlite3.Row
+                with closing(db_database.connect(db_path)) as conn, conn:
                     item = work_items.resolve_work_item_for_workstream(
                         conn,
                         task_info["workstream_id"],
@@ -610,10 +410,7 @@ def dispatch_queued_locked(
                                 "requested_worker": task_info.get("requested_worker"),
                             },
                         )
-                    conn.execute(
-                        "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.dispatch_wait','manual_worker_unavailable') WHERE task_id=?",
-                        (task_info["task_id"],),
-                    )
+                    db_write_tasks.update_for_dispatch_queued_locked(conn, task_info["task_id"])
                 continue
         elif config_result:
             policy = route_config.ROUTE_POLICIES.get(task_info.get("route_id"))
@@ -629,7 +426,7 @@ def dispatch_queued_locked(
             if effective_route and task_info.get("routing_mode") != "manual"
             else selected_worker["default_model"]
         )
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(db_database.connect(db_path)) as conn:
             model = _model_for_dispatch(
                 conn,
                 task_info["workstream_id"],
@@ -653,16 +450,13 @@ def dispatch_queued_locked(
             ),
             "dry_run": dry_run,
         }
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(db_database.connect(db_path)) as conn:
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
         if not native_review and config_result:
-            with closing(sqlite3.connect(db_path)) as conn, conn:
+            with closing(db_database.connect(db_path)) as conn, conn:
                 if not work_admission.ordinary_dispatch_allowed(conn, task_info["task_id"], repo):
                     now = values.utc_now()
-                    conn.execute(
-                        "UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'",
-                        (now, task_info["attempt_id"]),
-                    )
+                    db_write_attempts.update_for_dispatch_queued_locked(conn, now, task_info["attempt_id"])
                     work_application_lifecycle.finalize_failed_task(
                         conn,
                         task_info["task_id"],
@@ -687,23 +481,14 @@ def dispatch_queued_locked(
             and config_result
             and not workflow_routing.native_request_allowed(native_review, repo, config_result)
         ):
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute("BEGIN IMMEDIATE")
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_transactions.begin(conn, immediate=True)
                 current = current_dispatch_target(conn, task_info["attempt_id"])
                 if current is not None:
                     now = values.utc_now()
-                    conn.execute(
-                        "UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'",
-                        (now, task_info["attempt_id"]),
-                    )
-                    conn.execute(
-                        "UPDATE tasks SET lifecycle='canceled',updated_at=? WHERE task_id=?",
-                        (now, task_info["task_id"]),
-                    )
-                    conn.execute(
-                        "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL,updated_at=? WHERE active_task_id=?",
-                        (now, task_info["task_id"]),
-                    )
+                    db_write_attempts.update_for_dispatch_queued_locked(conn, now, task_info["attempt_id"])
+                    db_write_tasks.update_for_dispatch_queued_locked_2(conn, now, task_info["task_id"])
+                    db_write_workstreams.update_for_dispatch_queued_locked(conn, now, task_info["task_id"])
                     round_store = vote_store if "source_type" in native_review else review_store
                     round_store.update(
                         conn,
@@ -727,8 +512,7 @@ def dispatch_queued_locked(
         if config_result and not native_review:
             from robert_agent.workflows.maintenance import repair as supervision_repair
 
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.row_factory = sqlite3.Row
+            with closing(db_database.connect(db_path)) as conn, conn:
                 if supervision_store.repair_task(conn, task_info["task_id"]):
                     repair_authorization = supervision_repair.authorized_repair(
                         conn,
@@ -736,17 +520,13 @@ def dispatch_queued_locked(
                         config_result,
                         repo["repo_id"]
                         if "repo_id" in repo
-                        else conn.execute(
-                            "SELECT repo_id FROM workstreams WHERE workstream_id=?",
-                            (task_info["workstream_id"],),
-                        ).fetchone()[0],
+                        else db_records.first(
+                            db_read_workstreams.find_repo_id_by_workstream_id(conn, task_info["workstream_id"])
+                        )[0],
                     )
                     if not repair_authorization:
                         now = values.utc_now()
-                        conn.execute(
-                            "UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=? AND status='prepared'",
-                            (now, task_info["attempt_id"]),
-                        )
+                        db_write_attempts.update_for_dispatch_queued_locked_2(conn, now, task_info["attempt_id"])
                         work_application_lifecycle.finalize_failed_task(
                             conn,
                             task_info["task_id"],
@@ -755,27 +535,16 @@ def dispatch_queued_locked(
                             {"status": "maintenance_policy_rejected"},
                         )
                         continue
-                    from robert_agent.workflows.maintenance import (
-                        worker as supervision_repair_worker,
-                    )
+                    from robert_agent.workflows.maintenance import worker as supervision_repair_worker
 
                     worker_kwargs["worker_agent_config"] = supervision_repair_worker.launch_profile(
-                        config_result,
-                        task_info["task_id"],
-                        task_info["attempt_id"],
-                        repair_authorization["worker"],
+                        config_result, task_info["task_id"], task_info["attempt_id"], repair_authorization["worker"]
                     )
         if native_review:
             configured = native_review["request"]["workers"]
             timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
             environment_names = sorted(
-                {
-                    "GH_TOKEN",
-                    "GITHUB_TOKEN",
-                    "GH_HOST",
-                    "CODEX_HOME",
-                    "CLAUDE_CONFIG_DIR",
-                }
+                {"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
                 | {name for w in configured for name in w["environment_allowlist"]}
             )
             worker_kwargs.update(
@@ -802,8 +571,8 @@ def dispatch_queued_locked(
                 },
             )
         if not dry_run:
-            with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute("BEGIN IMMEDIATE")
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_transactions.begin(conn, immediate=True)
                 target = current_dispatch_target(conn, task_info["attempt_id"])
                 if target is None:
                     continue
@@ -816,16 +585,14 @@ def dispatch_queued_locked(
                 if metadata.get("dispatch_inflight"):
                     if binding:
                         metadata["reason_code"] = "dispatch_outcome_unknown"
-                        conn.execute(
-                            "UPDATE execution_subjects SET binding_status='attention',metadata_json=? WHERE subject_type=? AND subject_id=?",
-                            (json.dumps(metadata), subject_type, subject_id),
+                        db_write_execution_subjects.update_for_dispatch_queued_locked_2(
+                            conn, json.dumps(metadata), subject_type, subject_id
                         )
                     continue
                 if binding:
                     metadata["dispatch_inflight"] = task_info["attempt_id"]
-                    conn.execute(
-                        "UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?",
-                        (json.dumps(metadata), subject_type, subject_id),
+                    db_write_execution_subjects.update_for_dispatch_queued_locked(
+                        conn, json.dumps(metadata), subject_type, subject_id
                     )
         try:
             if worktree_result and not worktree_result.get("ok", True):
@@ -868,9 +635,9 @@ def dispatch_queued_locked(
             "fallback_model": selected_worker.get("fallback_model"),
             "reasoning_effort": worker_kwargs["reasoning_effort"],
         }
-        with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA busy_timeout = 5000")
+        with closing(db_database.connect(db_path)) as conn, conn:
+            db_sqlite.configure(conn, foreign_keys=True)
+            db_sqlite.configure(conn, busy_timeout_ms=5000)
             if not execution_ownership.claim_task(conn, task_info["task_id"]):
                 continue
             _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
@@ -879,9 +646,8 @@ def dispatch_queued_locked(
             if binding:
                 metadata = values.json_object(binding["metadata_json"])
                 metadata.pop("dispatch_inflight", None)
-                conn.execute(
-                    "UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?",
-                    (json.dumps(metadata), subject_type, subject_id),
+                db_write_execution_subjects.update_for_dispatch_queued_locked(
+                    conn, json.dumps(metadata), subject_type, subject_id
                 )
             _record_dispatch_artifacts(conn, task_info, dispatch_result, values.utc_now())
             if dispatch_result.get("cleanup_pending"):

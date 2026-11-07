@@ -1,5 +1,6 @@
 """application delivery effects responsibilities."""
 
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.adapters.git.remotes import github_owner
 import re
 import subprocess
@@ -288,16 +289,7 @@ def head_owner_from_push_metadata(metadata, head, run_command):
 def sibling_push_metadata(conn, action, head):
     if not conn or not action["result_id"]:
         return {}
-    rows = conn.execute(
-        """
-        SELECT metadata_json
-        FROM github_actions
-        WHERE result_id = ?
-          AND action_type = 'push_existing_pr'
-        ORDER BY created_at DESC, action_id DESC
-        """,
-        (action["result_id"],),
-    ).fetchall()
+    rows = db_read_github_actions.find_for_sibling_push_metadata(conn, action["result_id"])
     for row in rows:
         metadata = publication_values.decode_json(row["metadata_json"])
         branch = metadata_value(metadata, "branch", "head", "head_branch")
@@ -481,18 +473,9 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
             return blocked is None
 
         try:
-            completed = supervision_git.push(
-                action_scope,
-                result_head_sha,
-                before_push=before_push,
-                runner=run_command,
-            )
+            completed = supervision_git.push(action_scope, result_head_sha, before_push=before_push, runner=run_command)
         except (OSError, subprocess.SubprocessError):
-            return {
-                "ok": False,
-                "status": "publish_failed",
-                "safe_error": "Maintenance Git push unavailable",
-            }
+            return {"ok": False, "status": "publish_failed", "safe_error": "Maintenance Git push unavailable"}
         if blocked:
             return blocked
         safe_error = command_failure(completed, "Maintenance Git push failed")
@@ -553,13 +536,7 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
                     "safe_error": f"remote branch refresh failed: {fetch_error}",
                     "command": fetch_command,
                 }
-            ancestor_command = [
-                "git",
-                "merge-base",
-                "--is-ancestor",
-                current_remote_sha,
-                result_head_sha,
-            ]
+            ancestor_command = ["git", "merge-base", "--is-ancestor", current_remote_sha, result_head_sha]
             ancestor = run_command(
                 ancestor_command,
                 cwd=worktree_path,

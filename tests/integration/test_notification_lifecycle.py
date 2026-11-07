@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from robert_agent.adapters.github import discovery as discover
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.runtime import cycle as run_once
 from robert_agent.configuration import command as validate_config
 from robert_agent.adapters.github.read import GitHubReadSession
@@ -37,11 +37,7 @@ class NotificationLifecycleTests(unittest.TestCase):
         path = fixture.root / "assignment.json"
         path.write_text(json.dumps({"events": [event]}))
         outcome = run_once.run_once(
-            fixture.config_path,
-            fixture_path=path,
-            dry_run=True,
-            skip_external=True,
-            skip_publish=True,
+            fixture.config_path, fixture_path=path, dry_run=True, skip_external=True, skip_publish=True
         )
         self.assertTrue(outcome["ok"], outcome)
         with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
@@ -73,11 +69,7 @@ class NotificationLifecycleTests(unittest.TestCase):
             "user": {"login": "owner"},
             "assignees": [{"login": "robot"}],
             "head": {"sha": "head", "ref": "feature"},
-            "base": {
-                "sha": "base",
-                "ref": "main",
-                "repo": {"full_name": "example/repo"},
-            },
+            "base": {"sha": "base", "ref": "main", "repo": {"full_name": "example/repo"}},
         }
 
         def runner(args, **kwargs):
@@ -89,15 +81,7 @@ class NotificationLifecycleTests(unittest.TestCase):
             elif endpoint.endswith("/issues/1/comments"):
                 payload = [comments[:1], comments[1:]]
             elif endpoint.endswith("/pulls/1/reviews"):
-                payload = [
-                    [
-                        {
-                            **comments[0],
-                            "id": 32,
-                            "submitted_at": comments[0]["created_at"],
-                        }
-                    ]
-                ]
+                payload = [[{**comments[0], "id": 32, "submitted_at": comments[0]["created_at"]}]]
             elif endpoint.endswith("/pulls/1/comments"):
                 payload = [[{**comments[0], "id": 33}]]
             elif endpoint.endswith(("/issues/1", "/pulls/1")):
@@ -126,10 +110,7 @@ class NotificationLifecycleTests(unittest.TestCase):
         batch = synchronization.scan_repo(config, config["repos"][0], session, hints)
         with closing(sqlite3.connect(fixture.db_path)) as conn:
             return json.loads(
-                conn.execute(
-                    "SELECT raw_events_json FROM github_scan_batches WHERE batch_id=?",
-                    (batch,),
-                ).fetchone()[0]
+                conn.execute("SELECT raw_events_json FROM github_scan_batches WHERE batch_id=?", (batch,)).fetchone()[0]
             )
 
     def comments(self):
@@ -154,17 +135,11 @@ class NotificationLifecycleTests(unittest.TestCase):
 
     def consume(self, fixture):
         outcome = run_once.run_once(
-            fixture.config_path,
-            dry_run=True,
-            skip_external=True,
-            skip_publish=True,
-            consume_observations=True,
+            fixture.config_path, dry_run=True, skip_external=True, skip_publish=True, consume_observations=True
         )
         self.assertTrue(outcome["ok"], outcome)
 
-    def test_search_floor_notification_preserves_all_requests_after_completed_assignment(
-        self,
-    ):
+    def test_search_floor_notification_preserves_all_requests_after_completed_assignment(self):
         for source_type in ("issue", "pull_request"):
             with self.subTest(source_type=source_type):
                 fixture = self.fixture(source_type)

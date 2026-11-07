@@ -9,7 +9,7 @@ from pathlib import Path
 
 class BoardReadModelFixture(unittest.TestCase):
     def setUp(self):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
         from robert_agent.work.application import commands as work_items
 
         self.tmp = tempfile.TemporaryDirectory()
@@ -59,10 +59,7 @@ class BoardReadModelFixture(unittest.TestCase):
                 "SELECT active_task_id FROM workstreams WHERE workstream_id = ?",
                 (doing["workstream_id"],),
             ).fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?",
-                (doing_task,),
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (doing_task,))
             conn.execute(
                 "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, branch_name, started_at) VALUES ('attempt-doing', ?, 1, 'running', 'codex/dd-doing', ?)",
                 (doing_task, now),
@@ -72,10 +69,7 @@ class BoardReadModelFixture(unittest.TestCase):
                 "SELECT active_task_id FROM workstreams WHERE workstream_id = ?",
                 (waiting["workstream_id"],),
             ).fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'waiting_for_user' WHERE task_id = ?",
-                (waiting_task,),
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'waiting_for_user' WHERE task_id = ?", (waiting_task,))
             conn.execute(
                 "UPDATE workstreams SET lifecycle = 'waiting_for_user' WHERE workstream_id = ?",
                 (waiting["workstream_id"],),
@@ -94,10 +88,7 @@ class BoardReadModelFixture(unittest.TestCase):
                 "SELECT active_task_id FROM workstreams WHERE workstream_id = ?",
                 (review["workstream_id"],),
             ).fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?",
-                (review_task,),
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?", (review_task,))
             conn.execute(
                 "UPDATE workstreams SET lifecycle = 'completed', active_task_id = NULL WHERE workstream_id = ?",
                 (review["workstream_id"],),
@@ -114,10 +105,7 @@ class BoardReadModelFixture(unittest.TestCase):
                 "SELECT active_task_id FROM workstreams WHERE workstream_id = ?",
                 (done["workstream_id"],),
             ).fetchone()[0]
-            conn.execute(
-                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?",
-                (done_task,),
-            )
+            conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?", (done_task,))
             conn.execute(
                 "UPDATE workstreams SET lifecycle = 'completed', active_task_id = NULL WHERE workstream_id = ?",
                 (done["workstream_id"],),

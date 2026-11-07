@@ -183,7 +183,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
         self.assertIn("git_status_short", prompt)
 
     def test_recovery_creation_failure_marks_attempt_and_binding_attention(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(987)
         now = "2026-08-02T01:00:00+00:00"
@@ -253,7 +253,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
         self.assertEqual(notification, ("worker_identity_attention", "recorded"))
 
     def test_failed_timeout_recovery_creation_failure_marks_attention(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(988)
         now = "2026-08-02T01:00:00+00:00"
@@ -324,9 +324,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
             "recovery_attempt_creation_failed",
         )
 
-    def test_supervise_prepares_resume_attempt_when_timeout_pid_is_gone_after_progress(
-        self,
-    ):
+    def test_supervise_prepares_resume_attempt_when_timeout_pid_is_gone_after_progress(self):
         from robert_agent.runtime import cycle as run_once
 
         first = run_once.run_once(
@@ -442,9 +440,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
         self.assertEqual(workstream, ("active", task_id))
         self.assertEqual(notification, ("worker_resume_prepared", "recorded"))
 
-    def test_supervise_recovers_failed_timeout_attempt_when_pid_is_gone_after_progress(
-        self,
-    ):
+    def test_supervise_recovers_failed_timeout_attempt_when_pid_is_gone_after_progress(self):
         from robert_agent.runtime import cycle as run_once
 
         first = run_once.run_once(

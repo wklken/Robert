@@ -1,5 +1,6 @@
 """Recover native launch reservations only when the persisted outcome proves exit."""
 
+from tests.support import database as fixture_database
 import json
 import unittest
 
@@ -9,12 +10,7 @@ from tests.support import review_coordinator as review_fixture
 from tests.support import vote_coordinator as vote_fixture
 
 
-FAILED_WITHOUT_PROCESS = {
-    "ok": False,
-    "status": "failed_dispatch",
-    "pid": None,
-    "error_type": "FileNotFoundError",
-}
+FAILED_WITHOUT_PROCESS = {"ok": False, "status": "failed_dispatch", "pid": None, "error_type": "FileNotFoundError"}
 
 
 class NativeLaunchSlotRecoveryTests(unittest.TestCase):
@@ -30,13 +26,13 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
         else:
             driver = fixture.start()
         driver.prepare()
-        with driver.store.connect(driver.db_path) as conn:
+        with fixture_database.connect(driver.db_path) as conn:
             conn.execute("UPDATE review_process_pool SET max_concurrency=1")
         return fixture, driver
 
     def new_run(self, driver):
         worker = driver.request["workers"][0]
-        with driver.store.connect(driver.db_path) as conn:
+        with fixture_database.connect(driver.db_path) as conn:
             run = driver.store.new_run(
                 conn,
                 driver.round_id,
@@ -54,19 +50,16 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
         driver.launcher = lambda **kwargs: dict(FAILED_WITHOUT_PROCESS)
         launched = driver.launch_with_slot(run, driver.request["workers"][0], driver.manifest["prompt_path"], {})
         self.assertEqual(launched, FAILED_WITHOUT_PROCESS)
-        with driver.store.connect(driver.db_path) as conn:
+        with fixture_database.connect(driver.db_path) as conn:
             self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 1})
         # Crash after launch outcome commits, before run_phase's release_slot.
         return run
 
     def cancel(self, driver):
-        with driver.store.connect(driver.db_path) as conn:
+        with fixture_database.connect(driver.db_path) as conn:
             item = dict(conn.execute("SELECT * FROM work_items").fetchone())
         context = work_items.CommandContext(
-            "operator",
-            "maintainer",
-            frozenset({item["repo_id"]}),
-            frozenset({"codex", "claude"}),
+            "operator", "maintainer", frozenset({item["repo_id"]}), frozenset({"codex", "claude"})
         )
         return work_items.execute_command(
             driver.db_path,
@@ -79,14 +72,14 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
         )
 
     def assert_released(self, driver, run):
-        with driver.store.connect(driver.db_path) as conn:
+        with fixture_database.connect(driver.db_path) as conn:
             current = next(row for row in driver.store.runs(conn, driver.round_id) if row["run_id"] == run["run_id"])
             self.assertEqual(current["status"], "failed")
             self.assertEqual(current["dispatch"], FAILED_WITHOUT_PROCESS)
             self.assertFalse(current["slot_reserved"])
             self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 0})
         waiting = self.new_run(driver)
-        with driver.store.connect(driver.db_path) as conn:
+        with fixture_database.connect(driver.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             self.assertTrue(driver.store.reserve_slot(conn, waiting["run_id"]))
 
@@ -106,12 +99,9 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
                 run = self.failed_launch(driver)
                 response = self.cancel(driver)
                 self.assertTrue(response["ok"], response)
-                with driver.store.connect(driver.db_path) as conn:
+                with fixture_database.connect(driver.db_path) as conn:
                     self.assertEqual(
-                        conn.execute(
-                            "SELECT lifecycle FROM tasks WHERE task_id=?",
-                            (driver.task_id,),
-                        ).fetchone()[0],
+                        conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (driver.task_id,)).fetchone()[0],
                         "canceled",
                     )
                 self.assert_released(driver, run)
@@ -121,7 +111,7 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 _, driver = self.fixture(kind)
                 run = self.new_run(driver)
-                with driver.store.connect(driver.db_path) as conn:
+                with fixture_database.connect(driver.db_path) as conn:
                     conn.execute("BEGIN IMMEDIATE")
                     self.assertTrue(driver.store.reserve_slot(conn, run["run_id"]))
                 for status, recorded in [
@@ -133,33 +123,21 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
                     ("failed", {**FAILED_WITHOUT_PROCESS, "pid": 0}),
                 ]:
                     with self.subTest(status=status, recorded=recorded):
-                        with driver.store.connect(driver.db_path) as conn:
+                        with fixture_database.connect(driver.db_path) as conn:
                             driver.store.update_run(
-                                conn,
-                                run["run_id"],
-                                status=status,
-                                dispatch_json=json.dumps(recorded),
+                                conn, run["run_id"], status=status, dispatch_json=json.dumps(recorded)
                             )
                         driver.reclaim_finished_slots()
-                        with driver.store.connect(driver.db_path) as conn:
-                            self.assertEqual(
-                                driver.store.process_pool_status(conn),
-                                {"limit": 1, "in_use": 1},
-                            )
+                        with fixture_database.connect(driver.db_path) as conn:
+                            self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 1})
                             model_execution.terminate_children(conn, driver.task_id, store=driver.store)
-                            self.assertEqual(
-                                driver.store.process_pool_status(conn),
-                                {"limit": 1, "in_use": 1},
-                            )
-                with driver.store.connect(driver.db_path) as conn:
+                            self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 1})
+                with fixture_database.connect(driver.db_path) as conn:
                     driver.store.update_run(conn, run["run_id"], status="starting", dispatch_json="{}")
                 with self.assertRaises(work_items.WorkItemConflictError):
                     self.cancel(driver)
-                with driver.store.connect(driver.db_path) as conn:
-                    self.assertEqual(
-                        driver.store.process_pool_status(conn),
-                        {"limit": 1, "in_use": 1},
-                    )
+                with fixture_database.connect(driver.db_path) as conn:
+                    self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 1})
 
 
 if __name__ == "__main__":

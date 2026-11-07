@@ -1,16 +1,24 @@
 """application synchronization responsibilities."""
 
+from robert_agent.persistence.queries import github_events as db_read_github_events
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+
+from robert_agent.persistence.queries import github_scan_batches as db_read_github_scan_batches
+from robert_agent.persistence.queries import wakeups as db_read_wakeups
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
+from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.adapters.github import sources as github_sources
 from contextlib import closing
 import hashlib
 import json
 import os
-import sqlite3
 import subprocess
 import time
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.workflows import pr_health
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.configuration import command as validate_config
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.adapters.github import read as github_read
@@ -55,47 +63,23 @@ def scan_repo(config, repo, session, hints):
 
     db_path = config["db_path"]
     recorded = github_recording.RecordingRunner(session)
-    with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
+    with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
         repo_id = work_repositories.upsert_repo(conn, repo)
         known = work_queries.load_known_workstreams(conn, repo_id)
-        health_sources = set(
-            conn.execute(
-                """SELECT gs.source_type,gs.number FROM workstreams w
-            JOIN github_sources gs ON gs.source_id=w.primary_source_id
-            WHERE w.repo_id=? AND w.origin_workstream_id IS NOT NULL
-              AND gs.source_type='pull_request' AND gs.state='open' """,
-                (repo_id,),
-            ).fetchall()
-        )
+        health_sources = set(db_read_workstreams.find_for_scan_repo(conn, repo_id))
         sources = list(
             dict.fromkeys(
                 (row[4], row[5], (row[4], row[5]) in health_sources)
                 for row in work_queries.remote_source_rows(conn, repo_id)
             )
         )
-        pending_rows = conn.execute(
-            "SELECT batch_id,context_digest,raw_events_json,retry_at FROM github_scan_batches WHERE repo_id=? AND completed_at IS NULL AND attention_reason IS NULL",
-            (repo_id,),
-        ).fetchall()
+        pending_rows = db_read_github_scan_batches.find_for_scan_repo(conn, repo_id)
         pending = [(row[2],) for row in pending_rows]
         # A successful batch is not proof that every driving event created a
         # task. Reobserve orphaned requests; never dispatch their saved payload
         # or its historical authorization without fresh source reads.
         trusted = list(repo.get("trusted_actors") or [])
-        placeholders = ",".join("?" for _ in trusted) or "NULL"
-        unlinked = conn.execute(
-            f"""SELECT ge.payload_json FROM github_events ge
-            JOIN github_sources gs ON gs.source_id=ge.source_id
-            JOIN workstreams w ON w.primary_source_id=gs.source_id AND w.repo_id=ge.repo_id
-            WHERE ge.repo_id=? AND ge.authorization_status='accepted_context'
-              AND ge.actor_login IN ({placeholders}) AND ge.actor_login!=?
-              AND ge.actor_kind!='github_system' AND lower(gs.state)='open'
-              AND w.lifecycle IN ('completed','failed') AND w.active_task_id IS NULL
-              AND NOT EXISTS(SELECT 1 FROM task_events te WHERE te.event_id=ge.event_id)
-              AND NOT EXISTS(SELECT 1 FROM work_items wi WHERE wi.workstream_id=w.workstream_id
-                             AND wi.canceled_at IS NOT NULL)""",
-            [repo_id, *trusted, repo["github_account"]],
-        ).fetchall()
+        unlinked = db_read_github_events.scan_repo_filtered(conn, trusted, repo_id, repo["github_account"])
     hints = list(hints)
     recovery_events = [json.loads(encoded) for (encoded,) in unlinked]
     for raw in [
@@ -157,11 +141,7 @@ def scan_repo(config, repo, session, hints):
         ):
             if remote_states.get((source_type, number)) is None:
                 continue
-            raw = {
-                "number": number,
-                "source_type": source_type,
-                "event_type": "notification",
-            }
+            raw = {"number": number, "source_type": source_type, "event_type": "notification"}
             enriched, state = discover._source_metadata(raw, repo, session)
             if (state or "").lower() != "open":
                 continue
@@ -174,10 +154,7 @@ def scan_repo(config, repo, session, hints):
                 notification_hints=[h for h in hints if h["number"] == number and h["source_type"] == source_type],
             )
             events.extend(event for event in discussion if event.get("event_type") != "notification")
-        for raw in [
-            *events,
-            *(raw for (encoded,) in pending for raw in json.loads(encoded)),
-        ]:
+        for raw in [*events, *(raw for (encoded,) in pending for raw in json.loads(encoded))]:
             source = (raw.get("source_type", "issue"), raw["number"])
             if source not in remote_states:
                 remote_states[source] = github_sources.read_source_state(repo["full_name"], *source, recorded)
@@ -193,39 +170,28 @@ def scan_repo(config, repo, session, hints):
             and source not in incomplete
             and discover.source_key(repo["full_name"], *source) not in session.failed_sources
         }
-        with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
+        with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
             for old_id, old_context, encoded, retry_at in pending_rows:
                 old_sources = {(raw.get("source_type", "issue"), raw["number"]) for raw in json.loads(encoded)}
                 if old_context != context and retry_at <= time.time() and not old_sources <= covered:
                     scan_batches.fail_batch(conn, old_id, "source_refresh_unavailable", time.time())
         events = source_policy.refresh_pending_events(
-            events,
-            [raw for (encoded,) in pending for raw in json.loads(encoded)],
-            covered,
-            repo,
+            events, [raw for (encoded,) in pending for raw in json.loads(encoded)], covered, repo
         )
         identifier = scan_batches.save_batch(
-            db_path,
-            repo_id,
-            context,
-            events,
-            recorded.responses,
-            complete_sources=covered,
+            db_path, repo_id, context, events, recorded.responses, complete_sources=covered
         )
     except Exception:
         # A later discovery/search failure must not resurrect an older successful
         # safety read. Publish both fresh state and explicit failed-read markers.
-        with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
+        with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
             scan_batches.save_reads(conn, repo_id, recorded.responses, time.time())
             for old_id, old_context, _encoded, retry_at in pending_rows:
                 if old_context != context and retry_at <= time.time():
                     scan_batches.fail_batch(conn, old_id, "discovery_refresh_failed", time.time())
         raise
-    with closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
-        conn.execute(
-            "UPDATE wakeups SET status='consumed' WHERE repo_id=? AND json_extract(metadata_json,'$.kind')='github_context_refresh' AND status='pending'",
-            (repo_id,),
-        )
+    with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
+        db_write_wakeups.update_for_scan_repo(conn, repo_id)
     return identifier
 
 
@@ -237,16 +203,8 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
     storage.init_database(db_path)
     repos = config["repos"]
     if refresh_context:
-        with closing(sqlite3.connect(db_path, timeout=5)) as conn:
-            pending = {
-                row[0]
-                for row in conn.execute(
-                    """SELECT DISTINCT r.full_name FROM wakeups w JOIN repos r ON r.repo_id=w.repo_id
-                WHERE w.status='pending' AND json_extract(w.metadata_json,'$.kind')='github_context_refresh'
-                  AND julianday(w.not_before_at)<=julianday('now')
-                  AND (w.expires_at IS NULL OR julianday(w.expires_at)>julianday('now'))"""
-                )
-            }
+        with closing(db_database.connect(db_path, timeout=5)) as conn:
+            pending = {row[0] for row in db_read_wakeups.find_for_scan(conn)}
         repos = [repo for repo in repos if repo["full_name"] in pending]
     sessions, buckets, failures, batches = {}, {}, [], []
     for repo in repos:
@@ -254,10 +212,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
         if account in sessions:
             continue
         session = github_read.GitHubReadSession(
-            db_path,
-            account=account,
-            host=os.environ.get("GH_HOST", "github.com"),
-            runner=runner,
+            db_path, account=account, host=os.environ.get("GH_HOST", "github.com"), runner=runner
         )
         sessions[account] = session
         try:
@@ -295,7 +250,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             )
         except ControlDeadlineExceeded:
             raise
-        except (subprocess.SubprocessError, OSError, ValueError, sqlite3.Error):
+        except (subprocess.SubprocessError, OSError, ValueError, db_errors.Error):
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {

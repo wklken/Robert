@@ -1,9 +1,20 @@
 """Bounded retention for diagnostic history, never task or publication state."""
 
+from robert_agent.persistence.stores import diagnostics as diagnostic_store
+
+from robert_agent.persistence import transactions as db_transactions
+
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence.queries import agent_runs as db_read_agent_runs
+from robert_agent.persistence.queries import daemon_events as db_read_daemon_events
+from robert_agent.persistence.queries import leases as db_read_leases
+
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import sqlite3
 import time
 
 
@@ -20,68 +31,25 @@ def _positive_int(value, name, maximum=None):
 
 def _select_batch(conn, success_cutoff, failure_cutoff, event_cutoff, batch_size):
     runs = [
-        row[0]
-        for row in conn.execute(
-            """SELECT r.run_id FROM agent_runs r
-        WHERE ((r.status IN ('completed','skipped') AND julianday(r.finished_at) < julianday(?))
-            OR (r.status = 'failed' AND julianday(r.finished_at) < julianday(?)))
-          AND NOT EXISTS (SELECT 1 FROM wakeups w WHERE w.source_run_id = r.run_id)
-          AND NOT EXISTS (SELECT 1 FROM wakeups w WHERE w.consumed_run_id = r.run_id)
-          AND NOT EXISTS (SELECT 1 FROM leases l WHERE l.owner_id = r.run_id AND l.status = 'active')
-          AND r.run_id != (SELECT run_id FROM agent_runs ORDER BY started_at DESC,run_id DESC LIMIT 1)
-        ORDER BY julianday(r.finished_at),r.run_id LIMIT ?""",
-            (success_cutoff, failure_cutoff, batch_size),
-        )
+        row[0] for row in db_read_agent_runs.find_for_select_batch(conn, success_cutoff, failure_cutoff, batch_size)
     ]
     events = [
         row[0]
-        for row in conn.execute(
-            """SELECT daemon_event_id FROM daemon_events
-        WHERE (status IN ('ok','running','skipped') AND julianday(created_at) < julianday(?))
-           OR (status NOT IN ('ok','running','skipped') AND julianday(created_at) < julianday(?))
-        ORDER BY julianday(created_at),daemon_event_id LIMIT ?""",
-            (event_cutoff, min(event_cutoff, failure_cutoff), batch_size),
+        for row in db_read_daemon_events.find_for_select_batch(
+            conn, event_cutoff, min(event_cutoff, failure_cutoff), batch_size
         )
     ]
-    leases = [
-        row[0]
-        for row in conn.execute(
-            """SELECT l.lease_id FROM leases l
-        WHERE l.resource_type IN ('agent_run','daemon')
-          AND ((l.status = 'released' AND julianday(l.released_at) < julianday(?))
-            OR (l.status = 'expired' AND julianday(l.expires_at) < julianday(?)))
-          AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.run_id = l.owner_id AND r.status = 'running')
-          AND NOT EXISTS (SELECT 1 FROM daemon_runs d WHERE d.daemon_run_id = l.owner_id AND d.status = 'running')
-          AND NOT EXISTS (SELECT 1 FROM github_control_children c WHERE c.owner_id=l.owner_id AND c.status IN ('starting','running'))
-        ORDER BY l.acquired_at,l.lease_id LIMIT ?""",
-            (success_cutoff, failure_cutoff, batch_size),
-        )
-    ]
+    leases = [row[0] for row in db_read_leases.find_for_select_batch(conn, success_cutoff, failure_cutoff, batch_size)]
     return runs, events, leases
 
 
 def _prune_batch(conn, cutoffs, batch_size, apply):
     # Acquire the write lock before selecting candidates, so a new recovery
     # reference cannot appear between the selection and deletion.
-    conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
+    db_transactions.begin(conn, immediate=apply)
     try:
         runs, events, leases = _select_batch(conn, *cutoffs, batch_size)
-        groups = (
-            ("run_steps", "run_id", runs),
-            ("run_repo_steps", "run_id", runs),
-            ("agent_runs", "run_id", runs),
-            ("daemon_events", "daemon_event_id", events),
-            ("leases", "lease_id", leases),
-        )
-        counts = dict.fromkeys(COUNT_TABLES, 0)
-        for table, key, identifiers in groups:
-            if not identifiers:
-                continue
-            placeholders = ",".join("?" for _ in identifiers)
-            where = f"{key} IN ({placeholders})"
-            counts[table] = conn.execute(f"SELECT count(*) FROM {table} WHERE {where}", identifiers).fetchone()[0]
-            if apply:
-                conn.execute(f"DELETE FROM {table} WHERE {where}", identifiers)
+        counts = diagnostic_store.prune_rows(conn, runs, events, leases, apply=apply)
         conn.commit()
         return counts
     except Exception:
@@ -124,11 +92,7 @@ def prune_database(
     when = when.astimezone(timezone.utc)
     cutoffs = tuple(
         (when - timedelta(days=days)).isoformat()
-        for days in (
-            run_retention_days,
-            failed_run_retention_days,
-            event_retention_days,
-        )
+        for days in (run_retention_days, failed_run_retention_days, event_retention_days)
     )
     result = {
         "ok": True,
@@ -143,15 +107,11 @@ def prune_database(
     path = Path(db_path).expanduser().resolve()
     try:
         with closing(
-            sqlite3.connect(
-                path.as_uri() + ("?mode=rw" if apply else "?mode=ro"),
-                uri=True,
-                timeout=0.1,
-            )
+            db_database.connect(path.as_uri() + ("?mode=rw" if apply else "?mode=ro"), uri=True, timeout=0.1)
         ) as conn:
-            conn.execute("PRAGMA foreign_keys=ON")
+            db_sqlite.configure(conn, foreign_keys=True)
             if not apply:
-                conn.execute("PRAGMA query_only=ON")
+                db_sqlite.configure(conn, query_only=True)
             for _ in range(max_batches if apply else 1):
                 if result["batches"] and max_seconds is not None and time.monotonic() - started >= max_seconds:
                     break
@@ -162,10 +122,10 @@ def prune_database(
                     result["counts"][table] += count
                 if not any(counts.values()):
                     break
-    except sqlite3.Error as exc:
-        # Only lock contention is retryable; malformed schemas and other I/O
-        # failures remain visible.
-        busy = isinstance(exc, sqlite3.OperationalError) and str(exc) in {
+    except db_errors.Error as exc:
+        # Python 3.10 does not expose sqlite_errorcode. Only lock contention is
+        # retryable; malformed schemas and other I/O failures remain visible.
+        busy = isinstance(exc, db_errors.OperationalError) and str(exc) in {
             "database is locked",
             "database table is locked",
             "database schema is locked",

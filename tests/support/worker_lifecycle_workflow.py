@@ -10,8 +10,8 @@ from pathlib import Path
 
 class WorkerLifecycleWorkflowFixture(unittest.TestCase):
     def _database(self):
-        from robert_agent.adapters.sqlite import database as storage
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence.schema import database as storage
+        from robert_agent.persistence import execution_control as execution_store
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

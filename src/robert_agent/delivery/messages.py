@@ -2,6 +2,8 @@
 
 import json
 
+from robert_agent.persistence import records
+from robert_agent.persistence.queries import notifications, repos
 from robert_agent.security.redaction import redact_text
 from robert_agent.work import messaging
 
@@ -24,24 +26,21 @@ def _redact_values(value):
 def allowed_repo_ids(conn, config):
     names = (config or {}).get("messaging", {}).get("repos", [])
     configured = {repo["full_name"] for repo in (config or {}).get("repos", [])}
-    return frozenset(
-        row[0]
-        for row in conn.execute("SELECT repo_id,full_name FROM repos")
-        if row[1] in names and row[1] in configured
-    )
+    return frozenset(row[0] for row in repos.load_repos(conn) if row[1] in names and row[1] in configured)
 
 
 def envelope(conn, notification_id, *, config=None, include_closed=False):
-    row = conn.execute(
-        "SELECT task_id,notification_type,status,metadata_json FROM notifications WHERE notification_id=?",
-        (notification_id,),
-    ).fetchone()
+    row = records.first(
+        notifications.find_task_id_and_notification_type_and_status_and_metadata_json_by_notification_id(
+            conn, notification_id
+        )
+    )
     if not row:
         return None
     task_id, kind, status, raw = row
     metadata = json.loads(raw or "{}")
-    repo_id = messaging.notification_scope(conn, task_id, metadata)
-    if config is not None and (repo_id is not None or task_id or metadata.get("work_item_id")):
+    repo_id, repository_scoped = messaging.notification_scope(conn, task_id, metadata)
+    if config is not None and repository_scoped:
         if repo_id not in allowed_repo_ids(conn, config):
             return None
     payload = {
@@ -81,23 +80,8 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
     }
 
 
-def pending_filter(conn, config=None):
-    """Filter before LIMIT so stale or out-of-scope notices cannot starve delivery."""
-    predicate = """ AND (json_extract(metadata_json,'$.attention_event_id') IS NULL OR EXISTS (
-        SELECT 1 FROM work_item_events e JOIN work_items wi USING(work_item_id)
-        WHERE e.event_id=json_extract(notifications.metadata_json,'$.attention_event_id')
-          AND wi.work_item_id=json_extract(notifications.metadata_json,'$.work_item_id')
-          AND wi.canceled_at IS NULL AND wi.completed_at IS NULL
-          AND NOT EXISTS(SELECT 1 FROM work_item_events r WHERE r.resolves_event_id=e.event_id)))"""
+def delivery_repo_ids(conn, config=None):
+    """None leaves custom-command delivery unscoped; an empty set denies repositories."""
     if not (config or {}).get("messaging", {}).get("enabled"):
-        return predicate, []
-    allowed = sorted(allowed_repo_ids(conn, config))
-    placeholders = ",".join("?" for _ in allowed) or "NULL"
-    predicate += f""" AND (
-        (task_id IS NULL AND json_extract(metadata_json,'$.work_item_id') IS NULL
-            AND json_extract(metadata_json,'$.repo_id') IS NULL)
-        OR COALESCE(
-            (SELECT wi.repo_id FROM work_items wi WHERE wi.work_item_id=json_extract(notifications.metadata_json,'$.work_item_id')),
-            (SELECT w.repo_id FROM tasks t JOIN workstreams w USING(workstream_id) WHERE t.task_id=notifications.task_id),
-            json_extract(metadata_json,'$.repo_id')) IN ({placeholders}))"""
-    return predicate, allowed
+        return None
+    return allowed_repo_ids(conn, config)

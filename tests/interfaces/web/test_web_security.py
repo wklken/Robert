@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.interfaces.web.server import (
     build_http_response,
     build_read_only_control_context,
@@ -44,13 +44,7 @@ class WebSecurityTests(unittest.TestCase):
             ({"Origin": "https://attacker.example.com"}, "invalid Origin"),
             ({"X-Robert-CSRF-Token": "wrong"}, "invalid CSRF token"),
             ({"Origin": "http://robert.example.com"}, "invalid Origin"),
-            (
-                {
-                    "Host": "attacker.example.com",
-                    "X-Forwarded-Host": "robert.example.com",
-                },
-                "invalid Host",
-            ),
+            ({"Host": "attacker.example.com", "X-Forwarded-Host": "robert.example.com"}, "invalid Host"),
         ):
             with self.subTest(changes=changes):
                 status, _, body = handle_dashboard_post(
@@ -137,10 +131,7 @@ class WebSecurityTests(unittest.TestCase):
         for route in ("/", "/?bucket=history", "/board", "/work", "/operations"):
             status, _, body = build_http_response(route, "unused.sqlite3")
             self.assertEqual(status, 200, route)
-            self.assertIn(
-                b'<link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">',
-                body,
-            )
+            self.assertIn(b'<link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">', body)
             self.assertEqual(body.count(b'rel="icon"'), 1, route)
 
     def test_artifact_preview_selects_the_requested_historical_artifact(self):
@@ -154,13 +145,7 @@ class WebSecurityTests(unittest.TestCase):
                     path.write_text(f"output from attempt {number}")
                     conn.execute(
                         "INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES (?,?,?,?,?)",
-                        (
-                            f"log-{number}",
-                            "task-1",
-                            "worker_stdout",
-                            str(path),
-                            f"2026-10-2{number}",
-                        ),
+                        (f"log-{number}", "task-1", "worker_stdout", str(path), f"2026-10-2{number}"),
                     )
             url = "/artifact.txt?task_id=task-1&artifact_type=worker_stdout&artifact_id=log-1"
             status, _, body = build_http_response(url, db)
@@ -184,11 +169,7 @@ class WebSecurityTests(unittest.TestCase):
             directory_link = data / "linked"
             directory_link.symlink_to(root, target_is_directory=True)
             for path in (secret, link, directory_link / "private.txt"):
-                with (
-                    self.subTest(path=path),
-                    closing(sqlite3.connect(db)) as conn,
-                    conn,
-                ):
+                with self.subTest(path=path), closing(sqlite3.connect(db)) as conn, conn:
                     conn.execute("DELETE FROM artifacts")
                     conn.execute(
                         "INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES (?,?,?,?,?)",

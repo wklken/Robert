@@ -1,9 +1,18 @@
+from robert_agent.adapters.processes import attempt as attempt_process
+
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
+
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
 import json
 import os
-import sqlite3
 import sys
 import tempfile
 import time
@@ -32,10 +41,7 @@ def _workspace_dir(workspace_dir):
 
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _mock_new_pr_worker(workspace_dir):
@@ -112,10 +118,7 @@ def _config(source_config_path, workspace_dir, checkout, worker):
                 "effort": "default",
             }
         },
-        "scheduler": {
-            "max_concurrency": 1,
-            "lease_ttl_seconds": source_config["lease_ttl_seconds"],
-        },
+        "scheduler": {"max_concurrency": 1, "lease_ttl_seconds": source_config["lease_ttl_seconds"]},
         "supervision": {
             "startup_grace_seconds": 1,
             "heartbeat_stale_seconds": source_config["heartbeat_stale_seconds"],
@@ -138,11 +141,7 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "status": "prepared",
         "config_path": config_path,
         "db_path": workspace_dir / "data" / "dd.sqlite3",
-        "repo": repo
-        | {
-            "repo_root": str(checkout["repo_root"]),
-            "worktree_root": str(checkout["worktree_root"]),
-        },
+        "repo": repo | {"repo_root": str(checkout["repo_root"]), "worktree_root": str(checkout["worktree_root"])},
     }
 
 
@@ -174,16 +173,9 @@ def _fixture(config, workspace_dir):
 def _wait_for_result(db_path, timeout_seconds, poll_interval_seconds):
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() <= deadline:
-        with closing(sqlite3.connect(db_path)) as conn:
-            row = conn.execute(
-                """
-                SELECT result_id, output_type
-                FROM worker_results
-                ORDER BY created_at DESC
-                LIMIT 1
-                """
-            ).fetchone()
-        if row:
+        with closing(db_database.connect(db_path)) as conn:
+            row = db_records.first(db_read_worker_results.find_for_wait_for_result(conn))
+        if row and attempt_process.dispatch_status(json.loads(row[2] or "{}"))["status"] == "dead":
             return {"result_id": row[0], "output_type": row[1]}
         time.sleep(poll_interval_seconds)
     return {}
@@ -222,47 +214,12 @@ class _PublishRunner:
 def _evidence(db_path, repo_full_name):
     issue_workstream_id = f"github:{repo_full_name}#77"
     pr_workstream_id = f"github:{repo_full_name}!42"
-    with closing(sqlite3.connect(db_path)) as conn:
-        task = conn.execute(
-            """
-            SELECT t.task_id, t.lifecycle, t.route_id, a.worktree_path, a.branch_name
-            FROM tasks t
-            JOIN attempts a ON a.task_id = t.task_id
-            ORDER BY t.created_at DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        action_rows = conn.execute(
-            """
-            SELECT action_type, audit_status, publish_status, target_url
-            FROM github_actions
-            ORDER BY created_at, action_id
-            """
-        ).fetchall()
-        issue_stream = conn.execute(
-            """
-            SELECT lifecycle
-            FROM workstreams
-            WHERE workstream_id = ?
-            """,
-            (issue_workstream_id,),
-        ).fetchone()
-        pr_stream = conn.execute(
-            """
-            SELECT lifecycle
-            FROM workstreams
-            WHERE workstream_id = ?
-            """,
-            (pr_workstream_id,),
-        ).fetchone()
-        result = conn.execute(
-            """
-            SELECT result_id, output_type, metadata_json
-            FROM worker_results
-            ORDER BY created_at DESC
-            LIMIT 1
-            """
-        ).fetchone()
+    with closing(db_database.connect(db_path)) as conn:
+        task = db_records.first(db_read_tasks.find_for_evidence(conn))
+        action_rows = db_read_github_actions.find_for_evidence(conn)
+        issue_stream = db_records.first(db_read_workstreams.find_lifecycle_by_workstream_id(conn, issue_workstream_id))
+        pr_stream = db_records.first(db_read_workstreams.find_lifecycle_by_workstream_id(conn, pr_workstream_id))
+        result = db_records.first(db_read_worker_results.find_for_evidence(conn))
     return {
         "task_id": task[0] if task else "",
         "task_lifecycle": task[1] if task else "",

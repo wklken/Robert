@@ -8,8 +8,8 @@ from unittest import mock
 
 from tests import support  # noqa: F401
 from robert_agent.readmodels import board
-from robert_agent.adapters.sqlite import execution_control as execution_store
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence import execution_control as execution_store
+from robert_agent.persistence.schema import database as storage
 from robert_agent.readmodels import workbench
 from robert_agent.work.application import commands as work_items
 
@@ -65,30 +65,24 @@ class WebReviewRemediationTests(unittest.TestCase):
     def test_cancellation_does_not_hide_execution_attention_or_pending_action(self):
         item = self.create("attention", cancel=True)
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            task = conn.execute(
-                "SELECT task_id FROM tasks WHERE workstream_id=?",
-                (item["workstream_id"],),
-            ).fetchone()[0]
+            task = conn.execute("SELECT task_id FROM tasks WHERE workstream_id=?", (item["workstream_id"],)).fetchone()[
+                0
+            ]
             conn.execute(
                 "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at,metadata_json) VALUES ('task',?,'human_request','attention','2026-10-29','2026-10-29',?)",
                 (task, json.dumps({"reason_code": "cleanup_pending"})),
             )
         self.assertEqual(
-            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"],
-            "needs_attention",
+            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"], "needs_attention"
         )
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute(
-                "UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?",
-                (task,),
-            )
+            conn.execute("UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?", (task,))
             conn.execute(
                 "INSERT INTO github_actions(action_id,task_id,action_type,audit_status,publish_status,created_at) VALUES ('pending',?,'comment','pending','not_published','2026-10-29')",
                 (task,),
             )
         self.assertNotEqual(
-            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"],
-            "history",
+            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"], "history"
         )
 
     def test_cancellation_does_not_hide_a_derived_worker_that_has_not_stopped(self):
@@ -106,8 +100,7 @@ class WebReviewRemediationTests(unittest.TestCase):
                 (json.dumps({"dispatch": {"pid": 123}}),),
             )
         self.assertNotEqual(
-            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"],
-            "history",
+            workbench.get_work_item(self.db, item["workstream_id"])["operator_state"]["bucket"], "history"
         )
 
     def test_detail_preserves_ancestor_lifecycle_without_loading_unrelated_work(self):
@@ -146,22 +139,14 @@ class WebReviewRemediationTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('other','o/other','bot','main','/other','/w-other')"
             )
-            conn.execute(
-                "UPDATE work_items SET repo_id='other' WHERE work_item_id=?",
-                (other["work_item_id"],),
-            )
-            conn.execute(
-                "UPDATE workstreams SET repo_id='other' WHERE workstream_id=?",
-                (other["workstream_id"],),
-            )
+            conn.execute("UPDATE work_items SET repo_id='other' WHERE work_item_id=?", (other["work_item_id"],))
+            conn.execute("UPDATE workstreams SET repo_id='other' WHERE workstream_id=?", (other["workstream_id"],))
         with mock.patch.object(board, "_project_item", wraps=board._project_item) as project:
             result = board.list_board(self.db, repo="o/r", limit=1)
         self.assertEqual(result["counts"]["todo"], 1)
         self.assertEqual(project.call_count, 1)
 
-    def test_scoped_controls_preserve_neutral_precedence_and_exclude_other_subjects(
-        self,
-    ):
+    def test_scoped_controls_preserve_neutral_precedence_and_exclude_other_subjects(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at) VALUES ('task','included','human_request','terminal','2026-10-29','2026-10-29')"
@@ -172,10 +157,7 @@ class WebReviewRemediationTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at) VALUES ('task','unrelated','human_request','attention','2026-10-29','2026-10-29')"
             )
-            subjects = [
-                ("task", "included"),
-                *(("task", str(index)) for index in range(250)),
-            ]
+            subjects = [("task", "included"), *(("task", str(index)) for index in range(250))]
             controls = execution_store.read_controls(conn, subjects)
         self.assertEqual(set(controls), {("task", "included")})
         self.assertEqual(controls[("task", "included")]["binding_status"], "terminal")

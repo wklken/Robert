@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import store as supervision_store
 
 
@@ -44,9 +44,7 @@ class SupervisionStoreTests(unittest.TestCase):
             self.conn.execute("BEGIN IMMEDIATE")
             return supervision_store.apply_observations(self.conn, observations, now)
 
-    def test_confirmed_observations_deduplicate_across_restarts_and_reason_changes(
-        self,
-    ):
+    def test_confirmed_observations_deduplicate_across_restarts_and_reason_changes(self):
         self.assertEqual(self.apply(observation(classification="suspect")), [])
         (opened,) = self.apply(observation())
         self.assertEqual(opened["transition"], "opened")
@@ -105,11 +103,7 @@ class SupervisionStoreTests(unittest.TestCase):
         (resolved,) = self.apply(
             observation(
                 classification="healthy",
-                positive_evidence={
-                    "audit": "accepted",
-                    "result_id": "result-one",
-                    "occurred_at": LATER,
-                },
+                positive_evidence={"audit": "accepted", "result_id": "result-one", "occurred_at": LATER},
             ),
             now=LATER,
         )
@@ -123,10 +117,7 @@ class SupervisionStoreTests(unittest.TestCase):
         self.assertEqual(supervision_store.list_incidents(self.conn, status="active"), [])
         (recurrence,) = self.apply(observation(), now=LATER)
         self.assertNotEqual(recurrence["incident"]["incident_id"], opened["incident"]["incident_id"])
-        self.assertEqual(
-            recurrence["incident"]["prior_incident_id"],
-            opened["incident"]["incident_id"],
-        )
+        self.assertEqual(recurrence["incident"]["prior_incident_id"], opened["incident"]["incident_id"])
 
     def test_observation_updates_checkpoint_without_overwriting_metadata(self):
         key = ("task", "task-one", "result_not_consumed")
@@ -143,10 +134,7 @@ class SupervisionStoreTests(unittest.TestCase):
 
     def test_wait_resets_eligibility_but_heartbeat_does_not_reset_progress(self):
         self.apply(observation(eligible_since=NOW, progress_observed_at=NOW))
-        self.apply(
-            observation(eligible_since=None, classification="expected_wait", progress_token=None),
-            now=LATER,
-        )
+        self.apply(observation(eligible_since=None, classification="expected_wait", progress_token=None), now=LATER)
         checkpoint = supervision_store.get_checkpoint(self.conn, "task", "task-one", "result_not_consumed")
         self.assertIsNone(checkpoint["eligible_since"])
         self.assertEqual(checkpoint["last_progress_at"], NOW)

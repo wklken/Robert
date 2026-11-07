@@ -1,9 +1,16 @@
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import tasks as db_read_tasks
+
 #!/usr/bin/env python3
 from robert_agent.configuration.loading import load_config
 import argparse
 from contextlib import closing
 import json
-import sqlite3
 import subprocess
 import tempfile
 import time
@@ -45,10 +52,7 @@ def _tail(path, limit=4000):
 
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _workspace_dir(workspace_dir):
@@ -74,15 +78,7 @@ def _isolated_config(source_config, workspace_dir):
         try:
             base_branch = repo["default_branch"]
             available = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    source,
-                    "show-ref",
-                    "--verify",
-                    "--quiet",
-                    f"refs/heads/{base_branch}",
-                ],
+                ["git", "-C", source, "show-ref", "--verify", "--quiet", f"refs/heads/{base_branch}"],
                 capture_output=True,
                 timeout=120,
             )
@@ -97,16 +93,7 @@ def _isolated_config(source_config, workspace_dir):
             # Upstream is the local source, so fetch reads it without changing
             # its remote refs, worktree registrations or checked-out files.
             subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--no-local",
-                    "--origin",
-                    "upstream",
-                    "--",
-                    source,
-                    str(checkout),
-                ],
+                ["git", "clone", "--no-local", "--origin", "upstream", "--", source, str(checkout)],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -161,16 +148,7 @@ def _default_fixture(config, workspace_dir, issue_number=77):
 
 
 def _latest_artifacts(conn, task_id):
-    rows = conn.execute(
-        """
-        SELECT artifact_type, path
-        FROM artifacts
-        WHERE task_id = ?
-          AND artifact_type IN ('prompt', 'worker_stdout', 'worker_stderr')
-        ORDER BY created_at, artifact_id
-        """,
-        (task_id,),
-    ).fetchall()
+    rows = db_read_artifacts.find_for_latest_artifacts(conn, task_id)
     artifacts = {}
     for artifact_type, path in rows:
         artifacts[artifact_type] = path
@@ -181,27 +159,9 @@ def _current_evidence(db_path):
     db_path = Path(db_path)
     if not db_path.exists():
         return {"db_exists": False}
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        row = conn.execute(
-            """
-            SELECT
-              t.task_id,
-              t.lifecycle,
-              rd.route_id,
-              a.attempt_id,
-              a.status,
-              wr.result_id,
-              wr.output_type,
-              wr.metadata_json
-            FROM tasks t
-            LEFT JOIN route_decisions rd ON rd.task_id = t.task_id
-            LEFT JOIN attempts a ON a.task_id = t.task_id
-            LEFT JOIN worker_results wr ON wr.attempt_id = a.attempt_id
-            ORDER BY t.created_at DESC, a.attempt_no DESC, wr.created_at DESC
-            LIMIT 1
-            """
-        ).fetchone()
+    with closing(db_database.connect(db_path)) as conn:
+        db_sqlite.configure(conn, foreign_keys=True)
+        row = db_records.first(db_read_tasks.find_for_current_evidence(conn))
         if not row:
             return {"db_exists": True}
         (
@@ -215,15 +175,7 @@ def _current_evidence(db_path):
             result_metadata_json,
         ) = row
         artifacts = _latest_artifacts(conn, task_id)
-        action_rows = conn.execute(
-            """
-            SELECT audit_status, publish_status, COUNT(*)
-            FROM github_actions
-            WHERE task_id = ?
-            GROUP BY audit_status, publish_status
-            """,
-            (task_id,),
-        ).fetchall()
+        action_rows = db_read_github_actions.find_for_current_evidence(conn, task_id)
         accepted_count = sum(count for audit, _publish, count in action_rows if audit == "accepted")
         not_published_count = sum(count for _audit, publish, count in action_rows if publish == "not_published")
     evidence = {

@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import diagnosis as supervision_diagnose
 from robert_agent.supervision import store as supervision_store
 
@@ -60,14 +60,7 @@ class RepairFixture(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES (?,?,?,?,?,?)",
-                (
-                    "r",
-                    "acme/robert",
-                    "bot",
-                    "main",
-                    str(self.checkout),
-                    str(self.worktree_root),
-                ),
+                ("r", "acme/robert", "bot", "main", str(self.checkout), str(self.worktree_root)),
             )
         self.incident_id = self.incident("controller", "local")
 

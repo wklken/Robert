@@ -263,16 +263,11 @@ class DaemonSchedulingTests(DaemonFixture):
             "2026-07-03T00:10:00+00:00",
         )
 
-    def test_run_once_decision_running_attempt_initializes_and_honors_live_poll_schedule(
-        self,
-    ):
+    def test_run_once_decision_running_attempt_initializes_and_honors_live_poll_schedule(self):
         from robert_agent.runtime import daemon
 
         config_path = self._write_config(
-            {
-                "scheduler": {"max_concurrency": 3},
-                "github": {"account": "robot", "polling": {"fallback_seconds": 300}},
-            }
+            {"scheduler": {"max_concurrency": 3}, "github": {"account": "robot", "polling": {"fallback_seconds": 300}}}
         )
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -354,10 +349,7 @@ class DaemonSchedulingTests(DaemonFixture):
             {
                 "scheduler": {"max_concurrency": 1},
                 "daemon": {"scan_on_start": True},
-                "github": {
-                    "account": "robot",
-                    "polling": {"synchronous": {"full_capacity_seconds": 300}},
-                },
+                "github": {"account": "robot", "polling": {"synchronous": {"full_capacity_seconds": 300}}},
             }
         )
         now = "2026-07-03T00:00:00+00:00"
@@ -436,10 +428,7 @@ class DaemonSchedulingTests(DaemonFixture):
         config_path = self._write_config(
             {
                 "scheduler": {"max_concurrency": 1},
-                "github": {
-                    "account": "robot",
-                    "polling": {"synchronous": {"full_capacity_seconds": 300}},
-                },
+                "github": {"account": "robot", "polling": {"synchronous": {"full_capacity_seconds": 300}}},
             }
         )
         now = "2026-07-03T00:05:00+00:00"
@@ -505,7 +494,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_once_runs_local_drain_for_due_wakeup_without_live_poll(self):
         from robert_agent.runtime import daemon
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         config_path = self._write_config()
         storage.init_database(self.db_path)
@@ -546,7 +535,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_once_runs_local_drain_with_skip_publish_when_rate_limit_floor_is_hit(self):
         from robert_agent.runtime import daemon
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         config_path = self._write_config()
         storage.init_database(self.db_path)
@@ -597,7 +586,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_once_runs_live_poll_then_local_drain_when_run_on_start_enabled(self):
         from robert_agent.runtime import daemon
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         config_path = self._write_config({"daemon": {"scan_on_start": True}})
         storage.init_database(self.db_path)
@@ -632,7 +621,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_once_skips_live_poll_when_rate_limit_floor_is_hit(self):
         from robert_agent.runtime import daemon
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         config_path = self._write_config({"daemon": {"scan_on_start": True}})
         storage.init_database(self.db_path)

@@ -1,12 +1,26 @@
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
+from robert_agent.persistence.stores import wakeups as db_write_wakeups
+from robert_agent.persistence.stores import worker_results as db_write_worker_results
+
 #!/usr/bin/env python3
 from contextlib import closing
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.execution import spool as result_spool
 from robert_agent.delivery.application import validation as result_validation
 from robert_agent.delivery import contract as result_contract
@@ -15,16 +29,7 @@ from robert_agent.delivery.application import scope as action_scope
 
 
 def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
-    repo = conn.execute(
-        """
-        SELECT w.repo_id, wi.work_item_id
-        FROM tasks t
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        LEFT JOIN work_items wi ON wi.workstream_id = t.workstream_id
-        WHERE t.task_id = ?
-        """,
-        (payload["task_id"],),
-    ).fetchone()
+    repo = db_records.first(db_read_tasks.insert_worker_result_wakeup(conn, payload["task_id"]))
     if not repo:
         return None
     wakeup_id = f"wakeup-{uuid4().hex[:12]}"
@@ -32,27 +37,19 @@ def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
         "recorded_by": "robert.worker",
         "output_type": payload.get("output_type"),
     }
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO wakeups(
-          wakeup_id, repo_id, reason, dedupe_key, work_item_id, task_id, attempt_id,
-          result_id, status, not_before_at, created_at, updated_at, metadata_json
-        )
-        VALUES (?, ?, 'worker_result_ready', ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
-        """,
-        (
-            wakeup_id,
-            repo[0],
-            result_id,
-            repo[1],
-            payload["task_id"],
-            payload["attempt_id"],
-            result_id,
-            created_at,
-            created_at,
-            created_at,
-            json.dumps(metadata, sort_keys=True),
-        ),
+    db_write_wakeups.insert_worker_result_wakeup(
+        conn,
+        wakeup_id,
+        repo[0],
+        result_id,
+        repo[1],
+        payload["task_id"],
+        payload["attempt_id"],
+        result_id,
+        created_at,
+        created_at,
+        created_at,
+        json.dumps(metadata, sort_keys=True),
     )
     return wakeup_id
 
@@ -195,27 +192,21 @@ def _unavailable():
 
 
 def _lookup(db_path, envelope, digest):
-    with closing(sqlite3.connect(db_path, timeout=0.1)) as conn:
+    with closing(db_database.connect(db_path, timeout=0.1)) as conn:
         execution_store.require_migrated(conn)
         _, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"], include_scope=False)
         if rejection:
             return rejection
-        row = conn.execute(
-            "SELECT result_id,metadata_json FROM worker_results WHERE attempt_id=? AND task_id=?",
-            (envelope["attempt_id"], envelope["task_id"]),
-        ).fetchone()
+        row = db_records.first(
+            db_read_worker_results.find_for_lookup(conn, envelope["attempt_id"], envelope["task_id"])
+        )
         if not row:
             return None
         metadata = json.loads(row[1] or "{}")
         if metadata.get("result_contract") != result_contract.CONTRACT_ID:
             return {"ok": False, "status": "unsupported_contract"}
         if metadata.get("submission_fingerprint") == digest:
-            return {
-                "ok": True,
-                "status": "recorded",
-                "result_id": row[0],
-                "deduplicated": True,
-            }
+            return {"ok": True, "status": "recorded", "result_id": row[0], "deduplicated": True}
         return {
             "ok": False,
             "status": "result_conflict",
@@ -224,7 +215,7 @@ def _lookup(db_path, envelope, digest):
 
 
 def _prepare(db_path, envelope):
-    with closing(sqlite3.connect(db_path, timeout=0.1)) as conn:
+    with closing(db_database.connect(db_path, timeout=0.1)) as conn:
         settings, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"])
         if rejection:
             return None, rejection
@@ -268,15 +259,8 @@ def record_result(db_path, payload, *, notifier=None):
             "safe_error": "Use the bound compact submission envelope.",
         }
     try:
-        return result_spool.submit(
-            db_path,
-            payload,
-            _record_result_db,
-            notifier,
-            prepare=_prepare,
-            lookup=_lookup,
-        )
-    except (sqlite3.Error, OSError):
+        return result_spool.submit(db_path, payload, _record_result_db, notifier, prepare=_prepare, lookup=_lookup)
+    except (db_errors.Error, OSError):
         return _unavailable()
     except (ValueError, TypeError):
         return {
@@ -291,26 +275,13 @@ def record_result(db_path, payload, *, notifier=None):
 def replay_pending_results(db_path, limit=100, *, config=None, attempt_id=None):
     def ingest(path, payload, *, notifier=None):
         return _record_result_db(
-            path,
-            payload,
-            notifier=notifier,
-            busy_timeout_ms=100,
-            replay=True,
-            recovery_config=config,
+            path, payload, notifier=notifier, busy_timeout_ms=100, replay=True, recovery_config=config
         )
 
     return result_spool.replay(db_path, ingest, limit, attempt_id=attempt_id)
 
 
-def _record_result_db(
-    db_path,
-    payload,
-    *,
-    notifier=None,
-    busy_timeout_ms=5000,
-    replay=False,
-    recovery_config=None,
-):
+def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, replay=False, recovery_config=None):
     if payload.get("_result_contract") != result_contract.CONTRACT_ID:
         return {"ok": False, "status": "unsupported_contract"}
     if "planned_github_actions" not in payload:
@@ -328,11 +299,7 @@ def _record_result_db(
         return {"ok": False, "status": "failed_validation", "safe_error": skill_error}
     verification, verification_error = _validate_verification(payload.get("verification", []))
     if verification_error:
-        return {
-            "ok": False,
-            "status": "failed_validation",
-            "safe_error": verification_error,
-        }
+        return {"ok": False, "status": "failed_validation", "safe_error": verification_error}
     local_event_ids = payload.get("consumed_work_item_event_ids", [])
     if not isinstance(local_event_ids, list) or not all(
         isinstance(event_id, str) and event_id for event_id in local_event_ids
@@ -344,11 +311,7 @@ def _record_result_db(
         }
     operator_question, question_error = _validate_operator_question(payload.get("operator_question"))
     if question_error:
-        return {
-            "ok": False,
-            "status": "failed_validation",
-            "safe_error": question_error,
-        }
+        return {"ok": False, "status": "failed_validation", "safe_error": question_error}
     metadata = {
         "recorded_by": "robert.worker",
         "used_skills": used_skills,
@@ -383,17 +346,16 @@ def _record_result_db(
     created_at = datetime.now(timezone.utc)
     result_created_at = created_at.isoformat()
     result_id = f"result-{uuid4().hex[:12]}"
-    with closing(sqlite3.connect(db_path)) as conn, conn:
+    with closing(db_database.connect(db_path)) as conn, conn:
         execution_store.require_migrated(conn)
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
-        conn.execute("BEGIN IMMEDIATE")
+        db_sqlite.configure(conn, foreign_keys=True)
+        db_sqlite.configure(conn, busy_timeout_ms=busy_timeout_ms)
+        db_transactions.begin(conn, immediate=True)
         metadata["result_saved_at"] = result_spool.saved_at(db_path, payload["attempt_id"])
         metadata["result_ingested_at"] = datetime.now(timezone.utc).isoformat()
-        task = conn.execute(
-            "SELECT lifecycle, task_kind, metadata_json FROM tasks WHERE task_id=?",
-            (payload["task_id"],),
-        ).fetchone()
+        task = db_records.first(
+            db_read_tasks.find_lifecycle_and_task_kind_and_metadata_json_by_task_id(conn, payload["task_id"])
+        )
         if task and task[0] in {"canceled", "failed", "ignored"}:
             return {"ok": False, "status": "rejected_by_supervisor"}
         subject_type, subject_id = "task", payload["task_id"]
@@ -404,24 +366,15 @@ def _record_result_db(
         owner = execution_store.get_binding(conn, subject_type, subject_id)
         if owner and owner["binding_status"] != "active":
             return {"ok": False, "status": "rejected_by_workflow_owner"}
-        bound = conn.execute(
-            "SELECT metadata_json,status FROM attempts WHERE attempt_id=? AND task_id=?",
-            (payload["attempt_id"], payload["task_id"]),
-        ).fetchone()
+        bound = db_records.first(db_read_attempts.record_result_db(conn, payload["attempt_id"], payload["task_id"]))
         if not bound or json.loads(bound[0] or "{}").get("result_contract") != result_contract.CONTRACT_ID:
             return {"ok": False, "status": "unsupported_contract"}
-        existing = conn.execute(
-            "SELECT result_id, metadata_json FROM worker_results WHERE attempt_id=?",
-            (payload["attempt_id"],),
-        ).fetchone()
+        existing = db_records.first(
+            db_read_worker_results.find_result_id_and_metadata_json_by_attempt_id(conn, payload["attempt_id"])
+        )
         if existing:
             if json.loads(existing[1] or "{}").get("submission_fingerprint") == metadata["submission_fingerprint"]:
-                return {
-                    "ok": True,
-                    "status": "recorded",
-                    "result_id": existing[0],
-                    "deduplicated": True,
-                }
+                return {"ok": True, "status": "recorded", "result_id": existing[0], "deduplicated": True}
             return {
                 "ok": False,
                 "status": "result_conflict",
@@ -429,23 +382,18 @@ def _record_result_db(
             }
         if bound[1] not in {"prepared", "running", "stale"}:
             return {"ok": False, "status": "rejected_by_supervisor"}
-        prior_rejection = conn.execute(
-            "SELECT json_extract(metadata_json,'$.result_validation') FROM attempts WHERE attempt_id=? AND task_id=?",
-            (payload["attempt_id"], payload["task_id"]),
-        ).fetchone()
+        prior_rejection = db_records.first(
+            db_read_attempts.record_result_db_2(conn, payload["attempt_id"], payload["task_id"])
+        )
         if prior_rejection and prior_rejection[0]:
             return {"ok": False, "status": "rejected_by_supervisor"}
         if payload.get("output_type") == "waiting_for_user":
-            attempt = conn.execute(
-                "SELECT status FROM attempts WHERE attempt_id=? AND task_id=?",
-                (payload["attempt_id"], payload["task_id"]),
-            ).fetchone()
+            attempt = db_records.first(
+                db_read_attempts.record_result_db_3(conn, payload["attempt_id"], payload["task_id"])
+            )
             if not attempt or attempt[0] not in {"prepared", "running", "stale"}:
                 return {"ok": False, "status": "rejected_by_supervisor"}
-            origin = conn.execute(
-                "SELECT origin_type FROM work_items WHERE workstream_id=(SELECT workstream_id FROM tasks WHERE task_id=?)",
-                (payload["task_id"],),
-            ).fetchone()
+            origin = db_records.first(db_read_work_items.record_result_db(conn, payload["task_id"]))
             error = None
             if operator_question is None:
                 error = "waiting_for_user requires operator_question"
@@ -476,78 +424,37 @@ def _record_result_db(
             if gate["status"] == "blocked":
                 return {"ok": True, "status": "replay_blocked"}
             claim = gate.get("claim")
-        conn.execute(
-            """
-            INSERT INTO worker_results(
-              result_id, task_id, attempt_id, output_type,
-              consumed_event_fingerprints_json, verification_json, handoff, created_at,
-              metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                result_id,
-                payload["task_id"],
-                payload["attempt_id"],
-                payload["output_type"],
-                json.dumps(payload["consumed_event_fingerprints"], sort_keys=True),
-                json.dumps(verification, sort_keys=True),
-                payload.get("handoff", ""),
-                result_created_at,
-                json.dumps(
-                    metadata,
-                    sort_keys=True,
-                ),
-            ),
+        db_write_worker_results.record_result_db(
+            conn,
+            result_id,
+            payload["task_id"],
+            payload["attempt_id"],
+            payload["output_type"],
+            json.dumps(payload["consumed_event_fingerprints"], sort_keys=True),
+            json.dumps(verification, sort_keys=True),
+            payload.get("handoff", ""),
+            result_created_at,
+            json.dumps(metadata, sort_keys=True),
         )
         for index, action in enumerate(actions):
             action_created_at = (created_at + timedelta(microseconds=index)).isoformat()
-            conn.execute(
-                """
-                INSERT INTO github_actions(
-                  action_id, result_id, task_id, action_type, target_url, external_id,
-                  audit_status, publish_status, created_at, metadata_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', 'not_published', ?, ?)
-                """,
-                (
-                    f"action-{uuid4().hex[:12]}",
-                    result_id,
-                    payload["task_id"],
-                    action["type"],
-                    action.get("target_url") or action.get("url"),
-                    action.get("id"),
-                    action_created_at,
-                    json.dumps(action, sort_keys=True),
-                ),
-            )
-        cur = conn.execute(
-            """
-            UPDATE attempts
-            SET status = CASE
-                  WHEN json_type(metadata_json,'$.dispatch.pid')='integer' THEN 'running'
-                  ELSE 'completed' END,
-                finished_at = CASE
-                  WHEN json_type(metadata_json,'$.dispatch.pid')='integer' THEN NULL
-                  ELSE ? END,
-                metadata_json = json_set(metadata_json, '$.result_received_at', ?)
-            WHERE attempt_id = ? AND task_id = ?
-              AND status IN ('running', 'prepared', 'stale')
-            """,
-            (
-                result_created_at,
-                result_created_at,
-                payload["attempt_id"],
+            db_write_github_actions.record_result_db(
+                conn,
+                f"action-{uuid4().hex[:12]}",
+                result_id,
                 payload["task_id"],
-            ),
+                action["type"],
+                action.get("target_url") or action.get("url"),
+                action.get("id"),
+                action_created_at,
+                json.dumps(action, sort_keys=True),
+            )
+        cur = db_write_attempts.record_result_db(
+            conn, result_created_at, result_created_at, payload["attempt_id"], payload["task_id"]
         )
-        if cur.rowcount == 0:
+        if cur == 0:
             conn.rollback()
-            return {
-                "ok": False,
-                "status": "rejected_by_supervisor",
-                "result_id": result_id,
-            }
+            return {"ok": False, "status": "rejected_by_supervisor", "result_id": result_id}
         _insert_worker_result_wakeup(conn, payload, result_id, result_created_at)
         if claim and not supervision_actions.finish(
             conn,

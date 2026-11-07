@@ -1,9 +1,19 @@
 """SQLite state helpers for the Robert daemon."""
 
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence.dialects import sqlite as db_sqlite
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import daemon_events as db_read_daemon_events
+from robert_agent.persistence.queries import daemon_runs as db_read_daemon_runs
+from robert_agent.persistence.queries import leases as db_read_leases
+from robert_agent.persistence.stores import daemon_events as db_write_daemon_events
+from robert_agent.persistence.stores import daemon_runs as db_write_daemon_runs
+from robert_agent.persistence.stores import leases as db_write_leases
+
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-import sqlite3
 from uuid import uuid4
 
 
@@ -33,25 +43,16 @@ def _decode_json(value, default=None):
 
 
 def connect(db_path, *, busy_timeout_ms=5000):
-    conn = sqlite3.connect(Path(db_path).expanduser())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+    conn = db_database.connect(Path(db_path).expanduser())
+    db_sqlite.configure(conn, foreign_keys=True)
+    db_sqlite.configure(conn, busy_timeout_ms=busy_timeout_ms)
     return conn
 
 
 def start_daemon_run(conn, *, config_path, owner_id, now=None):
     now = now or utc_now()
     daemon_run_id = owner_id
-    conn.execute(
-        """
-        INSERT INTO daemon_runs(
-          daemon_run_id, status, owner_id, config_path, started_at
-        )
-        VALUES (?, 'running', ?, ?, ?)
-        """,
-        (daemon_run_id, owner_id, str(config_path), now),
-    )
+    db_write_daemon_runs.insert_for_start_daemon_run(conn, daemon_run_id, owner_id, str(config_path), now)
     return {
         "daemon_run_id": daemon_run_id,
         "status": "running",
@@ -63,43 +64,27 @@ def start_daemon_run(conn, *, config_path, owner_id, now=None):
 
 def finish_daemon_run(conn, daemon_run_id, status, *, summary=None, error=None, now=None):
     now = now or utc_now()
-    conn.execute(
-        """
-        UPDATE daemon_runs
-        SET status = ?,
-            finished_at = ?,
-            summary_json = ?,
-            error_json = ?
-        WHERE daemon_run_id = ?
-        """,
-        (
-            status,
-            now,
-            json.dumps(summary or {}, ensure_ascii=False, sort_keys=True),
-            json.dumps(error, ensure_ascii=False, sort_keys=True) if error else None,
-            daemon_run_id,
-        ),
+    db_write_daemon_runs.update_for_finish_daemon_run(
+        conn,
+        status,
+        now,
+        json.dumps(summary or {}, ensure_ascii=False, sort_keys=True),
+        json.dumps(error, ensure_ascii=False, sort_keys=True) if error else None,
+        daemon_run_id,
     )
 
 
 def record_event(conn, daemon_run_id, event_type, status, metadata=None, now=None):
     now = now or utc_now()
     daemon_event_id = _id("daemon-event")
-    conn.execute(
-        """
-        INSERT INTO daemon_events(
-          daemon_event_id, daemon_run_id, event_type, status, created_at, metadata_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            daemon_event_id,
-            daemon_run_id,
-            event_type,
-            status,
-            now,
-            json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
-        ),
+    db_write_daemon_events.record_event(
+        conn,
+        daemon_event_id,
+        daemon_run_id,
+        event_type,
+        status,
+        now,
+        json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
     )
     return {
         "daemon_event_id": daemon_event_id,
@@ -125,45 +110,10 @@ def _row_payload(row):
 
 
 def latest_daemon_summary(conn, event_limit=8):
-    run = conn.execute(
-        """
-        SELECT daemon_run_id, status, owner_id, config_path, started_at, finished_at,
-               summary_json, error_json
-        FROM daemon_runs
-        ORDER BY started_at DESC, daemon_run_id DESC
-        LIMIT 1
-        """
-    ).fetchone()
-    event = conn.execute(
-        """
-        SELECT daemon_event_id, daemon_run_id, event_type, status, created_at,
-               metadata_json
-        FROM daemon_events
-        ORDER BY created_at DESC, daemon_event_id DESC
-        LIMIT 1
-        """
-    ).fetchone()
-    lease = conn.execute(
-        """
-        SELECT lease_id, resource_key, owner_id, status, acquired_at, expires_at,
-               heartbeat_at, released_at, metadata_json
-        FROM leases
-        WHERE resource_type = 'daemon'
-        ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END,
-                 acquired_at DESC, lease_id DESC
-        LIMIT 1
-        """
-    ).fetchone()
-    events = conn.execute(
-        """
-        SELECT daemon_event_id, daemon_run_id, event_type, status, created_at,
-               metadata_json
-        FROM daemon_events
-        ORDER BY created_at DESC, daemon_event_id DESC
-        LIMIT ?
-        """,
-        (event_limit,),
-    ).fetchall()
+    run = db_records.first(db_read_daemon_runs.find_for_latest_daemon_summary(conn))
+    event = db_records.first(db_read_daemon_events.find_for_latest_daemon_summary(conn))
+    lease = db_records.first(db_read_leases.find_for_latest_daemon_summary(conn))
+    events = db_read_daemon_events.find_for_latest_daemon_summary_2(conn, event_limit)
     return {
         "available": True,
         "latest_run": _row_payload(run),
@@ -177,27 +127,8 @@ def acquire_daemon_lease(conn, *, resource_key, owner_id, ttl_seconds, now=None)
     now = now or utc_now()
     now_dt = _parse_time(now)
     expires_at = (now_dt + timedelta(seconds=ttl_seconds)).isoformat()
-    conn.execute(
-        """
-        UPDATE leases
-        SET status = 'expired'
-        WHERE resource_type = 'daemon'
-          AND resource_key = ?
-          AND status = 'active'
-          AND expires_at <= ?
-        """,
-        (resource_key, now),
-    )
-    active = conn.execute(
-        """
-        SELECT lease_id, owner_id, expires_at
-        FROM leases
-        WHERE resource_type = 'daemon'
-          AND resource_key = ?
-          AND status = 'active'
-        """,
-        (resource_key,),
-    ).fetchone()
+    db_write_leases.update_for_acquire_daemon_lease(conn, resource_key, now)
+    active = db_records.first(db_read_leases.find_for_acquire_daemon_lease(conn, resource_key))
     if active:
         return {
             "ok": False,
@@ -207,16 +138,7 @@ def acquire_daemon_lease(conn, *, resource_key, owner_id, ttl_seconds, now=None)
             "expires_at": active["expires_at"],
         }
     lease_id = _id("lease")
-    conn.execute(
-        """
-        INSERT INTO leases(
-          lease_id, resource_type, resource_key, owner_id, status,
-          acquired_at, expires_at, heartbeat_at
-        )
-        VALUES (?, 'daemon', ?, ?, 'active', ?, ?, ?)
-        """,
-        (lease_id, resource_key, owner_id, now, expires_at, now),
-    )
+    db_write_leases.insert_for_acquire_daemon_lease(conn, lease_id, resource_key, owner_id, now, expires_at, now)
     return {
         "ok": True,
         "status": "acquired",
@@ -228,31 +150,12 @@ def acquire_daemon_lease(conn, *, resource_key, owner_id, ttl_seconds, now=None)
 def heartbeat_daemon_lease(conn, lease_id, ttl_seconds, now=None):
     now = now or utc_now()
     expires_at = (_parse_time(now) + timedelta(seconds=ttl_seconds)).isoformat()
-    conn.execute(
-        """
-        UPDATE leases
-        SET heartbeat_at = ?,
-            expires_at = ?
-        WHERE lease_id = ?
-          AND status = 'active'
-        """,
-        (now, expires_at, lease_id),
-    )
+    db_write_leases.update_for_heartbeat_daemon_lease(conn, now, expires_at, lease_id)
 
 
 def release_daemon_lease(conn, lease_id, now=None):
     now = now or utc_now()
-    conn.execute(
-        """
-        UPDATE leases
-        SET status = 'released',
-            released_at = ?,
-            heartbeat_at = ?
-        WHERE lease_id = ?
-          AND status = 'active'
-        """,
-        (now, now, lease_id),
-    )
+    db_write_leases.update_for_release_daemon_lease(conn, now, now, lease_id)
 
 
 def repo_id_for_full_name(full_name):
@@ -260,9 +163,9 @@ def repo_id_for_full_name(full_name):
 
 
 def run_exists(conn, daemon_run_id):
-    return conn.execute("SELECT 1 FROM daemon_runs WHERE daemon_run_id=?", (daemon_run_id,)).fetchone() is not None
+    return db_records.first(db_read_daemon_runs.find_for_run_exists(conn, daemon_run_id)) is not None
 
 
 def started_at(conn, daemon_run_id):
-    row = conn.execute("SELECT started_at FROM daemon_runs WHERE daemon_run_id=?", (daemon_run_id,)).fetchone()
+    row = db_records.first(db_read_daemon_runs.find_started_at_by_daemon_run_id(conn, daemon_run_id))
     return row[0] if row else None

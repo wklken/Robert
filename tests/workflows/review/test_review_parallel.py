@@ -1,3 +1,6 @@
+from tests.support import database as fixture_database
+
+from robert_agent.persistence.schema import review_rounds as review_schema
 from robert_agent.execution import stages as model_execution
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -14,7 +17,7 @@ import yaml
 
 from robert_agent.adapters.processes import worker as dispatch
 from robert_agent.workflows.review import coordinator as review_coordinator
-from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.persistence.rounds import review as review_store
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.delivery.lock import task_publication_lock
 from tests.support import review_coordinator as coordinator_fixture
@@ -47,12 +50,9 @@ class ParallelReviewTests(unittest.TestCase):
         self.fixture.config_path.write_text(yaml.safe_dump(config))
 
     def launcher(self, **kwargs):
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             self.slot_observations.append(
-                (
-                    Path(kwargs["prompt_path"]).name,
-                    review_store.process_pool_status(conn)["in_use"],
-                )
+                (Path(kwargs["prompt_path"]).name, review_store.process_pool_status(conn)["in_use"])
             )
         result = self.fixture.launcher(**kwargs)
         if Path(kwargs["prompt_path"]).name != "reviewer-prompt.md":
@@ -72,14 +72,7 @@ sys.exit(int(sys.argv[3]))
         exit_code = self.exit_codes.get(kwargs["worker_agent_config"]["name"], 0)
         kwargs["worker_agent_config"] = {
             "agent": "command",
-            "command_argv": [
-                sys.executable,
-                "-c",
-                script,
-                str(output),
-                str(self.gate),
-                str(exit_code),
-            ],
+            "command_argv": [sys.executable, "-c", script, str(output), str(self.gate), str(exit_code)],
         }
         launched = dispatch.dispatch_worker(**kwargs, startup_probe_seconds=0.01)
         # Keep every child alive through identity capture, even when an earlier
@@ -95,7 +88,7 @@ sys.exit(int(sys.argv[3]))
             git = self.fixture.git_fixture
             git.git(git.upstream, "update-ref", f"refs/pull/{number}/head", git.head)
         self.fixture.cycle([self.fixture.event(str(number)) | {"number": number}])
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             task, attempt = conn.execute(
                 """SELECT rs.task_id,a.attempt_id FROM review_sessions rs
                 JOIN attempts a ON a.task_id=rs.task_id WHERE rs.pr_number=?
@@ -124,11 +117,11 @@ sys.exit(int(sys.argv[3]))
         return self.started()
 
     def pool(self):
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             return review_store.process_pool_status(conn)
 
     def set_limit(self, limit):
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             review_store.configure_process_pool(conn, limit)
 
     def cancel(self, driver):
@@ -136,11 +129,8 @@ sys.exit(int(sys.argv[3]))
         while time.monotonic() < deadline:
             with task_publication_lock(self.fixture.db, driver.task_id) as locked:
                 if locked:
-                    with review_store.connect(self.fixture.db) as conn:
-                        conn.execute(
-                            "UPDATE tasks SET lifecycle='canceled' WHERE task_id=?",
-                            (driver.task_id,),
-                        )
+                    with fixture_database.connect(self.fixture.db) as conn:
+                        conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id=?", (driver.task_id,))
                         outcome = model_execution.terminate_children(conn, driver.task_id, store=review_store)
                         self.assertNotEqual(outcome, "attention")
                     return
@@ -153,11 +143,7 @@ sys.exit(int(sys.argv[3]))
         with ThreadPoolExecutor(1) as executor:
             future = executor.submit(driver.review)
             try:
-                self.assertEqual(
-                    self.wait_started(2),
-                    2,
-                    "both reviewers must start before either finishes",
-                )
+                self.assertEqual(self.wait_started(2), 2, "both reviewers must start before either finishes")
             finally:
                 self.gate.touch()
             records = future.result(timeout=5)
@@ -168,7 +154,7 @@ sys.exit(int(sys.argv[3]))
         self.assertEqual(self.pool(), {"limit": 2, "in_use": 0})
         self.assertTrue(all(count >= 1 for stage, count in self.slot_observations))
         self.assertTrue(any(stage.startswith("synthesis-prompt") for stage, count in self.slot_observations))
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
 
@@ -204,11 +190,7 @@ sys.exit(int(sys.argv[3]))
             try:
                 self.assertEqual(self.wait_started(1), 1)
                 time.sleep(0.4)
-                self.assertEqual(
-                    self.started(),
-                    1,
-                    "a second round must share the global model budget",
-                )
+                self.assertEqual(self.started(), 1, "a second round must share the global model budget")
             finally:
                 self.gate.touch()
             for future in futures:
@@ -278,7 +260,7 @@ sys.exit(int(sys.argv[3]))
         self.assertEqual(len(self.launched), 1)
         self.assertTrue(all(model_execution._group_finished(run) for run, _ in self.launched))
         self.assertEqual(self.pool()["in_use"], 0)
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
 
     def test_restart_adopts_parallel_children_and_files_without_duplicate_launch(self):
@@ -290,10 +272,7 @@ sys.exit(int(sys.argv[3]))
             barrier.wait(timeout=3)
             raise KeyboardInterrupt("coordinator crash after both PID registrations")
 
-        with (
-            patch.object(first, "_wait", side_effect=crash),
-            self.assertRaises(KeyboardInterrupt),
-        ):
+        with patch.object(first, "_wait", side_effect=crash), self.assertRaises(KeyboardInterrupt):
             first.review()
         self.assertEqual(self.pool()["in_use"], 2)
         restarted = review_coordinator.Coordinator(
@@ -328,7 +307,7 @@ sys.exit(int(sys.argv[3]))
         second = self.driver(43)
         second.run()
         self.assertEqual(self.pool()["in_use"], 0)
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             original = next(run for run in review_store.runs(conn, first.round_id) if run["stage"] == "review")
             self.assertEqual(original["status"], "running")  # still available for file adoption
 
@@ -360,7 +339,7 @@ sys.exit(int(sys.argv[3]))
             with self.assertRaises(RuntimeError):
                 future.result(timeout=5)
         self.assertEqual(self.pool()["in_use"], 0)
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             successful = next(
                 run
                 for run in review_store.runs(conn, driver.round_id)
@@ -384,11 +363,9 @@ sys.exit(int(sys.argv[3]))
         self.assertEqual(len({call[2] for call in reviews}), 1)
         self.assertEqual(self.pool()["in_use"], 0)
 
-    def test_migration_counts_existing_live_or_unknown_runs_without_resetting_limit(
-        self,
-    ):
+    def test_migration_counts_existing_live_or_unknown_runs_without_resetting_limit(self):
         with closing(sqlite3.connect(":memory:")) as conn:
-            legacy = review_store.SCHEMA.replace("  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", "").replace(
+            legacy = review_schema.SCHEMA.replace("  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", "").replace(
                 "  started_at TEXT,\n", ""
             )
             conn.executescript(legacy)
@@ -411,18 +388,16 @@ sys.exit(int(sys.argv[3]))
                         "2026-10-25T00:00:00+00:00",
                     ),
                 )
-            review_store.initialize(conn)
+            review_schema.initialize(conn)
             self.assertEqual(review_store.process_pool_status(conn), {"limit": 4, "in_use": 2})
             review_store.configure_process_pool(conn, 1)
-            review_store.initialize(conn)
+            review_schema.initialize(conn)
             self.assertEqual(review_store.process_pool_status(conn), {"limit": 1, "in_use": 2})
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_runs").fetchone()[0], 3)
 
-    def test_status_reads_existing_round_before_pool_migration_without_inventing_capacity(
-        self,
-    ):
+    def test_status_reads_existing_round_before_pool_migration_without_inventing_capacity(self):
         with closing(sqlite3.connect(":memory:")) as conn:
-            legacy = review_store.SCHEMA.split("CREATE TABLE IF NOT EXISTS review_process_pool")[0]
+            legacy = review_schema.SCHEMA.split("CREATE TABLE IF NOT EXISTS review_process_pool")[0]
             legacy = legacy.replace("  slot_reserved INTEGER NOT NULL DEFAULT 0,\n", "").replace(
                 "  started_at TEXT,\n", ""
             )
@@ -443,7 +418,7 @@ sys.exit(int(sys.argv[3]))
 
         self.configure(1)
         driver = self.driver()
-        with review_store.connect(self.fixture.db) as conn:
+        with fixture_database.connect(self.fixture.db) as conn:
             runs = [
                 review_store.new_run(
                     conn,
@@ -459,9 +434,10 @@ sys.exit(int(sys.argv[3]))
             for run in runs:
                 review_store.update_run(conn, run["run_id"], status="waiting")
         script = """import sys
-from robert_agent.adapters.sqlite import review_rounds as review_store
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.transactions import begin_immediate
 with review_store.connect(sys.argv[1]) as conn:
-    conn.execute('BEGIN IMMEDIATE')
+    begin_immediate(conn)
     acquired=review_store.reserve_slot(conn,sys.argv[2])
 print(int(acquired))
 """

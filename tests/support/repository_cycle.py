@@ -20,12 +20,7 @@ def _dd_comment_body(text, **_identity):
 def _new_pr_actions(**_assignment):
     return [
         {"type": "push_existing_pr"},
-        {
-            "type": "open_pr",
-            "title": "Fix issue",
-            "body": "Opened PR",
-            "issue_resolution": "complete",
-        },
+        {"type": "open_pr", "title": "Fix issue", "body": "Opened PR", "issue_resolution": "complete"},
     ]
 
 
@@ -131,7 +126,7 @@ repos:
         fallback_model="model-fallback",
         same_task=False,
     ):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / f"fallback-{len(failures)}.sqlite3"
         storage.init_database(db_path)
@@ -214,10 +209,7 @@ repos:
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 "UPDATE tasks SET metadata_json=? WHERE task_id=?",
-                (
-                    json.dumps({"trigger_work_item_event_id": "local-request"}),
-                    "task-current",
-                ),
+                (json.dumps({"trigger_work_item_event_id": "local-request"}), "task-current"),
             )
 
         worker = {
@@ -332,7 +324,7 @@ repos:
         )
 
     def _seed_active_pr_task(self, pr_number):
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)

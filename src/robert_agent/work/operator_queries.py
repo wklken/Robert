@@ -1,51 +1,27 @@
 """Durable Kanban requests awaiting GitHub context from the remote scanner."""
 
+from robert_agent.persistence.queries import operator_requests
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_scan_reads as db_read_github_scan_reads
 from robert_agent.work import control_queries
 from robert_agent.adapters.github import client as github_client
 from datetime import datetime
 import json
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
-
 
 def pending_tasks(conn, repo_ids=(), *, task_id=None):
-    clause = " AND w.repo_id IN (" + ",".join("?" for _ in repo_ids) + ")" if repo_ids else ""
-    if task_id:
-        clause += " AND t.task_id=?"
-    cursor = conn.execute(
-        f"""SELECT t.task_id,t.parent_task_id,t.workstream_id,t.metadata_json,
-        wu.wakeup_id,wu.created_at AS requested_at,wi.work_item_id,wi.origin_source_id,
-        w.repo_id,r.full_name,gs.number,gs.source_type
-        FROM tasks t JOIN workstreams w ON w.active_task_id=t.task_id AND w.workstream_id=t.workstream_id
-        JOIN repos r ON r.repo_id=w.repo_id
-        JOIN wakeups wu ON wu.task_id=t.task_id
-        JOIN work_items wi ON wi.work_item_id=wu.work_item_id
-        JOIN github_sources gs ON gs.source_id=w.primary_source_id
-        WHERE wi.origin_type='github' AND wi.canceled_at IS NULL AND wi.completed_at IS NULL
-          AND t.lifecycle='detected' AND t.task_kind='human_request'
-          AND wu.reason='manual_operator_request' AND wu.status='pending'
-          AND json_extract(t.metadata_json,'$.trigger_work_item_event_id') IS NOT NULL
-          AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.task_id)
-          AND {execution_store.runnable_sql()} {clause}
-        ORDER BY t.created_at,t.task_id""",
-        [*repo_ids, *([task_id] if task_id else [])],
-    )
-    columns = [column[0] for column in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    return [dict(row) for row in operator_requests.pending_tasks(conn, repo_ids, task_id)]
 
 
 def source_read(conn, task):
     """Require a scanner observation after the accepted operator request."""
     key = github_client.command_key(["gh", "api", f"repos/{task['full_name']}/issues/{task['number']}"])
-    row = conn.execute(
-        """SELECT response_json FROM github_scan_reads
-        WHERE repo_id=? AND command_key=? AND observed_at>=?""",
-        (
-            task["repo_id"],
-            key,
-            datetime.fromisoformat(task["requested_at"]).timestamp(),
-        ),
-    ).fetchone()
+    row = db_records.first(
+        db_read_github_scan_reads.find_for_source_read(
+            conn, task["repo_id"], key, datetime.fromisoformat(task["requested_at"]).timestamp()
+        )
+    )
     # No row means wait for the scanner; a row containing null is a failed read.
     try:
         response = json.loads(row[0]) if row and row[0] else None

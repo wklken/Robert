@@ -1,19 +1,38 @@
 """Read-only dashboard and artifact projections, independent of HTTP."""
 
-from collections import Counter
-from contextlib import closing
 import json
 import os
 import stat
-import sqlite3
+from collections import Counter
+from contextlib import closing
 from pathlib import Path
-from robert_agent.readmodels import summarize
-from robert_agent.execution import runtime_state as daemon_state
-from robert_agent.context import knowledge as runtime_knowledge
-from robert_agent.readmodels import usage
-from robert_agent.work import wakeup
-from robert_agent.readmodels.history import step_output
 
+from robert_agent.context import knowledge as runtime_knowledge
+from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import agent_runs as db_read_agent_runs
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.queries import github_events as db_read_github_events
+from robert_agent.persistence.queries import (
+    knowledge_candidates as db_read_knowledge_candidates,
+)
+from robert_agent.persistence.queries import notifications as db_read_notifications
+from robert_agent.persistence.queries import (
+    project_memory_entries as db_read_project_memory_entries,
+)
+from robert_agent.persistence.queries import repos as db_read_repos
+from robert_agent.persistence.queries import (
+    runtime_knowledge as db_read_runtime_knowledge,
+)
+from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.queries.readviews import run_history, task_history
+from robert_agent.readmodels import summarize, usage
+from robert_agent.readmodels.history import step_output
+from robert_agent.work import wakeup
 
 RUN_STEP_ORDER = [
     "validate_config",
@@ -52,14 +71,6 @@ def _decode_json(value):
         return value
 
 
-def _table_exists(conn, table_name):
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table_name,),
-    ).fetchone()
-    return bool(row)
-
-
 def _load_latest_loop(db_path):
     path = Path(db_path).parent / "latest-loop.json"
     try:
@@ -71,12 +82,7 @@ def _load_latest_loop(db_path):
 def _is_authorized_unattached_event(event):
     return (
         event["authorization_status"]
-        in {
-            "authorized",
-            "authorized_trigger",
-            "accepted_context",
-            "accepted_review_participant",
-        }
+        in {"authorized", "authorized_trigger", "accepted_context", "accepted_review_participant"}
         and not event["task_id"]
     )
 
@@ -109,13 +115,7 @@ def _task_operator_state(task):
         return "result_pending_audit", "wait_next_cycle_or_run_once"
     if task["lifecycle"] in {"queued", "running"} and task.get("latest_attempt_status") == "running":
         return "worker_running", "wait_for_worker_completion"
-    if task["lifecycle"] in {
-        "detected",
-        "authorized",
-        "classified",
-        "queued",
-        "running",
-    }:
+    if task["lifecycle"] in {"detected", "authorized", "classified", "queued", "running"}:
         return "waiting_worker", "wait_for_worker_or_supervise"
     if task["lifecycle"] == "completed":
         return "completed", "none"
@@ -128,7 +128,6 @@ def _attach_task_operator_state(conn, recent_tasks):
     if not recent_tasks:
         return
     task_ids = [task["task_id"] for task in recent_tasks]
-    placeholders = ",".join("?" for _task_id in task_ids)
     actions_by_task = {
         task_id: {
             "pending_publish_actions": 0,
@@ -141,17 +140,7 @@ def _attach_task_operator_state(conn, recent_tasks):
         }
         for task_id in task_ids
     }
-    for row in conn.execute(
-        f"""
-        SELECT
-          task_id, action_id, action_type, target_url,
-          audit_status, publish_status, created_at, metadata_json
-        FROM github_actions
-        WHERE task_id IN ({placeholders})
-        ORDER BY created_at DESC, action_id DESC
-        """,
-        task_ids,
-    ):
+    for row in task_history.actions_for_tasks(conn, task_ids):
         action_state = actions_by_task[row["task_id"]]
         if row["audit_status"] == "accepted" and row["publish_status"] == "not_published":
             action_state["pending_publish_actions"] += 1
@@ -187,29 +176,12 @@ def _attach_task_operator_state(conn, recent_tasks):
                 }
 
     attempts_by_task = {}
-    for row in conn.execute(
-        f"""
-        SELECT task_id, attempt_id, status, heartbeat_at, started_at, finished_at
-        FROM attempts
-        WHERE task_id IN ({placeholders})
-        ORDER BY attempt_no DESC, started_at DESC, attempt_id DESC
-        """,
-        task_ids,
-    ):
+    for row in task_history.attempts_for_tasks(conn, task_ids):
         attempts_by_task.setdefault(row["task_id"], dict(row))
 
     notifications_by_task = {}
     worker_resume_counts_by_task = {task_id: 0 for task_id in task_ids}
-    for row in conn.execute(
-        f"""
-        SELECT notification_id, task_id, notification_type, channel, status,
-               created_at, metadata_json
-        FROM notifications
-        WHERE task_id IN ({placeholders})
-        ORDER BY created_at DESC, notification_id DESC
-        """,
-        task_ids,
-    ):
+    for row in task_history.notifications_for_tasks(conn, task_ids):
         notification = dict(row)
         notification["metadata"] = _decode_json(notification.pop("metadata_json"))
         if notification["notification_type"] == "worker_resume_prepared":
@@ -217,73 +189,20 @@ def _attach_task_operator_state(conn, recent_tasks):
         notifications_by_task.setdefault(row["task_id"], notification)
 
     result_pending_audit_by_task = {task_id: False for task_id in task_ids}
-    for row in conn.execute(
-        f"""
-        SELECT wr.task_id, wr.metadata_json
-        FROM worker_results wr
-        JOIN attempts a ON a.attempt_id = wr.attempt_id
-        WHERE wr.task_id IN ({placeholders})
-          AND a.status = 'completed'
-        ORDER BY wr.created_at DESC, wr.result_id DESC
-        """,
-        task_ids,
-    ):
+    for row in task_history.completed_attempt_results(conn, task_ids):
         metadata = _decode_json(row["metadata_json"]) or {}
         if isinstance(metadata, dict) and not metadata.get("audit"):
             result_pending_audit_by_task[row["task_id"]] = True
 
     sources_by_task = {}
-    for row in conn.execute(
-        f"""
-        SELECT
-          te.task_id,
-          ge.event_fingerprint,
-          gs.source_key,
-          gs.title AS source_title,
-          gs.html_url,
-          gs.source_type,
-          gs.number
-        FROM task_events te
-        JOIN github_events ge ON ge.event_id = te.event_id
-        JOIN github_sources gs ON gs.source_id = ge.source_id
-        WHERE te.task_id IN ({placeholders})
-        ORDER BY
-          CASE te.relationship
-            WHEN 'trigger' THEN 0
-            WHEN 'context' THEN 1
-            WHEN 'pending' THEN 2
-            WHEN 'consumed' THEN 3
-            ELSE 4
-          END,
-          te.created_at DESC
-        """,
-        task_ids,
-    ):
+    for row in task_history.event_sources_for_tasks(conn, task_ids):
         sources_by_task.setdefault(row["task_id"], dict(row))
 
-    for row in conn.execute(
-        f"""
-        SELECT t.task_id, gs.source_key, gs.title AS source_title, gs.html_url,
-               gs.source_type, gs.number
-        FROM tasks t
-        JOIN workstreams w ON w.workstream_id = t.workstream_id
-        JOIN github_sources gs ON gs.source_id = w.primary_source_id
-        WHERE t.task_id IN ({placeholders})
-        """,
-        task_ids,
-    ):
+    for row in task_history.primary_sources_for_tasks(conn, task_ids):
         sources_by_task.setdefault(row["task_id"], dict(row))
 
     artifacts_by_task = {task_id: {} for task_id in task_ids}
-    for row in conn.execute(
-        f"""
-        SELECT task_id, artifact_type, path, bytes, created_at
-        FROM artifacts
-        WHERE task_id IN ({placeholders})
-        ORDER BY created_at DESC, artifact_id DESC
-        """,
-        task_ids,
-    ):
+    for row in task_history.artifacts_for_tasks(conn, task_ids):
         artifacts_by_task[row["task_id"]].setdefault(
             row["artifact_type"],
             {
@@ -294,10 +213,7 @@ def _attach_task_operator_state(conn, recent_tasks):
 
     attention_by_task = {
         row["task_id"]: (_decode_json(row["metadata_json"]) or {}).get("execution_attention")
-        for row in conn.execute(
-            f"SELECT task_id,metadata_json FROM tasks WHERE task_id IN ({placeholders})",
-            task_ids,
-        )
+        for row in task_history.metadata_for_tasks(conn, task_ids)
     }
     for task in recent_tasks:
         task["execution_attention"] = attention_by_task.get(task["task_id"])
@@ -491,11 +407,7 @@ def _build_operator_next_steps(recent_tasks, recent_events, priority_events=None
                 if isinstance(metadata, dict)
                 else None
             )
-        elif task["next_action"] in {
-            "inspect_worker_heartbeat",
-            "inspect_worker_timeout",
-            "inspect_worker_startup",
-        }:
+        elif task["next_action"] in {"inspect_worker_heartbeat", "inspect_worker_timeout", "inspect_worker_startup"}:
             step["attempt_id"] = task.get("latest_attempt_id")
             step["attempt_status"] = task.get("latest_attempt_status")
             step["heartbeat_at"] = task.get("latest_attempt_heartbeat_at")
@@ -696,9 +608,7 @@ def _build_notification_center(
                 item_id=f"github_action:{action.get('action_id')}",
                 kind="github_action",
                 severity=_status_severity(
-                    audit_status,
-                    publish_status,
-                    publish.get("status") if isinstance(publish, dict) else None,
+                    audit_status, publish_status, publish.get("status") if isinstance(publish, dict) else None
                 ),
                 title=action.get("action_type") or "github_action",
                 summary=publish.get("safe_error") if isinstance(publish, dict) else publish_status or audit_status,
@@ -819,39 +729,7 @@ def _build_work_items(recent_tasks):
 def _load_priority_pending_events(conn, recent_events, history_limit):
     recent_event_ids = {event["event_id"] for event in recent_events}
     priority_limit = max(history_limit, 20)
-    rows = [
-        dict(row)
-        for row in conn.execute(
-            """
-            SELECT
-              ge.event_id,
-              ge.event_fingerprint,
-              ge.event_type,
-              ge.actor_login,
-              ge.author_association,
-              ge.authorization_status,
-              ge.event_at,
-              ge.payload_json,
-              gs.source_key,
-              gs.title AS source_title,
-              gs.source_type,
-              gs.number,
-              gs.html_url,
-              NULL AS task_id,
-              NULL AS task_relationship,
-              NULL AS workstream_id
-            FROM github_events ge
-            JOIN github_sources gs ON gs.source_id = ge.source_id
-            WHERE ge.authorization_status IN (
-              'pending_actor_permission',
-              'pending_authorization'
-            )
-            ORDER BY ge.event_at DESC, ge.event_id DESC
-            LIMIT ?
-            """,
-            (priority_limit,),
-        )
-    ]
+    rows = [dict(row) for row in db_read_github_events.load_priority_pending_events(conn, priority_limit)]
     priority_events = []
     for event in rows:
         if event["event_id"] in recent_event_ids:
@@ -862,104 +740,38 @@ def _load_priority_pending_events(conn, recent_events, history_limit):
 
 
 def _load_repos(conn):
-    if not _table_exists(conn, "repos"):
+    if not db_read_sqlite_master.table_exists(conn, "repos"):
         return []
     return [
         {
             "repo_id": row["repo_id"],
             "full_name": row["full_name"],
         }
-        for row in conn.execute(
-            """
-            SELECT repo_id, full_name
-            FROM repos
-            ORDER BY full_name, repo_id
-            """
-        )
+        for row in db_read_repos.load_repos(conn)
     ]
 
 
 def build_dashboard_data(db_path, history_limit=20):
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.row_factory = sqlite3.Row
+    with closing(db_database.connect(db_path)) as conn, conn:
         repos = _load_repos(conn)
-        recent_tasks = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT
-                  t.task_id,
-                  t.workstream_id,
-                  t.lifecycle,
-                  t.priority,
-                  COALESCE(t.route_id, rd.route_id) AS route_id,
-                  COALESCE(t.expected_output, rd.expected_output) AS expected_output,
-                  t.updated_at,
-                  w.lifecycle AS workstream_lifecycle,
-                  w.repo_id,
-                  repos.full_name AS repo_full_name,
-                  rd.route_decision_id,
-                  rd.confidence AS route_confidence,
-                  rd.allowed_github_actions_json,
-                  rd.recommended_skills_json
-                FROM tasks t
-                JOIN workstreams w ON w.workstream_id = t.workstream_id
-                JOIN repos ON repos.repo_id = w.repo_id
-                LEFT JOIN route_decisions rd ON rd.task_id = t.task_id
-                ORDER BY t.updated_at DESC, t.task_id DESC
-                LIMIT ?
-                """,
-                (history_limit,),
-            )
-        ]
+        recent_tasks = [dict(row) for row in db_read_tasks.find_for_build_dashboard_data(conn, history_limit)]
         for task in recent_tasks:
             task["allowed_github_actions"] = _decode_json(task.pop("allowed_github_actions_json")) or []
             task["recommended_skills"] = _decode_json(task.pop("recommended_skills_json")) or []
         _attach_task_operator_state(conn, recent_tasks)
         operator_state_counts = dict(sorted(Counter(task["operator_state"] for task in recent_tasks).items()))
         recent_actions = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT action_id, result_id, task_id, action_type, target_url, external_id,
-                       audit_status, publish_status, created_at, metadata_json
-                FROM github_actions
-                ORDER BY created_at DESC, action_id DESC
-                LIMIT ?
-                """,
-                (history_limit,),
-            )
+            dict(row) for row in db_read_github_actions.find_for_build_dashboard_data(conn, history_limit)
         ]
         for action in recent_actions:
             action["metadata"] = _decode_json(action.pop("metadata_json"))
         recent_notifications = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT notification_id, task_id, notification_type, channel, status,
-                       created_at, metadata_json
-                FROM notifications
-                ORDER BY created_at DESC, notification_id DESC
-                LIMIT ?
-                """,
-                (history_limit,),
-            )
+            dict(row) for row in db_read_notifications.find_for_build_dashboard_data(conn, history_limit)
         ]
         for notification in recent_notifications:
             notification["metadata"] = _decode_json(notification.pop("metadata_json"))
         recent_worker_results = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT result_id, task_id, attempt_id, output_type,
-                       consumed_event_fingerprints_json, verification_json,
-                       handoff, created_at, metadata_json
-                FROM worker_results
-                ORDER BY created_at DESC, result_id DESC
-                LIMIT ?
-                """,
-                (history_limit,),
-            )
+            dict(row) for row in db_read_worker_results.find_for_build_dashboard_data(conn, history_limit)
         ]
         used_skill_counts = Counter()
         for result in recent_worker_results:
@@ -967,37 +779,7 @@ def build_dashboard_data(db_path, history_limit=20):
             result["verification"] = _decode_json(result.pop("verification_json")) or []
             result["metadata"] = _decode_json(result.pop("metadata_json")) or {}
             used_skill_counts.update(result["metadata"].get("used_skills") or [])
-        recent_events = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT
-                  ge.event_id,
-                  ge.event_fingerprint,
-                  ge.event_type,
-                  ge.actor_login,
-                  ge.author_association,
-                  ge.authorization_status,
-                  ge.event_at,
-                  ge.payload_json,
-                  gs.source_key,
-                  gs.title AS source_title,
-                  gs.source_type,
-                  gs.number,
-                  gs.html_url,
-                  te.task_id,
-                  te.relationship AS task_relationship,
-                  t.workstream_id
-                FROM github_events ge
-                JOIN github_sources gs ON gs.source_id = ge.source_id
-                LEFT JOIN task_events te ON te.event_id = ge.event_id
-                LEFT JOIN tasks t ON t.task_id = te.task_id
-                ORDER BY ge.event_at DESC, ge.event_id DESC
-                LIMIT ?
-                """,
-                (history_limit,),
-            )
-        ]
+        recent_events = [dict(row) for row in db_read_github_events.find_for_build_dashboard_data(conn, history_limit)]
         for event in recent_events:
             event["payload"] = _decode_json(event.pop("payload_json")) or {}
         priority_pending_events = _load_priority_pending_events(
@@ -1032,33 +814,10 @@ def build_dashboard_data(db_path, history_limit=20):
             recent_events,
             priority_pending_events,
         )
-        recent_runs = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT run_id, status, started_at, finished_at, config_path, dry_run,
-                       summary_json, error_json
-                FROM agent_runs
-                ORDER BY started_at DESC, run_id DESC
-                LIMIT ?
-                """,
-                (history_limit,),
-            )
-        ]
+        recent_runs = [dict(row) for row in db_read_agent_runs.find_for_build_dashboard_data(conn, history_limit)]
         steps_by_run = {run["run_id"]: [] for run in recent_runs}
         if recent_runs:
-            placeholders = ",".join("?" for _run in recent_runs)
-            for row in conn.execute(
-                f"""
-                SELECT s.run_id, s.step_key, s.status, s.started_at, s.finished_at,
-                       s.output_json, s.error_json,
-                       CASE WHEN s.step_key = 'summarize' THEN r.summary_json END AS referenced_summary_json
-                FROM run_steps s
-                JOIN agent_runs r ON r.run_id = s.run_id
-                WHERE s.run_id IN ({placeholders})
-                """,
-                [run["run_id"] for run in recent_runs],
-            ):
+            for row in run_history.steps(conn, [run["run_id"] for run in recent_runs]):
                 step = dict(row)
                 step["output"] = step_output(
                     step["step_key"],
@@ -1068,20 +827,8 @@ def build_dashboard_data(db_path, history_limit=20):
                 step["error"] = _decode_json(step.pop("error_json"))
                 steps_by_run[step["run_id"]].append(step)
         repo_steps_by_run = {run["run_id"]: [] for run in recent_runs}
-        if recent_runs and _table_exists(conn, "run_repo_steps"):
-            placeholders = ",".join("?" for _run in recent_runs)
-            for row in conn.execute(
-                f"""
-                SELECT rrs.run_id, rrs.repo_id, repos.full_name AS repo_full_name,
-                       rrs.step_key, rrs.status, rrs.started_at, rrs.finished_at,
-                       rrs.output_json, rrs.error_json
-                FROM run_repo_steps rrs
-                JOIN repos ON repos.repo_id = rrs.repo_id
-                WHERE rrs.run_id IN ({placeholders})
-                ORDER BY repos.full_name, rrs.step_key
-                """,
-                [run["run_id"] for run in recent_runs],
-            ):
+        if recent_runs and db_read_sqlite_master.table_exists(conn, "run_repo_steps"):
+            for row in run_history.repo_steps(conn, [run["run_id"] for run in recent_runs]):
                 step = dict(row)
                 step["output"] = _decode_json(step.pop("output_json"))
                 step["error"] = _decode_json(step.pop("error_json"))
@@ -1093,10 +840,7 @@ def build_dashboard_data(db_path, history_limit=20):
             run["error"] = _decode_json(run.pop("error_json"))
             run["steps"] = sorted(
                 steps_by_run[run["run_id"]],
-                key=lambda step: (
-                    order.get(step["step_key"], len(order)),
-                    step["step_key"],
-                ),
+                key=lambda step: (order.get(step["step_key"], len(order)), step["step_key"]),
             )
             run["repo_steps"] = sorted(
                 repo_steps_by_run.get(run["run_id"], []),
@@ -1143,7 +887,9 @@ def build_dashboard_data(db_path, history_limit=20):
 
 def _build_knowledge_review_data(conn, history_limit=20):
     proposal_repos = _knowledge_proposal_repos(conn)
-    if not _table_exists(conn, "knowledge_candidates") or not _table_exists(conn, "runtime_knowledge"):
+    if not db_read_sqlite_master.table_exists(conn, "knowledge_candidates") or not db_read_sqlite_master.table_exists(
+        conn, "runtime_knowledge"
+    ):
         return {
             "available": False,
             "submission_boundary": "local_runtime_knowledge_only",
@@ -1154,28 +900,12 @@ def _build_knowledge_review_data(conn, history_limit=20):
             "active_knowledge": [],
         }
     candidate_counts = {
-        row["status"]: row["count"]
-        for row in conn.execute(
-            """
-            SELECT status, COUNT(*) AS count
-            FROM knowledge_candidates
-            GROUP BY status
-            """
-        )
+        row["status"]: row["count"] for row in db_read_knowledge_candidates.find_for_build_knowledge_review_data(conn)
     }
-    active_count = conn.execute("SELECT COUNT(*) FROM runtime_knowledge WHERE active = 1").fetchone()[0]
+    active_count = db_records.first(db_read_runtime_knowledge.find_for_build_knowledge_review_data_2(conn))[0]
     pending_candidates = [
         runtime_knowledge.show_candidate(conn, row["candidate_id"])
-        for row in conn.execute(
-            """
-            SELECT candidate_id
-            FROM knowledge_candidates
-            WHERE status = 'pending'
-            ORDER BY created_at DESC, candidate_id
-            LIMIT ?
-            """,
-            (history_limit,),
-        )
+        for row in db_read_knowledge_candidates.find_for_build_knowledge_review_data_2(conn, history_limit)
     ]
     recent_candidates = runtime_knowledge.list_candidates(conn)[:history_limit]
     active_knowledge = [
@@ -1190,17 +920,7 @@ def _build_knowledge_review_data(conn, history_limit=20):
             "approved_by": row["approved_by"],
             "approved_at": row["approved_at"],
         }
-        for row in conn.execute(
-            """
-            SELECT knowledge_id, candidate_id, repo_id, scope_type, scope_value,
-                   title, prompt_text, approved_by, approved_at
-            FROM runtime_knowledge
-            WHERE active = 1
-            ORDER BY approved_at DESC, knowledge_id
-            LIMIT ?
-            """,
-            (history_limit,),
-        )
+        for row in db_read_runtime_knowledge.find_for_build_knowledge_review_data(conn, history_limit)
     ]
     return {
         "available": True,
@@ -1219,19 +939,13 @@ def _build_knowledge_review_data(conn, history_limit=20):
 
 
 def _knowledge_proposal_repos(conn):
-    if not _table_exists(conn, "repos"):
+    if not db_read_sqlite_master.table_exists(conn, "repos"):
         return []
     memory_counts = {}
-    if _table_exists(conn, "project_memory_entries"):
+    if db_read_sqlite_master.table_exists(conn, "project_memory_entries"):
         memory_counts = {
             row["repo_id"]: row["count"]
-            for row in conn.execute(
-                """
-                SELECT repo_id, COUNT(*) AS count
-                FROM project_memory_entries
-                GROUP BY repo_id
-                """
-            )
+            for row in db_read_project_memory_entries.find_for_knowledge_proposal_repos(conn)
         }
     return [
         {
@@ -1239,43 +953,24 @@ def _knowledge_proposal_repos(conn):
             "full_name": row["full_name"],
             "memory_count": memory_counts.get(row["repo_id"], 0),
         }
-        for row in conn.execute(
-            """
-            SELECT repo_id, full_name
-            FROM repos
-            ORDER BY full_name, repo_id
-            """
-        )
+        for row in db_read_repos.load_repos(conn)
     ]
 
 
 def _knowledge_tables_available(conn):
     return all(
-        _table_exists(conn, table_name)
-        for table_name in [
-            "knowledge_candidates",
-            "runtime_knowledge",
-            "project_memory_entries",
-        ]
+        db_read_sqlite_master.table_exists(conn, table_name)
+        for table_name in ["knowledge_candidates", "runtime_knowledge", "project_memory_entries"]
     )
 
 
 def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, artifact_id=None):
     if not task_id or not artifact_type:
         return None
-    with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """
-            SELECT artifact_type, path, bytes
-            FROM artifacts
-            WHERE task_id = ? AND artifact_type = ?
-              AND (? IS NULL OR artifact_id = ?)
-            ORDER BY created_at DESC, artifact_id DESC
-            LIMIT 1
-            """,
-            (task_id, artifact_type, artifact_id, artifact_id),
-        ).fetchone()
+    with closing(db_database.connect(db_path)) as conn, conn:
+        row = db_records.first(
+            db_read_artifacts.load_artifact_preview(conn, task_id, artifact_type, artifact_id, artifact_id)
+        )
     if not row:
         return None
     registered_path = str(row["path"])
@@ -1288,18 +983,10 @@ def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, a
         directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             for component in relative.parts[:-1]:
-                child_fd = os.open(
-                    component,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=directory_fd,
-                )
+                child_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
                 os.close(directory_fd)
                 directory_fd = child_fd
-            file_fd = os.open(
-                relative.name,
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                dir_fd=directory_fd,
-            )
+            file_fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
         finally:
             os.close(directory_fd)
         with os.fdopen(file_fd, "rb") as fh:
@@ -1346,5 +1033,5 @@ def render_artifact_preview_text(preview):
 
 
 def knowledge_available(db_path):
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(db_database.connect(db_path)) as conn:
         return _knowledge_tables_available(conn)

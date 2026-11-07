@@ -1,10 +1,15 @@
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+
 #!/usr/bin/env python3
 from contextlib import closing
 import json
 import os
 import re
 import signal
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -32,10 +37,7 @@ def _journal_argv(command):
         arg = os.fsdecode(arg)
         option = arg.split("=", 1)[0].lower().replace("-", "_")
         sensitive = bool(
-            re.search(
-                r"(?:^|_)(?:token|password|passwd|secret|api_key|credential|authorization|cookie)$",
-                option,
-            )
+            re.search(r"(?:^|_)(?:token|password|passwd|secret|api_key|credential|authorization|cookie)$", option)
         )
         sensitive = sensitive or arg in {"-u", "--user", "--proxy-user"}
         hidden = hide_next or not redact_text(arg)["ok"] or bool(re.search(r"://[^/\s]*@", arg))
@@ -155,7 +157,7 @@ def _write_command_record(path, record):
 def _record_command_snapshot(**kwargs):
     try:
         snapshot.record_snapshot(**kwargs)
-    except sqlite3.OperationalError as exc:
+    except db_errors.OperationalError as exc:
         if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
             raise
         return "deferred"
@@ -213,11 +215,8 @@ def run_command_with_heartbeat(
     argv = _journal_argv(command)
     # Validate ownership with a read before allowing a busy write to be deferred.
     snapshot.build_snapshot(task_id, attempt_id, phase, "running", "Starting command")
-    with closing(sqlite3.connect(db_path)) as conn:
-        if not conn.execute(
-            "SELECT 1 FROM attempts WHERE attempt_id = ? AND task_id = ?",
-            (attempt_id, task_id),
-        ).fetchone():
+    with closing(db_database.connect(db_path)) as conn:
+        if not db_records.first(db_read_attempts.find_for_run_command_with_heartbeat(conn, attempt_id, task_id)):
             raise ValueError("attempt_id does not belong to task_id")
     output_dir = Path(output_dir).expanduser() if output_dir else default_output_dir(db_path, task_id)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -280,11 +279,7 @@ def run_command_with_heartbeat(
             _write_command_record(record_path, record)
             raise
         try:
-            record.update(
-                status="running",
-                pid=proc.pid,
-                process_identity=process_identity(proc.pid),
-            )
+            record.update(status="running", pid=proc.pid, process_identity=process_identity(proc.pid))
             _write_command_record(record_path, record)
             next_heartbeat = started + heartbeat_interval_seconds
             while True:
@@ -300,12 +295,7 @@ def run_command_with_heartbeat(
                     _kill_command(proc)
                     break
                 try:
-                    proc.wait(
-                        timeout=min(
-                            0.1 if output_mode == "tee" else heartbeat_interval_seconds,
-                            remaining,
-                        )
-                    )
+                    proc.wait(timeout=min(0.1 if output_mode == "tee" else heartbeat_interval_seconds, remaining))
                 except subprocess.TimeoutExpired:
                     pass
                 else:

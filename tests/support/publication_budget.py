@@ -20,7 +20,7 @@ from unittest import mock
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 from robert_agent.delivery import values as publication_values
 
@@ -61,10 +61,7 @@ class PublicationBudgetFixture(unittest.TestCase):
                 "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES ('r','t','a','new_pr','now',?)",
                 (
                     json.dumps(
-                        {
-                            "result_contract": "compact-v1",
-                            "audit": {"status": "accepted", "action_scope": scope},
-                        }
+                        {"result_contract": "compact-v1", "audit": {"status": "accepted", "action_scope": scope}}
                     ),
                 ),
             )

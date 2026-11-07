@@ -2,18 +2,25 @@
 
 import base64
 import binascii
+import json
+import shlex
 from collections import Counter, defaultdict
 from contextlib import closing
-import json
 from pathlib import Path
-import shlex
-import sqlite3
 
-from robert_agent.readmodels import board
-from robert_agent.readmodels import execution_metrics
-from robert_agent.execution import inspection as supervise
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
+from robert_agent.persistence.queries import wakeups as db_read_wakeups
+from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.queries import (
+    workstream_sources as db_read_workstream_sources,
+)
+from robert_agent.persistence.queries.readviews import task_history
+from robert_agent.persistence.queries.readviews import work_items as work_item_queries
+from robert_agent.readmodels import board, execution_metrics
 from robert_agent.readmodels.execution import safe_text
-
 
 ACTIVE_TASK_LIFECYCLES = {"detected", "authorized", "classified", "queued", "running"}
 BUCKETS = {"needs_attention", "working", "waiting", "history"}
@@ -49,13 +56,12 @@ def _decode_json(value, default=None):
 
 
 def _connect(db_path):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    conn = db_database.connect(db_path)
+    tables = {row[0] for row in db_read_sqlite_master.find_for_read_binding(conn)}
     missing = REQUIRED_TABLES - tables
     if missing:
         conn.close()
-        raise sqlite3.OperationalError("workbench schema is missing: " + ", ".join(sorted(missing)))
+        raise db_errors.OperationalError("workbench schema is missing: " + ", ".join(sorted(missing)))
     return conn
 
 
@@ -82,166 +88,31 @@ def _decode_cursor(value):
     return updated_at, workstream_id
 
 
-def _group_rows(conn, sql, key, ids=None):
+def _group_by(rows, key):
     grouped = defaultdict(list)
-    if ids is not None and not ids:
-        return grouped
-    ids = None if ids is None else list(dict.fromkeys(ids))
-    batches = [None] if ids is None else [ids[i : i + 200] for i in range(0, len(ids), 200)]
-    for batch in batches:
-        query = sql if batch is None else f"SELECT * FROM ({sql}) WHERE {key} IN (" + ",".join("?" for _ in batch) + ")"
-        for row in conn.execute(query, batch or []):
-            item = dict(row)
-            grouped[item[key]].append(item)
+    for row in rows:
+        grouped[row[key]].append(dict(row))
     return grouped
 
 
 def _load_state(conn, workstream_id=None):
-    workstream_ids = None
-    if workstream_id is not None:
-        # Ancestors provide the owning board item for a derived PR workstream.
-        workstream_ids = [
-            row[0]
-            for row in conn.execute(
-                """WITH RECURSIVE ancestors(workstream_id,origin_workstream_id) AS (
-                SELECT workstream_id,origin_workstream_id FROM workstreams WHERE workstream_id=?
-                UNION
-                SELECT w.workstream_id,w.origin_workstream_id FROM workstreams w
-                JOIN ancestors a ON w.workstream_id=a.origin_workstream_id
-            ) SELECT workstream_id FROM ancestors""",
-                (workstream_id,),
-            )
-        ]
-    clause = (
-        "" if workstream_ids is None else " WHERE w.workstream_id IN (" + ",".join("?" for _ in workstream_ids) + ")"
-    )
-    workstreams = [
-        dict(row)
-        for row in conn.execute(
-            f"""
-            SELECT
-              w.workstream_id,
-              w.repo_id,
-              w.primary_source_id,
-              w.origin_workstream_id,
-              w.lifecycle AS workstream_lifecycle,
-              w.active_task_id,
-              w.created_at,
-              w.updated_at,
-              r.full_name AS repo_full_name,
-              gs.source_key,
-              gs.source_type,
-              gs.number AS source_number,
-              gs.html_url AS github_url,
-              gs.title AS source_title,
-              gs.state AS source_state,
-              gs.author_login,
-              gs.source_updated_at
-            FROM workstreams w
-            JOIN repos r ON r.repo_id = w.repo_id
-            LEFT JOIN github_sources gs ON gs.source_id = w.primary_source_id
-            {clause}
-            """,
-            workstream_ids or [],
-        )
-    ]
-    tasks = _group_rows(
-        conn,
-        """
-        SELECT
-          task_id, workstream_id, lifecycle, parent_task_id, priority,
-          route_id, expected_output, created_at, updated_at, metadata_json
-        FROM tasks
-        ORDER BY updated_at DESC, task_id DESC
-        """,
-        "workstream_id",
-        workstream_ids,
-    )
+    # Ancestors provide the owning board item for a derived PR workstream.
+    workstream_ids = None if workstream_id is None else work_item_queries.ancestor_workstream_ids(conn, workstream_id)
+    workstreams = [dict(row) for row in work_item_queries.workstream_sources(conn, workstream_ids)]
+    tasks = _group_by(task_history.tasks_for_workstreams(conn, workstream_ids), "workstream_id")
     task_ids = None if workstream_ids is None else [task["task_id"] for rows in tasks.values() for task in rows]
-    attempts = _group_rows(
-        conn,
-        """
-        SELECT
-          attempt_id, task_id, attempt_no, status, worktree_path, branch_name,
-          started_at, heartbeat_at, finished_at, failure_json
-        FROM attempts
-        ORDER BY attempt_no DESC, started_at DESC, attempt_id DESC
-        """,
-        "task_id",
-        task_ids,
-    )
+    attempts = _group_by(task_history.attempts_for_tasks(conn, task_ids), "task_id")
     attempt_ids = (
         None if task_ids is None else [attempt["attempt_id"] for rows in attempts.values() for attempt in rows]
     )
-    phases = _group_rows(
-        conn,
-        """
-        SELECT phase_id, attempt_id, phase, status, summary, next_step, created_at
-        FROM worker_phases
-        ORDER BY created_at, phase_id
-        """,
-        "attempt_id",
-        attempt_ids,
-    )
-    results = _group_rows(
-        conn,
-        """
-        SELECT
-          result_id, task_id, attempt_id, output_type, verification_json,
-          handoff, created_at, metadata_json
-        FROM worker_results
-        ORDER BY created_at DESC, result_id DESC
-        """,
-        "task_id",
-        task_ids,
-    )
-    actions = _group_rows(
-        conn,
-        """
-        SELECT
-          action_id, result_id, task_id, action_type, target_url, external_id,
-          audit_status, publish_status, created_at, metadata_json
-        FROM github_actions
-        ORDER BY created_at DESC, action_id DESC
-        """,
-        "task_id",
-        task_ids,
-    )
-    artifacts = _group_rows(
-        conn,
-        """
-        SELECT artifact_id, task_id, attempt_id, artifact_type, path, bytes, created_at
-        FROM artifacts
-        ORDER BY created_at DESC, artifact_id DESC
-        """,
-        "task_id",
-        task_ids,
-    )
-    notifications = _group_rows(
-        conn,
-        """
-        SELECT notification_id, task_id, notification_type, status, created_at, metadata_json
-        FROM notifications
-        ORDER BY created_at DESC, notification_id DESC
-        """,
-        "task_id",
-        task_ids,
-    )
-    remediation_episodes = _group_rows(
-        conn,
-        """
-        SELECT episode_id, workstream_id, episode_kind, status,
-               observed_head_sha, observed_base_sha, result_head_sha,
-               attempt_count, failure_signature, first_seen_at, updated_at,
-               terminal_at, last_task_id, metadata_json
-        FROM pr_remediation_episodes
-        ORDER BY updated_at DESC, episode_id DESC
-        """,
-        "workstream_id",
-        workstream_ids,
-    )
+    phases = _group_by(task_history.phases_for_attempts(conn, attempt_ids), "attempt_id")
+    results = _group_by(task_history.results_for_tasks(conn, task_ids), "task_id")
+    actions = _group_by(task_history.actions_for_tasks(conn, task_ids), "task_id")
+    artifacts = _group_by(task_history.artifacts_for_tasks(conn, task_ids), "task_id")
+    notifications = _group_by(task_history.notifications_for_tasks(conn, task_ids), "task_id")
+    remediation_episodes = _group_by(task_history.remediation_for_workstreams(conn, workstream_ids), "workstream_id")
     attention = {}
-    from robert_agent.adapters.sqlite import execution_control as execution_store
+    from robert_agent.persistence import execution_control as execution_store
 
     subjects = set()
     for stream_tasks in tasks.values():
@@ -264,27 +135,16 @@ def _load_state(conn, workstream_id=None):
                 attention[task["workstream_id"]] = safe_text(
                     metadata.get("reason_code") or "execution_attention_required"
                 )
-    occupied_clause = (
-        "" if workstream_ids is None else " AND t.workstream_id IN (" + ",".join("?" for _ in workstream_ids) + ")"
-    )
-    occupied_tasks = {
-        row[0]
-        for row in conn.execute(
-            f"SELECT a.task_id FROM attempts a JOIN tasks t ON t.task_id=a.task_id WHERE {supervise.occupied_attempt_sql()} {occupied_clause}",
-            workstream_ids or [],
-        )
-    }
+    occupied_tasks = task_history.occupied_tasks(conn, workstream_ids)
     return {
         "workflow_attention": attention,
         "occupied_tasks": occupied_tasks,
         "workstreams": workstreams,
         "workstreams_by_id": {row["workstream_id"]: row for row in workstreams},
         "board_items": board.workstream_projections(
-            conn,
-            workstream_ids=workstream_ids,
-            controls=controls if workstream_ids is None else None,
+            conn, workstream_ids=workstream_ids, controls=controls if workstream_ids is None else None
         )
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'").fetchone()
+        if db_read_sqlite_master.table_exists(conn, "work_items")
         else {},
         "tasks": tasks,
         "attempts": attempts,
@@ -537,11 +397,7 @@ def _item_from_workstream(state, workstream):
         )
     ):
         if board_item and board_item["reason_code"] == "canceled":
-            bucket, reason_code, reason_summary = (
-                "history",
-                "canceled",
-                "Canceled by the operator",
-            )
+            bucket, reason_code, reason_summary = "history", "canceled", "Canceled by the operator"
         else:
             bucket, reason_code, reason_summary = (
                 "history",
@@ -791,13 +647,7 @@ def _safe_action(row):
         "safe_error": safe_text(publish.get("safe_error")) if isinstance(publish, dict) else None,
         "retry": {
             key: publish.get(key)
-            for key in (
-                "attempt_count",
-                "max_attempts",
-                "reason_code",
-                "next_retry_at",
-                "required_action",
-            )
+            for key in ("attempt_count", "max_attempts", "reason_code", "next_retry_at", "required_action")
         }
         if isinstance(publish, dict)
         else {},
@@ -818,11 +668,12 @@ def get_work_item(db_path, workstream_id):
             return None
         item = _item_from_workstream(state, workstream)
         board_item = None
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'").fetchone():
-            board_item = conn.execute(
-                "SELECT work_item_id FROM work_items WHERE workstream_id IN (?, ?) ORDER BY workstream_id = ? DESC LIMIT 1",
-                (workstream_id, workstream.get("origin_workstream_id"), workstream_id),
-            ).fetchone()
+        if db_read_sqlite_master.table_exists(conn, "work_items"):
+            board_item = db_records.first(
+                db_read_work_items.find_for_get_work_item(
+                    conn, workstream_id, workstream.get("origin_workstream_id"), workstream_id
+                )
+            )
         related_sources = [
             {
                 "relationship": row["relationship"],
@@ -834,18 +685,7 @@ def get_work_item(db_path, workstream_id):
                 "url": row["html_url"],
                 "state": row["state"],
             }
-            for row in conn.execute(
-                """
-                SELECT
-                  ws.relationship, gs.source_id, gs.source_key, gs.source_type,
-                  gs.number, gs.title, gs.html_url, gs.state
-                FROM workstream_sources ws
-                JOIN github_sources gs ON gs.source_id = ws.source_id
-                WHERE ws.workstream_id = ?
-                ORDER BY ws.created_at, gs.source_id
-                """,
-                (workstream_id,),
-            )
+            for row in db_read_workstream_sources.find_for_get_work_item(conn, workstream_id)
         ]
         current_task = _current_task(
             workstream,
@@ -857,18 +697,7 @@ def get_work_item(db_path, workstream_id):
         retrigger_pending = False
         if current_task:
             retrigger_pending = bool(
-                conn.execute(
-                    """
-                    SELECT 1
-                    FROM wakeups
-                    WHERE task_id = ?
-                      AND reason = 'manual_operator_request'
-                      AND status = 'pending'
-                      AND json_extract(metadata_json, '$.kind') = 'github_retrigger'
-                    LIMIT 1
-                    """,
-                    (current_task["task_id"],),
-                ).fetchone()
+                db_records.first(db_read_wakeups.find_for_get_work_item(conn, current_task["task_id"]))
             )
     tasks = state["tasks"].get(workstream_id, [])
     task_ids = {task["task_id"] for task in tasks}

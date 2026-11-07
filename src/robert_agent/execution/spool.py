@@ -1,5 +1,10 @@
 """Final Worker results survive a busy domain database and process restart."""
 
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence import errors as db_errors
+
+from robert_agent.persistence.stores import notifications as db_write_notifications
+
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import fcntl
@@ -7,7 +12,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import sqlite3
 import tempfile
 import time
 
@@ -88,17 +92,13 @@ def _ingest(db_path, path, record, writer, notifier, *, defer_database_errors=Fa
 
     try:
         response = writer(db_path, record["payload"], notifier=notifier)
-    except sqlite3.Error as exc:
+    except db_errors.Error as exc:
         # Submission already owns a durable final slot. Replay handles permanent
         # ingestion failures with its existing bounded retry/quarantine policy.
         if not defer_database_errors and "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
             raise
         wakeup_notifier.notify(db_path, sender=notifier)
-        return {
-            "ok": True,
-            "status": "deferred",
-            "safe_error": "Result durably saved; waiting for ingestion.",
-        }
+        return {"ok": True, "status": "deferred", "safe_error": "Result durably saved; waiting for ingestion."}
     if response["ok"]:
         if response["status"] not in {"deferred", "replay_blocked"}:
             path.unlink(missing_ok=True)
@@ -153,20 +153,15 @@ def submit(db_path, envelope, writer, notifier=None, *, prepare, lookup):
 
 def _notify_rejection(db_path, path, reason):
     try:
-        with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO notifications(notification_id,notification_type,channel,status,created_at,metadata_json) VALUES (?,'worker_result_invalid','local','recorded',strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),?)",
-                (
-                    "notification-invalid-" + path.stem,
-                    json.dumps(
-                        {
-                            "reason_code": reason,
-                            "required_action": "Inspect preserved spool evidence before retrying.",
-                        }
-                    ),
+        with closing(db_database.connect(db_path, timeout=0.1)) as conn, conn:
+            db_write_notifications.insert_for_notify_rejection(
+                conn,
+                "notification-invalid-" + path.stem,
+                json.dumps(
+                    {"reason_code": reason, "required_action": "Inspect preserved spool evidence before retrying."}
                 ),
             )
-    except sqlite3.Error:
+    except db_errors.Error:
         pass  # The preserved file remains authoritative diagnostic evidence.
 
 

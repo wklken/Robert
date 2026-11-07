@@ -3,8 +3,11 @@
 from contextlib import closing, contextmanager
 import hashlib
 import json
-import sqlite3
 from pathlib import Path
+
+from robert_agent.persistence import database, errors, records, transactions
+from robert_agent.persistence.queries import notifications
+from robert_agent.persistence.stores import notifications as notification_store
 
 from robert_agent.delivery import messages
 from robert_agent.security.redaction import redact_text
@@ -19,9 +22,9 @@ def _connection(config, *, write=False):
     mode = "rw" if write else "ro"
     uri = Path(config["db_path"]).expanduser().resolve().as_uri() + "?mode=" + mode
     try:
-        with closing(sqlite3.connect(uri, uri=True)) as conn:
+        with closing(database.connect(uri, uri=True)) as conn:
             yield conn
-    except sqlite3.Error as exc:
+    except errors.Error as exc:
         raise WorkItemValidationError("Messaging storage is unavailable; inspect Robert locally.") from exc
 
 
@@ -40,17 +43,7 @@ def _authenticate(config, request):
 def inbox(config, request):
     _authenticate(config, request)
     with _connection(config) as conn:
-        scope, params = messages.pending_filter(conn, config)
-        rows = conn.execute(
-            """SELECT notification_id FROM notifications
-            WHERE channel='local' AND status!='resolved'
-            AND (json_extract(metadata_json,'$.operator_response') IS NULL
-                 OR json_extract(metadata_json,'$.attention_event_id') IS NOT NULL)
-            """
-            + scope
-            + " ORDER BY created_at DESC,notification_id DESC LIMIT 100",
-            params,
-        ).fetchall()
+        rows = notifications.find_inbox(conn, messaging_repo_ids=messages.allowed_repo_ids(conn, config))
         entries = [messages.envelope(conn, row[0], config=config) for row in rows]
     return {"ok": True, "messages": [entry for entry in entries if entry]}
 
@@ -76,16 +69,13 @@ def respond(config, request):
         ).hexdigest()
     )
     with _connection(config) as conn:
-        row = conn.execute(
-            "SELECT task_id,metadata_json FROM notifications WHERE notification_id=? AND channel='local'",
-            (notification_id,),
-        ).fetchone()
+        row = records.first(notifications.find_local_response(conn, notification_id))
         if not row:
             raise WorkItemNotFoundError("Message not found.")
         metadata = json.loads(row[1] or "{}")
-        repo_id = messaging.notification_scope(conn, row[0], metadata)
+        repo_id, repository_scoped = messaging.notification_scope(conn, row[0], metadata)
         allowed = messages.allowed_repo_ids(conn, config)
-        if (repo_id is not None or row[0] or metadata.get("work_item_id")) and repo_id not in allowed:
+        if repository_scoped and repo_id not in allowed:
             raise WorkItemNotFoundError("Message not found.")
         displayed = messages.envelope(conn, notification_id, config=config, include_closed=True)
         if not displayed or action not in displayed["actions"]:
@@ -114,10 +104,8 @@ def respond(config, request):
         }
     # Acknowledgement only records receipt; it never resolves an incident or task.
     with _connection(config, write=True) as conn, conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT metadata_json FROM notifications WHERE notification_id=?", (notification_id,)
-        ).fetchone()
+        transactions.begin_immediate(conn)
+        row = records.first(notifications.find_metadata_json_by_notification_id(conn, notification_id))
         if not row:
             raise WorkItemNotFoundError("Message not found.")
         metadata = json.loads(row[0] or "{}")
@@ -132,8 +120,7 @@ def respond(config, request):
                 "body": body,
                 "created_at": commands.utc_now(),
             }
-            conn.execute(
-                "UPDATE notifications SET metadata_json=? WHERE notification_id=?",
-                (json.dumps(metadata, ensure_ascii=False), notification_id),
+            notification_store.set_metadata_json_by_notification_id(
+                conn, json.dumps(metadata, ensure_ascii=False), notification_id
             )
     return {"ok": True, "status": "acknowledged", "notification_id": notification_id}

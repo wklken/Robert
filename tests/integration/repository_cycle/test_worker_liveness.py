@@ -16,7 +16,7 @@ from tests.support.repository_cycle import (
 
 class WorkerLivenessTests(RepositoryCycleFixture):
     def test_unknown_worker_identity_marks_binding_attention_without_mutation(self):
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
 
         db_path, task_id, attempt_id = self._seed_active_pr_task(993)
         now = "2026-08-02T01:00:00+00:00"
@@ -80,12 +80,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
-                (
-                    old,
-                    old,
-                    json.dumps({"dispatch": self._recorded_identity(987654)}),
-                    attempt_id,
-                ),
+                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
             conn.execute(
                 """
@@ -148,12 +143,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
-                (
-                    old,
-                    old,
-                    json.dumps({"dispatch": self._recorded_identity(987654)}),
-                    attempt_id,
-                ),
+                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
 
         original_inspect = worker_identity.inspect_recorded_identity
@@ -368,12 +358,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
-                (
-                    old,
-                    old,
-                    json.dumps({"dispatch": self._recorded_identity(987654)}),
-                    attempt_id,
-                ),
+                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
             )
             conn.execute(
                 """
@@ -698,10 +683,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
             worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
-            worker_identity.terminate_recorded_identity = lambda _identity: {
-                "status": "terminated",
-                "pid": 12345,
-            }
+            worker_identity.terminate_recorded_identity = lambda _identity: {"status": "terminated", "pid": 12345}
             discover.collect_account_notifications = fake_collect_notifications
             discover.collect_live_events = fake_collect
             second = run_once.run_once(

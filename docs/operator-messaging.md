@@ -24,14 +24,23 @@ the incident, retry execution, release a process or approve a repair.
 
 | Owner | Responsibility |
 | --- | --- |
-| `work/messaging.py` | Attention event/outbox correlation and stable query facts |
+| `work/messaging.py` | Attention event/outbox correlation and response action policy |
+| `persistence/queries/notifications.py`, `persistence/queries/work_item_events.py` | Scoped inbox, delivery readiness and attention facts |
+| `persistence/stores/notifications.py` | Notification correlation, resolution and delivery/acknowledgement records |
 | `delivery/messages.py` | Scoped, redacted `robert.message.v1` envelopes |
 | `delivery/application/notifications.py` | Durable delivery state and bounded retries |
 | `adapters/notifications/messaging.py` | OpenClaw CLI and existing command transport |
 | `work/application/messaging.py` | Sender/session authorization and operator command admission |
 | `integrations/openclaw.py` | Translate authenticated plugin command context to the local CLI |
 
-No new database table or runtime dependency is required. Disabling messaging
+Messaging uses the existing SQLAlchemy mappings through named `persistence` operations.
+Business modules do not construct SQL or import a database driver. Queries return
+materialized records; writes participate in the caller-owned transaction without
+committing it. Inbox and delivery apply repository and unresolved-attention filters
+before limiting results, so closed or unauthorized notices cannot starve eligible work.
+Chat reads use an existing database in read-only mode; acknowledgement uses an
+existing writable database and an immediate transaction. Neither path creates a
+missing database. No new database table or runtime dependency is required. Disabling messaging
 stops the built-in transport and rejects new chat responses; the timeline and
 local controls continue to work.
 
@@ -110,7 +119,9 @@ repository restrictions. A blocked retry must be investigated through existing
 local controls, not bypassed through chat.
 
 Secrets are blocked or omitted; details that cannot safely be shown require local
-inspection. The CLI bridge accepts JSON on stdin, not arbitrary shell commands.
+inspection. The CLI bridge accepts JSON on stdin, not arbitrary shell commands. The plugin
+rejects requests above 64 KiB before spawning and handles an early CLI exit without
+crashing the OpenClaw host.
 The OpenClaw plugin enforces `requireAuth` and `isAuthorizedSender`; Robert also
 checks provider, channel, account, conversation/thread, sender allowlist and
 repository scope. Local CLI access is a trusted host capability, not a remote
@@ -118,7 +129,12 @@ HTTP authentication mechanism. Do not expose it as an unauthenticated endpoint.
 
 ## Delivery guarantees and failures
 
-Notifications are sent outside SQLite write transactions. A stable `delivery_id`
+Notifications are sent outside SQLite write transactions. Delivery updates only its
+own JSON metadata member atomically, preserving concurrent operator receipts.
+Repository-backed admission incidents retain their repository binding; missing
+bindings are withheld from chat rather than treated as global alerts. Older
+notices recover that binding from the stored incident and admission checkpoint;
+controller incidents remain global. No database rewrite is needed. A stable `delivery_id`
 is persisted before sending. Delivery retries at most three times within the
 existing ten-minute retry window; OpenClaw calls have a 30-second timeout.
 Exhausted delivery remains visible in the local notification metadata and inbox.

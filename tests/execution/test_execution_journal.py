@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from tests import support  # noqa: F401
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 from robert_agent.execution import command as heartbeat
 
 
@@ -158,9 +158,7 @@ class ExecutionJournalTests(unittest.TestCase):
             "c.execute('BEGIN IMMEDIATE'); c.rollback(); print('unlocked')"
         )
         with patch.object(
-            heartbeat.snapshot,
-            "record_snapshot",
-            side_effect=sqlite3.OperationalError("database is locked"),
+            heartbeat.snapshot, "record_snapshot", side_effect=sqlite3.OperationalError("database is locked")
         ):
             result = self.run_command(script, output_mode="tee")
         self.assertEqual(result["returncode"], 0)

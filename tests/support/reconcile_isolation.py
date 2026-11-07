@@ -9,7 +9,7 @@ from tests import support  # noqa: F401
 from tests.support import repository_cycle as fixtures
 from tests.support import retention as health_fixtures
 from robert_agent.execution import runtime_state as daemon_state
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.runtime import cycle as run_once
 
 
@@ -22,10 +22,7 @@ class ReconcileIsolationFixture(unittest.TestCase):
 
     def seed(self, status="terminal"):
         result = run_once.run_once(
-            self.fixture.config_path,
-            fixture_path=self.fixture.fixture_path,
-            dry_run=True,
-            skip_external=True,
+            self.fixture.config_path, fixture_path=self.fixture.fixture_path, dry_run=True, skip_external=True
         )
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -43,10 +40,7 @@ class ReconcileIsolationFixture(unittest.TestCase):
     @staticmethod
     def remote(args, **kwargs):
         return subprocess.CompletedProcess(
-            args,
-            0,
-            json.dumps({"state": "closed", "merged": True, "merged_at": "2026-10-28T07:10:33Z"}),
-            "",
+            args, 0, json.dumps({"state": "closed", "merged": True, "merged_at": "2026-10-28T07:10:33Z"}), ""
         )
 
 
@@ -60,10 +54,4 @@ class ControlFailureHealthFixture(unittest.TestCase):
 
     def event(self, event_type, status, minute):
         with closing(daemon_state.connect(self.db)) as conn, conn:
-            daemon_state.record_event(
-                conn,
-                "daemon",
-                event_type,
-                status,
-                now=f"2026-10-28T11:{minute:02d}:00+00:00",
-            )
+            daemon_state.record_event(conn, "daemon", event_type, status, now=f"2026-10-28T11:{minute:02d}:00+00:00")

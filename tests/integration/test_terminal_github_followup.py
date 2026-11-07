@@ -8,7 +8,7 @@ import json
 import sqlite3
 from unittest import mock
 
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.runtime import cycle as run_once
 from robert_agent.execution import workspace as assigned_workspace
 from robert_agent.work.application import source_events
@@ -26,67 +26,42 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
                 self.source_type = source_type
                 self.finish()
                 result = self.deliver(
-                    "followup",
-                    body="@robot is there a cached decorator for functions and methods?",
-                    intent="unclear",
+                    "followup", body="@robot is there a cached decorator for functions and methods?", intent="unclear"
                 )
                 self.assertEqual(len(result["prompt_paths"]), 1)
                 rows = self.tasks()
                 self.assertEqual(len(rows), 2)
                 self.assertEqual(rows[1][1], self.parent_id)
                 with closing(sqlite3.connect(self.db_path)) as conn:
-                    self.assertEqual(
-                        execution_store.get_binding(conn, "task", self.parent_id),
-                        self.old_binding,
-                    )
-                    self.assertEqual(
-                        execution_store.get_binding(conn, "task", rows[1][0])["binding_status"],
-                        "active",
-                    )
+                    self.assertEqual(execution_store.get_binding(conn, "task", self.parent_id), self.old_binding)
+                    self.assertEqual(execution_store.get_binding(conn, "task", rows[1][0])["binding_status"], "active")
                     links = conn.execute(
-                        "SELECT event_id,relationship FROM task_events WHERE task_id=?",
-                        (rows[1][0],),
+                        "SELECT event_id,relationship FROM task_events WHERE task_id=?", (rows[1][0],)
                     ).fetchall()
                     self.assertEqual(links, [("event:comment:followup", "trigger")])
                     self.assertIsNone(conn.execute("SELECT completed_at FROM work_items").fetchone()[0])
                 self.deliver("followup")
                 with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                    conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (rows[1][0],))
                     conn.execute(
-                        "UPDATE tasks SET lifecycle='completed' WHERE task_id=?",
-                        (rows[1][0],),
-                    )
-                    conn.execute(
-                        "UPDATE attempts SET status='completed',metadata_json='{}' WHERE task_id=?",
-                        (rows[1][0],),
+                        "UPDATE attempts SET status='completed',metadata_json='{}' WHERE task_id=?", (rows[1][0],)
                     )
                     conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
                     execution_store.close_binding(conn, "task", rows[1][0], values.utc_now())
                 self.deliver("followup")
                 self.assertEqual(len(self.tasks()), 2)
 
-    def test_failed_closed_parent_retry_preserves_original_trigger_and_new_context(
-        self,
-    ):
+    def test_failed_closed_parent_retry_preserves_original_trigger_and_new_context(self):
         self.finish("failed")
         self.deliver("retry", body="@robot also compare method decorators")
         rows = self.tasks()
         self.assertEqual(len(rows), 2)
         with closing(sqlite3.connect(self.db_path)) as conn:
             links = conn.execute(
-                "SELECT event_id,relationship FROM task_events WHERE task_id=? ORDER BY relationship",
-                (rows[1][0],),
+                "SELECT event_id,relationship FROM task_events WHERE task_id=? ORDER BY relationship", (rows[1][0],)
             ).fetchall()
-            self.assertEqual(
-                links,
-                [
-                    ("event:comment:retry", "context"),
-                    ("event:comment:first", "trigger"),
-                ],
-            )
-            self.assertEqual(
-                execution_store.get_binding(conn, "task", self.parent_id),
-                self.old_binding,
-            )
+            self.assertEqual(links, [("event:comment:retry", "context"), ("event:comment:first", "trigger")])
+            self.assertEqual(execution_store.get_binding(conn, "task", self.parent_id), self.old_binding)
         self.deliver("retry")
         self.assertEqual(len(self.tasks()), 2)
 
@@ -96,15 +71,10 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
         self.deliver("bot", actor="robot")
         self.assertEqual(len(self.tasks()), 1)
 
-    def test_terminal_followup_waits_for_process_publication_attention_and_cancellation(
-        self,
-    ):
+    def test_terminal_followup_waits_for_process_publication_attention_and_cancellation(self):
         self.finish()
         cases = [
-            (
-                "UPDATE attempts SET status='running'",
-                "UPDATE attempts SET status='completed'",
-            ),
+            ("UPDATE attempts SET status='running'", "UPDATE attempts SET status='completed'"),
             (
                 "UPDATE attempts SET metadata_json=json_set(metadata_json,'$.dispatch.pid',99999)",
                 'UPDATE attempts SET metadata_json=\'{"result_contract":"compact-v1"}\'',
@@ -117,14 +87,8 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
                 'UPDATE tasks SET metadata_json=\'{"execution_attention":{"reason_code":"protocol"}}\'',
                 "UPDATE tasks SET metadata_json='{}'",
             ),
-            (
-                "UPDATE work_items SET canceled_at='2026-10-31T00:00:00Z'",
-                "UPDATE work_items SET canceled_at=NULL",
-            ),
-            (
-                "UPDATE workstreams SET lifecycle='canceled'",
-                "UPDATE workstreams SET lifecycle='completed'",
-            ),
+            ("UPDATE work_items SET canceled_at='2026-10-31T00:00:00Z'", "UPDATE work_items SET canceled_at=NULL"),
+            ("UPDATE workstreams SET lifecycle='canceled'", "UPDATE workstreams SET lifecycle='completed'"),
         ]
         for i, (block, release) in enumerate(cases):
             with self.subTest(block=block):
@@ -179,9 +143,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
         from robert_agent.adapters.github import discovery as discover
 
         decision = authorize.authorize_events(
-            discover.normalize_events([event], repo),
-            repo,
-            known_workstreams={self.stream_id},
+            discover.normalize_events([event], repo), repo, known_workstreams={self.stream_id}
         )[0]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             source_events.insert_source_and_event(conn, self.fixture.repo_id, decision, values.utc_now())
@@ -199,18 +161,12 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
             mock.patch(
                 "robert_agent.adapters.github.discovery._source_metadata",
                 return_value=(
-                    {
-                        "number": 123,
-                        "source_type": "issue",
-                        "event_type": "notification",
-                        "state": "open",
-                    },
+                    {"number": 123, "source_type": "issue", "event_type": "notification", "state": "open"},
                     "open",
                 ),
             ),
             mock.patch(
-                "robert_agent.adapters.github.discovery._enrich_known_workstream_contexts",
-                return_value=[event],
+                "robert_agent.adapters.github.discovery._enrich_known_workstream_contexts", return_value=[event]
             ),
         ):
             batch_id = synchronization.scan_repo(config, repo, session, [])
@@ -259,10 +215,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
 
         def occupy(*args, **kwargs):
             with closing(sqlite3.connect(self.db_path)) as conn, conn:
-                conn.execute(
-                    "UPDATE workstreams SET lifecycle='active',active_task_id=?",
-                    (self.parent_id,),
-                )
+                conn.execute("UPDATE workstreams SET lifecycle='active',active_task_id=?", (self.parent_id,))
             return original(*args, **kwargs)
 
         with mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=occupy):
@@ -273,9 +226,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
                 conn.execute("SELECT 1 FROM task_events WHERE event_id='event:comment:racing-owner'").fetchone()
             )
 
-    def test_scanner_does_not_recover_requests_after_trust_revocation_or_cancellation(
-        self,
-    ):
+    def test_scanner_does_not_recover_requests_after_trust_revocation_or_cancellation(self):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
         from robert_agent.configuration import command as validate_config
@@ -294,9 +245,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
             "state": "open",
         }
         decision = authorize.authorize_events(
-            discover.normalize_events([event], repo),
-            repo,
-            known_workstreams={self.stream_id},
+            discover.normalize_events([event], repo), repo, known_workstreams={self.stream_id}
         )[0]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             source_events.insert_source_and_event(conn, self.fixture.repo_id, decision, values.utc_now())
@@ -340,9 +289,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
             "state": "open",
         }
         decision = authorize.authorize_events(
-            discover.normalize_events([event], repo),
-            repo,
-            known_workstreams={self.stream_id},
+            discover.normalize_events([event], repo), repo, known_workstreams={self.stream_id}
         )[0]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             source_events.insert_source_and_event(conn, self.fixture.repo_id, decision, values.utc_now())
@@ -351,12 +298,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
         def discussion(raw, _repo, _runner):
             return [{**raw, **event}]
 
-        metadata = {
-            "number": 123,
-            "source_type": "pull_request",
-            "event_type": "notification",
-            "state": "open",
-        }
+        metadata = {"number": 123, "source_type": "pull_request", "event_type": "notification", "state": "open"}
         with (
             mock.patch.object(session, "collect_events", return_value=[]),
             mock.patch.object(github_sources, "read_source_state", return_value={"state": "open"}),
@@ -401,11 +343,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
             )
         )
         result = run_once.run_once(
-            self.fixture.config_path,
-            fixture_path=path,
-            dry_run=True,
-            skip_external=True,
-            skip_publish=True,
+            self.fixture.config_path, fixture_path=path, dry_run=True, skip_external=True, skip_publish=True
         )
         self.assertTrue(result["ok"], result)
         with closing(sqlite3.connect(self.db_path)) as conn:

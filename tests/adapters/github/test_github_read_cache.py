@@ -9,14 +9,10 @@ import unittest
 from unittest import mock
 
 from robert_agent.adapters.github import discovery as discover
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
-REPO = {
-    "full_name": "example/backend",
-    "github_account": "robert-bot",
-    "trusted_actors": ["wklken"],
-}
+REPO = {"full_name": "example/backend", "github_account": "robert-bot", "trusted_actors": ["wklken"]}
 
 
 class GitHubReadCacheTests(unittest.TestCase):
@@ -55,10 +51,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         notification = {
             "id": "n1",
             "repository": {"full_name": "example/backend"},
-            "subject": {
-                "type": "PullRequest",
-                "url": "https://api.github.com/repos/example/backend/pulls/7",
-            },
+            "subject": {"type": "PullRequest", "url": "https://api.github.com/repos/example/backend/pulls/7"},
             "updated_at": "2026-10-28T00:00:00Z",
         }
 
@@ -73,10 +66,7 @@ class GitHubReadCacheTests(unittest.TestCase):
                     "",
                 )
             return subprocess.CompletedProcess(
-                args,
-                1,
-                "HTTP/2.0 304 Not Modified\r\nX-Poll-Interval: 90\r\n\r\n",
-                "HTTP304",
+                args, 1, "HTTP/2.0 304 Not Modified\r\nX-Poll-Interval: 90\r\n\r\n", "HTTP304"
             )
 
         first = self.session(runner).collect_notifications([REPO])
@@ -106,12 +96,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
     def test_source_cache_is_replayed_copied_and_context_invalidates(self):
         session = self.session(lambda *_a, **_k: None)
-        raw = {
-            "number": 7,
-            "source_type": "pull_request",
-            "event_type": "mention",
-            "event_at": "v1",
-        }
+        raw = {"number": 7, "source_type": "pull_request", "event_type": "mention", "event_at": "v1"}
         count = []
 
         def load():
@@ -127,12 +112,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
     def test_incomplete_source_results_are_not_cached_and_empty_results_are(self):
         session = self.session(lambda *_a, **_k: None)
-        raw = {
-            "number": 7,
-            "source_type": "issue",
-            "event_type": "notification",
-            "event_at": "v1",
-        }
+        raw = {"number": 7, "source_type": "issue", "event_type": "notification", "event_at": "v1"}
         count = []
 
         def load():
@@ -205,17 +185,9 @@ class GitHubReadCacheTests(unittest.TestCase):
             elif args[2].endswith("/comments") or args[2].endswith("/reviews"):
                 payload = [[]]
             elif "/pulls/" in args[2]:
-                payload = {
-                    "user": {"login": "wklken"},
-                    "base": {"ref": "main"},
-                    "head": {"ref": "fix", "sha": "a"},
-                }
+                payload = {"user": {"login": "wklken"}, "base": {"ref": "main"}, "head": {"ref": "fix", "sha": "a"}}
             else:
-                payload = {
-                    "state": "open",
-                    "user": {"login": "wklken"},
-                    "updated_at": "2026-10-28T00:00:00Z",
-                }
+                payload = {"state": "open", "user": {"login": "wklken"}, "updated_at": "2026-10-28T00:00:00Z"}
             return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
 
         kwargs = {
@@ -256,14 +228,7 @@ class GitHubReadCacheTests(unittest.TestCase):
                 payload = {"state": "open", "user": {"login": "wklken"}}
             elif args[2].endswith("/timeline"):
                 payload = [
-                    [
-                        {
-                            "id": 30,
-                            "event": "assigned",
-                            "actor": {"login": "wklken"},
-                            "assignee": {"login": "robert-bot"},
-                        }
-                    ]
+                    [{"id": 30, "event": "assigned", "actor": {"login": "wklken"}, "assignee": {"login": "robert-bot"}}]
                 ]
             else:
                 payload = [[]]
@@ -281,12 +246,7 @@ class GitHubReadCacheTests(unittest.TestCase):
         from robert_agent.adapters.github.read import GitHubReadSession
 
         session = GitHubReadSession(self.db, account="robert-bot", now=lambda: clock[0])
-        raw = {
-            "number": 7,
-            "source_type": "issue",
-            "event_type": "mention",
-            "event_at": "v1",
-        }
+        raw = {"number": 7, "source_type": "issue", "event_type": "mention", "event_at": "v1"}
         calls = []
 
         def load():
@@ -301,12 +261,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
     def test_invalid_json_is_not_a_successful_source_observation(self):
         session = self.session(lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "badJSON", ""))
-        raw = {
-            "number": 7,
-            "source_type": "issue",
-            "event_type": "mention",
-            "event_at": "v1",
-        }
+        raw = {"number": 7, "source_type": "issue", "event_type": "mention", "event_at": "v1"}
         count = []
 
         def load():
@@ -367,10 +322,7 @@ class GitHubReadCacheTests(unittest.TestCase):
     def test_notification_throttle_preserves_server_backoff(self):
         def runner(args, **kwargs):
             return subprocess.CompletedProcess(
-                args,
-                1,
-                "HTTP/2.0 429 Too Many Requests\nRetry-After: 180\nX-Poll-Interval: 60\n\n{}",
-                "",
+                args, 1, "HTTP/2.0 429 Too Many Requests\nRetry-After: 180\nX-Poll-Interval: 60\n\n{}", ""
             )
 
         session = self.session(runner)
@@ -403,15 +355,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
         clock = [1000]
         calls = []
-        args = [
-            "gh",
-            "search",
-            "issues",
-            "--repo",
-            "example/backend",
-            "--json",
-            "number",
-        ]
+        args = ["gh", "search", "issues", "--repo", "example/backend", "--json", "number"]
 
         def runner(command, **kwargs):
             calls.append(command)
@@ -437,15 +381,7 @@ class GitHubReadCacheTests(unittest.TestCase):
 
         clock = [1000]
         calls = []
-        args = [
-            "gh",
-            "search",
-            "issues",
-            "--repo",
-            "example/backend",
-            "--json",
-            "number",
-        ]
+        args = ["gh", "search", "issues", "--repo", "example/backend", "--json", "number"]
 
         def runner(command, **kwargs):
             calls.append(command)

@@ -9,7 +9,7 @@ import unittest
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.delivery import contract as result_contract
 from robert_agent.execution.application import cutover as result_cutover
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 class CutoverScalingTests(unittest.TestCase):
@@ -95,12 +95,7 @@ class CutoverScalingTests(unittest.TestCase):
                 checked = result_cutover.check(path)
                 self.assertFalse(checked["ok"], checked)
                 self.assertIn(
-                    {
-                        "kind": "legacy_unresolved_result",
-                        "task_id": "t1",
-                        "result_id": "r1",
-                    },
-                    checked["blockers"],
+                    {"kind": "legacy_unresolved_result", "task_id": "t1", "result_id": "r1"}, checked["blockers"]
                 )
                 with closing(sqlite3.connect(path)) as conn, conn:
                     conn.execute(deactivate)

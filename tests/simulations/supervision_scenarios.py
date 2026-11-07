@@ -19,7 +19,7 @@ import tempfile
 import time
 
 from robert_agent.execution import runtime_state as daemon_state
-from robert_agent.adapters.sqlite import database as storage
+from robert_agent.persistence.schema import database as storage
 
 
 def wait_for(predicate, label, timeout=15):
@@ -61,27 +61,15 @@ def process_observation(root):
         "db_path": str(db),
         "data_dir": str(root),
         "repos": [],
-        "supervision": {
-            "mode": "observe",
-            "poll_seconds": 1,
-            "batch_size": 3,
-            "stall_seconds": 1,
-        },
+        "supervision": {"mode": "observe", "poll_seconds": 1, "batch_size": 3, "stall_seconds": 1},
     }
     old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     with closing(daemon_state.connect(db)) as conn, conn:
         daemon_state.start_daemon_run(
-            conn,
-            config_path=str(root / "fixture.json"),
-            owner_id="stalled-controller",
-            now=old,
+            conn, config_path=str(root / "fixture.json"), owner_id="stalled-controller", now=old
         )
         daemon_state.acquire_daemon_lease(
-            conn,
-            resource_key="database:" + str(db.resolve()),
-            owner_id="stalled-controller",
-            ttl_seconds=1,
-            now=old,
+            conn, resource_key="database:" + str(db.resolve()), owner_id="stalled-controller", ttl_seconds=1, now=old
         )
     config_file = root / "supervisor.json"
     config_file.write_text(json.dumps(config))
@@ -91,10 +79,7 @@ def process_observation(root):
         "import json,sys\nfrom pathlib import Path\npayload=json.load(sys.stdin)\n"
         'with Path(sys.argv[1]).open("a") as stream: stream.write(json.dumps(payload)+"\\n")\n'
     )
-    env = {
-        **os.environ,
-        "ROBERT_NOTIFICATION_COMMAND": f"{sys.executable} {receiver} {notices}",
-    }
+    env = {**os.environ, "ROBERT_NOTIFICATION_COMMAND": f"{sys.executable} {receiver} {notices}"}
     command = [
         sys.executable,
         "-c",
@@ -107,15 +92,11 @@ def process_observation(root):
             lambda: query(db, "SELECT incident_id FROM supervision_incidents WHERE status='open'"),
             "independent incident",
         )
-        wait_for(
-            lambda: notices.exists() and notices.stat().st_size,
-            "independent notification",
-        )
+        wait_for(lambda: notices.exists() and notices.stat().st_size, "independent notification")
         initial_count = query(db, "SELECT count(*) FROM supervision_incidents")[0][0]
         stamp = read_json(supervision_health.health_path(config)).get("checked_at")
         wait_for(
-            lambda: read_json(supervision_health.health_path(config)).get("checked_at") != stamp,
-            "second observation",
+            lambda: read_json(supervision_health.health_path(config)).get("checked_at") != stamp, "second observation"
         )
         assert query(db, "SELECT count(*) FROM supervision_incidents")[0][0] == initial_count
         # A second OS process cannot become the same installation's observer.
@@ -193,8 +174,7 @@ def process_observation(root):
         finally:
             stop(holder)
         wait_for(
-            lambda: read_json(supervision_health.health_path(config)).get("status") == "observed",
-            "observation resumed",
+            lambda: read_json(supervision_health.health_path(config)).get("status") == "observed", "observation resumed"
         )
         stop(process)
         process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -249,10 +229,7 @@ json.dump({'bundle_id':packet['bundle_id'],'bundle_sha256':packet['bundle_sha256
         "db_path": str(db),
         "supervision": {
             "mode": "observe",
-            "diagnosis": {
-                "command": [sys.executable, str(wrapper), str(gate)],
-                "timeout_seconds": 10,
-            },
+            "diagnosis": {"command": [sys.executable, str(wrapper), str(gate)], "timeout_seconds": 10},
         },
     }
     with closing(sqlite3.connect(db)) as conn, conn:
@@ -368,12 +345,7 @@ json.dump({'bundle_id':p['bundle_id'],'bundle_sha256':p['bundle_sha256'],
             )[0]["incident"]["incident_id"]
 
     # Supplementary-plane Han characters occupy four UTF-8 bytes each.
-    large = incident(
-        "large",
-        when,
-        {f"e{i}": "𠀀" * 1800 for i in range(6)},
-        {f"p{i}": "𠀀" * 700 for i in range(4)},
-    )
+    large = incident("large", when, {f"e{i}": "𠀀" * 1800 for i in range(6)}, {f"p{i}": "𠀀" * 700 for i in range(4)})
 
     launcher = """
 import json,sys,time
@@ -401,11 +373,7 @@ finally:
         return json.loads(result.stdout)
 
     rejected = cold_poll(when)
-    assert rejected == {
-        "ok": False,
-        "status": "evidence_too_large",
-        "incident_id": large,
-    }, rejected
+    assert rejected == {"ok": False, "status": "evidence_too_large", "incident_id": large}, rejected
     assert not calls.exists()
     with closing(sqlite3.connect(db)) as conn:
         record = supervision_store.get_checkpoint(conn, "diagnosis", large, "analysis")["metadata"]
@@ -446,11 +414,9 @@ finally:
     # the suspect-task queue in this same bounded poll, not restart starvation.
     config["supervision"]["poll_seconds"] = 60
     outcome = cold_poll(when + timedelta(seconds=60))
-    assert outcome == {
-        "ok": True,
-        "status": "succeeded",
-        "candidate_id": "candidate:small:worker_progress_stalled",
-    }, outcome
+    assert outcome == {"ok": True, "status": "succeeded", "candidate_id": "candidate:small:worker_progress_stalled"}, (
+        outcome
+    )
     assert calls.read_text().splitlines() == [json.dumps("small")]
     with closing(sqlite3.connect(db)) as conn, conn:
         runner = supervision_store.get_checkpoint(conn, "diagnostic", "installation", "runner")["metadata"]
@@ -490,11 +456,7 @@ def main():
             service_scenarios,
         )
 
-        scenarios = [
-            process_observation(root),
-            diagnosis_contention(root),
-            diagnosis_oversized_evidence(root),
-        ]
+        scenarios = [process_observation(root), diagnosis_contention(root), diagnosis_oversized_evidence(root)]
         scenarios.extend(recovery_scenarios.run(root))
         scenarios.append(repair_scenarios.run(root))
         scenarios.append(service_scenarios.run(root))

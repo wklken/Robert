@@ -50,10 +50,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn("function workItemTitleMatches", html)
         self.assertIn("function taskIdMatchesWorkSearch", html)
         self.assertIn("renderWorkFilters(data)", html)
-        self.assertIn(
-            "grid-template-columns: minmax(260px, 340px) minmax(260px, 340px) minmax(0, 1fr)",
-            html,
-        )
+        self.assertIn("grid-template-columns: minmax(260px, 340px) minmax(260px, 340px) minmax(0, 1fr)", html)
         self.assertIn("timeline-filters", html)
         self.assertIn("timelineHiddenTypes: new Set(['daemon_heartbeat'])", html)
         self.assertIn("function fmtShort(value)", html)
@@ -99,7 +96,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
 
     def test_web_pages_share_primary_navigation_and_language_preference(self):
         from robert_agent.interfaces.web import server as web
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.root / "shared-navigation.sqlite3"
         storage.init_database(db_path)
@@ -113,8 +110,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn('class="underline-nav-item" href="/work"', operations_html)
         self.assertIn('class="underline-nav-item" href="/board"', operations_html)
         self.assertIn(
-            'class="underline-nav-item selected" data-primary-view="operations" href="/operations"',
-            operations_html,
+            'class="underline-nav-item selected" data-primary-view="operations" href="/operations"', operations_html
         )
         self.assertIn('data-i18n="primaryWork"', operations_html)
         self.assertIn('data-i18n="navHistory"', operations_html)
@@ -218,7 +214,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
 
     def test_web_serves_board_shell_assets_and_rejects_asset_traversal(self):
         from robert_agent.interfaces.web import server as web
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.root / "board-shell.sqlite3"
         storage.init_database(db_path)

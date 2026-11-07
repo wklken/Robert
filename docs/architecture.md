@@ -39,7 +39,9 @@ robert_agent/
   workflows/                  # review、vote、PR remediation、maintenance
   configuration/              # 严格 v2、schema、路由、监督配置
   readmodels/                 # dashboard/board/status/workbench/history/usage
-  adapters/                   # github/git/processes/sqlite/notifications/services
+  models/                     # SQLAlchemy 2 mapped tables; existing column/storage contracts
+  persistence/                # shared queries/stores/transactions/schema/dialects
+  adapters/                   # github/git/processes/notifications/services
   application/                # 只保留跨领域的 repository-cycle 组合
   runtime/                    # once/loop/daemon/scan/supervisor/paused monitor
   interfaces/web/             # HTTP、输入/CSRF、模板、服务启动
@@ -61,14 +63,14 @@ robert_agent/
 模块别名注册或转发 facade 隐藏依赖。全源码显式 import 图包含函数内 import 并要求无环。
 
 `runtime.cycle` 只负责循环组合，仓库处理流程调用明确的准入/准备/派发/监督/审计/
-发布用例。runtime 和 HTTP 不直接执行 SQL。事务、savepoint、claim、fence、回执和
+发布用例。所有业务调用方通过 persistence 的命名操作访问数据库，不直接执行 SQL。事务、savepoint、claim、fence、回执和
 幂等记录由相应能力或应用用例处理；外部 I/O 在写事务外执行，回写时重新核对所有权与当前状态。
 
 - `configuration` 不加载执行服务；`resources/routes.yml` 是固定路由的唯一可编辑来源。
 - `execution.stages` 通过 `StageStore`、`StageWorkspace`、`StageArtifacts` 接收能力，
-  不选择具体 review/vote 工作流。轮次持久化在 SQLite adapters，子进程机制在 execution。
+  不选择具体 review/vote 工作流。轮次持久化在 persistence/rounds，子进程机制在 execution。
 - Worker 命令只解析输入。共享快照/命令机制在 `execution.progress`、`execution.command`，
-  结果提交在 `delivery.application.submission`。SQLite adapter 不反向依赖领域或用例。
+  结果提交在 `delivery.application.submission`。models 和 persistence 不反向依赖领域或用例。
 - `readmodels.dashboard` 负责只读查询与聚合；`interfaces.web.server` 负责 HTTP，
   工作项/知识写入调用相应领域的应用用例。
 - 包根目录只保留 `__init__.py`、`paths.py` 和 `resource_files.py`。可执行入口位于所属模块，
@@ -76,10 +78,25 @@ robert_agent/
   [入口清单](../src/robert_agent/resources/entrypoints.json)。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和
-runtime/HTTP 的 SQL 边界。 [pyproject.toml](../pyproject.toml) 统一配置 Ruff 和 import-linter，
+全部业务调用方的 SQL 边界。 [pyproject.toml](../pyproject.toml) 统一配置 Ruff 和 import-linter，
 后者约束入口/用例分层、稳定能力、适配器、配置和共享执行阶段；CI 必须通过这些合同。该门禁不能证明任意运行时调用或外部部署都正确；
 真实子进程、暂停/恢复、回执/重复发布和已安装 wheel 另由行为场景验证。
 目录约束、变更和验收规则见 [AGENTS.md](../AGENTS.md)。执行计划与审查记录只在本地保存，不发布到仓库。
+
+### 数据模型与数据库操作
+
+`models/` 使用 SQLAlchemy 2 声明现有表映射，保留 TEXT JSON、时间字符串、约束和索引。
+它不建立连接，也不自动修改数据库。`persistence/` 统一持有查询、写入、批量操作、
+条件更新和事务控制；调用方传入过滤值，取得物化记录或影响行数，不传 SQL 片段。
+按持久化事实组织的 `queries/` 与 `stores/` 复用表操作；调度、进程占用、发布资格和
+只读视图使用共享查询与谓词，避免各业务入口重复拼装相同条件。
+
+应用用例继续拥有事务生命周期。传入连接的操作不自行提交、不换连接，保留
+BEGIN IMMEDIATE、savepoint、checkpoint、回滚、超时和受影响行数语义。
+连接上下文只管理提交与回滚，连接所有者负责关闭；使用 `closing` 管理其资源生命周期。
+SQLite 方言细节集中在 `persistence/dialects/`，历史建表与升级集中在
+`persistence/schema/`。SQLAlchemy 映射对应现有 schema，本次访问层切换无需搬迁数据，
+不新增迁移版本；当前支持的运行后端仍为 SQLite。
 
 ## 整体架构
 
@@ -158,9 +175,9 @@ flowchart LR
     Repo --> Supervise["execution/application/monitor.py → execution/inspection.py · adapters/processes/identity.py"]
     Repo --> Audit["delivery/application/audit.py · delivery/application/scope.py · security/redaction.py"]
     Repo --> Publish["delivery/application/publish.py → delivery/application/reconcile.py"]
-    Run --> State["adapters/sqlite/database.py · adapters/sqlite/execution_control.py · execution/operations.py"]
+    Run --> State["persistence/schema/database.py · persistence/execution_control.py · execution/operations.py"]
     Run --> Rounds["workflows/review/coordinator.py / workflows/vote/coordinator.py"]
-    Rounds --> Models["execution/stages.py → adapters/sqlite/model_pool.py"]
+    Rounds --> Models["execution/stages.py → persistence/rounds/pool.py"]
 ```
 
 | 责任 | 主要模块 | 关键契约 |
@@ -171,8 +188,8 @@ flowchart LR
 | 执行与监督 | [adapters/processes/worker.py](../src/robert_agent/adapters/processes/worker.py)、[worker_adapters/](../src/robert_agent/worker_adapters/)、[execution/inspection.py](../src/robert_agent/execution/inspection.py)、[adapters/processes/identity.py](../src/robert_agent/adapters/processes/identity.py) | 环境白名单、进程身份、心跳、超时与退出证明 |
 | Worker 交接 | [worker/](../src/robert_agent/worker/)、[delivery/contract.py](../src/robert_agent/delivery/contract.py)、[execution/spool.py](../src/robert_agent/execution/spool.py) | 绑定任务与 Attempt；规范化计划动作；持久提交与冲突拒绝 |
 | 审计与发布 | [delivery/application/audit.py](../src/robert_agent/delivery/application/audit.py)、[delivery/application/scope.py](../src/robert_agent/delivery/application/scope.py)、[security/redaction.py](../src/robert_agent/security/redaction.py)、[delivery/application/publish.py](../src/robert_agent/delivery/application/publish.py)、[delivery/application/reconcile.py](../src/robert_agent/delivery/application/reconcile.py) | 校验证据、权限与文本；发布锁、远端确认、去重与有限重试 |
-| 状态与内部调度 | [adapters/sqlite/database.py](../src/robert_agent/adapters/sqlite/database.py)、[adapters/sqlite/execution_control.py](../src/robert_agent/adapters/sqlite/execution_control.py)、[execution/operations.py](../src/robert_agent/execution/operations.py)、[work/wakeup.py](../src/robert_agent/work/wakeup.py)、[adapters/notifications/wakeup.py](../src/robert_agent/adapters/notifications/wakeup.py) | SQLite 事务与事实回执；通知只是提示；恢复受主体状态约束 |
-| 内建多模型流程 | [workflows/review/coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、[workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[execution/stages.py](../src/robert_agent/execution/stages.py)、[adapters/sqlite/model_pool.py](../src/robert_agent/adapters/sqlite/model_pool.py) | 冻结输入、共享额度、封存输出、复用已校验阶段 |
+| 状态与内部调度 | [persistence/schema/database.py](../src/robert_agent/persistence/schema/database.py)、[persistence/execution_control.py](../src/robert_agent/persistence/execution_control.py)、[execution/operations.py](../src/robert_agent/execution/operations.py)、[work/wakeup.py](../src/robert_agent/work/wakeup.py)、[adapters/notifications/wakeup.py](../src/robert_agent/adapters/notifications/wakeup.py) | SQLite 事务与事实回执；通知只是提示；恢复受主体状态约束 |
+| 内建多模型流程 | [workflows/review/coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、[workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[execution/stages.py](../src/robert_agent/execution/stages.py)、[persistence/rounds/pool.py](../src/robert_agent/persistence/rounds/pool.py) | 冻结输入、共享额度、封存输出、复用已校验阶段 |
 | PR 自修复 | [workflows/pr_health.py](../src/robert_agent/workflows/pr_health.py)、[workflows/pr_remediation.py](../src/robert_agent/workflows/pr_remediation.py) | 仓库显式开启；证据、版本、次数与预算限制 |
 | 操作与可观测性 | [interfaces/web/server.py](../src/robert_agent/interfaces/web/server.py)、[work/application/control.py](../src/robert_agent/work/application/control.py)、[readmodels/status.py](../src/robert_agent/readmodels/status.py)、[operations/diagnostics.py](../src/robert_agent/operations/diagnostics.py)、[delivery/application/notifications.py](../src/robert_agent/delivery/application/notifications.py) | 默认只读；写入需身份、CSRF 与状态校验；诊断导出脱敏 |
 | 可选知识与查询 | [context/project.py](../src/robert_agent/context/project.py)、[context/knowledge.py](../src/robert_agent/context/knowledge.py)、[integrations/openclaw.py](../src/robert_agent/integrations/openclaw.py) | 项目记忆与运行知识可复用；OpenClaw 提供查询及显式启用的受认证消息入口 |
@@ -487,7 +504,7 @@ Worker 的运行超时，父任务期限仍有效。未知启动保留额度。�
 
 源码：[workflows/review/coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、
 [workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[StageCoordinator](../src/robert_agent/execution/stages.py)、
-[adapters/sqlite/model_pool.py](../src/robert_agent/adapters/sqlite/model_pool.py)、[workflows/vote/tally.py](../src/robert_agent/workflows/vote/tally.py)。
+[persistence/rounds/pool.py](../src/robert_agent/persistence/rounds/pool.py)、[workflows/vote/tally.py](../src/robert_agent/workflows/vote/tally.py)。
 配置与恢复见 [multi-model-review.md](multi-model-review.md) 和 [multi-agent-vote.md](multi-agent-vote.md)。
 
 ## PR 自修复
@@ -557,9 +574,9 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 `supervision_checkpoints`、`supervision_incidents`、`supervision_recovery_actions`
 保存独立监督的观察、事件和恢复记录。
 
-源码：[主 schema](../src/robert_agent/resources/db/schema.sql)、[存储初始化](../src/robert_agent/adapters/sqlite/database.py)、
-[执行主体与事实回执](../src/robert_agent/adapters/sqlite/execution_control.py)、[adapters/sqlite/review_rounds.py](../src/robert_agent/adapters/sqlite/review_rounds.py)、
-[adapters/sqlite/vote_rounds.py](../src/robert_agent/adapters/sqlite/vote_rounds.py)。基础概念见 [concepts.md](concepts.md)，
+源码：[主 schema](../src/robert_agent/resources/db/schema.sql)、[存储初始化](../src/robert_agent/persistence/schema/database.py)、
+[执行主体与事实回执](../src/robert_agent/persistence/execution_control.py)、[persistence/rounds/review.py](../src/robert_agent/persistence/rounds/review.py)、
+[persistence/rounds/vote.py](../src/robert_agent/persistence/rounds/vote.py)。基础概念见 [concepts.md](concepts.md)，
 配置见 [reference.md](reference.md)。
 
 ## 维护图示
@@ -571,7 +588,10 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 ## 操作员消息边界
 
 [双向消息方案](operator-messaging.md)复用工作项事件、通知 outbox 和现有操作命令。
-`work/messaging.py` 维护问题关联事实，`delivery/messages.py` 构建脱敏信封，
+`work/messaging.py` 维护问题关联规则，`delivery/messages.py` 构建脱敏信封，
 `adapters/notifications/messaging.py` 发送消息。`work/application/messaging.py`
 校验发送者、会话和仓库授权后调用既有命令；OpenClaw 插件只做协议转换。
+持久化统一调用 `persistence/queries/notifications.py`、`persistence/queries/work_item_events.py`
+和 `persistence/stores/notifications.py`；问题和通知使用调用方事务原子提交，
+收件箱、发送队列和就绪检测在限额前应用相同的未解决问题和仓库筛选。
 通知确认不会改变 Supervisor 事件或执行所有权。未来渠道复用同一版本化协议。

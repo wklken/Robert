@@ -1,5 +1,7 @@
 """Audited, revision-bound GitHub PR Review COMMENT publication."""
 
+from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
+
 import hashlib
 import json
 from pathlib import Path
@@ -103,12 +105,7 @@ def validate_action(action, scope):
 
 def publication_keys(action, scope):
     data, repo, number, _ = validate_action(action, scope)
-    identity = {
-        "type": "submit_pr_review",
-        "repo": repo.casefold(),
-        "number": number,
-        "round_id": data["round_id"],
-    }
+    identity = {"type": "submit_pr_review", "repo": repo.casefold(), "number": number, "round_id": data["round_id"]}
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     key = "publication:" + hashlib.sha256(encoded).hexdigest()
     request = {
@@ -143,13 +140,7 @@ def reconcile(action, scope, run_command):
         data, repo, number, marker = validate_action(action, scope)
     except (ValueError, TypeError, OSError) as exc:
         return _result("unknown", "review_artifact_or_scope_invalid", error_type=type(exc).__name__)
-    command = [
-        "gh",
-        "api",
-        f"repos/{repo}/pulls/{number}/reviews?per_page=100",
-        "--paginate",
-        "--slurp",
-    ]
+    command = ["gh", "api", f"repos/{repo}/pulls/{number}/reviews?per_page=100", "--paginate", "--slurp"]
     try:
         completed = run_command(command, capture_output=True, text=True)
         if getattr(completed, "returncode", 0) != 0:
@@ -160,14 +151,7 @@ def reconcile(action, scope, run_command):
             if (
                 not review.get("id")
                 or not isinstance(review.get("commit_id"), str)
-                or review.get("state")
-                not in {
-                    "COMMENTED",
-                    "APPROVED",
-                    "CHANGES_REQUESTED",
-                    "DISMISSED",
-                    "PENDING",
-                }
+                or review.get("state") not in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED", "PENDING"}
                 or review.get("body") is not None
                 and not isinstance(review.get("body"), str)
             ):
@@ -320,16 +304,10 @@ def publish(action, scope, run_command, scope_guard=None):
 
 
 def record_outcome(conn, action, status, now):
-    if action.get("action_type") != "submit_pr_review" or status not in {
-        "published",
-        "superseded",
-    }:
+    if action.get("action_type") != "submit_pr_review" or status not in {"published", "superseded"}:
         return
     try:
         round_id = payload(action).get("round_id")
     except ValueError:
         return
-    conn.execute(
-        "UPDATE review_sessions SET status=?,updated_at=? WHERE round_id=?",
-        (status, now, round_id),
-    )
+    db_write_review_sessions.set_status_and_updated_at_by_round_id(conn, status, now, round_id)

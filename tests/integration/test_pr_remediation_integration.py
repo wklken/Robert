@@ -310,9 +310,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
     def test_failed_system_task_can_retry_same_guarded_event(self):
         from robert_agent.workflows import routes as route
         from robert_agent.work import streams as workstream
-        from robert_agent.work.application import (
-            lifecycle as work_application_lifecycle,
-        )
+        from robert_agent.work.application import lifecycle as work_application_lifecycle
 
         data_dir = Path(self.tmp.name) / "retry-data"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -370,7 +368,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
 
     def test_unbound_episode_is_claimed_legacy_before_repair_task_materialization(self):
         from robert_agent.workflows import routes as route
-        from robert_agent.adapters.sqlite import execution_control as execution_store
+        from robert_agent.persistence import execution_control as execution_store
         from robert_agent.work import streams as workstream
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:

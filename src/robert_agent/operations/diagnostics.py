@@ -1,8 +1,11 @@
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import schema_migrations as db_read_schema_migrations
 from contextlib import closing
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import sqlite3
 import zipfile
 
 import yaml
@@ -54,10 +57,10 @@ def _database_payloads(config_path):
     db_path = Path(validated["db_path"])
     if not db_path.is_file():
         return {}, [], "unknown"
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(db_database.connect(db_path)) as conn:
         status_payload = status.build_status(db_path)
         runs_payload = status.build_runs(conn, limit=5)
-        row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+        row = db_records.first(db_read_schema_migrations.find_for_database_payloads(conn))
     return status_payload, runs_payload, str(row[0] or "unknown")
 
 

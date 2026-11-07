@@ -53,10 +53,7 @@ class ConfigV2Tests(ConfigV2Fixture):
 
     def test_seconds_are_not_truncated(self):
         self.config["scheduler"] = {"lease_ttl_seconds": 61}
-        self.config["supervision"] = {
-            "hard_timeout_seconds": 121,
-            "heartbeat_stale_seconds": 31,
-        }
+        self.config["supervision"] = {"hard_timeout_seconds": 121, "heartbeat_stale_seconds": 31}
         result = self.validate()
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["lease_ttl_seconds"], 61)
@@ -67,11 +64,7 @@ class ConfigV2Tests(ConfigV2Fixture):
             "review-pr": {
                 "worker": "a",
                 "model": "single-model",
-                "multi_agent_review": {
-                    "enabled": True,
-                    "workers": ["a", "b"],
-                    "author_allowlist": ["Alice"],
-                },
+                "multi_agent_review": {"enabled": True, "workers": ["a", "b"], "author_allowlist": ["Alice"]},
             }
         }
         result = self.validate()
@@ -82,10 +75,7 @@ class ConfigV2Tests(ConfigV2Fixture):
         self.assertFalse(self.validate(override)["ok"])
 
     def test_native_global_settings_can_depend_on_real_repository_worker_override(self):
-        for route_id, field in (
-            ("review-pr", "multi_agent_review"),
-            ("vote", "multi_agent_vote"),
-        ):
+        for route_id, field in (("review-pr", "multi_agent_review"), ("vote", "multi_agent_vote")):
             with self.subTest(route_id=route_id):
                 self.config["routes"] = {route_id: {field: {"enabled": True, "workers": ["a", "b"]}}}
                 self.config["repos"][0]["routes"] = {route_id: {"worker": "a"}}
@@ -95,10 +85,7 @@ class ConfigV2Tests(ConfigV2Fixture):
                 self.assertEqual(effective[field]["workers"][0], effective["worker"])
                 # A repository override must not hide unknown global references.
                 self.config["routes"][route_id][field]["workers"] = ["missing", "b"]
-                self.config["repos"][0]["routes"][route_id][field] = {
-                    "enabled": True,
-                    "workers": ["a", "b"],
-                }
+                self.config["repos"][0]["routes"][route_id][field] = {"enabled": True, "workers": ["a", "b"]}
                 self.assertIn("missing", self.validate()["safe_error"])
 
     def test_worker_deadlines_coexist_with_continuous_supervision_settings(self):
@@ -111,10 +98,7 @@ class ConfigV2Tests(ConfigV2Fixture):
             "hard_timeout_seconds": 121,
             "startup_grace_seconds": 15,
             "diagnosis": {"command": ["/usr/bin/false"], "timeout_seconds": 20},
-            "recovery": {
-                "allowed_actions": ["audit_retry"],
-                "repositories": ["example/test"],
-            },
+            "recovery": {"allowed_actions": ["audit_retry"], "repositories": ["example/test"]},
             "repair": {"repository": "example/test", "mode": "backlog"},
             "build_manifest": "/tmp/build.json",
         }
@@ -125,12 +109,7 @@ class ConfigV2Tests(ConfigV2Fixture):
         self.assertEqual(result["worker_startup_grace_seconds"], 15)
         settings = result["supervision"]
         self.assertEqual(
-            (
-                settings["mode"],
-                settings["poll_seconds"],
-                settings["batch_size"],
-                settings["stall_seconds"],
-            ),
+            (settings["mode"], settings["poll_seconds"], settings["batch_size"], settings["stall_seconds"]),
             ("recover_known", 17, 7, 91),
         )
         self.assertEqual(settings["diagnosis"]["timeout_seconds"], 20)
@@ -161,10 +140,7 @@ class ConfigV2Tests(ConfigV2Fixture):
         self.config["supervision"] = {
             "mode": "recover_known",
             "diagnosis": {"command": ["/usr/bin/false"]},
-            "recovery": {
-                "allowed_actions": ["audit_retry"],
-                "repositories": ["example/test"],
-            },
+            "recovery": {"allowed_actions": ["audit_retry"], "repositories": ["example/test"]},
             "repair": {"repository": "example/test"},
         }
         self.path.write_text(yaml.safe_dump(self.config), encoding="utf-8")
@@ -206,8 +182,7 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
         self.assertEqual(result["worker_startup_grace_seconds"], 300)
         self.assertEqual(result["repos"][0]["github_account"], "bot")
         self.assertEqual(
-            result["maintenance"]["retention"],
-            {"runs_days": 7, "failed_runs_days": 30, "daemon_events_days": 7},
+            result["maintenance"]["retention"], {"runs_days": 7, "failed_runs_days": 30, "daemon_events_days": 7}
         )
         self.assertFalse(result["repos"][0]["pr_automation"]["ci"]["enabled"])
         self.config["repos"][0]["github_account"] = "other-bot"
@@ -263,12 +238,7 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
                 self.assertIn(str(path[-1]), result["safe_error"])
 
     def test_worker_credentials_are_rejected_after_whitespace_normalization(self):
-        for name in (
-            "GH_TOKEN",
-            "GITHUB_TOKEN",
-            "GH_ENTERPRISE_TOKEN",
-            "GITHUB_ENTERPRISE_TOKEN",
-        ):
+        for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
             for value in (name, f" {name} "):
                 with self.subTest(value=value):
                     self.config["workers"]["a"]["environment_allowlist"] = [value]
@@ -291,10 +261,7 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
 
     def test_custom_worker_and_pr_automation_preserved(self):
         self.config["workers"]["a"].update(
-            adapter="command",
-            command=["custom", "--batch"],
-            fallback_model="fallback",
-            timeout_seconds=91,
+            adapter="command", command=["custom", "--batch"], fallback_model="fallback", timeout_seconds=91
         )
         self.config["repos"][0]["pr_automation"] = {
             "ci": {"enabled": True, "check_allowlist": ["unit"], "max_cost_usd": 2.5},
@@ -321,25 +288,19 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
         self.assertEqual(code, 0, output.getvalue())
         result = json.loads(output.getvalue())
         route = result["effective_routes"]["example/test"]["new-pr"]
-        self.assertEqual(
-            (route["worker"], route["model"], route["effort"]),
-            ("a", "route-model", "medium"),
-        )
+        self.assertEqual((route["worker"], route["model"], route["effort"]), ("a", "route-model", "medium"))
         self.assertIn("native multi-model", result["model_scope"])
 
     def test_seconds_reach_lease_and_supervision_boundaries(self):
         from contextlib import closing
         from datetime import datetime, timedelta, timezone
         import sqlite3
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
         from robert_agent.execution import inspection as supervise
         from robert_agent.execution import leases as execution_leases
 
         self.config["scheduler"] = {"lease_ttl_seconds": 61}
-        self.config["supervision"] = {
-            "heartbeat_stale_seconds": 31,
-            "hard_timeout_seconds": 121,
-        }
+        self.config["supervision"] = {"heartbeat_stale_seconds": 31, "hard_timeout_seconds": 121}
         config = self.validate()
         self.assertTrue(config["ok"], config)
         now = datetime(2026, 11, 6, tzinfo=timezone.utc)
@@ -348,12 +309,7 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
             lease = execution_leases.acquire(conn, "repo", "run", now.isoformat(), config["lease_ttl_seconds"])
             expires = conn.execute("SELECT expires_at FROM leases WHERE lease_id=?", (lease["lease_id"],)).fetchone()[0]
         self.assertEqual(datetime.fromisoformat(expires) - now, timedelta(seconds=61))
-        for elapsed, expected in (
-            (30, "running"),
-            (31, "stale"),
-            (120, "stale"),
-            (121, "failed_timeout"),
-        ):
+        for elapsed, expected in ((30, "running"), (31, "stale"), (120, "stale"), (121, "failed_timeout")):
             with self.subTest(elapsed=elapsed):
                 state = supervise.classify_attempt(
                     heartbeat_at=now,

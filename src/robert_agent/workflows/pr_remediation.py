@@ -1,5 +1,17 @@
 """Durable CI and merge-conflict remediation episode state."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import notifications as db_read_notifications
+from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
+from robert_agent.persistence.queries import projections as db_read_projections
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
+from robert_agent.persistence.stores import audit_events as db_write_audit_events
+from robert_agent.persistence.stores import notifications as db_write_notifications
+from robert_agent.persistence.stores import pr_ci_observations as db_write_pr_ci_observations
+from robert_agent.persistence.stores import pr_remediation_episodes as db_write_pr_remediation_episodes
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -66,17 +78,7 @@ def _episode_row(row):
 
 
 def _load_episode(conn, episode_id):
-    row = conn.execute(
-        """
-        SELECT episode_id, workstream_id, episode_kind, subject_key,
-               observed_head_sha, observed_base_sha, result_head_sha,
-               status, attempt_count, failure_signature, first_seen_at,
-               updated_at, terminal_at, last_task_id, metadata_json
-        FROM pr_remediation_episodes
-        WHERE episode_id = ?
-        """,
-        (episode_id,),
-    ).fetchone()
+    row = db_records.first(db_read_pr_remediation_episodes.load_episode(conn, episode_id))
     return _episode_row(row)
 
 
@@ -164,37 +166,26 @@ def attest_remediation_worktree(
 
 
 def _audit_transition(conn, episode, old_status, new_status, reason, now):
-    workstream = conn.execute(
-        "SELECT repo_id FROM workstreams WHERE workstream_id = ?",
-        (episode["workstream_id"],),
-    ).fetchone()
-    conn.execute(
-        """
-        INSERT INTO audit_events(
-          audit_id, repo_id, workstream_id, task_id,
-          event_type, created_at, payload_json
-        )
-        VALUES (?, ?, ?, ?, 'pr_remediation_transition', ?, ?)
-        """,
-        (
-            f"audit-{uuid.uuid4().hex}",
-            workstream[0] if workstream else None,
-            episode["workstream_id"],
-            episode.get("last_task_id"),
-            now,
-            json.dumps(
-                {
-                    "episode_id": episode["episode_id"],
-                    "episode_kind": episode["episode_kind"],
-                    "observed_head_sha": episode["observed_head_sha"],
-                    "observed_base_sha": episode["observed_base_sha"],
-                    "old_status": old_status,
-                    "new_status": new_status,
-                    "reason": reason,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
+    workstream = db_records.first(db_read_workstreams.find_repo_id_by_workstream_id(conn, episode["workstream_id"]))
+    db_write_audit_events.insert_for_audit_transition(
+        conn,
+        f"audit-{uuid.uuid4().hex}",
+        workstream[0] if workstream else None,
+        episode["workstream_id"],
+        episode.get("last_task_id"),
+        now,
+        json.dumps(
+            {
+                "episode_id": episode["episode_id"],
+                "episode_kind": episode["episode_kind"],
+                "observed_head_sha": episode["observed_head_sha"],
+                "observed_base_sha": episode["observed_base_sha"],
+                "old_status": old_status,
+                "new_status": new_status,
+                "reason": reason,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
         ),
     )
 
@@ -223,57 +214,38 @@ def _remediation_notification_type(reason):
 
 def _notify_exhausted_episode(conn, episode, reason, now):
     notification_type = _remediation_notification_type(reason)
-    existing = conn.execute(
-        """
-        SELECT notification_id
-        FROM notifications
-        WHERE notification_type = ?
-          AND json_extract(metadata_json, '$.episode_id') = ?
-        LIMIT 1
-        """,
-        (notification_type, episode["episode_id"]),
-    ).fetchone()
+    existing = db_records.first(
+        db_read_notifications.find_for_notify_exhausted_episode(conn, notification_type, episode["episode_id"])
+    )
     if existing:
         return
-    conn.execute(
-        """
-        INSERT INTO notifications(
-          notification_id, task_id, notification_type, channel,
-          status, created_at, metadata_json
-        )
-        VALUES (?, ?, ?, 'local',
-                'recorded', ?, ?)
-        """,
-        (
-            f"notification-{uuid.uuid4().hex[:12]}",
-            episode.get("last_task_id"),
-            notification_type,
-            now,
-            json.dumps(
-                {
-                    "episode_id": episode["episode_id"],
-                    "workstream_id": episode["workstream_id"],
-                    "episode_kind": episode["episode_kind"],
-                    "observed_head_sha": episode["observed_head_sha"],
-                    "observed_base_sha": episode["observed_base_sha"],
-                    "pr_number": episode["metadata"].get("pr_number"),
-                    "attempt_count": episode["attempt_count"],
-                    "budget": episode["metadata"].get("budget"),
-                    "details_urls": sorted(
-                        {
-                            failure.get("details_url")
-                            for failure in episode["metadata"].get(
-                                "failures",
-                                [],
-                            )
-                            if isinstance(failure, dict) and failure.get("details_url")
-                        }
-                    ),
-                    "reason": reason,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
+    db_write_notifications.insert_notification(
+        conn,
+        f"notification-{uuid.uuid4().hex[:12]}",
+        episode.get("last_task_id"),
+        notification_type,
+        now,
+        json.dumps(
+            {
+                "episode_id": episode["episode_id"],
+                "workstream_id": episode["workstream_id"],
+                "episode_kind": episode["episode_kind"],
+                "observed_head_sha": episode["observed_head_sha"],
+                "observed_base_sha": episode["observed_base_sha"],
+                "pr_number": episode["metadata"].get("pr_number"),
+                "attempt_count": episode["attempt_count"],
+                "budget": episode["metadata"].get("budget"),
+                "details_urls": sorted(
+                    {
+                        failure.get("details_url")
+                        for failure in episode["metadata"].get("failures", [])
+                        if isinstance(failure, dict) and failure.get("details_url")
+                    }
+                ),
+                "reason": reason,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
         ),
     )
 
@@ -285,24 +257,16 @@ def _transition(conn, episode, new_status, reason, now):
     terminal_at = now if new_status in TERMINAL_STATUSES else None
     metadata = dict(episode["metadata"])
     metadata["last_transition_reason"] = reason
-    conn.execute(
-        """
-        UPDATE pr_remediation_episodes
-        SET status = ?, updated_at = ?, terminal_at = ?,
-            metadata_json = ?
-        WHERE episode_id = ?
-          AND status = ?
-        """,
-        (
-            new_status,
-            now,
-            terminal_at,
-            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-            episode["episode_id"],
-            old_status,
-        ),
+    db_write_pr_remediation_episodes.update_for_transition(
+        conn,
+        new_status,
+        now,
+        terminal_at,
+        json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+        episode["episode_id"],
+        old_status,
     )
-    if conn.execute("SELECT changes()").fetchone()[0] != 1:
+    if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
         return None
     _audit_transition(conn, episode, old_status, new_status, reason, now)
     if new_status == "exhausted":
@@ -316,18 +280,7 @@ def _transition(conn, episode, new_status, reason, now):
 
 
 def _episodes_for_workstream(conn, workstream_id):
-    rows = conn.execute(
-        """
-        SELECT episode_id, workstream_id, episode_kind, subject_key,
-               observed_head_sha, observed_base_sha, result_head_sha,
-               status, attempt_count, failure_signature, first_seen_at,
-               updated_at, terminal_at, last_task_id, metadata_json
-        FROM pr_remediation_episodes
-        WHERE workstream_id = ?
-        ORDER BY first_seen_at, episode_id
-        """,
-        (workstream_id,),
-    ).fetchall()
+    rows = db_read_pr_remediation_episodes.find_for_episodes_for_workstream(conn, workstream_id)
     return [_episode_row(row) for row in rows]
 
 
@@ -347,42 +300,18 @@ def _create_episode(
         episode_kind,
         subject_key,
     )
-    conn.execute(
-        """
-        INSERT INTO pr_remediation_episodes(
-          episode_id, workstream_id, episode_kind, subject_key,
-          observed_head_sha, observed_base_sha, status,
-          failure_signature, first_seen_at, updated_at, metadata_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
-        ON CONFLICT(workstream_id, episode_kind, subject_key) DO UPDATE SET
-          updated_at = excluded.updated_at,
-          failure_signature = CASE
-            WHEN pr_remediation_episodes.status = 'open'
-              THEN COALESCE(
-                excluded.failure_signature,
-                pr_remediation_episodes.failure_signature
-              )
-            ELSE pr_remediation_episodes.failure_signature
-          END,
-          metadata_json = CASE
-            WHEN pr_remediation_episodes.status = 'open'
-              THEN excluded.metadata_json
-            ELSE pr_remediation_episodes.metadata_json
-          END
-        """,
-        (
-            episode_id,
-            workstream["workstream_id"],
-            episode_kind,
-            subject_key,
-            snapshot["head_sha"],
-            snapshot["base_sha"],
-            failure_signature_value,
-            now,
-            now,
-            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-        ),
+    db_write_pr_remediation_episodes.insert_for_create_episode(
+        conn,
+        episode_id,
+        workstream["workstream_id"],
+        episode_kind,
+        subject_key,
+        snapshot["head_sha"],
+        snapshot["base_sha"],
+        failure_signature_value,
+        now,
+        now,
+        json.dumps(metadata, ensure_ascii=False, sort_keys=True),
     )
     return _load_episode(conn, episode_id)
 
@@ -410,38 +339,20 @@ def _store_ci_observations(conn, episode_id, observations):
                 "failure_signature",
             }
         }
-        conn.execute(
-            """
-            INSERT INTO pr_ci_observations(
-              observation_id, episode_id, source_kind, external_id,
-              attempt_no, check_name, status, conclusion, details_url,
-              completed_at, failure_signature, metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(source_kind, external_id, attempt_no) DO UPDATE SET
-              episode_id = excluded.episode_id,
-              check_name = excluded.check_name,
-              status = excluded.status,
-              conclusion = excluded.conclusion,
-              details_url = excluded.details_url,
-              completed_at = excluded.completed_at,
-              failure_signature = excluded.failure_signature,
-              metadata_json = excluded.metadata_json
-            """,
-            (
-                _observation_id(source_kind, external_id, attempt_no),
-                episode_id,
-                source_kind,
-                external_id,
-                attempt_no,
-                observation.get("check_name") or "",
-                observation.get("status") or "",
-                observation.get("conclusion"),
-                observation.get("details_url"),
-                observation.get("completed_at"),
-                observation.get("failure_signature"),
-                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-            ),
+        db_write_pr_ci_observations.insert_for_store_ci_observations(
+            conn,
+            _observation_id(source_kind, external_id, attempt_no),
+            episode_id,
+            source_kind,
+            external_id,
+            attempt_no,
+            observation.get("check_name") or "",
+            observation.get("status") or "",
+            observation.get("conclusion"),
+            observation.get("details_url"),
+            observation.get("completed_at"),
+            observation.get("failure_signature"),
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         )
 
 
@@ -674,18 +585,7 @@ def _parse_time(value):
 
 def _episode_usage(conn, episode_id):
     payloads = []
-    for row in conn.execute(
-        """
-        SELECT a.metadata_json
-        FROM attempts a
-        JOIN tasks t ON t.task_id = a.task_id
-        WHERE json_extract(
-          t.metadata_json,
-          '$.remediation_episode_id'
-        ) = ?
-        """,
-        (episode_id,),
-    ):
+    for row in db_read_attempts.find_for_episode_usage(conn, episode_id):
         metadata = _json_object(row[0])
         payloads.append(usage.extract_attempt_usage(metadata))
     summary = usage.summarize_usage_payloads(payloads)
@@ -747,24 +647,7 @@ def _policy_for_episode(repo, episode_kind):
 
 
 def next_system_decisions(conn, *, repo, now):
-    rows = conn.execute(
-        """
-        SELECT e.episode_id
-        FROM pr_remediation_episodes e
-        JOIN workstreams w ON w.workstream_id = e.workstream_id
-        WHERE w.repo_id = ?
-          AND w.active_task_id IS NULL
-          AND e.status = 'open'
-        ORDER BY
-          CASE e.episode_kind
-            WHEN 'merge_conflict' THEN 0
-            ELSE 1
-          END,
-          e.first_seen_at,
-          e.episode_id
-        """,
-        (repo["repo_id"],),
-    ).fetchall()
+    rows = db_read_pr_remediation_episodes.find_for_next_system_decisions(conn, repo["repo_id"])
     decisions = []
     for (episode_id,) in rows:
         episode = _load_episode(conn, episode_id)
@@ -807,18 +690,7 @@ def next_system_decisions(conn, *, repo, now):
 
 
 def cancel_disabled_episodes(conn, *, repo, now):
-    rows = conn.execute(
-        """
-        SELECT e.episode_id
-        FROM pr_remediation_episodes e
-        JOIN workstreams w ON w.workstream_id = e.workstream_id
-        WHERE w.repo_id = ?
-          AND e.status IN (
-            'open', 'queued', 'remediating', 'waiting_for_signal'
-          )
-        """,
-        (repo["repo_id"],),
-    ).fetchall()
+    rows = db_read_pr_remediation_episodes.find_for_cancel_disabled_episodes(conn, repo["repo_id"])
     canceled = 0
     for (episode_id,) in rows:
         episode = _load_episode(conn, episode_id)
@@ -886,14 +758,7 @@ def supersede_episode(conn, *, episode_id, reason, now):
 
 
 def record_task_failure(conn, *, task_id, reason, now):
-    row = conn.execute(
-        """
-        SELECT task_kind, metadata_json
-        FROM tasks
-        WHERE task_id = ?
-        """,
-        (task_id,),
-    ).fetchone()
+    row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     if not row or row[0] not in {
         "ci_remediation",
         "merge_conflict_remediation",
@@ -929,20 +794,8 @@ def record_task_started(conn, *, episode_id, task_id, now):
     episode = _load_episode(conn, episode_id)
     if not episode or episode["status"] != "open":
         return False
-    conn.execute(
-        """
-        UPDATE pr_remediation_episodes
-        SET status = 'remediating',
-            attempt_count = attempt_count + 1,
-            last_task_id = ?,
-            updated_at = ?,
-            terminal_at = NULL
-        WHERE episode_id = ?
-          AND status = 'open'
-        """,
-        (task_id, now, episode_id),
-    )
-    if conn.execute("SELECT changes()").fetchone()[0] != 1:
+    db_write_pr_remediation_episodes.record_task_started(conn, task_id, now, episode_id)
+    if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
         return False
     _audit_transition(
         conn,
@@ -979,25 +832,16 @@ def record_publish_result(
     else:
         new_status = "open"
         reason = "publish_failed"
-    conn.execute(
-        """
-        UPDATE pr_remediation_episodes
-        SET status = ?, result_head_sha = COALESCE(?, result_head_sha),
-            updated_at = ?,
-            terminal_at = ?
-        WHERE episode_id = ?
-          AND status = ?
-        """,
-        (
-            new_status,
-            result_head_sha,
-            now,
-            now if new_status in TERMINAL_STATUSES else None,
-            episode_id,
-            episode["status"],
-        ),
+    db_write_pr_remediation_episodes.record_publish_result(
+        conn,
+        new_status,
+        result_head_sha,
+        now,
+        now if new_status in TERMINAL_STATUSES else None,
+        episode_id,
+        episode["status"],
     )
-    if conn.execute("SELECT changes()").fetchone()[0] != 1:
+    if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
         return False
     _audit_transition(
         conn,

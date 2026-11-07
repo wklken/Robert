@@ -1,3 +1,4 @@
+from robert_agent.persistence.schema import execution_control as execution_schema
 from contextlib import closing
 import json
 from pathlib import Path
@@ -5,8 +6,8 @@ import sqlite3
 import tempfile
 import unittest
 
-from robert_agent.adapters.sqlite import database as storage
-from robert_agent.adapters.sqlite import execution_control as execution_store
+from robert_agent.persistence.schema import database as storage
+from robert_agent.persistence import execution_control as execution_store
 
 
 NOW = "2026-08-02T00:00:00+00:00"
@@ -165,8 +166,7 @@ class WorkflowOperationsTests(unittest.TestCase):
                 )
             execution_store.ensure_subject(conn, "task", "task-1", "human_request", NOW)
             self.assertEqual(
-                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)["binding_status"],
-                "active",
+                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)["binding_status"], "active"
             )
             execution_store.mark_binding_attention(conn, "task", "task-1", NOW)
             self.assertIsNone(execution_operations.claim_subject(conn, "task", "task-1", now=NOW))
@@ -198,21 +198,14 @@ class MigratedSubjectClaimTests(unittest.TestCase):
             """
         )
         storage._migrate_pr_remediation(self.conn)
-        execution_store.initialize(self.conn)
+        execution_schema.initialize(self.conn)
 
     def test_claim_migrated_task_respects_kind_and_lifecycle(self):
         from robert_agent.execution import operations as execution_operations
 
         for row_factory in (None, sqlite3.Row):
             self.conn.row_factory = row_factory
-            for lifecycle in (
-                "queued",
-                "running",
-                "completed",
-                "failed",
-                "canceled",
-                "ignored",
-            ):
+            for lifecycle in ("queued", "running", "completed", "failed", "canceled", "ignored"):
                 with self.subTest(row_factory=row_factory, lifecycle=lifecycle):
                     self.conn.execute("DELETE FROM execution_subjects")
                     self.conn.execute("DELETE FROM tasks")

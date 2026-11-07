@@ -22,12 +22,10 @@ class RetentionTests(RetentionFixture):
         daemon._heartbeat(self.context, now=NOW)
         with self.connect() as conn:
             self.assertEqual(
-                conn.execute("SELECT heartbeat_at FROM leases WHERE lease_id=?", (self.lease,)).fetchone()[0],
-                NOW,
+                conn.execute("SELECT heartbeat_at FROM leases WHERE lease_id=?", (self.lease,)).fetchone()[0], NOW
             )
             self.assertEqual(
-                conn.execute("SELECT count(*) FROM daemon_events WHERE event_type='daemon_heartbeat'").fetchone()[0],
-                0,
+                conn.execute("SELECT count(*) FROM daemon_events WHERE event_type='daemon_heartbeat'").fetchone()[0], 0
             )
 
     def test_daemon_keeps_bounded_diagnostics_and_returns_full_result(self):
@@ -52,15 +50,9 @@ class RetentionTests(RetentionFixture):
 
     def test_summary_is_stored_once_and_cli_and_web_keep_full_output(self):
         self.add_run("run")
-        summary = {
-            "repo_summaries": [{"full_name": "example/repo", "status": "completed"}],
-            "dispatch_count": 2,
-        }
+        summary = {"repo_summaries": [{"full_name": "example/repo", "status": "completed"}], "dispatch_count": 2}
         with self.connect() as conn:
-            conn.execute(
-                "UPDATE agent_runs SET summary_json=? WHERE run_id='run'",
-                (json.dumps(summary),),
-            )
+            conn.execute("UPDATE agent_runs SET summary_json=? WHERE run_id='run'", (json.dumps(summary),))
             run_journal.mark_run_step(conn, "run", "summarize", "succeeded", NOW, output=summary)
             raw = conn.execute("SELECT output_json FROM run_steps WHERE run_id='run'").fetchone()[0]
             self.assertNotIn("repo_summaries", raw)
@@ -118,7 +110,7 @@ class RetentionTests(RetentionFixture):
         real_connect = sqlite3.connect
         db = self.db
 
-        class CompletingConnection(sqlite3.Connection):
+        class CompletingCursor(sqlite3.Cursor):
             completed = False
 
             def execute(self, sql, parameters=()):
@@ -132,6 +124,10 @@ class RetentionTests(RetentionFixture):
                         run_journal.mark_run_step(writer, "run", "summarize", "succeeded", NOW, output=summary)
                 return super().execute(sql, parameters)
 
+        class CompletingConnection(sqlite3.Connection):
+            def cursor(self, factory=CompletingCursor):
+                return super().cursor(factory)
+
         for reader in ("cli", "web"):
             with self.subTest(reader=reader):
                 with self.connect() as conn:
@@ -143,7 +139,7 @@ class RetentionTests(RetentionFixture):
                         run = status.build_run(conn, "run")
                     else:
                         with mock.patch(
-                            "robert_agent.interfaces.web.server.sqlite3.connect",
+                            "robert_agent.persistence.database.sqlite3.connect",
                             side_effect=lambda *a, **k: real_connect(*a, **k, factory=CompletingConnection),
                         ):
                             run = dashboard.build_dashboard_data(db)["recent_runs"][0]
@@ -166,10 +162,7 @@ class RetentionTests(RetentionFixture):
         with self.connect() as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0], 3)
 
-    @mock.patch(
-        "robert_agent.runtime.daemon.loop_engine.has_runnable_local_work",
-        return_value=False,
-    )
+    @mock.patch("robert_agent.runtime.daemon.loop_engine.has_runnable_local_work", return_value=False)
     def test_maintenance_runs_again_in_resident_daemon_and_can_be_disabled(self, _local_work):
         self.add_run("old")
         self.add_run("latest", when=NOW)
@@ -221,16 +214,9 @@ class RetentionTests(RetentionFixture):
         self.add_run("old-a")
         self.add_run("old-b")
         self.add_run("latest", when=NOW)
-        validated = {
-            "ok": True,
-            "db_path": str(self.db),
-            "maintenance": maintenance_config(),
-        }
+        validated = {"ok": True, "db_path": str(self.db), "maintenance": maintenance_config()}
         before = self.db.read_bytes()
-        with mock.patch(
-            "robert_agent.cli.main.validate_config.validate_config",
-            return_value=validated,
-        ) as validate:
+        with mock.patch("robert_agent.cli.main.validate_config.validate_config", return_value=validated) as validate:
             output = io.StringIO()
             with redirect_stdout(output):
                 code = main(["maintenance", "prune", "--output", "json", "--batch-size", "1"])
@@ -238,24 +224,11 @@ class RetentionTests(RetentionFixture):
             self.assertTrue(json.loads(output.getvalue())["dry_run"])
             validate.assert_called_once_with(mock.ANY, skip_external=True)
         self.assertEqual(self.db.read_bytes(), before)
-        with mock.patch(
-            "robert_agent.cli.main.validate_config.validate_config",
-            return_value=validated,
-        ):
+        with mock.patch("robert_agent.cli.main.validate_config.validate_config", return_value=validated):
             output = io.StringIO()
             with redirect_stdout(output):
                 code = main(
-                    [
-                        "maintenance",
-                        "prune",
-                        "--apply",
-                        "--output",
-                        "json",
-                        "--batch-size",
-                        "1",
-                        "--batches",
-                        "2",
-                    ]
+                    ["maintenance", "prune", "--apply", "--output", "json", "--batch-size", "1", "--batches", "2"]
                 )
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(output.getvalue())["counts"]["agent_runs"], 2)
@@ -294,25 +267,15 @@ class RetentionTests(RetentionFixture):
         self.add_run("run")
         summary = {"items": ["x" * 1000] * 20, **{str(i): i for i in range(12)}}
         with self.connect() as conn:
-            conn.execute(
-                "UPDATE agent_runs SET summary_json=? WHERE run_id='run'",
-                (json.dumps(summary),),
-            )
-            conn.execute(
-                "UPDATE run_steps SET output_json=? WHERE run_id='run'",
-                (json.dumps(summary),),
-            )
+            conn.execute("UPDATE agent_runs SET summary_json=? WHERE run_id='run'", (json.dumps(summary),))
+            conn.execute("UPDATE run_steps SET output_json=? WHERE run_id='run'", (json.dumps(summary),))
             legacy = status.build_run(conn, "run")
             run_journal.mark_run_step(conn, "run", "summarize", "succeeded", NOW, output=summary)
             current = status.build_run(conn, "run")
             self.assertEqual(current["steps"][0]["output"], legacy["steps"][0]["output"])
 
     def test_child_diagnostic_secret_is_omitted(self):
-        result = {
-            "ok": False,
-            "safe_error": "Authorization: sensitive",
-            "status": "failed",
-        }
+        result = {"ok": False, "safe_error": "Authorization: sensitive", "status": "failed"}
         daemon._run_local_drain(self.context, child_runner=lambda *a, **k: result, now=NOW)
         with self.connect() as conn:
             raw = conn.execute("SELECT metadata_json FROM daemon_events WHERE status='failed'").fetchone()[0]

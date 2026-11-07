@@ -9,7 +9,7 @@ from tests.support.repository_cycle import (
 class PublicationScopeTests(RepositoryCycleFixture):
     def test_publish_ready_actions_filters_by_repo_id(self):
         from robert_agent.delivery.application import publish
-        from robert_agent.adapters.sqlite import database as storage
+        from robert_agent.persistence.schema import database as storage
 
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)

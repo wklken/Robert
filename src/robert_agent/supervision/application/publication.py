@@ -1,20 +1,25 @@
 """Supervision fences around the existing publisher's exact action and task lock."""
 
+from robert_agent.persistence import database as db_database
+
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import publication_intents as db_read_publication_intents
+from robert_agent.persistence.queries import supervision_recovery_actions as db_read_supervision_recovery_actions
+from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.workflows import routing as workflow_routing
 from robert_agent.work.application import admission as work_admission
 
 from contextlib import closing
 import json
 from pathlib import Path
-import sqlite3
 
 from robert_agent.supervision import actions as supervision_actions
 from robert_agent.supervision import store as supervision_store
 
 
 def _connect(db):
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
+    conn = db_database.connect(db)
     return conn
 
 
@@ -40,11 +45,7 @@ def _repair_allowed(conn, action, config):
     repair = supervision_store.repair_task(conn, action["task_id"])
     if not repair:
         return False, True
-    repo = conn.execute(
-        """SELECT w.repo_id FROM workstreams w JOIN tasks t ON t.workstream_id=w.workstream_id
-        WHERE t.task_id=?""",
-        (action["task_id"],),
-    ).fetchone()
+    repo = db_records.first(db_read_workstreams.find_for_repair_allowed(conn, action["task_id"]))
     return True, bool(
         repo
         and supervision_repair.authorized_repair(
@@ -63,10 +64,9 @@ def begin(db, action, config, now):
         repair, allowed = _repair_allowed(conn, action, config)
         if not allowed:
             return {"status": "blocked", "reason_code": "maintenance_policy_rejected"}
-        intent = conn.execute(
-            "SELECT status,remote_evidence_json FROM publication_intents WHERE action_id=?",
-            (action["action_id"],),
-        ).fetchone()
+        intent = db_records.first(
+            db_read_publication_intents.find_status_and_remote_evidence_json_by_action_id(conn, action["action_id"])
+        )
         executing = intent and intent["status"] == "executing"
         evidence = json.loads(intent["remote_evidence_json"] or "{}") if intent else {}
         needs_claim = bool(evidence.get("supervision_retry_required"))
@@ -79,21 +79,11 @@ def begin(db, action, config, now):
         if (
             not native_retry
             and supervision_store.has_schema(conn)
-            and conn.execute(
-                """SELECT 1
-            FROM supervision_recovery_actions WHERE scope_type='task' AND scope_id=?
-              AND action_kind NOT IN ('publication_retry','publication_reconcile')
-              AND status IN ('requested','applying','observing','unknown')""",
-                (action["task_id"],),
-            ).fetchone()
+            and db_records.first(db_read_supervision_recovery_actions.find_for_begin(conn, action["task_id"]))
         ):
             # The domain has already accepted this first publication. Do not
             # wait for an unrelated recovery's observational bookkeeping.
-            return {
-                "status": "legacy",
-                "guard_required": repair,
-                "reconcile_only": False,
-            }
+            return {"status": "legacy", "guard_required": repair, "reconcile_only": False}
         verdict = supervision_actions.begin(
             conn,
             task_id=action["task_id"],
@@ -106,23 +96,13 @@ def begin(db, action, config, now):
         # A recovered task lock permits reading the same earlier remote effect,
         # even if the writer crashed after it charged its recovery claim.
         if verdict["status"] == "blocked" and executing and supervision_store.has_schema(conn):
-            row = conn.execute(
-                """SELECT * FROM supervision_recovery_actions WHERE scope_type='task'
-                AND scope_id=? AND target_id=? AND action_kind IN ('publication_retry','publication_reconcile')
-                AND status IN ('applying','unknown','observing')""",
-                (action["task_id"], action["action_id"]),
-            ).fetchone()
+            row = db_records.first(
+                db_read_supervision_recovery_actions.find_for_begin_2(conn, action["task_id"], action["action_id"])
+            )
             if row:
-                return {
-                    "status": "reconcile_only",
-                    "claim": dict(row),
-                    "reconcile_only": True,
-                }
+                return {"status": "reconcile_only", "claim": dict(row), "reconcile_only": True}
         if needs_claim and not executing and verdict["status"] != "claimed":
-            return {
-                "status": "blocked",
-                "reason_code": verdict.get("reason_code", "recovery_policy_required"),
-            }
+            return {"status": "blocked", "reason_code": verdict.get("reason_code", "recovery_policy_required")}
     return {
         **verdict,
         "guard_required": repair or verdict["status"] == "claimed",
@@ -143,15 +123,8 @@ def guard(db, action, state, config, now):
             if not repair:
                 from robert_agent.execution import rounds as native_rounds
 
-                row = conn.execute(
-                    """SELECT r.full_name FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-                    JOIN repos r ON r.repo_id=w.repo_id WHERE t.task_id=?""",
-                    (action["task_id"],),
-                ).fetchone()
-                repo = next(
-                    (value for value in config.get("repos", ()) if row and value["full_name"] == row[0]),
-                    None,
-                )
+                row = db_records.first(db_read_tasks.find_for_guard(conn, action["task_id"]))
+                repo = next((value for value in config.get("repos", ()) if row and value["full_name"] == row[0]), None)
                 if not repo:
                     return False
                 native = native_rounds.session(conn, task_id=action["task_id"])

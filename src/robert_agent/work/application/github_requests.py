@@ -1,12 +1,19 @@
 """Handle GitHub request priorities and native-round admission."""
 
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_events as db_read_github_events
+from robert_agent.persistence.queries import vote_sessions as db_read_vote_sessions
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.stores import task_events as db_write_task_events
+from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.work.application import source_events
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.foundation import values
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import policies as work_policies
-from robert_agent.adapters.sqlite import vote_rounds as vote_store
+from robert_agent.persistence.rounds import vote as vote_store
 import json
 
 
@@ -53,13 +60,7 @@ def dedupe_events_by_fingerprint(events):
 
 def enqueue_native_request(conn, store, repo, event, route, workers, admission, now):
     lineage = supervision_lineage.github_key(event)
-    round_entry = store.enqueue(
-        conn,
-        repo,
-        {**event, supervision_lineage.LINEAGE_FIELD: lineage},
-        route,
-        workers,
-    )
+    round_entry = store.enqueue(conn, repo, {**event, supervision_lineage.LINEAGE_FIELD: lineage}, route, workers)
     supervision_lineage.record_disposition(
         conn,
         admission,
@@ -80,34 +81,25 @@ def resume_waiting_vote(conn, repo, event, run_now, admission=None):
         or event.get("intent") not in {None, "unclear", "analysis", "discussion", "requirement_analysis"}
     ):
         return False
-    row = conn.execute(
-        """SELECT vs.round_id,vs.task_id FROM vote_sessions vs JOIN tasks t ON t.task_id=vs.task_id
-        WHERE vs.workstream_id=? AND vs.status='waiting_for_user' AND t.lifecycle='waiting_for_user'
-        AND vs.source_type=? AND vs.number=?""",
-        (event["workstream_id"], event["source_type"], event["number"]),
-    ).fetchone()
+    row = db_records.first(
+        db_read_vote_sessions.find_for_resume_waiting_vote(
+            conn, event["workstream_id"], event["source_type"], event["number"]
+        )
+    )
     if not row:
         return False
     if source_events.event_has_terminal_trigger(conn, event["event_fingerprint"]):
         supervision_lineage.record_disposition(
-            conn,
-            admission,
-            disposition="explicitly_ignored",
-            now=run_now,
-            reason_code="trigger_already_processed",
+            conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="trigger_already_processed"
         )
         return True  # Already-used replies cannot answer another question on polling.
     event_time = event.get("event_at")
     if not event_time:
-        observed = conn.execute(
-            "SELECT event_at FROM github_events WHERE event_id=?",
-            (values.github_event_id(event["event_fingerprint"]),),
-        ).fetchone()
+        observed = db_records.first(
+            db_read_github_events.find_event_at_by_event_id(conn, values.github_event_id(event["event_fingerprint"]))
+        )
         event_time = observed[0] if observed else None
-    question = conn.execute(
-        "SELECT created_at FROM worker_results WHERE task_id=? AND output_type='waiting_for_user' ORDER BY created_at DESC LIMIT 1",
-        (row[1],),
-    ).fetchone()
+    question = db_records.first(db_read_worker_results.find_for_resume_waiting_vote(conn, row[1]))
     try:
         # GitHub comment times have second precision; avoid a false rejection due to local microseconds.
         if (
@@ -144,15 +136,9 @@ def resume_waiting_vote(conn, repo, event, run_now, admission=None):
         )
         return True
     request["event"].setdefault("clarifications", []).append(event)
-    conn.execute(
-        "UPDATE tasks SET lifecycle='completed',updated_at=? WHERE task_id=?",
-        (run_now, row[1]),
-    )
+    db_write_tasks.update_for_finish_parent_for_child(conn, run_now, row[1])
     execution_ownership.close_terminal_task(conn, row[1], run_now)
-    conn.execute(
-        "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",
-        (run_now, event["workstream_id"]),
-    )
+    db_write_workstreams.update_for_execute_command(conn, run_now, event["workstream_id"])
     vote_store.update(
         conn,
         row[0],
@@ -161,9 +147,8 @@ def resume_waiting_vote(conn, repo, event, run_now, admission=None):
         manifest_json=None,
         request_json=json.dumps(request, ensure_ascii=False),
     )
-    conn.execute(
-        "INSERT OR IGNORE INTO task_events(task_id,event_id,relationship,created_at) VALUES (?,?,'consumed',?)",
-        (row[1], values.github_event_id(event["event_fingerprint"]), run_now),
+    db_write_task_events.insert_for_resume_waiting_vote(
+        conn, row[1], values.github_event_id(event["event_fingerprint"]), run_now
     )
     supervision_lineage.record_disposition(
         conn,
