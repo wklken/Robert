@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import sys
 
 from robert_agent import __version__
@@ -56,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"robert {__version__}",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    messaging_parser = subparsers.add_parser('messages', help='Authenticated local messaging bridge.')
+    messaging_parser.add_argument('messages_command', choices=['inbox', 'respond'])
+    _add_config_argument(messaging_parser)
+    _add_output_argument(messaging_parser)
 
     init_parser = subparsers.add_parser(
         "init",
@@ -404,6 +410,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == 'messages':
+            from robert_agent.work.application import messaging
+            from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
+            validated = validate_config.validate_config(args.config, skip_external=True)
+            if not validated.get('ok'):
+                return _emit_and_code(validated, args.output)
+            raw = sys.stdin.read(65537)
+            if len(raw) > 65536:
+                raise ValueError('Message exceeds the input limit.')
+            request = json.loads(raw)
+            if not isinstance(request, dict):
+                raise ValueError('Message must be an object.')
+            try:
+                result = (messaging.inbox(validated, request) if args.messages_command == 'inbox'
+                          else messaging.respond(validated, request))
+            except (WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError) as exc:
+                result = {'ok': False, 'status': 'rejected', 'safe_error': str(exc)}
+            except sqlite3.Error:
+                result = {'ok': False, 'status': 'unavailable', 'safe_error': 'Messaging storage is unavailable; inspect Robert locally.'}
+            return _emit_and_code(result, args.output)
         if args.command == "init":
             result = init_config(
                 args.config,

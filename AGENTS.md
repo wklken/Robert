@@ -131,6 +131,18 @@ Paths below are relative to `src/robert_agent/`.
   in its adapter. A new invariant belongs to the owning domain's rules or use case.
   Importing policies/configuration must not connect to production or launch work.
 
+## Operator messaging
+
+- `work/messaging.py` owns attention/outbox correlation; event and notification
+  writes share the caller transaction. `delivery/messages.py` owns scoped,
+  redacted envelopes; adapters own transport only.
+- Chat ingress checks explicit provider/session/sender/repository configuration
+  and delegates to existing versioned work commands. Acknowledgement is a
+  receipt, never incident resolution, recovery authority or process release.
+- Preserve `robert.message.v1`, bounded delivery retries and idempotent operator
+  responses. Future providers must prove equivalent authenticated context;
+  never derive authority from message text or bypass lifecycle guards.
+
 ## Entry points, migration and verification
 
 - The package root contains only `__init__.py`, `paths.py`, and

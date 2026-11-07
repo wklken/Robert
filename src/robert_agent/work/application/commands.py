@@ -1,6 +1,6 @@
 """Transactional commands for repository-scoped DD work items."""
 from robert_agent.work.inputs import COMMANDS, CommandContext, DECISION_EVENTS, FAILURE_EVENTS, MAX_DESCRIPTION, MAX_REPLY, MAX_TITLE, QUESTION_EVENTS, validate_idempotency_key, validate_priority, validate_routing, validate_text
-from robert_agent.work import control_queries
+from robert_agent.work import control_queries, messaging
 
 from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
 from contextlib import closing, ExitStack
@@ -143,6 +143,8 @@ def _insert_event(
             metadata_json,
         ),
     )
+    messaging.record_attention(conn, event_id=event_id, work_item_id=work_item_id,
+        event_type=event_type, metadata=metadata or {}, resolves_event_id=resolves_event_id, now=now)
     return {
         "event_id": event_id,
         "work_item_id": work_item_id,
@@ -932,6 +934,11 @@ def execute_command(
                 return _commit_result(conn, db_path, replay, notifier)
             if item["version"] != expected_version:
                 raise WorkItemConflictError("work item version is stale")
+
+            if expected_event_id is not None and command in {'cancel', 'retry_publish'}:
+                attention = _unresolved_event(conn, work_item_id, messaging.ATTENTION_EVENTS)
+                if not attention or attention['event_id'] != expected_event_id:
+                    raise WorkItemConflictError('The attention item changed. Refresh before continuing.')
 
             if item["canceled_at"] is not None:
                 raise WorkItemConflictError("a canceled work item cannot be changed")

@@ -170,7 +170,7 @@ flowchart LR
 | 内建多模型流程 | [workflows/review/coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、[workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[execution/stages.py](../src/robert_agent/execution/stages.py)、[adapters/sqlite/model_pool.py](../src/robert_agent/adapters/sqlite/model_pool.py) | 冻结输入、共享额度、封存输出、复用已校验阶段 |
 | PR 自修复 | [workflows/pr_health.py](../src/robert_agent/workflows/pr_health.py)、[workflows/pr_remediation.py](../src/robert_agent/workflows/pr_remediation.py) | 仓库显式开启；证据、版本、次数与预算限制 |
 | 操作与可观测性 | [interfaces/web/server.py](../src/robert_agent/interfaces/web/server.py)、[work/application/control.py](../src/robert_agent/work/application/control.py)、[readmodels/status.py](../src/robert_agent/readmodels/status.py)、[operations/diagnostics.py](../src/robert_agent/operations/diagnostics.py)、[delivery/application/notifications.py](../src/robert_agent/delivery/application/notifications.py) | 默认只读；写入需身份、CSRF 与状态校验；诊断导出脱敏 |
-| 可选知识与查询 | [context/project.py](../src/robert_agent/context/project.py)、[context/knowledge.py](../src/robert_agent/context/knowledge.py)、[integrations/openclaw.py](../src/robert_agent/integrations/openclaw.py) | 项目记忆与运行知识可复用；OpenClaw 提供查询 |
+| 可选知识与查询 | [context/project.py](../src/robert_agent/context/project.py)、[context/knowledge.py](../src/robert_agent/context/knowledge.py)、[integrations/openclaw.py](../src/robert_agent/integrations/openclaw.py) | 项目记忆与运行知识可复用；OpenClaw 提供查询及显式启用的受认证消息入口 |
 
 ## 事件授权、串行协作与路由
 
@@ -524,3 +524,11 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 改变机制时，同时核对对应源码入口、schema 与行为测试，再更新节点和分支。
 架构图表达责任与信任边界，时序图表达持久化与外部效果的先后，流程图保留失败、
 等待和未知状态。规划目标、mock 验证或 Worker 声明不能替代当前实现证据。
+
+## 操作员消息边界
+
+[双向消息方案](operator-messaging.md)复用工作项事件、通知 outbox 和现有操作命令。
+`work/messaging.py` 维护问题关联事实，`delivery/messages.py` 构建脱敏信封，
+`adapters/notifications/messaging.py` 发送消息。`work/application/messaging.py`
+校验发送者、会话和仓库授权后调用既有命令；OpenClaw 插件只做协议转换。
+通知确认不会改变 Supervisor 事件或执行所有权。未来渠道复用同一版本化协议。

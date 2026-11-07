@@ -1,5 +1,6 @@
 """Persist execution notices without external notification effects."""
 import json
+from robert_agent.delivery import messages
 from uuid import uuid4
 
 
@@ -48,8 +49,9 @@ def record_control_stop(conn, daemon_run_id, lane, now, attention):
         ('notification-control-stop-' + daemon_run_id + '-' + lane, now, json.dumps(attention)))
 
 
-def has_pending_local_delivery(conn, repo_ids, now):
+def has_pending_local_delivery(conn, repo_ids, now, config=None):
     placeholders = ','.join('?' for _ in repo_ids)
+    scope, params = messages.pending_filter(conn, config)
     return bool(conn.execute(f"""SELECT 1 FROM notifications
         WHERE channel='local' AND status NOT IN ('resolved','sent')
           AND COALESCE(json_extract(metadata_json,'$.delivery.status'),'') NOT IN ('sent','exhausted')
@@ -57,4 +59,4 @@ def has_pending_local_delivery(conn, repo_ids, now):
                OR julianday(json_extract(metadata_json,'$.delivery.next_retry_at'))<=julianday(?))
           AND (task_id IS NULL OR task_id IN (
             SELECT t.task_id FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-            WHERE w.repo_id IN ({placeholders}))) LIMIT 1""", [now, *repo_ids]).fetchone())
+            WHERE w.repo_id IN ({placeholders}))) """ + scope + " LIMIT 1", [now, *repo_ids, *params]).fetchone())

@@ -27,6 +27,7 @@ from robert_agent.security import redaction
 from robert_agent.operations import retention
 from robert_agent.adapters.sqlite import database as storage
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
+from robert_agent.adapters.notifications import messaging as message_transport
 from robert_agent.work import wakeup
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.runtime import loop as loop_engine
@@ -796,13 +797,13 @@ def run_once_decision(
         _maybe_prune(context, now=now)
         if not context.dry_run:
             result_cutover.prepare(context.db_path, now=now, isolated_only=True)
-            notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+            notify.deliver_pending(context.db_path, config=context.runtime_config, now=now, repo_ids=context.repo_ids or [context.repo_id])
         return {'ok': True, 'decision': 'control_attention'}
     cutover = result_cutover.check(context.db_path) if context.dry_run else result_cutover.prepare(context.db_path, now=now)
     if not cutover['ok']:
         _record_control_outcome(context, 'local', cutover, now=now)
         if not context.dry_run:
-            notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+            notify.deliver_pending(context.db_path, config=context.runtime_config, now=now, repo_ids=context.repo_ids or [context.repo_id])
         return {'ok': False, 'decision': 'control_attention', 'result': cutover}
     if context.background_lanes is not None:
         return _background_decision(context, now=now, child_runner=child_runner)
@@ -811,7 +812,7 @@ def run_once_decision(
         from robert_agent.delivery.application.submission import replay_pending_results
         replay_pending_results(context.db_path,
                                config=None if 'local' in context.control_attention else context.runtime_config)
-        notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+        notify.deliver_pending(context.db_path, config=context.runtime_config, now=now, repo_ids=context.repo_ids or [context.repo_id])
     repo_ids = context.repo_ids or [context.repo_id]
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         local_work = loop_engine.has_runnable_local_work(
@@ -911,8 +912,8 @@ def _background_decision(context, *, now, child_runner=run_child_json):
             config_result=context.runtime_config, now=now, consume_observations=True, include_publication=False)
         conn.row_factory = sqlite3.Row
         pending_publish = any(delivery_queries.ready_actions(conn, 1, repo_id=repo_id) for repo_id in repo_ids)
-        pending_delivery = bool(os.environ.get('ROBERT_NOTIFICATION_COMMAND')
-                                and execution_notifications.has_pending_local_delivery(conn, repo_ids, now))
+        pending_delivery = bool(message_transport.configured(context.runtime_config)
+                                and execution_notifications.has_pending_local_delivery(conn, repo_ids, now, config=context.runtime_config))
         refresh_pending = wakeup.has_due_context_refresh(conn, repo_ids, now)
     due = context.startup_live_poll_pending or (context.next_live_poll_at is not None and _parse_time(now) >= _parse_time(context.next_live_poll_at))
     if context.next_live_poll_at is None and not due:

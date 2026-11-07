@@ -104,3 +104,8 @@ routes:
 # Add a real repository before running config validate or starting Robert.
 # See docs/config-v2-upgrade.md for a complete repository example.
 repos: []
+
+# Optional operator chat; disabled unless explicitly configured.
+# See docs/operator-messaging.md for exact identity and repository scoping.
+messaging:
+  enabled: false
