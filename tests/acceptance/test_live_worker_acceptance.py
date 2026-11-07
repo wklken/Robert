@@ -2,8 +2,10 @@ from contextlib import closing
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from tests.support import PACKAGE_ROOT, init_test_checkout
 
@@ -80,7 +82,7 @@ default_worker: default
 workers:
   default:
     adapter: cbc
-    command: {self.worker_command}
+    command: {json.dumps([sys.executable, str(self.worker_command)])}
     model: gpt-5.4
     effort: high
 scheduler:
@@ -104,12 +106,18 @@ repos:
 
         workspace_dir = (self.root / "acceptance-workspace").resolve()
 
-        result = live_worker_acceptance.live_worker_acceptance(
-            self.config_path,
-            workspace_dir=workspace_dir,
-            timeout_seconds=5,
-            poll_interval_seconds=0.05,
-        )
+        shadow_bin = self.root / "shadow-bin"
+        shadow_bin.mkdir()
+        wrong_python = shadow_bin / "python3"
+        wrong_python.write_text("#!/bin/sh\nexit 86\n", encoding="utf-8")
+        wrong_python.chmod(0o755)
+        with patch.dict(os.environ, {"PATH": str(shadow_bin) + os.pathsep + os.environ["PATH"]}):
+            result = live_worker_acceptance.live_worker_acceptance(
+                self.config_path,
+                workspace_dir=workspace_dir,
+                timeout_seconds=5,
+                poll_interval_seconds=0.05,
+            )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["status"], "completed")

@@ -63,10 +63,17 @@ class BrokerProcessTests(unittest.TestCase):
             worktree_path=fixture.tree,
             worker_agent_config=profile,
             dry_run=False,
-            startup_probe_seconds=0.5,
+            startup_probe_seconds=0,
         )
+        process = dispatch.tracked_process(launched.get("pid"))
+        if process is not None:
+            self.addCleanup(dispatch.reap_finished_process, process.pid)
+            self.addCleanup(stop_fixture, process)
+            returncode = process.wait(timeout=9)
+        else:
+            returncode = launched.get("returncode")
         self.assertFalse(marker.exists(), launched)
-        self.assertEqual(launched.get("returncode"), 1, launched)
+        self.assertEqual(returncode, 1, launched)
         stderr = Path(launched["stderr_path"]).read_text()
         self.assertNotIn("No module named robert_agent.workflows.maintenance.worker", stderr)
 

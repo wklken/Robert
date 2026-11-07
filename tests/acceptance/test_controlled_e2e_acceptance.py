@@ -1,7 +1,11 @@
 from contextlib import closing
+import json
 import os
 from unittest.mock import patch
 import sqlite3
+import subprocess
+import sys
+import sysconfig
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +83,31 @@ repos:
             )
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["publish_result"]["published_count"], 2)
+
+    def test_generated_worker_imports_source_without_an_installed_robert(self):
+        from robert_agent.acceptance import controlled_e2e
+
+        worker = controlled_e2e._mock_new_pr_worker(self.root)
+        # -S excludes editable-install hooks. Add dependencies without processing
+        # site .pth files, so the worker must supply the Robert source search root.
+        dependencies = list({sysconfig.get_path("purelib"), sysconfig.get_path("platlib")})
+        bootstrap = (
+            f"import sys,runpy; sys.path.extend({dependencies!r}); "
+            "assert 'robert_agent' not in sys.modules; runpy.run_path(sys.argv[1], run_name='__main__')"
+        )
+        # An invalid identity exercises the full generated script without creating work.
+        prompt = f"task_id: \nattempt_id: missing\nevent_fingerprints: []\ndb_path: {self.root / 'unused.sqlite3'}\n"
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", bootstrap, str(worker)],
+            cwd=self.root,
+            input=prompt,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 1, result)
+        self.assertTrue(result.stdout, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["reason_code"], "invalid_envelope")
 
     def test_controlled_e2e_acceptance_completes_new_pr_workflow(self):
         from robert_agent.acceptance import controlled_e2e as controlled_e2e_acceptance

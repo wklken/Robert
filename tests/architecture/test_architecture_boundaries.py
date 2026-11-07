@@ -224,6 +224,14 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         commands = json.loads((PACKAGE / "resources/entrypoints.json").read_text())
         self.assertIsInstance(commands, list)
         self.assertEqual(len(commands), len(set(commands)))
+        self.assertTrue(
+            {
+                "robert_agent.runtime.paused_monitor",
+                "robert_agent.workflows.maintenance.worker",
+                "robert_agent.workflows.review.coordinator",
+                "robert_agent.workflows.vote.coordinator",
+            }.issubset(commands)
+        )
         for name in commands:
             self.assertIn(name, self.graph)
             self.assertGreaterEqual(name.count("."), 2, name)
