@@ -43,7 +43,7 @@ Robert 是一个自托管的 GitHub 队友。它把可信的 Issue、提及、�
 - **无人值守运行**：推荐 Supervisor 分别管理 daemon 和 Web，提供自动重启、状态查询和日志；
   也支持 systemd 用户服务及 macOS LaunchAgent。
 - **可审计的持久状态**：SQLite 保存任务、尝试、审核结果和发布去重记录；提供诊断历史保留策略、
-  脱敏诊断导出，以及可选的 OpenClaw 只读查询。
+  脱敏诊断导出，以及可选的 OpenClaw 查询与双向消息。
 
 ## 工作流程
 
@@ -146,8 +146,9 @@ robert openclaw install
 robert openclaw status
 ```
 
-插件只提供 Robert 状态、任务、运行和产物查询，不会启动 Robert，也不会创建
-定时任务。
+插件提供状态、任务、运行和产物查询。显式启用后，Worker 提问和 Supervisor
+故障通知可发送到 OpenClaw，受信任用户可以回复、确认或执行受状态约束的恢复操作。
+配置、权限和交付保证见[操作员消息](docs/operator-messaging.md)。
 
 ## 故障排查
 

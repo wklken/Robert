@@ -12,6 +12,7 @@
 | [操作指引](guides.md) | 多仓库、Worker、Skills、服务、Web 与 OpenClaw |
 | [配置与命令参考](reference.md) | 完整最小配置、默认值、CLI、环境变量、数据保留与恢复 |
 | [生命周期看板](web-lifecycle-board.md) | 状态含义、日常操作、异常恢复与交付证据 |
+| [操作员消息](operator-messaging.md) | OpenClaw 通知、提问、受认证回复与渠道接入边界 |
 
 ## 运行机制
 

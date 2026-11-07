@@ -34,7 +34,7 @@ def publish(config_path, *, dry_run=False):
         if row:
             repo_ids.append(row[0])
     if not dry_run:
-        notify.deliver_pending(config["db_path"], repo_ids=repo_ids)
+        notify.deliver_pending(config["db_path"], repo_ids=repo_ids, config=config)
         session = github_read.GitHubReadSession(
             config["db_path"],
             account=config["repos"][0]["github_account"],
