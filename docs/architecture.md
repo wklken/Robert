@@ -570,7 +570,7 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 
 专用表保留各自边界：`github_scan_batches` / `github_scan_reads` 保存扫描重放输入；
 `leases` / `github_control_children` 保存执行所有权；`review_sessions` / `review_runs`
-和 `vote_sessions` / `vote_runs` 保存内建轮次；`execution_*` 管理执行主体。
+和 `vote_sessions` / `vote_runs` 保存内建轮次；`execution_subjects` 是执行控制的唯一数据源；`execution_fact_receipts` 保存事实去重证据。
 `supervision_checkpoints`、`supervision_incidents`、`supervision_recovery_actions`
 保存独立监督的观察、事件和恢复记录。
 

@@ -1,7 +1,6 @@
 """Admit ordered requests and prepare available work under existing task fences."""
 
 from robert_agent.persistence import transactions as db_transactions
-from robert_agent.execution.application import replay as execution_replay
 from robert_agent.execution.application import dispatch as dispatcher
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.foundation import errors as run_errors
@@ -562,7 +561,6 @@ def admit_requests(
         round_store=vote_store,
         config_result=config_result,
     )
-    execution_replay.acknowledge_effects(conn, repo_id, run_now)
 
     if invalidation_attempt_ids:
         # Commit the classifier fence before touching any Worker process.

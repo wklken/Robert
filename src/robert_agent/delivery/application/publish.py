@@ -48,7 +48,6 @@ def publish_ready_actions(
         return control_command(*args, runner=run_command, **kwargs)
 
     with closing(db_database.connect(db_path)) as conn:
-        execution_store.require_migrated(conn)
         from robert_agent.execution.application import cutover as result_cutover
 
         cutover = result_cutover.inspect(conn, db_path) if dry_run else result_cutover.prepare(db_path)

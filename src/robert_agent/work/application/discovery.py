@@ -1,6 +1,5 @@
 """Collect, authorize and order one repository's discovery inputs."""
 
-from robert_agent.execution.application import replay as execution_replay
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.adapters.github import sources as github_sources
 from robert_agent.foundation import errors as run_errors
@@ -186,15 +185,6 @@ def discover_requests(
                     }
                     decisions[index] = authorize.authorize_event(requested, repo, known_workstreams=set())
     decisions.extend(system_decisions if not fixture_path and (not skip_external or observation is not None) else [])
-    decisions.extend(
-        execution_replay.decisions(
-            conn,
-            repo_id,
-            run_now,
-            system_decisions if not fixture_path and (not skip_external or observation is not None) else [],
-            repo=repo,
-        )
-    )
     unique_decisions = {}
     for event in decisions:
         fingerprint = event["event_fingerprint"]

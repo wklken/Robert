@@ -33,24 +33,6 @@ def find_for_for_result(conn, task_id):
     return statements.read(conn, query3, {"p0": task_id})
 
 
-def find_for_acknowledge_effects(conn, fact_id):
-    table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
-    table3 = tables["tasks"].alias("t")
-    query4 = (
-        select(table3.c["task_id"], table3.c["lifecycle"])
-        .select_from(
-            table1.join(table2, (table2.c["event_id"] == table1.c["event_id"]), isouter=False).join(
-                table3, (table3.c["task_id"] == table1.c["task_id"]), isouter=False
-            )
-        )
-        .where((table2.c["event_fingerprint"] == bindparam("p0")))
-        .correlate_except(table1, table2, table3)
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query4, {"p0": fact_id})
-
-
 def find_for_build_task(conn, task_id):
     table1 = tables["task_events"].alias("te")
     table2 = tables["github_events"].alias("ge")

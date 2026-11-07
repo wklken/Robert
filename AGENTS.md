@@ -38,7 +38,7 @@ Paths below are relative to `src/robert_agent/`.
 | Domain or boundary | Stable responsibilities | Application or composition responsibilities |
 | --- | --- | --- |
 | `work/` | Input validation, event/trust policy, workstream and operator queries, source batches, repository/task facts | `work/application/`: commands, admission, preparation, input refresh, handoff, completion and source lifecycle |
-| `execution/` | Identity/ownership, capacity, leases, progress/command journals, result spool, shared model stages and round mechanics | `execution/application/`: dispatch, monitoring, recovery evidence, replay and readiness |
+| `execution/` | Identity/ownership, capacity, leases, progress/command journals, result spool, shared model stages and round mechanics | `execution/application/`: dispatch, monitoring, recovery evidence and readiness |
 | `delivery/` | Submission contract, pure policies, locks, result/intent facts, selection and notification persistence | `delivery/application/`: audit, submission, trusted scope, guarded effects, intents, receipts, notifications, reconciliation and publication |
 | `supervision/` | Rules, lineage, durable recovery records, receipt proof and health projections | `supervision/application/`: observation, checks and publication recovery coordination |
 | `context/` | Prompt/skill rendering, review guidance, project memory and runtime knowledge | `context/application/`: transactional human knowledge review |
@@ -84,8 +84,9 @@ Paths below are relative to `src/robert_agent/`.
   Share query and mutation capabilities across callers. SQL text is limited to existing schema
   upgrades and SQLite-specific controls inside persistence.
 - Execution controls and shared model slots belong to `persistence/`.
-  Adapters cannot import their domain/use-case callers. Database upgrades belong
-  to `operations/migration.py`, which coordinates stable persistence and work facts.
+  Adapters cannot import their domain/use-case callers. Database schema initialization and upgrades belong
+  to `persistence/schema/`; execution controls use the current `execution_subjects`
+  schema directly.
   Public process-handle capabilities own access to the dispatch registry.
 - Same-layer use cases may call a named capability in another domain only in
   the direction permitted by the complete module DAG. Share facts/policies below

@@ -103,14 +103,9 @@ def lifecycle_facts(conn, item, *, controls=None):
         controls = execution_store.read_controls(conn, subjects)
     for key in sorted(subjects):
         binding = controls.get(key)
-        if binding and (
-            binding["binding_status"] == "attention"
-            or (binding.get("owner_engine") == "dbos" and binding["binding_status"] != "terminal")
-        ):
+        if binding and binding["binding_status"] == "attention":
             metadata = json.loads(binding["metadata_json"] or "{}")
-            attention.append(
-                safe_text(metadata.get("reason_code") or "Execution requires operator attention or offline migration.")
-            )
+            attention.append(safe_text(metadata.get("reason_code") or "Execution requires operator attention."))
     source = db_records.first(db_read_github_sources.find_state_by_source_id(conn, item["origin_source_id"]))
     pending = db_records.first(db_read_wakeups.find_for_lifecycle_facts(conn, item["work_item_id"]))
     approval_task = db_records.first(db_read_workstreams.find_for_lifecycle_facts(conn, item["workstream_id"]))

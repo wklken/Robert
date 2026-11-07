@@ -167,24 +167,6 @@ class ExecutionSubject(Base):
     )
 
 
-class ExecutionPendingFact(Base):
-    __tablename__ = "execution_pending_facts"
-
-    source_signal_id: Mapped[str | None] = mapped_column(Text, primary_key=True, nullable=True)
-    subject_type: Mapped[str] = mapped_column(Text)
-    subject_id: Mapped[str] = mapped_column(Text)
-    topic: Mapped[str] = mapped_column(Text)
-    dedupe_key: Mapped[str] = mapped_column(Text)
-    fact_id: Mapped[str] = mapped_column(Text)
-    disposition: Mapped[str] = mapped_column(Text)
-    repo_id: Mapped[str] = mapped_column(Text)
-    task_id: Mapped[str] = mapped_column(Text)
-    payload_json: Mapped[str] = mapped_column(Text)
-    not_before_at: Mapped[str] = mapped_column(Text)
-    consumed_at: Mapped[str | None] = mapped_column(Text)
-    resolution_json: Mapped[str] = mapped_column(Text, server_default="{}")
-
-
 class ExecutionFactReceipt(Base):
     __tablename__ = "execution_fact_receipts"
 
@@ -192,13 +174,3 @@ class ExecutionFactReceipt(Base):
     subject_id: Mapped[str] = mapped_column(Text, primary_key=True)
     fact_id: Mapped[str] = mapped_column(Text, primary_key=True)
     evidence_json: Mapped[str | None] = mapped_column(Text)
-
-
-class ExecutionMigration(Base):
-    __tablename__ = "execution_migrations"
-
-    migration_id: Mapped[str | None] = mapped_column(Text, primary_key=True, nullable=True)
-    source_fingerprint: Mapped[str] = mapped_column(Text, unique=True)
-    applied_at: Mapped[str] = mapped_column(Text)
-    snapshot_json: Mapped[str] = mapped_column(Text)
-    mappings_json: Mapped[str] = mapped_column(Text)

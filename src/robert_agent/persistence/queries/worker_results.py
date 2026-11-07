@@ -199,17 +199,6 @@ def find_result_id_by_attempt_id(conn, attempt_id):
     return statements.read(conn, query1, {"p0": attempt_id})
 
 
-def find_task_id_by_result_id(conn, fact_id):
-    query1 = (
-        select(tables["worker_results"].c["task_id"])
-        .select_from(tables["worker_results"])
-        .where((tables["worker_results"].c["result_id"] == bindparam("p0")))
-        .correlate_except(tables["worker_results"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query1, {"p0": fact_id})
-
-
 def find_for_build_dashboard_data(conn, history_limit):
     query1 = (
         select(

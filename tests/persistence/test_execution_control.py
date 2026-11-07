@@ -5,13 +5,12 @@ import unittest
 
 from robert_agent.persistence.schema import database as storage
 from robert_agent.persistence import execution_control as execution_store
-from tests.support import legacy_workflow_store as workflow_store
 
 
 NOW = "2026-08-02T00:00:00Z"
 
 
-class WorkflowStoreTests(unittest.TestCase):
+class ExecutionControlTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -93,61 +92,32 @@ class WorkflowStoreTests(unittest.TestCase):
         )
         self.conn.commit()
 
-    def test_binding_is_idempotent_and_rejects_conflicts(self):
-        first = workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "dbos", NOW)
-        same = workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "dbos", NOW)
+    def test_binding_is_idempotent(self):
+        first = execution_store.ensure_subject(self.conn, "task", "task-1", "human_request", NOW)
+        same = execution_store.ensure_subject(self.conn, "task", "task-1", "human_request", "2026-08-02T01:00:00Z")
 
         self.assertEqual(first, same)
-        self.assertEqual(first["workflow_id"], "robert:v1:task:task-1")
-        with self.assertRaises(ValueError):
-            workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "legacy", NOW)
-        with self.assertRaises(ValueError):
-            workflow_store.assert_owner(self.conn, "task", "task-1", "legacy")
-
-    def test_schema_has_all_workflow_storage_tables_and_indexes(self):
-        tables = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        indexes = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
-        self.assertTrue(
-            {
-                "workflow_bindings",
-                "workflow_outbox",
-                "workflow_signal_receipts",
-                "workflow_shadow_observations",
-                "publication_intents",
-            }.issubset(tables)
-        )
-        self.assertTrue(
-            {
-                "idx_workflow_bindings_active",
-                "idx_workflow_outbox_pending_due",
-                "idx_workflow_shadow_observations_mismatch",
-            }.issubset(indexes)
-        )
 
     def test_only_human_tasks_and_remediation_episodes_can_bind(self):
         with self.assertRaises(ValueError):
-            workflow_store.bind_subject(self.conn, "task", "task-remediation", "pr_remediation", "legacy", NOW)
+            execution_store.ensure_subject(self.conn, "task", "task-remediation", "pr_remediation", NOW)
         with self.assertRaises(ValueError):
-            workflow_store.bind_subject(
+            execution_store.ensure_subject(
                 self.conn,
                 "remediation_episode",
                 "episode-1",
                 "human_request",
-                "legacy",
                 NOW,
             )
 
-        binding = workflow_store.ensure_legacy_binding(
-            self.conn, "remediation_episode", "episode-1", "pr_remediation", NOW
-        )
-        self.assertEqual(binding["owner_engine"], "legacy")
-        self.assertIsNone(binding["workflow_id"])
+        binding = execution_store.ensure_subject(self.conn, "remediation_episode", "episode-1", "pr_remediation", NOW)
+        self.assertEqual(binding["binding_status"], "active")
+        self.assertEqual(binding["subject_id"], "episode-1")
 
-    def test_waiting_for_user_task_remains_eligible_for_legacy_migration(self):
-        binding = workflow_store.ensure_legacy_binding(self.conn, "task", "task-waiting", "human_request", NOW)
+    def test_waiting_for_user_task_can_bind(self):
+        binding = execution_store.ensure_subject(self.conn, "task", "task-waiting", "human_request", NOW)
 
         self.assertEqual(binding["binding_status"], "active")
-        self.assertEqual(binding["owner_engine"], "legacy")
 
     def test_publication_intent_is_idempotent(self):
         first = execution_store.prepare_publication_intent(self.conn, "action-1", "publish:action-1", "request-1", NOW)
@@ -179,8 +149,8 @@ class WorkflowStoreTests(unittest.TestCase):
             execution_store.transition_publication_intent(self.conn, attention["publication_id"], "executing", NOW)
 
     def test_terminal_binding_cannot_be_reopened_as_attention(self):
-        workflow_store.bind_subject(self.conn, "task", "task-1", "human_request", "legacy", NOW)
-        workflow_store.close_binding(self.conn, "task", "task-1", NOW)
+        execution_store.ensure_subject(self.conn, "task", "task-1", "human_request", NOW)
+        execution_store.close_binding(self.conn, "task", "task-1", NOW)
 
         with self.assertRaisesRegex(ValueError, "terminal"):
-            workflow_store.mark_binding_attention(self.conn, "task", "task-1", NOW)
+            execution_store.mark_binding_attention(self.conn, "task", "task-1", NOW)

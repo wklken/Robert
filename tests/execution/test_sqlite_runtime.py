@@ -29,54 +29,6 @@ class SQLiteRuntimeTests(unittest.TestCase):
                 self.assertIn("recovery_attempts", fields)
                 self.assertNotIn("owner_engine", fields)
 
-    def test_direct_entrypoints_refuse_unmigrated_dbos_subject(self):
-        from tests.support.repository_cycle import RepositoryCycleFixture
-        from robert_agent.delivery.application import publish
-        from robert_agent.runtime import cycle as run_once
-        from robert_agent.runtime import daemon
-        from tests.support import legacy_workflow_store as workflow_store
-        from robert_agent.delivery.application import submission as result
-
-        fixture = RepositoryCycleFixture()
-        fixture.setUp()
-        self.addCleanup(fixture.doCleanups)
-        db, task, attempt = fixture._seed_active_pr_task(999)
-        with closing(sqlite3.connect(db)) as conn, conn:
-            workflow_store.bind_subject(
-                conn,
-                "task",
-                task,
-                "human_request",
-                "dbos",
-                "now",
-                definition_version="v2",
-            )
-        with self.assertRaisesRegex(RuntimeError, "offline migration"):
-            publish.publish_ready_actions(db)
-        with self.assertRaisesRegex(RuntimeError, "offline migration"):
-            run_once.run_once(fixture.config_path, dry_run=False, skip_external=True)
-        _, error = daemon._load_context(fixture.config_path)
-        self.assertEqual(error["status"], "migration_required")
-        payload = result.build_result(task, attempt, "comment_analysis", [], [], "done", planned_github_actions=[])
-        with self.assertRaisesRegex(RuntimeError, "offline migration"):
-            result.record_result(db, payload)
-        from robert_agent.interfaces.web import server as web
-
-        with self.assertRaisesRegex(RuntimeError, "offline migration"):
-            web.build_control_context_from_config(
-                fixture.config_path, host="127.0.0.1", port=8765, operator_identity="test"
-            )
-        from contextlib import redirect_stdout
-        import io
-        from robert_agent.cli.main import main
-
-        output = io.StringIO()
-        with redirect_stdout(output):
-            code = main(["run", "once", "--config", str(fixture.config_path), "--dry-run", "--skip-external"])
-        self.assertNotEqual(code, 0)
-        self.assertIn("migration_required", output.getvalue())
-        self.assertIn("migrate dbos", output.getvalue())
-
     def test_native_dispatch_crash_fence_prevents_second_spawn(self):
         from unittest.mock import patch
         from tests.support.repository_cycle import RepositoryCycleFixture

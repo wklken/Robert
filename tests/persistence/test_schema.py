@@ -43,9 +43,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         "knowledge_candidates",
         "runtime_knowledge",
         "execution_subjects",
-        "workflow_outbox",
-        "workflow_signal_receipts",
-        "workflow_shadow_observations",
+        "execution_fact_receipts",
         "publication_intents",
     }
 
@@ -74,7 +72,21 @@ class ConfigAndSchemaTests(unittest.TestCase):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+            migrations = {row[0] for row in conn.execute("SELECT name FROM schema_migrations")}
         self.assertTrue(self.expected_tables.issubset(tables))
+        self.assertEqual(
+            tables
+            & {
+                "workflow_bindings",
+                "workflow_outbox",
+                "workflow_signal_receipts",
+                "workflow_shadow_observations",
+                "execution_pending_facts",
+                "execution_migrations",
+            },
+            set(),
+        )
+        self.assertNotIn("robert-dbos-workflow-v1", migrations)
         self.assertIn("idx_workstreams_one_active_task", indexes)
         self.assertIn("idx_leases_one_active_resource", indexes)
         self.assertIn("idx_wakeups_status_due", indexes)

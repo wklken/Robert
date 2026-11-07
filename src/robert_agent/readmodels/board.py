@@ -414,10 +414,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
             ) + ["cancel"]
         elif task and task["lifecycle"] == "failed" and not running and not publication_in_progress:
             if row["origin_type"] != "web":
-                binding = execution_store.read_binding(conn, "task", task["task_id"])
-                ownership_blocked = binding and (
-                    binding["binding_status"] == "attention" or binding.get("owner_engine") == "dbos"
-                )
+                binding = execution_store.get_binding(conn, "task", task["task_id"])
+                ownership_blocked = binding and binding["binding_status"] == "attention"
                 pending = db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"]))
                 operator_failure = json.loads(task["metadata_json"] or "{}").get("trigger_work_item_event_id") and any(
                     a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"]
