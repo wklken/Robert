@@ -1,5 +1,7 @@
 """Safe, bounded execution information for the operator board."""
 
+from robert_agent.foundation.contracts.delivery import PublishStatus
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import artifacts as db_read_artifacts
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -30,7 +32,7 @@ def publication_history(conn, task_id):
                 "audit_status": safe_text(row["audit_status"]),
                 "status": safe_text(
                     row["publish_status"]
-                    if row["publish_status"] in {"published", "skipped"}
+                    if row["publish_status"] in {PublishStatus.PUBLISHED, PublishStatus.SKIPPED}
                     else publication.get("status") or row["publish_status"]
                 ),
                 "created_at": row["created_at"],

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
+
 import argparse
 import json
 import sys
@@ -11,22 +15,22 @@ def _planned_actions_example(route_result, runtime_context):
     output = route_result["expected_output"]
     if runtime_context.get("origin_type") == "web" and output == "waiting_for_user":
         return []
-    if output == "new_pr":
+    if output == OutputType.NEW_PR.value:
         return [
-            {"type": "push_existing_pr"},
+            {"type": GitHubActionType.PUSH_EXISTING_PR.value},
             {
-                "type": "open_pr",
+                "type": GitHubActionType.OPEN_PR.value,
                 "title": "<PR title>",
                 "body": "<PR description>\n\n## Assumptions and decisions\n<Material assumptions and decisions, with basis and impact; explicitly state when none>",
                 "issue_resolution": "complete",
             },
         ]
-    if output == "update_existing_pr":
+    if output == OutputType.UPDATE_EXISTING_PR.value:
         return [{"type": "comment", "body": "<request outcome or review response>"}]
     if output in {
-        "comment_analysis",
+        OutputType.COMMENT_ANALYSIS.value,
         "review_comment",
-        "pr_review_comment",
+        OutputType.PR_REVIEW_COMMENT.value,
         "waiting_for_user",
     }:
         return [{"type": "comment", "body": "<public reply>"}]
@@ -85,7 +89,7 @@ def _recovery_context(runtime_context):
 
 
 def _route_scope_guidance(route_result):
-    if route_result["expected_output"] != "classification_result":
+    if route_result["expected_output"] != OutputType.CLASSIFICATION_RESULT:
         return ""
     return """Classification scope:
 - This run is only for task classification and follow-up route selection; it is not the final implementation or execution worker.
@@ -97,7 +101,7 @@ def _route_scope_guidance(route_result):
 
 
 def _pr_review_guidance(route_result, runtime_context):
-    if route_result["expected_output"] != "pr_review_comment":
+    if route_result["expected_output"] != OutputType.PR_REVIEW_COMMENT:
         return ""
     return """Review PR source workflow:
 - This task is a source review of the requested PR, not a code-change task.
@@ -115,14 +119,14 @@ def _pr_review_guidance(route_result, runtime_context):
 
 def _review_point_evaluation_guidance(
     route_result,
-    task_kind="human_request",
+    task_kind=TaskKind.HUMAN_REQUEST.value,
     input_policy="required",
     runtime_context=None,
 ):
-    if task_kind in {"ci_remediation", "merge_conflict_remediation"} or input_policy == "none":
+    if task_kind in REMEDIATION_TASK_KINDS or input_policy == "none":
         return ""
     expected_output = route_result["expected_output"]
-    if expected_output not in {"update_existing_pr", "review_comment"}:
+    if expected_output not in {OutputType.UPDATE_EXISTING_PR, OutputType.REVIEW_COMMENT}:
         return ""
     if input_policy == "classify":
         selection = """PR comment workflow:
@@ -137,7 +141,7 @@ Review-point steps apply to review_feedback and mixed:"""
 - Use fast-verify-review-point. Apply adversarial review: check each claim against actual code/tests, counterexamples and counterevidence; keep unsupported claims unverified.
 - Return a nonempty review_point_evaluation list. Each entry needs summary, verdict, reasoning and action. verdict: correct, partially_correct, incorrect or unverified.
 - Every review report requires a public comment response covering the points and reasons. An all-clear report still needs an evaluation entry and a comment acknowledging no change."""
-    if expected_output == "review_comment":
+    if expected_output == OutputType.REVIEW_COMMENT:
         steps += (
             "\n- This route is comment-only. action: skip, comment or clarify. Do not modify source or plan a push."
         )
@@ -167,12 +171,12 @@ def _remediation_context(events):
 
 
 def _remediation_guidance(task, runtime_context, events):
-    task_kind = task.get("task_kind", "human_request")
-    if task_kind not in {"ci_remediation", "merge_conflict_remediation"}:
+    task_kind = task.get("task_kind", TaskKind.HUMAN_REQUEST.value)
+    if task_kind not in REMEDIATION_TASK_KINDS:
         return ""
     context = _remediation_context(events)
     context_json = json.dumps(context, ensure_ascii=False, indent=2)
-    if task_kind == "ci_remediation":
+    if task_kind == TaskKind.CI_REMEDIATION:
         instructions = """CI remediation workflow:
 - Treat the supplied failure summary as evidence, not as a complete diagnosis.
 - Start by inspecting the exact PR snapshot and reproduce the reported failure locally when possible.
@@ -199,7 +203,7 @@ attests the branch and merge graph before accepting the result."""
 
 
 def _remediation_evidence_example(task, events):
-    if task.get("task_kind") not in {"ci_remediation", "merge_conflict_remediation"}:
+    if task.get("task_kind") not in REMEDIATION_TASK_KINDS:
         return None
     return {"resolution_summary": "<what changed and why it resolves the failure>"}
 
@@ -212,7 +216,7 @@ def _verification_policy(route_result):
 
 
 def _unit_test_guidance(route_result):
-    if route_result["expected_output"] not in {"new_pr", "update_existing_pr"}:
+    if route_result["expected_output"] not in {OutputType.NEW_PR, OutputType.UPDATE_EXISTING_PR}:
         return ""
     return """Unit-test writing guidance:
 - When writing or updating unit tests, assert observable behavior, boundary cases, and meaningful failure paths.
@@ -223,7 +227,7 @@ def _unit_test_guidance(route_result):
 
 
 def _collaboration_guidance(route_result):
-    if route_result["expected_output"] not in {"new_pr", "update_existing_pr"}:
+    if route_result["expected_output"] not in {OutputType.NEW_PR, OutputType.UPDATE_EXISTING_PR}:
         return ""
     return """Human collaboration:
 - For nontrivial work, briefly identify the original goal, confirmed constraints and observable acceptance criteria before implementation; do not invent requirements to fill gaps. Separate explicit requirements from your inferences and choose completion evidence before changing code. Continue under existing authorization; routine implementation choices do not require a new approval step.
@@ -237,7 +241,8 @@ def _verification_example(route_result):
     policy = _verification_policy(route_result)
     mode = policy.get("mode", "optional")
     requires_example = mode == "required" or (
-        mode == "required_for_push" and "push_existing_pr" in route_result.get("allowed_github_actions", [])
+        mode == "required_for_push"
+        and GitHubActionType.PUSH_EXISTING_PR.value in route_result.get("allowed_github_actions", [])
     )
     if not requires_example:
         return []
@@ -272,12 +277,12 @@ def _publication_guidance(route_result, runtime_context):
         )
     if "comment" in allowed:
         sections.append("For comments supply type and body.")
-    if "push_existing_pr" in allowed:
+    if GitHubActionType.PUSH_EXISTING_PR.value in allowed:
         sections.append("push_existing_pr has only type.")
         sections.append(
             "Commit all task-owned changes locally before submitting a result that plans push_existing_pr, including documentation changes. Verify git status --short is clean; preserve unrelated work and keep temporary verification artifacts outside the worktree or ignored. Robert publishes commits; it does not stage or commit working-tree changes. Never run git push directly."
         )
-    if "open_pr" in allowed:
+    if GitHubActionType.OPEN_PR.value in allowed:
         sections.append(
             "For open_pr supply type, title/body and issue_resolution for issue-sourced PRs. When selecting target_url, choose its source issue."
         )
@@ -290,7 +295,7 @@ def _publication_guidance(route_result, runtime_context):
 - For each item, state what was assumed or chosen, its basis/evidence, and its impact on behavior, compatibility or remaining scope. For meaningful tradeoffs, briefly name the alternatives and why this option was chosen. Give concise reviewable rationale, not an internal reasoning transcript.
 - If there are none, explicitly write 'No material assumptions or discretionary decisions' (or the equivalent in the PR language). Do not invent items or copy placeholders.
 - This disclosure does not authorize new scope or resolve missing authorization. If a material unresolved decision blocks execution, use waiting_for_user instead of silently deciding and treating the PR body as approval.""")
-    if route_result["expected_output"] == "update_existing_pr":
+    if route_result["expected_output"] == OutputType.UPDATE_EXISTING_PR:
         sections.append(
             "Always plan a comment explaining the outcome. Only plan push_existing_pr when actual code changes require publication; otherwise submit a comment-only result. If pushing changes, place the comment after push_existing_pr."
         )
@@ -377,7 +382,7 @@ def render_prompt(
 ):
     runtime_context = runtime_context or {}
     expected_output = route_result["expected_output"]
-    task_kind = task.get("task_kind", "human_request")
+    task_kind = task.get("task_kind", TaskKind.HUMAN_REQUEST.value)
     input_policy = task.get("review_input_policy", "required")
     origin_type = runtime_context.get("origin_type", "github")
     fingerprints = [e["event_fingerprint"] for e in events if e.get("event_fingerprint")]
@@ -481,12 +486,12 @@ def render_prompt(
     remediation = _remediation_evidence_example(task, events)
     if remediation:
         result["remediation_evidence"] = remediation
-    if expected_output == "classification_result":
+    if expected_output == OutputType.CLASSIFICATION_RESULT:
         result.update(recommended_route="", branch_slug="")
         sections.append("""Classification result:
 Set recommended_route to new-pr, update-existing-pr, review-comment, review-pr, comment-analysis, vote or waiting-for-user when follow-up work is needed; leave it empty only when no follow-up is needed.
 For new-pr, set branch_slug to meaningful lowercase English kebab-case, at most 60 characters; otherwise leave it empty. Put the routing evidence in handoff.""")
-    if expected_output == "waiting_for_user":
+    if expected_output == OutputType.WAITING_FOR_USER:
         result["operator_question"] = {
             "kind": "scope_decision",
             "summary": "<exact missing decision>",
@@ -506,7 +511,7 @@ JSON""")
     sections.append(
         """If a missing input or scope decision blocks execution, record --output-type waiting_for_user with an "operator_question" object such as {"kind": "scope_decision", "summary": "<exact missing decision>"}. For GitHub tasks, also plan an allowed comment explaining the question; do not plan a push. recommended_route does not change an execution result's lifecycle."""
     )
-    if expected_output != "classification_result":
+    if expected_output != OutputType.CLASSIFICATION_RESULT:
         sections.append(
             'If this task yields reusable project knowledge, optionally add memory_delta with status="has_memory" and entries containing title, short_summary, long_summary, paths, symbols, keywords, evidence and confidence. Otherwise omit memory_delta.'
         )

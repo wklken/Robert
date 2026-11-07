@@ -1,5 +1,7 @@
 """Reauthorize preserved requests and append input under execution ownership."""
 
+from robert_agent.foundation.contracts.work import TaskKind
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import work_items as db_read_work_items
@@ -36,7 +38,7 @@ def _json_object(value):
 
 def ordinary_dispatch_allowed(conn, task_id, repo):
     row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
-    if not row or row[0] != "human_request":
+    if not row or row[0] != TaskKind.HUMAN_REQUEST.value:
         return True  # System remediation is governed by its Episode policy.
     metadata = _json_object(row[1])
     item = db_records.first(db_read_work_items.find_for_ordinary_dispatch_allowed(conn, task_id))

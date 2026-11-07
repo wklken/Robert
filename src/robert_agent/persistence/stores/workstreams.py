@@ -1,5 +1,7 @@
 """Shared stores operations for workstreams."""
 
+from robert_agent.foundation.contracts.work import WorkstreamLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import select, update, bindparam, null, LABEL_STYLE_NONE
@@ -16,7 +18,7 @@ def insert_fixture(conn, now, now_2):
             "workstream_id": sql_constant("github:x/y#1"),
             "repo_id": sql_constant("repo-1"),
             "primary_source_id": sql_constant("source-1"),
-            "lifecycle": sql_constant("active"),
+            "lifecycle": sql_constant(WorkstreamLifecycle.ACTIVE.value),
             "created_at": bindparam("p0"),
             "updated_at": bindparam("p1"),
         }
@@ -30,7 +32,7 @@ def insert_canary_fixture(conn, source_key, now, now_3):
             "workstream_id": bindparam("p0"),
             "repo_id": sql_constant("repo-production-canary"),
             "primary_source_id": sql_constant("source-production-canary"),
-            "lifecycle": sql_constant("completed"),
+            "lifecycle": sql_constant(WorkstreamLifecycle.COMPLETED.value),
             "created_at": bindparam("p1"),
             "updated_at": bindparam("p2"),
         }
@@ -43,7 +45,7 @@ def update_for_dispatch_queued_locked(conn, now, task_id):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("completed"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.COMPLETED.value),
                 "active_task_id": null(),
                 "updated_at": bindparam("p0"),
             }
@@ -58,7 +60,7 @@ def update_for_supervise_running_attempts(conn, run_now, workstream_id):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("failed"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.FAILED.value),
                 "active_task_id": null(),
                 "updated_at": bindparam("p0"),
             }
@@ -82,7 +84,7 @@ def update_for_create_task(conn, task_id, now, workstream_id):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("active"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.ACTIVE.value),
                 "active_task_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -97,7 +99,7 @@ def insert_for_activate(conn, workstream_id, repo_id, now, now_4, value_5):
         {
             "workstream_id": bindparam("p0"),
             "repo_id": bindparam("p1"),
-            "lifecycle": sql_constant("active"),
+            "lifecycle": sql_constant(WorkstreamLifecycle.ACTIVE.value),
             "active_task_id": null(),
             "created_at": bindparam("p2"),
             "updated_at": bindparam("p3"),
@@ -116,7 +118,7 @@ def update_for_execute_command(conn, now, workstream_id):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("completed"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.COMPLETED.value),
                 "active_task_id": null(),
                 "updated_at": bindparam("p0"),
             }
@@ -135,7 +137,7 @@ def insert_for_materialize_open_pr_workstream(
             "repo_id": bindparam("p1"),
             "primary_source_id": bindparam("p2"),
             "origin_workstream_id": bindparam("p3"),
-            "lifecycle": sql_constant("completed"),
+            "lifecycle": sql_constant(WorkstreamLifecycle.COMPLETED.value),
             "active_task_id": null(),
             "created_at": bindparam("p4"),
             "updated_at": bindparam("p5"),
@@ -169,7 +171,7 @@ def update_for_finalize_failed_task(conn, run_now, value_2, workstream_id):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("failed"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.FAILED.value),
                 "active_task_id": null(),
                 "updated_at": bindparam("p0"),
                 "metadata_json": bindparam("p1"),
@@ -185,7 +187,7 @@ def mark_task_waiting_for_user(conn, task_id, run_now, workstream_id):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("waiting_for_user"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.WAITING_FOR_USER.value),
                 "active_task_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -273,7 +275,7 @@ def record_remote_terminal_state_locked_2(conn, run_now, work_item_id):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("completed"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.COMPLETED.value),
                 "active_task_id": null(),
                 "updated_at": bindparam("p0"),
             }
@@ -288,7 +290,7 @@ def cancel_execution_filtered(conn, items, value_1):
         update(tables["workstreams"])
         .values(
             {
-                "lifecycle": sql_constant("canceled"),
+                "lifecycle": sql_constant(WorkstreamLifecycle.CANCELED.value),
                 "active_task_id": null(),
                 "updated_at": bindparam("p0"),
             }

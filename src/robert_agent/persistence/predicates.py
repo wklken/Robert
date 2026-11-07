@@ -1,5 +1,8 @@
 """Shared persisted ownership predicates used by queries and atomic writes."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from robert_agent.persistence.catalog import tables
@@ -12,9 +15,9 @@ from robert_agent.models.execution import ExecutionSubject
 def occupied_attempt(attempt):
     """A result does not establish that its recorded process has exited."""
     return or_(
-        attempt.c.status.in_((sql_constant("running"), sql_constant("stale"))),
+        attempt.c.status.in_((sql_constant(AttemptStatus.RUNNING.value), sql_constant(AttemptStatus.STALE.value))),
         and_(
-            attempt.c.status == sql_constant("completed"),
+            attempt.c.status == sql_constant(AttemptStatus.COMPLETED.value),
             func.json_type(attempt.c.metadata_json, sql_constant("$.dispatch.pid")) == sql_constant("integer"),
             func.json_extract(attempt.c.metadata_json, sql_constant("$.process_stopped_at")).is_(None),
         ),
@@ -27,7 +30,7 @@ def execution_attention_free(task):
         select(1)
         .select_from(control)
         .where(
-            control.c.binding_status == sql_constant("attention"),
+            control.c.binding_status == sql_constant(BindingStatus.ATTENTION.value),
             or_(
                 and_(
                     control.c.subject_type == sql_constant("task"),
@@ -59,7 +62,7 @@ def runnable_task(task):
 def earlier_action(earlier, action):
     return and_(
         earlier.c.result_id == action.c.result_id,
-        earlier.c.publish_status == sql_constant("not_published"),
+        earlier.c.publish_status == sql_constant(PublishStatus.NOT_PUBLISHED.value),
         or_(
             earlier.c.created_at < action.c.created_at,
             and_(
@@ -92,7 +95,7 @@ def publication_ready(action, now):
         select(1)
         .where(
             intent.c.action_id == action.c.action_id,
-            intent.c.status == sql_constant("executing"),
+            intent.c.status == sql_constant(PublicationStatus.EXECUTING.value),
         )
         .correlate_except(intent)
         .exists()
@@ -101,7 +104,7 @@ def publication_ready(action, now):
         select(1)
         .where(
             intent.c.action_id == action.c.action_id,
-            intent.c.status == sql_constant("attention"),
+            intent.c.status == sql_constant(PublicationStatus.ATTENTION.value),
         )
         .correlate_except(intent)
         .exists()
@@ -110,7 +113,7 @@ def publication_ready(action, now):
         select(1)
         .where(
             earlier_intent.c.action_id == earlier.c.action_id,
-            earlier_intent.c.status == sql_constant("attention"),
+            earlier_intent.c.status == sql_constant(PublicationStatus.ATTENTION.value),
         )
         .correlate_except(earlier_intent)
         .exists()
@@ -119,9 +122,11 @@ def publication_ready(action, now):
         select(1)
         .where(
             earlier_action(earlier, action),
-            earlier.c.audit_status.in_((sql_constant("pending"), sql_constant("accepted"))),
+            earlier.c.audit_status.in_(
+                (sql_constant(AuditStatus.PENDING.value), sql_constant(AuditStatus.ACCEPTED.value))
+            ),
             or_(
-                earlier.c.audit_status == sql_constant("pending"),
+                earlier.c.audit_status == sql_constant(AuditStatus.PENDING.value),
                 func.json_extract(earlier.c.metadata_json, sql_constant("$.publish.status"))
                 == sql_constant("publish_failed"),
                 prior_attention,
@@ -132,8 +137,8 @@ def publication_ready(action, now):
     )
     retry_at = func.json_extract(action.c.metadata_json, sql_constant("$.publish.next_retry_at"))
     return and_(
-        action.c.audit_status == sql_constant("accepted"),
-        action.c.publish_status == sql_constant("not_published"),
+        action.c.audit_status == sql_constant(AuditStatus.ACCEPTED.value),
+        action.c.publish_status == sql_constant(PublishStatus.NOT_PUBLISHED.value),
         ~running,
         or_(
             func.coalesce(

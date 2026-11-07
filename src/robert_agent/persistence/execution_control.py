@@ -4,6 +4,10 @@ Execution ownership is represented by the existing repository leases and attempt
 identity; these records preserve recovery limits and stopped-state evidence.
 """
 
+from robert_agent.foundation.contracts.delivery import PublicationStatus
+from robert_agent.foundation.contracts.execution import BindingStatus
+from robert_agent.foundation.contracts.work import TERMINAL_REMEDIATION_STATUSES, TERMINAL_TASK_LIFECYCLES, TaskKind
+
 import hashlib
 import json
 
@@ -22,9 +26,6 @@ from robert_agent.persistence.stores import (
     execution_subjects as db_write_execution_subjects,
     publication_intents as db_write_publication_intents,
 )
-
-_TERMINAL_TASK_LIFECYCLES = {"completed", "failed", "canceled", "ignored"}
-_TERMINAL_EPISODE_STATUSES = {"resolved", "exhausted", "superseded", "canceled"}
 
 
 def get_binding(conn, subject_type, subject_id):
@@ -61,12 +62,17 @@ def ensure_subject(conn, subject_type, subject_id, workflow_kind, now):
 
 
 _PUBLICATION_TRANSITIONS = {
-    "prepared": {"executing"},
-    "executing": {"published", "confirmed_absent", "failed", "attention"},
-    "confirmed_absent": {"executing"},
-    "failed": {"executing"},
-    "published": set(),
-    "attention": set(),
+    PublicationStatus.PREPARED.value: {PublicationStatus.EXECUTING.value},
+    PublicationStatus.EXECUTING.value: {
+        PublicationStatus.PUBLISHED.value,
+        PublicationStatus.CONFIRMED_ABSENT.value,
+        PublicationStatus.FAILED.value,
+        PublicationStatus.ATTENTION.value,
+    },
+    PublicationStatus.CONFIRMED_ABSENT.value: {PublicationStatus.EXECUTING.value},
+    PublicationStatus.FAILED.value: {PublicationStatus.EXECUTING.value},
+    PublicationStatus.PUBLISHED.value: set(),
+    PublicationStatus.ATTENTION.value: set(),
 }
 
 
@@ -88,7 +94,7 @@ def _id(prefix, *values):
 
 def _validate_subject(conn, subject_type, subject_id, workflow_kind):
     legal_pairs = {
-        ("task", "human_request"),
+        ("task", TaskKind.HUMAN_REQUEST.value),
         ("remediation_episode", "pr_remediation"),
     }
     if (subject_type, workflow_kind) not in legal_pairs:
@@ -97,13 +103,13 @@ def _validate_subject(conn, subject_type, subject_id, workflow_kind):
         row = db_records.first(db_read_tasks.find_task_kind_and_lifecycle_by_task_id(conn, subject_id))
         if not row:
             raise ValueError("workflow task subject does not exist")
-        if row[0] != "human_request" or row[1] in _TERMINAL_TASK_LIFECYCLES:
+        if row[0] != TaskKind.HUMAN_REQUEST.value or row[1] in TERMINAL_TASK_LIFECYCLES:
             raise ValueError("workflow task subject is not eligible")
         return
     row = db_records.first(db_read_pr_remediation_episodes.find_status_by_episode_id(conn, subject_id))
     if not row:
         raise ValueError("workflow remediation episode subject does not exist")
-    if row[0] in _TERMINAL_EPISODE_STATUSES:
+    if row[0] in TERMINAL_REMEDIATION_STATUSES:
         raise ValueError("workflow remediation episode subject is not eligible")
 
 
@@ -111,7 +117,7 @@ def close_binding(conn, subject_type, subject_id, now):
     binding = get_binding(conn, subject_type, subject_id)
     if not binding:
         raise ValueError("workflow subject is not bound")
-    if binding["binding_status"] == "terminal":
+    if binding["binding_status"] == BindingStatus.TERMINAL:
         return binding
     db_write_execution_subjects.update_for_close_binding(conn, now, now, subject_type, subject_id)
     return get_binding(conn, subject_type, subject_id)
@@ -121,9 +127,9 @@ def mark_binding_attention(conn, subject_type, subject_id, now):
     binding = get_binding(conn, subject_type, subject_id)
     if not binding:
         raise ValueError("workflow subject is not bound")
-    if binding["binding_status"] == "attention":
+    if binding["binding_status"] == BindingStatus.ATTENTION:
         return binding
-    if binding["binding_status"] == "terminal":
+    if binding["binding_status"] == BindingStatus.TERMINAL:
         raise ValueError("terminal workflow binding cannot require attention")
     db_write_execution_subjects.mark_binding_attention(conn, now, subject_type, subject_id)
     return get_binding(conn, subject_type, subject_id)
@@ -157,13 +163,18 @@ def transition_publication_intent(conn, publication_id, status, now, remote_evid
         raise ValueError(f"illegal publication intent transition: {intent['status']} -> {status}")
     changes = {"status": status, "updated_at": now}
     table = model_tables["publication_intents"]
-    if status == "executing":
+    if status == PublicationStatus.EXECUTING.value:
         changes.update(
             started_at=func.coalesce(table.c.started_at, now),
             finished_at=None,
             error_json=None,
         )
-    if status in {"published", "confirmed_absent", "failed", "attention"}:
+    if status in {
+        PublicationStatus.PUBLISHED.value,
+        PublicationStatus.CONFIRMED_ABSENT.value,
+        PublicationStatus.FAILED.value,
+        PublicationStatus.ATTENTION.value,
+    }:
         changes["finished_at"] = now
     if remote_evidence is not None:
         changes["remote_evidence_json"] = _json(remote_evidence)

@@ -1,5 +1,9 @@
 """Legacy result contract evidence used by the cutover guard."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import select, and_, or_, func
@@ -18,7 +22,9 @@ def legacy_evidence(conn, contract_id):
         tables["github_actions"],
     )
     task, attempt, result = tasks.c, attempts.c, results.c
-    unfinished = task.lifecycle.in_((sql_constant("queued"), sql_constant("running")))
+    unfinished = task.lifecycle.in_(
+        (sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value))
+    )
 
     attempt_query = (
         select(
@@ -31,8 +37,10 @@ def legacy_evidence(conn, contract_id):
         .select_from(attempts.join(tasks, task.task_id == attempt.task_id))
         .where(
             or_(
-                attempt.status.in_((sql_constant("running"), sql_constant("stale"))),
-                and_(attempt.status == "prepared", unfinished),
+                attempt.status.in_(
+                    (sql_constant(AttemptStatus.RUNNING.value), sql_constant(AttemptStatus.STALE.value))
+                ),
+                and_(attempt.status == AttemptStatus.PREPARED, unfinished),
             ),
             func.coalesce(
                 func.json_extract(attempt.metadata_json, sql_constant("$.result_contract")),
@@ -43,10 +51,12 @@ def legacy_evidence(conn, contract_id):
     )
 
     # The uncorrelated sets avoid rescanning the terminal history for each result.
-    active_tasks = select(streams.c.active_task_id).where(streams.c.lifecycle == sql_constant("active"))
+    active_tasks = select(streams.c.active_task_id).where(
+        streams.c.lifecycle == sql_constant(WorkstreamLifecycle.ACTIVE.value)
+    )
     pending_results = select(actions.c.result_id).where(
-        actions.c.publish_status == sql_constant("not_published"),
-        actions.c.audit_status.in_((sql_constant("pending"), sql_constant("accepted"))),
+        actions.c.publish_status == sql_constant(PublishStatus.NOT_PUBLISHED.value),
+        actions.c.audit_status.in_((sql_constant(AuditStatus.PENDING.value), sql_constant(AuditStatus.ACCEPTED.value))),
     )
     result_query = (
         select(result.result_id, result.task_id)

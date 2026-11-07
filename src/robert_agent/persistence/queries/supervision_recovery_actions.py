@@ -1,5 +1,7 @@
 """Shared queries operations for supervision_recovery_actions."""
 
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind, RecoveryStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -103,8 +105,8 @@ def find_for_begin(conn, task_id):
                     .c["action_kind"]
                     .in_(
                         [
-                            sql_constant("publication_retry"),
-                            sql_constant("publication_reconcile"),
+                            sql_constant(RecoveryActionKind.PUBLICATION_RETRY.value),
+                            sql_constant(RecoveryActionKind.PUBLICATION_RECONCILE.value),
                         ]
                     )
                 ),
@@ -112,10 +114,10 @@ def find_for_begin(conn, task_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("requested"),
-                        sql_constant("applying"),
-                        sql_constant("observing"),
-                        sql_constant("unknown"),
+                        sql_constant(RecoveryStatus.REQUESTED.value),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
                     ]
                 ),
             )
@@ -139,17 +141,17 @@ def find_for_begin_2(conn, task_id, action_id):
                 .c["action_kind"]
                 .in_(
                     [
-                        sql_constant("publication_retry"),
-                        sql_constant("publication_reconcile"),
+                        sql_constant(RecoveryActionKind.PUBLICATION_RETRY.value),
+                        sql_constant(RecoveryActionKind.PUBLICATION_RECONCILE.value),
                     ]
                 ),
                 tables["supervision_recovery_actions"]
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("applying"),
-                        sql_constant("unknown"),
-                        sql_constant("observing"),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
                     ]
                 ),
             )
@@ -171,10 +173,10 @@ def find_for_budget_block_2(conn, lineage):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("requested"),
-                        sql_constant("applying"),
-                        sql_constant("observing"),
-                        sql_constant("unknown"),
+                        sql_constant(RecoveryStatus.REQUESTED.value),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
                     ]
                 ),
             )
@@ -202,10 +204,10 @@ def find_for_blocks_consumer(conn, task_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("requested"),
-                        sql_constant("applying"),
-                        sql_constant("observing"),
-                        sql_constant("unknown"),
+                        sql_constant(RecoveryStatus.REQUESTED.value),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
                     ]
                 ),
             )
@@ -234,7 +236,7 @@ def find_for_fenced(conn, action_id, claim_owner, claim_generation):
         .where(
             and_(
                 tables["supervision_recovery_actions"].c["action_id"] == bindparam("p0"),
-                tables["supervision_recovery_actions"].c["status"] == sql_constant("applying"),
+                tables["supervision_recovery_actions"].c["status"] == sql_constant(RecoveryStatus.APPLYING.value),
                 tables["supervision_recovery_actions"].c["claim_owner"] == bindparam("p1"),
                 tables["supervision_recovery_actions"].c["claim_generation"] == bindparam("p2"),
             )
@@ -254,7 +256,7 @@ def find_for_finish(conn, action_id, claim_owner, claim_generation):
                 tables["supervision_recovery_actions"].c["action_id"] == bindparam("p0"),
                 tables["supervision_recovery_actions"]
                 .c["status"]
-                .in_([sql_constant("applying"), sql_constant("unknown")]),
+                .in_([sql_constant(RecoveryStatus.APPLYING.value), sql_constant(RecoveryStatus.UNKNOWN.value)]),
                 tables["supervision_recovery_actions"].c["claim_owner"] == bindparam("p1"),
                 tables["supervision_recovery_actions"].c["claim_generation"] == bindparam("p2"),
             )
@@ -275,10 +277,10 @@ def find_for_verify(conn, now, value_2):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("requested"),
-                        sql_constant("applying"),
-                        sql_constant("observing"),
-                        sql_constant("unknown"),
+                        sql_constant(RecoveryStatus.REQUESTED.value),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
                     ]
                 ),
                 (
@@ -315,10 +317,10 @@ def find_for_begin_3(conn, task_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("requested"),
-                        sql_constant("applying"),
-                        sql_constant("observing"),
-                        sql_constant("unknown"),
+                        sql_constant(RecoveryStatus.REQUESTED.value),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
                     ]
                 ),
             )
@@ -341,10 +343,10 @@ def find_for_begin_4(conn, task_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("requested"),
-                        sql_constant("applying"),
-                        sql_constant("observing"),
-                        sql_constant("unknown"),
+                        sql_constant(RecoveryStatus.REQUESTED.value),
+                        sql_constant(RecoveryStatus.APPLYING.value),
+                        sql_constant(RecoveryStatus.OBSERVING.value),
+                        sql_constant(RecoveryStatus.UNKNOWN.value),
                     ]
                 ),
             )

@@ -1,5 +1,7 @@
 """Shared queries operations for github_events."""
 
+from robert_agent.foundation.contracts.work import WorkstreamLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -266,7 +268,9 @@ def scan_repo_filtered(conn, items, value_1, value_2):
                 table1.c["actor_login"] != bindparam("p1"),
                 table1.c["actor_kind"] != sql_constant("github_system"),
                 func.lower(table2.c["state"]) == sql_constant("open"),
-                table3.c["lifecycle"].in_([sql_constant("completed"), sql_constant("failed")]),
+                table3.c["lifecycle"].in_(
+                    [sql_constant(WorkstreamLifecycle.COMPLETED.value), sql_constant(WorkstreamLifecycle.FAILED.value)]
+                ),
                 table3.c["active_task_id"].is_(null()),
                 not_(query6.exists()),
                 not_(query8.exists()),

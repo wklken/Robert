@@ -1,5 +1,9 @@
 """application delivery publish responsibilities."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 
@@ -96,7 +100,7 @@ def publish_ready_actions(
                     latest = db_records.first(
                         db_read_github_actions.find_record_by_action_id(conn, action["action_id"])
                     )
-                    if latest and latest["publish_status"] not in {"published", "skipped"}:
+                    if latest and latest["publish_status"] not in {PublishStatus.PUBLISHED, PublishStatus.SKIPPED}:
                         publication_outcomes.mark_skipped(
                             conn,
                             dict(latest),
@@ -143,7 +147,8 @@ def publish_ready_actions(
                     existing_intent = intent_facts.load_intent(conn, action["action_id"])
                     # Unknown effects can still be reconciled after the write budget is exhausted.
                     if (
-                        not existing_intent or existing_intent["status"] not in {"executing", "published"}
+                        not existing_intent
+                        or existing_intent["status"] not in {PublicationStatus.EXECUTING, PublicationStatus.PUBLISHED}
                     ) and publication_queries.retry_budget_exhausted(prior, now):
                         publication_outcomes.record_failure(
                             conn,
@@ -195,7 +200,7 @@ def publish_ready_actions(
                     # A completed intent is replay success.  Normally the action was
                     # committed in the same transaction; this branch repairs an old
                     # partial local update without contacting GitHub again.
-                    if action.get("publish_status") == "not_published":
+                    if action.get("publish_status") == PublishStatus.NOT_PUBLISHED:
                         result = {
                             "ok": True,
                             "status": "published",
@@ -396,7 +401,9 @@ def publish_ready_actions(
                                 if supervision.get("reconcile_only"):
                                     claim = supervision.get("claim") or {}
                                     outcome = (
-                                        "failed" if claim.get("action_kind") == "publication_retry" else "observing"
+                                        "failed"
+                                        if claim.get("action_kind") == RecoveryActionKind.PUBLICATION_RETRY.value
+                                        else "observing"
                                     )
                                     supervision_publication.finish(
                                         conn,
@@ -603,7 +610,7 @@ def publish_ready_actions(
                             and result_id
                             and not scope.get("review_round_id")
                             and not scope.get("vote_round_id")
-                            and scope.get("task_kind") not in {"ci_remediation", "merge_conflict_remediation"}
+                            and scope.get("task_kind") not in REMEDIATION_TASK_KINDS
                         ):
                             from robert_agent.work.application import lifecycle as work_application_lifecycle
 
@@ -623,9 +630,9 @@ def publish_ready_actions(
                     failed_result_ids.add(result_id)
                     action_scope = scope
                     if (
-                        action["action_type"] == "push_existing_pr"
+                        action["action_type"] == GitHubActionType.PUSH_EXISTING_PR
                         and isinstance(action_scope, dict)
-                        and action_scope.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
+                        and action_scope.get("task_kind") in REMEDIATION_TASK_KINDS
                     ):
                         failed_remediation_result_ids.add(result_id)
                 failed_count += 1

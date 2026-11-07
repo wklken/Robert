@@ -1,5 +1,8 @@
 """Validate supervision settings without importing execution services."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+
 from pathlib import Path
 import re
 
@@ -16,11 +19,11 @@ DEFAULTS = {
 }
 
 RECOVERY_STAGES = {
-    "spool_replay": "ingestion",
-    "audit_retry": "audit",
-    "handoff_resume": "handoff",
-    "publication_retry": "publication",
-    "publication_reconcile": "publication_reconcile",
+    RecoveryActionKind.SPOOL_REPLAY.value: "ingestion",
+    RecoveryActionKind.AUDIT_RETRY.value: "audit",
+    RecoveryActionKind.HANDOFF_RESUME.value: "handoff",
+    RecoveryActionKind.PUBLICATION_RETRY.value: "publication",
+    RecoveryActionKind.PUBLICATION_RECONCILE.value: "publication_reconcile",
 }
 
 _DIAGNOSIS_DEFAULTS = {
@@ -46,7 +49,7 @@ _DENIED_ENV_PREFIXES = (
 )
 _DENIED_ENV_NAMES = {"HOME", "PATH", "TMPDIR", "BASH_ENV", "ENV", "NODE_OPTIONS"}
 
-REPAIR_ACTIONS = ("push_existing_pr", "open_pr")
+REPAIR_ACTIONS = (GitHubActionType.PUSH_EXISTING_PR.value, GitHubActionType.OPEN_PR.value)
 _REPAIR_DEFAULTS: dict[str, object] = {
     "mode": "backlog",
     "worker": None,

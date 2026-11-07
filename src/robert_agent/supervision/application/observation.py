@@ -1,5 +1,9 @@
 """Collect bounded supervision evidence without advancing Robert's workflows."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence.queries import observation as observation_queries
 
 from robert_agent.persistence.queries import repos as db_read_repos
@@ -157,7 +161,7 @@ def _publication_facts(conn, facts, now):
     actions = db_read_github_actions.find_for_publication_facts(
         conn, now, facts["result_id"], MAX_ACTIONS_PER_RESULT + 1
     )
-    pending = [action for action in actions if action["publish_status"] == "not_published"]
+    pending = [action for action in actions if action["publish_status"] == PublishStatus.NOT_PUBLISHED]
     if pending:
         action = next((row for row in pending if row["eligible"]), pending[0])
         relevant = (action["retry_at"], facts.get("process_stopped_at"), facts.get("audited_at"), action["created_at"])
@@ -167,14 +171,16 @@ def _publication_facts(conn, facts, now):
             intent_status=action["intent_status"],
             intent_started_at=action["intent_started_at"],
             publish_reason=action["publish_reason"],
-            publication_terminal_failure=action["intent_status"] == "attention"
+            publication_terminal_failure=action["intent_status"] == PublicationStatus.ATTENTION
             or (action["retryable"] == 0 and not action["reconcile_required"]),
             publication_eligible=bool(action["eligible"]),
             publication_retry_at=action["retry_at"],
             action_created_at=action["created_at"],
             action_eligible_at=eligible_at.isoformat() if eligible_at else None,
         )
-    if facts["lifecycle"] == "completed" or (actions and all(a["publish_status"] == "published" for a in actions)):
+    if facts["lifecycle"] == TaskLifecycle.COMPLETED or (
+        actions and all(a["publish_status"] == PublishStatus.PUBLISHED for a in actions)
+    ):
         _delivery_facts(facts, actions)
         if actions and facts["delivery_status"] == "confirmed":
             facts["publication_receipt"] = facts["delivery_positive"]
@@ -210,12 +216,12 @@ def _delivery_facts(facts, actions):
         actual.append(payload)
     if Counter(map(supervision_rules._digest, plan)) != Counter(map(supervision_rules._digest, actual)):
         return outcome("inconsistent", "planned_actions_do_not_match")
-    if facts["audit_status"] != "accepted" or any(a["audit_status"] != "accepted" for a in actions):
+    if facts["audit_status"] != AuditStatus.ACCEPTED or any(a["audit_status"] != AuditStatus.ACCEPTED for a in actions):
         return outcome("inconsistent", "completed_delivery_not_audited")
-    if any(a["publish_status"] == "skipped" for a in actions):
+    if any(a["publish_status"] == PublishStatus.SKIPPED for a in actions):
         # Existing business finalization permits superseded review/vote and remediation.
         return outcome("retired", "delivery_action_retired")
-    if any(a["publish_status"] != "published" for a in actions):
+    if any(a["publish_status"] != PublishStatus.PUBLISHED for a in actions):
         return outcome("inconsistent", "completed_delivery_not_published")
     scope = _object(facts["audited_scope"])
     confirmations = []
@@ -256,14 +262,20 @@ def _checkpoints(conn, scope_type, scope_id):
 def _execution_recovery(conn, facts, now):
     """Find a completed retry of the same request through explicit inheritance."""
     lineage = facts.get("lineage_key")
-    if not lineage or facts["lifecycle"] not in {"completed", "failed"} or facts.get("canceled"):
+    if (
+        not lineage
+        or facts["lifecycle"] not in {TaskLifecycle.COMPLETED, TaskLifecycle.FAILED}
+        or facts.get("canceled")
+    ):
         return None
     if not db_records.first(db_read_supervision_incidents.find_for_execution_recovery(conn, facts["task_id"], lineage)):
         return None
     # Bounded traversal through durable parents. A separate request may share
     # a repository or source without being a continuation of this failure.
     candidates = db_read_retries.find_for_execution_recovery(conn, facts["task_id"], facts["repo_id"], lineage)
-    failed_at = supervision_rules.timestamp(facts.get("finished_at")) if facts["lifecycle"] == "failed" else None
+    failed_at = (
+        supervision_rules.timestamp(facts.get("finished_at")) if facts["lifecycle"] == TaskLifecycle.FAILED else None
+    )
     for candidate in candidates:
         completed = _completed_execution(conn, candidate, now)
         occurred_at = supervision_rules.timestamp((completed or {}).get("occurred_at"))
@@ -274,7 +286,7 @@ def _execution_recovery(conn, facts, now):
 
 def _completed_execution(conn, candidate, now):
     attempt = _attempt_facts(conn, candidate["task_id"])
-    if not attempt or attempt["output_type"] in {"classification_result", "waiting_for_user"}:
+    if not attempt or attempt["output_type"] in {OutputType.CLASSIFICATION_RESULT, OutputType.WAITING_FOR_USER}:
         return None
     proof = _completed_attempt_delivery(conn, candidate, attempt, now)
     return (
@@ -285,7 +297,7 @@ def _completed_execution(conn, candidate, now):
 
 
 def _completed_attempt_delivery(conn, candidate, attempt, now):
-    if not attempt or attempt["attempt_status"] != "completed" or not attempt["result_id"]:
+    if not attempt or attempt["attempt_status"] != AttemptStatus.COMPLETED or not attempt["result_id"]:
         return None
     if type(_object(attempt["dispatch"]).get("pid")) is int and not attempt["process_stopped_at"]:
         return None
@@ -313,9 +325,9 @@ def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
         facts["audit_eligible_at"] = facts["audit_retry_at"] or facts["process_stopped_at"] or facts["finished_at"]
         if facts["result_id"]:
             _publication_facts(conn, facts, now)
-        if facts["attempt_status"] == "prepared":
+        if facts["attempt_status"] == AttemptStatus.PREPARED:
             _dispatch_facts(conn, facts, capacity)
-        elif facts["attempt_status"] in {"running", "stale"} and not facts["result_id"]:
+        elif facts["attempt_status"] in {AttemptStatus.RUNNING, AttemptStatus.STALE} and not facts["result_id"]:
             _milestones(conn, facts)
     facts["generation"] = {
         "kind": "task",
@@ -336,7 +348,7 @@ def _task_facts(conn, row, controller_wait, now, capacity, consumer_completed):
             handoff_due_at=handoff.get("next_retry_at") or facts["task_updated_at"],
             handoff_current=(
                 facts["active_task_id"] == facts["task_id"]
-                and facts["stream_lifecycle"] == "active"
+                and facts["stream_lifecycle"] == WorkstreamLifecycle.ACTIVE
                 and handoff.get("retryable") is not False
             ),
         )
@@ -395,13 +407,13 @@ def _receipt_facts(conn, row, consumer_completed, wait):
             facts["successor_task_id"] = successor["task_id"] if successor else None
             facts["successor_occurred_at"] = successor["occurred_at"] if successor else None
             facts["pending_eligible"] = (
-                owner["lifecycle"] == "completed"
+                owner["lifecycle"] == TaskLifecycle.COMPLETED
                 and owner["active_task_id"] == target_id
-                and owner["stream_lifecycle"] == "active"
+                and owner["stream_lifecycle"] == WorkstreamLifecycle.ACTIVE
             )
         elif owner and scope == "work_item_event":
             facts["operator_handoff"] = True
-            if owner["lifecycle"] == "detected":
+            if owner["lifecycle"] == TaskLifecycle.DETECTED:
                 pending = github_operator.pending_tasks(conn, task_id=target_id)
                 if pending and not github_operator.blocked(conn, pending[0]):
                     observed, response = github_operator.source_read(conn, pending[0])
@@ -727,7 +739,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
         if (
             facts.get("attempt_id")
             and not facts.get("result_id")
-            and facts.get("attempt_status") in {"running", "stale", "prepared"}
+            and facts.get("attempt_status") in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.PREPARED}
         ):
             facts.update(_spool_facts(db_path, facts["task_id"], facts["attempt_id"]))
         if facts.get("process_status") == "dead" and facts.get("spool_status") == "missing":

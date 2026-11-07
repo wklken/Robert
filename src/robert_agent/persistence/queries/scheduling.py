@@ -1,5 +1,8 @@
 """Durable scheduling observations for readiness and native round admission."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus, RoundStatus
+from robert_agent.foundation.contracts.work import LIVE_TASK_LIFECYCLES, TaskLifecycle
+
 from functools import lru_cache
 
 from robert_agent.persistence.expressions import sql_constant
@@ -19,18 +22,11 @@ _ROUND_TABLES = {
     "review": tables["review_sessions"],
     "vote": tables["vote_sessions"],
 }
-_ACTIVE_TASK_STATES = (
-    "detected",
-    "authorized",
-    "classified",
-    "queued",
-    "running",
-    "waiting_for_user",
-)
+_ACTIVE_TASK_STATES = tuple(state.value for state in TaskLifecycle if state.value in LIVE_TASK_LIFECYCLES)
 
 
 def _queued(rounds):
-    return and_(rounds.c.status == sql_constant("queued"), rounds.c.task_id.is_(None))
+    return and_(rounds.c.status == sql_constant(RoundStatus.QUEUED.value), rounds.c.task_id.is_(None))
 
 
 def _unblocked_round(workstream_id, rounds, available_rounds):
@@ -59,7 +55,7 @@ def _unblocked_round(workstream_id, rounds, available_rounds):
         )
         .where(
             previous.c.workstream_id == workstream_id,
-            owner.c.binding_status == sql_constant("attention"),
+            owner.c.binding_status == sql_constant(BindingStatus.ATTENTION.value),
         )
         .correlate_except(previous, owner)
         .exists()

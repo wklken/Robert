@@ -1,5 +1,7 @@
 """Shared stores operations for supervision_recovery_actions."""
 
+from robert_agent.foundation.contracts.supervision import RecoveryStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, bindparam, and_, null, case
@@ -42,7 +44,7 @@ def insert_for_reserve(
             "target_id": bindparam("p8"),
             "target_generation": bindparam("p9"),
             "policy_version": bindparam("p10"),
-            "status": sql_constant("requested"),
+            "status": sql_constant(RecoveryStatus.REQUESTED.value),
             "budget_cost": sql_constant(1),
             "preconditions_json": bindparam("p11"),
             "expected_progress_json": bindparam("p12"),
@@ -79,7 +81,7 @@ def update_for_begin(conn, owner, value_2, now, value_4, action_id, claim_genera
         update(tables["supervision_recovery_actions"])
         .values(
             {
-                "status": sql_constant("applying"),
+                "status": sql_constant(RecoveryStatus.APPLYING.value),
                 "claim_owner": bindparam("p0"),
                 "claim_generation": (tables["supervision_recovery_actions"].c["claim_generation"] + sql_constant(1)),
                 "claim_expires_at": bindparam("p1"),
@@ -90,7 +92,7 @@ def update_for_begin(conn, owner, value_2, now, value_4, action_id, claim_genera
         .where(
             and_(
                 tables["supervision_recovery_actions"].c["action_id"] == bindparam("p4"),
-                tables["supervision_recovery_actions"].c["status"] == sql_constant("requested"),
+                tables["supervision_recovery_actions"].c["status"] == sql_constant(RecoveryStatus.REQUESTED.value),
                 tables["supervision_recovery_actions"].c["claim_generation"] == bindparam("p5"),
             )
         )
@@ -166,7 +168,7 @@ def update_for_begin_2(conn, now, action_id):
         update(tables["supervision_recovery_actions"])
         .values(
             {
-                "status": sql_constant("rejected"),
+                "status": sql_constant(RecoveryStatus.REJECTED.value),
                 "budget_cost": sql_constant(0),
                 "finished_at": bindparam("p0"),
                 "next_check_at": null(),
@@ -175,7 +177,7 @@ def update_for_begin_2(conn, now, action_id):
         .where(
             and_(
                 (tables["supervision_recovery_actions"].c["action_id"] == bindparam("p1")),
-                (tables["supervision_recovery_actions"].c["status"] == sql_constant("requested")),
+                (tables["supervision_recovery_actions"].c["status"] == sql_constant(RecoveryStatus.REQUESTED.value)),
             )
         )
     )
@@ -187,13 +189,16 @@ def update_for_verify(conn, now, value_2, action_id, state):
         update(tables["supervision_recovery_actions"])
         .values(
             {
-                "status": sql_constant("succeeded"),
+                "status": sql_constant(RecoveryStatus.SUCCEEDED.value),
                 "finished_at": bindparam("p0"),
                 "next_check_at": null(),
                 "verification_evidence_json": bindparam("p1"),
                 "budget_cost": case(
                     (
-                        (tables["supervision_recovery_actions"].c["status"] == sql_constant("requested")),
+                        (
+                            tables["supervision_recovery_actions"].c["status"]
+                            == sql_constant(RecoveryStatus.REQUESTED.value)
+                        ),
                         sql_constant(0),
                     ),
                     else_=tables["supervision_recovery_actions"].c["budget_cost"],

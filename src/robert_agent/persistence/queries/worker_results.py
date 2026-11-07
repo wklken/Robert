@@ -1,5 +1,9 @@
 """Shared queries operations for worker_results."""
 
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from functools import lru_cache
 
 from functools import cache
@@ -106,8 +110,10 @@ def find_for_audit_completed_results(conn, repo_id):
         .where(
             and_(
                 table2.c["workstream_id"].in_(query6),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
-                table3.c["status"] == sql_constant("completed"),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
+                table3.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 or_(
                     func.json_type(table3.c["metadata_json"], sql_constant("$.dispatch.pid")).is_not(
                         sql_constant("integer")
@@ -430,8 +436,10 @@ def find_for_finalize_published_results(conn, repo_id):
         .where(
             and_(
                 table2.c["workstream_id"].in_(query5),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
-                table3.c["status"] == sql_constant("completed"),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
+                table3.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 or_(
                     func.json_type(table3.c["metadata_json"], sql_constant("$.dispatch.pid")).is_not(
                         sql_constant("integer")
@@ -459,7 +467,7 @@ def find_for_resume_waiting_vote(conn, value_1):
         .where(
             and_(
                 (tables["worker_results"].c["task_id"] == bindparam("p0")),
-                (tables["worker_results"].c["output_type"] == sql_constant("waiting_for_user")),
+                (tables["worker_results"].c["output_type"] == sql_constant(OutputType.WAITING_FOR_USER.value)),
             )
         )
         .order_by(tables["worker_results"].c["created_at"].desc())
@@ -570,8 +578,10 @@ def _has_local_work_filtered_statement(scoped):
         )
         .where(
             and_(
-                table3.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
-                table2.c["status"] == sql_constant("completed"),
+                table3.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
+                table2.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 not_(func.coalesce(occupied_attempt(table2), sql_constant(0))),
                 func.json_extract(table1.c["metadata_json"], sql_constant("$.audit")).is_(null()),
                 runnable_task(table3),
@@ -625,8 +635,10 @@ def _published_result_needs_finalization_filtered_statement(scoped):
         )
         .where(
             and_(
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
-                table3.c["status"] == sql_constant("completed"),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
+                table3.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 or_(
                     func.json_type(table3.c["metadata_json"], sql_constant("$.dispatch.pid")).is_not(
                         sql_constant("integer")
@@ -690,10 +702,10 @@ def _orphaned_classification_rows_filtered_statement():
         .where(
             and_(
                 table3.c["repo_id"].in_(bindparam("items", expanding=True)),
-                table3.c["lifecycle"] == sql_constant("active"),
+                table3.c["lifecycle"] == sql_constant(WorkstreamLifecycle.ACTIVE.value),
                 table3.c["active_task_id"] == table2.c["task_id"],
-                table2.c["lifecycle"] == sql_constant("completed"),
-                table1.c["output_type"] == sql_constant("classification_result"),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value),
+                table1.c["output_type"] == sql_constant(OutputType.CLASSIFICATION_RESULT.value),
                 func.coalesce(
                     func.json_extract(
                         table2.c["metadata_json"],

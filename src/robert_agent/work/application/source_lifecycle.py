@@ -1,5 +1,8 @@
 """Reconcile terminal GitHub source state with owned work."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, WorkstreamLifecycle
+
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
 from robert_agent.persistence import transactions as db_transactions
@@ -38,11 +41,11 @@ def _remote_terminal_state(source_type, remote_state):
         return None
     if source_type == "pull_request":
         if remote_state.get("merged"):
-            return "completed", "remote_pr_merged"
-        return "canceled", "remote_pr_closed"
+            return WorkstreamLifecycle.COMPLETED.value, "remote_pr_merged"
+        return WorkstreamLifecycle.CANCELED.value, "remote_pr_closed"
     if remote_state.get("state_reason") == "completed":
-        return "completed", "remote_source_closed"
-    return "canceled", "remote_source_closed"
+        return WorkstreamLifecycle.COMPLETED.value, "remote_source_closed"
+    return WorkstreamLifecycle.CANCELED.value, "remote_source_closed"
 
 
 def record_remote_terminal_state(
@@ -110,19 +113,11 @@ def _record_remote_terminal_state_locked(
         task_row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
         task_metadata = values.json_object(task_row[1] if task_row else None)
         episode_id = task_metadata.get("remediation_episode_id") if task_row else None
-        if (
-            task_row
-            and task_row[0]
-            in {
-                "ci_remediation",
-                "merge_conflict_remediation",
-            }
-            and episode_id
-        ):
+        if task_row and task_row[0] in REMEDIATION_TASK_KINDS and episode_id:
             subject_type, subject_id = "remediation_episode", str(episode_id)
     binding = execution_store.get_binding(conn, subject_type, subject_id) if subject_id else None
     workflow_fact = None
-    if binding and binding["binding_status"] == "active":
+    if binding and binding["binding_status"] == BindingStatus.ACTIVE:
         marker = (
             remote_state.get("merged_at")
             or remote_state.get("closed_at")
@@ -156,7 +151,7 @@ def _record_remote_terminal_state_locked(
         db_read_github_sources.find_metadata_json_and_state_by_source_id(conn, source_id)
     )
     source_metadata = values.json_object(source_metadata_row[0] if source_metadata_row else None)
-    attention = binding and binding["binding_status"] == "attention"
+    attention = binding and binding["binding_status"] == BindingStatus.ATTENTION
     if (
         attention
         and source_metadata_row
@@ -181,7 +176,7 @@ def _record_remote_terminal_state_locked(
     cleanup_pending = False
     for attempt_id, attempt_status, metadata_json in attempts:
         metadata = values.json_object(metadata_json)
-        if attempt_status in {"running", "stale", "completed"}:
+        if attempt_status in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.COMPLETED}:
             previous_termination = metadata.get("termination")
             metadata["termination"] = monitor.terminate_owned_attempt(conn, task_id, metadata)
             if metadata["termination"]["status"] not in {"terminated", "not_found", "already_dead"}:
@@ -255,12 +250,12 @@ def _record_remote_terminal_state_locked(
             and not facts["cleanup_pending"]
             and not facts["workflow_attention"]
         ):
-            terminal_column = "completed_at" if workstream_lifecycle == "completed" else "canceled_at"
+            terminal_column = "completed_at" if workstream_lifecycle == WorkstreamLifecycle.COMPLETED else "canceled_at"
             decision = work_items._unresolved_event(conn, item["work_item_id"], work_items.DECISION_EVENTS)
             work_items.record_system_event(
                 conn,
                 item["work_item_id"],
-                event_type="completed" if workstream_lifecycle == "completed" else "canceled",
+                event_type="completed" if workstream_lifecycle == WorkstreamLifecycle.COMPLETED else "canceled",
                 idempotency_key=f"issue-closed:{source_key}:{remote_state.get('closed_at') or run_now}",
                 body="GitHub issue closed: " + (remote_state.get("state_reason") or "closed"),
                 resolves_event_id=(decision["event_id"] if hasattr(decision, "keys") else decision[0])

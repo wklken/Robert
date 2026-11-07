@@ -1,5 +1,14 @@
 """Durable CI and merge-conflict remediation episode state."""
 
+from robert_agent.foundation.contracts.delivery import PublishStatus
+from robert_agent.foundation.contracts.work import (
+    ACTIVE_REMEDIATION_STATUSES,
+    REMEDIATION_TASK_KINDS,
+    RemediationStatus,
+    TERMINAL_REMEDIATION_STATUSES,
+    TaskKind,
+)
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import notifications as db_read_notifications
@@ -19,20 +28,6 @@ import subprocess
 import uuid
 
 from robert_agent.readmodels import usage
-
-
-NONTERMINAL_STATUSES = {
-    "open",
-    "queued",
-    "remediating",
-    "waiting_for_signal",
-}
-TERMINAL_STATUSES = {
-    "resolved",
-    "exhausted",
-    "superseded",
-    "canceled",
-}
 
 
 def _json_object(value):
@@ -93,7 +88,7 @@ def attest_remediation_worktree(
     remediation_evidence,
     run_command=subprocess.run,
 ):
-    if task_kind not in {"ci_remediation", "merge_conflict_remediation"}:
+    if task_kind not in REMEDIATION_TASK_KINDS:
         return {"status": "not_applicable"}
     if not isinstance(action_scope, dict) or not isinstance(
         remediation_evidence,
@@ -144,7 +139,7 @@ def attest_remediation_worktree(
     )
     if head_ancestor.returncode != 0:
         return {"status": "failed", "reason": "head_not_ancestor"}
-    if task_kind == "merge_conflict_remediation":
+    if task_kind == TaskKind.MERGE_CONFLICT_REMEDIATION:
         base_ancestor = run_git(
             "merge-base",
             "--is-ancestor",
@@ -254,7 +249,7 @@ def _transition(conn, episode, new_status, reason, now):
     old_status = episode["status"]
     if old_status == new_status:
         return None
-    terminal_at = now if new_status in TERMINAL_STATUSES else None
+    terminal_at = now if new_status in TERMINAL_REMEDIATION_STATUSES else None
     metadata = dict(episode["metadata"])
     metadata["last_transition_reason"] = reason
     db_write_pr_remediation_episodes.update_for_transition(
@@ -269,7 +264,7 @@ def _transition(conn, episode, new_status, reason, now):
     if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
         return None
     _audit_transition(conn, episode, old_status, new_status, reason, now)
-    if new_status == "exhausted":
+    if new_status == RemediationStatus.EXHAUSTED.value:
         _notify_exhausted_episode(conn, episode, reason, now)
     return {
         "episode_id": episode["episode_id"],
@@ -369,11 +364,11 @@ def upsert_health_episodes(
     episodes = _episodes_for_workstream(conn, workstream["workstream_id"])
     if snapshot.get("state") == "closed" or snapshot.get("merged"):
         for episode in episodes:
-            if episode["status"] in NONTERMINAL_STATUSES:
+            if episode["status"] in ACTIVE_REMEDIATION_STATUSES:
                 transition = _transition(
                     conn,
                     episode,
-                    "canceled",
+                    RemediationStatus.CANCELED.value,
                     "remote_pr_terminal",
                     now,
                 )
@@ -388,7 +383,7 @@ def upsert_health_episodes(
         # A failed repair remains exhausted across polls of its result snapshot.
         # A new externally supplied head/base can still start a new episode.
         if (
-            episode["status"] == "exhausted"
+            episode["status"] == RemediationStatus.EXHAUSTED
             and episode["result_head_sha"] == snapshot.get("head_sha")
             and episode["observed_base_sha"] == snapshot.get("base_sha")
         ):
@@ -401,13 +396,15 @@ def upsert_health_episodes(
                 and ci_summary.get("failure_signature") == episode["failure_signature"]
             ):
                 suppress_current_ci_episode = True
-        if episode["status"] != "waiting_for_signal" or episode["result_head_sha"] != snapshot.get("head_sha"):
+        if episode["status"] != RemediationStatus.WAITING_FOR_SIGNAL or episode["result_head_sha"] != snapshot.get(
+            "head_sha"
+        ):
             continue
         if episode["episode_kind"] == "merge_conflict" and snapshot.get("mergeable") is True:
             transition = _transition(
                 conn,
                 episode,
-                "resolved",
+                RemediationStatus.RESOLVED.value,
                 "merge_conflict_cleared",
                 now,
             )
@@ -416,7 +413,7 @@ def upsert_health_episodes(
             transition = _transition(
                 conn,
                 episode,
-                "exhausted",
+                RemediationStatus.EXHAUSTED.value,
                 "merge_conflict_persisted",
                 now,
             )
@@ -425,7 +422,7 @@ def upsert_health_episodes(
                 transition = _transition(
                     conn,
                     episode,
-                    "resolved",
+                    RemediationStatus.RESOLVED.value,
                     "configured_checks_green",
                     now,
                 )
@@ -437,7 +434,7 @@ def upsert_health_episodes(
                 transition = _transition(
                     conn,
                     episode,
-                    "exhausted",
+                    RemediationStatus.EXHAUSTED.value,
                     "repeated_failure_signature",
                     now,
                 )
@@ -448,7 +445,7 @@ def upsert_health_episodes(
                 transition = _transition(
                     conn,
                     episode,
-                    "superseded",
+                    RemediationStatus.SUPERSEDED.value,
                     "result_head_requires_new_episode",
                     now,
                 )
@@ -461,14 +458,14 @@ def upsert_health_episodes(
     subject_key = f"{snapshot.get('head_sha', '')}:{snapshot.get('base_sha', '')}"
     for episode in _episodes_for_workstream(conn, workstream["workstream_id"]):
         if (
-            episode["status"] in NONTERMINAL_STATUSES
+            episode["status"] in ACTIVE_REMEDIATION_STATUSES
             and episode["subject_key"] != subject_key
             and episode["episode_id"] not in keep_waiting_ids
         ):
             transition = _transition(
                 conn,
                 episode,
-                "superseded",
+                RemediationStatus.SUPERSEDED.value,
                 "pr_snapshot_changed",
                 now,
             )
@@ -550,22 +547,22 @@ def upsert_health_episodes(
                 episode["episode_id"],
                 ci_summary.get("observations") or ci_summary.get("failures") or [],
             )
-            if episode["status"] == "open":
+            if episode["status"] == RemediationStatus.OPEN:
                 transition = _transition(
                     conn,
                     episode,
-                    "exhausted",
+                    RemediationStatus.EXHAUSTED.value,
                     ci_summary.get("reason") or "manual_ci_signal",
                     now,
                 )
                 if transition:
                     transitions.append(transition)
         elif ci_summary.get("status") == "green" and current_ci:
-            if current_ci["status"] in NONTERMINAL_STATUSES:
+            if current_ci["status"] in ACTIVE_REMEDIATION_STATUSES:
                 transition = _transition(
                     conn,
                     current_ci,
-                    "resolved",
+                    RemediationStatus.RESOLVED.value,
                     "configured_checks_green",
                     now,
                 )
@@ -658,7 +655,7 @@ def next_system_decisions(conn, *, repo, now):
             _transition(
                 conn,
                 episode,
-                "canceled",
+                RemediationStatus.CANCELED.value,
                 "automation_disabled",
                 now,
             )
@@ -680,7 +677,7 @@ def next_system_decisions(conn, *, repo, now):
             _transition(
                 conn,
                 episode,
-                "exhausted",
+                RemediationStatus.EXHAUSTED.value,
                 budget["reason"],
                 now,
             )
@@ -702,7 +699,7 @@ def cancel_disabled_episodes(conn, *, repo, now):
         if _transition(
             conn,
             episode,
-            "canceled",
+            RemediationStatus.CANCELED.value,
             "automation_disabled",
             now,
         ):
@@ -712,30 +709,30 @@ def cancel_disabled_episodes(conn, *, repo, now):
 
 def revalidate_decision(conn, *, decision, snapshot, repo):
     episode = _load_episode(conn, decision["episode_id"])
-    if not episode or episode["status"] != "open":
+    if not episode or episode["status"] != RemediationStatus.OPEN:
         return {"status": "ineligible", "reason": "episode_not_open"}
     if snapshot.get("state") == "closed" or snapshot.get("merged"):
-        return {"status": "canceled", "reason": "remote_pr_terminal"}
+        return {"status": RemediationStatus.CANCELED.value, "reason": "remote_pr_terminal"}
     if (
         snapshot.get("head_sha") != episode["observed_head_sha"]
         or snapshot.get("base_sha") != episode["observed_base_sha"]
     ):
-        return {"status": "superseded", "reason": "pr_snapshot_changed"}
+        return {"status": RemediationStatus.SUPERSEDED.value, "reason": "pr_snapshot_changed"}
     policy = _policy_for_episode(repo, episode["episode_kind"])
     if not policy["enabled"]:
-        return {"status": "canceled", "reason": "automation_disabled"}
+        return {"status": RemediationStatus.CANCELED.value, "reason": "automation_disabled"}
     return {"status": "eligible", "episode": episode}
 
 
 def exhaust_episode(conn, *, episode_id, reason, now):
     episode = _load_episode(conn, episode_id)
-    if not episode or episode["status"] not in NONTERMINAL_STATUSES:
+    if not episode or episode["status"] not in ACTIVE_REMEDIATION_STATUSES:
         return False
     return bool(
         _transition(
             conn,
             episode,
-            "exhausted",
+            RemediationStatus.EXHAUSTED.value,
             reason,
             now,
         )
@@ -744,13 +741,13 @@ def exhaust_episode(conn, *, episode_id, reason, now):
 
 def supersede_episode(conn, *, episode_id, reason, now):
     episode = _load_episode(conn, episode_id)
-    if not episode or episode["status"] not in NONTERMINAL_STATUSES:
+    if not episode or episode["status"] not in ACTIVE_REMEDIATION_STATUSES:
         return False
     return bool(
         _transition(
             conn,
             episode,
-            "superseded",
+            RemediationStatus.SUPERSEDED.value,
             reason,
             now,
         )
@@ -759,19 +756,16 @@ def supersede_episode(conn, *, episode_id, reason, now):
 
 def record_task_failure(conn, *, task_id, reason, now):
     row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
-    if not row or row[0] not in {
-        "ci_remediation",
-        "merge_conflict_remediation",
-    }:
+    if not row or row[0] not in REMEDIATION_TASK_KINDS:
         return False
     episode_id = _json_object(row[1]).get("remediation_episode_id")
     episode = _load_episode(conn, episode_id)
     if not episode or episode["status"] not in {
-        "queued",
-        "remediating",
+        RemediationStatus.QUEUED,
+        RemediationStatus.REMEDIATING,
     }:
         return False
-    return bool(_transition(conn, episode, "open", reason, now))
+    return bool(_transition(conn, episode, RemediationStatus.OPEN.value, reason, now))
 
 
 def cancel_workstream_episodes(
@@ -783,16 +777,16 @@ def cancel_workstream_episodes(
 ):
     canceled = 0
     for episode in _episodes_for_workstream(conn, workstream_id):
-        if episode["status"] not in NONTERMINAL_STATUSES:
+        if episode["status"] not in ACTIVE_REMEDIATION_STATUSES:
             continue
-        if _transition(conn, episode, "canceled", reason, now):
+        if _transition(conn, episode, RemediationStatus.CANCELED.value, reason, now):
             canceled += 1
     return canceled
 
 
 def record_task_started(conn, *, episode_id, task_id, now):
     episode = _load_episode(conn, episode_id)
-    if not episode or episode["status"] != "open":
+    if not episode or episode["status"] != RemediationStatus.OPEN:
         return False
     db_write_pr_remediation_episodes.record_task_started(conn, task_id, now, episode_id)
     if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
@@ -800,8 +794,8 @@ def record_task_started(conn, *, episode_id, task_id, now):
     _audit_transition(
         conn,
         {**episode, "last_task_id": task_id},
-        "open",
-        "remediating",
+        RemediationStatus.OPEN.value,
+        RemediationStatus.REMEDIATING.value,
         "task_started",
         now,
     )
@@ -818,26 +812,26 @@ def record_publish_result(
 ):
     episode = _load_episode(conn, episode_id)
     if not episode or episode["status"] not in {
-        "remediating",
-        "queued",
-        "open",
+        RemediationStatus.REMEDIATING,
+        RemediationStatus.QUEUED,
+        RemediationStatus.OPEN,
     }:
         return False
-    if publish_status == "published":
-        new_status = "waiting_for_signal"
+    if publish_status == PublishStatus.PUBLISHED:
+        new_status = RemediationStatus.WAITING_FOR_SIGNAL.value
         reason = "repair_published"
     elif publish_status == "superseded":
-        new_status = "superseded"
+        new_status = RemediationStatus.SUPERSEDED.value
         reason = "publish_snapshot_changed"
     else:
-        new_status = "open"
+        new_status = RemediationStatus.OPEN.value
         reason = "publish_failed"
     db_write_pr_remediation_episodes.record_publish_result(
         conn,
         new_status,
         result_head_sha,
         now,
-        now if new_status in TERMINAL_STATUSES else None,
+        now if new_status in TERMINAL_REMEDIATION_STATUSES else None,
         episode_id,
         episode["status"],
     )

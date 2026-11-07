@@ -1,5 +1,7 @@
 """Task-scoped access to native model round lifecycles."""
 
+from robert_agent.foundation.contracts.execution import ModelRunStatus
+
 import os
 
 from robert_agent.persistence.rounds import pool as model_pool
@@ -40,11 +42,11 @@ def _run_stopped(run):
         # These states precede reservation, or record explicit abandonment.
         # In particular, an empty starting/running record is never exit proof.
         return not run["slot_reserved"] and run["status"] in {
-            "prepared",
-            "waiting",
-            "failed",
-            "interrupted",
-            "abandoned",
+            ModelRunStatus.PREPARED,
+            ModelRunStatus.WAITING,
+            ModelRunStatus.FAILED,
+            ModelRunStatus.INTERRUPTED,
+            ModelRunStatus.ABANDONED,
         }
     if not isinstance(recorded, dict):
         return False

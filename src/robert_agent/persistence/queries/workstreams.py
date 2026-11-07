@@ -1,5 +1,8 @@
 """Shared queries operations for workstreams."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from functools import cache
 
 from robert_agent.persistence.expressions import sql_constant
@@ -232,7 +235,7 @@ def load_review_participants(conn, repo_id):
         .where(
             and_(
                 (tables["workstreams"].c["repo_id"] == bindparam("p0")),
-                (tables["workstreams"].c["lifecycle"] != sql_constant("canceled")),
+                (tables["workstreams"].c["lifecycle"] != sql_constant(WorkstreamLifecycle.CANCELED.value)),
             )
         )
         .correlate_except(tables["workstreams"])
@@ -310,8 +313,8 @@ def find_for_waiting_task_state(conn, workstream_id):
         .where(
             and_(
                 table1.c["workstream_id"] == bindparam("p0"),
-                table1.c["lifecycle"] == sql_constant("waiting_for_user"),
-                table2.c["lifecycle"] == sql_constant("waiting_for_user"),
+                table1.c["lifecycle"] == sql_constant(WorkstreamLifecycle.WAITING_FOR_USER.value),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.WAITING_FOR_USER.value),
             )
         )
         .limit(sql_constant(1))
@@ -355,18 +358,18 @@ def find_for_source_has_active_unpublished_result(conn, source_id, source_id_2):
                     or_(
                         table3.c["lifecycle"].in_(
                             [
-                                sql_constant("queued"),
-                                sql_constant("running"),
-                                sql_constant("waiting_for_user"),
+                                sql_constant(TaskLifecycle.QUEUED.value),
+                                sql_constant(TaskLifecycle.RUNNING.value),
+                                sql_constant(TaskLifecycle.WAITING_FOR_USER.value),
                             ]
                         ),
                         func.json_extract(table4.c["metadata_json"], sql_constant("$.audit.status")).is_(null()),
                         and_(
                             and_(
                                 not_(table5.c["action_id"].is_(null())),
-                                table5.c["audit_status"] == sql_constant("accepted"),
+                                table5.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
                             ),
-                            table5.c["publish_status"] != sql_constant("published"),
+                            table5.c["publish_status"] != sql_constant(PublishStatus.PUBLISHED.value),
                         ),
                     )
                 ),
@@ -447,14 +450,14 @@ def _find_for_lifecycle_facts_statement():
         .where(
             and_(
                 table1.c["workstream_id"] == bindparam("p0"),
-                table1.c["lifecycle"] == sql_constant("active"),
+                table1.c["lifecycle"] == sql_constant(WorkstreamLifecycle.ACTIVE.value),
                 table2.c["lifecycle"].in_(
                     [
-                        sql_constant("detected"),
-                        sql_constant("authorized"),
-                        sql_constant("classified"),
-                        sql_constant("queued"),
-                        sql_constant("running"),
+                        sql_constant(TaskLifecycle.DETECTED.value),
+                        sql_constant(TaskLifecycle.AUTHORIZED.value),
+                        sql_constant(TaskLifecycle.CLASSIFIED.value),
+                        sql_constant(TaskLifecycle.QUEUED.value),
+                        sql_constant(TaskLifecycle.RUNNING.value),
                     ]
                 ),
             )
@@ -476,7 +479,14 @@ def load_active_workstreams(conn, repo_id):
         .where(
             and_(
                 tables["workstreams"].c["repo_id"] == bindparam("p0"),
-                tables["workstreams"].c["lifecycle"].in_([sql_constant("active"), sql_constant("waiting_for_user")]),
+                tables["workstreams"]
+                .c["lifecycle"]
+                .in_(
+                    [
+                        sql_constant(WorkstreamLifecycle.ACTIVE.value),
+                        sql_constant(WorkstreamLifecycle.WAITING_FOR_USER.value),
+                    ]
+                ),
                 not_(tables["workstreams"].c["active_task_id"].is_(null())),
             )
         )
@@ -495,7 +505,7 @@ def load_known_workstreams(conn, repo_id):
                 (tables["workstreams"].c["repo_id"] == bindparam("p0")),
                 (
                     or_(
-                        (tables["workstreams"].c["lifecycle"] != sql_constant("canceled")),
+                        (tables["workstreams"].c["lifecycle"] != sql_constant(WorkstreamLifecycle.CANCELED.value)),
                         not_(
                             func.json_extract(
                                 tables["workstreams"].c["metadata_json"],
@@ -554,8 +564,8 @@ def find_for_remote_source_rows(conn, repo_id):
                             not_(table1.c["active_task_id"].is_(null())),
                             table1.c["lifecycle"].in_(
                                 [
-                                    sql_constant("active"),
-                                    sql_constant("waiting_for_user"),
+                                    sql_constant(WorkstreamLifecycle.ACTIVE.value),
+                                    sql_constant(WorkstreamLifecycle.WAITING_FOR_USER.value),
                                 ]
                             ),
                         ),

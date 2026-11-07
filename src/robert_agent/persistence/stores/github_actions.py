@@ -1,5 +1,7 @@
 """Shared stores operations for github_actions."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublishStatus
+
 from sqlalchemy import literal
 
 from robert_agent.persistence.expressions import sql_constant
@@ -18,10 +20,10 @@ def insert_canary_fixture(conn, html_url, now, value_3):
             "action_id": sql_constant("action-production-canary"),
             "result_id": sql_constant("result-production-canary"),
             "task_id": sql_constant("task-production-canary"),
-            "action_type": sql_constant("comment"),
+            "action_type": sql_constant(GitHubActionType.COMMENT.value),
             "target_url": bindparam("p0"),
-            "audit_status": sql_constant("accepted"),
-            "publish_status": sql_constant("not_published"),
+            "audit_status": sql_constant(AuditStatus.ACCEPTED.value),
+            "publish_status": sql_constant(PublishStatus.NOT_PUBLISHED.value),
             "created_at": bindparam("p1"),
             "metadata_json": bindparam("p2"),
         }
@@ -34,7 +36,7 @@ def mark_skipped(conn, value_1, action_id):
         update(tables["github_actions"])
         .values(
             {
-                "publish_status": sql_constant("skipped"),
+                "publish_status": sql_constant(PublishStatus.SKIPPED.value),
                 "metadata_json": bindparam("p0"),
             }
         )
@@ -57,7 +59,7 @@ def mark_published(conn, value_1, value_2, value_3, action_id):
         update(tables["github_actions"])
         .values(
             {
-                "publish_status": sql_constant("published"),
+                "publish_status": sql_constant(PublishStatus.PUBLISHED.value),
                 "external_id": func.coalesce(
                     func.nullif(bindparam("p0"), sql_constant("")),
                     tables["github_actions"].c["external_id"],
@@ -93,8 +95,8 @@ def record_result_db(
             "action_type": bindparam("p3"),
             "target_url": bindparam("p4"),
             "external_id": bindparam("p5"),
-            "audit_status": sql_constant("pending"),
-            "publish_status": sql_constant("not_published"),
+            "audit_status": sql_constant(AuditStatus.PENDING.value),
+            "publish_status": sql_constant(PublishStatus.NOT_PUBLISHED.value),
             "created_at": bindparam("p6"),
             "metadata_json": bindparam("p7"),
         }
@@ -132,8 +134,8 @@ def insert_fixture(conn, rows):
             "task_id": bindparam("p2"),
             "action_type": bindparam("p3"),
             "target_url": bindparam("p4"),
-            "audit_status": literal("accepted"),
-            "publish_status": literal("not_published"),
+            "audit_status": literal(AuditStatus.ACCEPTED.value),
+            "publish_status": literal(PublishStatus.NOT_PUBLISHED.value),
             "created_at": bindparam("p5"),
             "metadata_json": bindparam("p6"),
         }
@@ -151,11 +153,11 @@ def cancel_execution_filtered(conn, items):
     )
     stmt = (
         update(tables["github_actions"])
-        .values({"publish_status": sql_constant("skipped")})
+        .values({"publish_status": sql_constant(PublishStatus.SKIPPED.value)})
         .where(
             and_(
                 tables["github_actions"].c["task_id"].in_(query1),
-                (tables["github_actions"].c["publish_status"] == sql_constant("not_published")),
+                (tables["github_actions"].c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value)),
             )
         )
     )

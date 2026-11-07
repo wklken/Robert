@@ -1,5 +1,7 @@
 """Shared stores operations for execution_subjects."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, bindparam, and_, func
@@ -18,7 +20,7 @@ def insert_for_ensure_subject(conn, subject_type, subject_id, workflow_kind, now
                 "subject_type": bindparam("p0"),
                 "subject_id": bindparam("p1"),
                 "workflow_kind": bindparam("p2"),
-                "binding_status": sql_constant("active"),
+                "binding_status": sql_constant(BindingStatus.ACTIVE.value),
                 "created_at": bindparam("p3"),
                 "updated_at": bindparam("p4"),
             }
@@ -43,7 +45,7 @@ def update_for_close_binding(conn, now, now_2, subject_type, subject_id):
         update(tables["execution_subjects"])
         .values(
             {
-                "binding_status": sql_constant("terminal"),
+                "binding_status": sql_constant(BindingStatus.TERMINAL.value),
                 "terminal_at": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -61,7 +63,7 @@ def update_for_close_binding(conn, now, now_2, subject_type, subject_id):
 def mark_binding_attention(conn, now, subject_type, subject_id):
     stmt = (
         update(tables["execution_subjects"])
-        .values({"binding_status": sql_constant("attention"), "updated_at": bindparam("p0")})
+        .values({"binding_status": sql_constant(BindingStatus.ATTENTION.value), "updated_at": bindparam("p0")})
         .where(
             and_(
                 (tables["execution_subjects"].c["subject_type"] == bindparam("p1")),
@@ -91,7 +93,7 @@ def update_for_dispatch_queued_locked_2(conn, value_1, subject_type, subject_id)
         update(tables["execution_subjects"])
         .values(
             {
-                "binding_status": sql_constant("attention"),
+                "binding_status": sql_constant(BindingStatus.ATTENTION.value),
                 "metadata_json": bindparam("p0"),
             }
         )
@@ -142,7 +144,7 @@ def update_for_classify_recovery(conn, now, subject_type, subject_id):
             and_(
                 tables["execution_subjects"].c["subject_type"] == bindparam("p1"),
                 tables["execution_subjects"].c["subject_id"] == bindparam("p2"),
-                tables["execution_subjects"].c["binding_status"] == sql_constant("active"),
+                tables["execution_subjects"].c["binding_status"] == sql_constant(BindingStatus.ACTIVE.value),
                 tables["execution_subjects"].c["recovery_attempts"] == sql_constant(0),
             )
         )

@@ -1,5 +1,8 @@
 """Native preparation, independent ballots and synthesis; no direct GitHub writes."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.execution import RoundStatus
+
 import argparse
 import json
 from pathlib import Path
@@ -42,7 +45,7 @@ class Coordinator(StageCoordinator):
             raise StageSuperseded("vote sources or PR revision changed")
 
     def prepare(self):
-        self.phase("preparing")
+        self.phase(RoundStatus.PREPARING.value)
         self.reconcile_running()
         if not self.manifest:
             self.manifest = vote_workspace.prepare(
@@ -82,15 +85,15 @@ class Coordinator(StageCoordinator):
                 payload = worker_result.build_result(
                     self.task_id,
                     self.attempt_id,
-                    "waiting_for_user",
+                    OutputType.WAITING_FOR_USER.value,
                     [self.session["trigger_fingerprint"]],
                     [],
                     prepared["question"],
-                    [{"type": "comment", "target_url": target, "body": body}],
+                    [{"type": GitHubActionType.COMMENT.value, "target_url": target, "body": body}],
                     used_skills=[],
                     operator_question={"kind": "clarification", "summary": prepared["question"]},
                 )
-                self.phase("waiting_for_user")
+                self.phase(RoundStatus.WAITING_FOR_USER.value)
                 self.record(payload)
                 return False
             self.manifest = vote_workspace.freeze(self.manifest, prepared)
@@ -104,7 +107,7 @@ class Coordinator(StageCoordinator):
         return f"https://github.com/{self.session['repo']}/{kind}/{self.session['number']}"
 
     def vote(self):
-        self.phase("voting")
+        self.phase(RoundStatus.VOTING.value)
 
         def vote_one(worker):
             def validate(output, model):
@@ -126,7 +129,7 @@ class Coordinator(StageCoordinator):
         return [record for record, _ in outcomes]
 
     def synthesize(self, records):
-        self.phase("synthesizing")
+        self.phase(RoundStatus.SYNTHESIZING.value)
         ballots = vote_files.selected_ballots(self.manifest, records)
         tally = vote_tally.tally(self.manifest["spec"], ballots)
         root = Path(self.manifest["artifact_root"]) / "synthesis"
@@ -171,13 +174,17 @@ class Coordinator(StageCoordinator):
         vote_workspace.verify_snapshot(self.manifest)
         with vote_store.connect(self.db_path) as conn:
             vote_store.update(
-                conn, self.round_id, status="ready", report_path=str(report), report_sha256=vote_files.digest(report)
+                conn,
+                self.round_id,
+                status=RoundStatus.READY.value,
+                report_path=str(report),
+                report_sha256=vote_files.digest(report),
             )
-        action = {"type": "comment", "target_url": self.target_url(), "body": body}
+        action = {"type": GitHubActionType.COMMENT.value, "target_url": self.target_url(), "body": body}
         payload = worker_result.build_result(
             self.task_id,
             self.attempt_id,
-            "multi_agent_vote_report",
+            OutputType.MULTI_AGENT_VOTE_REPORT.value,
             [self.session["trigger_fingerprint"]],
             [],
             f"Vote report: {report}",
@@ -199,9 +206,13 @@ class Coordinator(StageCoordinator):
             return self.synthesize(self.vote())
         except Exception as exc:
             with vote_store.connect(self.db_path) as conn:
-                status = "superseded" if isinstance(exc, StageSuperseded) else "failed"
+                status = RoundStatus.SUPERSEDED.value if isinstance(exc, StageSuperseded) else RoundStatus.FAILED.value
                 if isinstance(exc, StageStopped):
-                    status = "canceled" if not attempt_is_active(conn, self.task_id, self.attempt_id) else "attention"
+                    status = (
+                        RoundStatus.CANCELED.value
+                        if not attempt_is_active(conn, self.task_id, self.attempt_id)
+                        else RoundStatus.ATTENTION.value
+                    )
                 vote_store.update(conn, self.round_id, status=status, error=str(exc))
             with vote_store.connect(self.db_path) as conn:
                 terminate_children(conn, self.task_id, store=vote_store)

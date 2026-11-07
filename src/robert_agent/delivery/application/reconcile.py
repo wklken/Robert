@@ -6,6 +6,8 @@ Returned evidence is deliberately small so a remote response can never leak
 an unbounded body, command output, or credential into Robert state.
 """
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType
+
 import hashlib
 import json
 import re
@@ -177,7 +179,7 @@ def derive_publication_keys(action, action_scope):
 
     if vote_publish.is_vote(action):
         return vote_publish.publication_keys(action, action_scope)
-    if action.get("action_type") == "submit_pr_review":
+    if action.get("action_type") == GitHubActionType.SUBMIT_PR_REVIEW:
         return review_publish.publication_keys(action, action_scope)
     projection = _scope_projection(action_scope)
     if not isinstance(projection, dict):
@@ -438,12 +440,12 @@ def classify_remote_state(action, action_scope, run_command, *, conn=None):
     action_type = action.get("action_type")
     if vote_publish.is_vote(action):
         return vote_publish.reconcile(action, action_scope, run_command)
-    if action_type == "submit_pr_review":
+    if action_type == GitHubActionType.SUBMIT_PR_REVIEW:
         return review_publish.reconcile(action, action_scope, run_command)
-    if action_type == "comment":
+    if action_type == GitHubActionType.COMMENT:
         return _reconcile_comment(action, action_scope, run_command)
-    if action_type == "open_pr":
+    if action_type == GitHubActionType.OPEN_PR:
         return _reconcile_open_pr(action, action_scope, run_command)
-    if action_type == "push_existing_pr":
+    if action_type == GitHubActionType.PUSH_EXISTING_PR:
         return _remote_branch(action, action_scope, run_command)
     return _result("unknown", "unsupported_action_type")

@@ -4,6 +4,8 @@ The inner agent receives a prompt and returns a compact submission. Only this
 outer process can call Robert's ordinary result validation and durable spool.
 """
 
+from robert_agent.foundation.contracts.delivery import OutputType
+
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 
@@ -227,7 +229,12 @@ def run(config, task_id, attempt_id, prompt):
                     return {"ok": False, "status": "repair_policy_rejected"}
             return result.record_result(
                 config["db_path"],
-                {"task_id": task_id, "attempt_id": attempt_id, "output_type": "new_pr", "submission": submission},
+                {
+                    "task_id": task_id,
+                    "attempt_id": attempt_id,
+                    "output_type": OutputType.NEW_PR.value,
+                    "submission": submission,
+                },
             )
     except (OSError, ValueError, db_errors.Error, subprocess.SubprocessError):
         return {"ok": False, "status": "repair_broker_failed"}

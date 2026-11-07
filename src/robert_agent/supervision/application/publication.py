@@ -1,5 +1,8 @@
 """Supervision fences around the existing publisher's exact action and task lock."""
 
+from robert_agent.foundation.contracts.delivery import PublicationStatus
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+
 from robert_agent.persistence import database as db_database
 
 from robert_agent.persistence import records as db_records
@@ -67,10 +70,12 @@ def begin(db, action, config, now):
         intent = db_records.first(
             db_read_publication_intents.find_status_and_remote_evidence_json_by_action_id(conn, action["action_id"])
         )
-        executing = intent and intent["status"] == "executing"
+        executing = intent and intent["status"] == PublicationStatus.EXECUTING
         evidence = json.loads(intent["remote_evidence_json"] or "{}") if intent else {}
         needs_claim = bool(evidence.get("supervision_retry_required"))
-        kind = "publication_reconcile" if executing else "publication_retry"
+        kind = (
+            RecoveryActionKind.PUBLICATION_RECONCILE.value if executing else RecoveryActionKind.PUBLICATION_RETRY.value
+        )
         native_retry = bool(
             executing
             or needs_claim

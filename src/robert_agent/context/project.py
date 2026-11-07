@@ -1,5 +1,7 @@
 """Project-memory helpers for DD GitHub agent tasks."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType
+
 from robert_agent.persistence.queries import project_memory_terms as db_read_project_memory_terms
 
 from robert_agent.persistence import errors as db_errors
@@ -124,7 +126,7 @@ def _thread_key(payload, workstream_id):
     if explicit:
         return explicit
     for action in payload.get("planned_github_actions") or []:
-        if not isinstance(action, dict) or action.get("type") != "open_pr":
+        if not isinstance(action, dict) or action.get("type") != GitHubActionType.OPEN_PR.value:
             continue
         url = _text(action.get("url")) or _text(action.get("target_url"))
         match = re.search(r"/pull/(\d+)/?$", url)

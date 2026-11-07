@@ -1,5 +1,7 @@
 """Command input values and validation, independent of persistence and execution."""
 
+from robert_agent.foundation.contracts.work import WorkCommand
+
 from dataclasses import dataclass
 from robert_agent.work.errors import WorkItemValidationError
 
@@ -19,19 +21,7 @@ MAX_IDEMPOTENCY_KEY = 128
 PRIORITIES = frozenset({"P0", "P1", "P2", "P3"})
 
 
-COMMANDS = frozenset(
-    {
-        "edit",
-        "start",
-        "approve",
-        "reply",
-        "request_changes",
-        "retry",
-        "retry_publish",
-        "cancel",
-        "reopen",
-    }
-)
+COMMANDS = frozenset(command.value for command in WorkCommand)
 
 
 QUESTION_EVENTS = frozenset({"operator_question", "completion_acceptance_requested"})

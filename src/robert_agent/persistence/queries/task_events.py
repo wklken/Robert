@@ -1,5 +1,7 @@
 """Shared queries operations for task_events."""
 
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -278,10 +280,10 @@ def find_for_event_has_terminal_trigger(conn, event_fingerprint):
                                 (table1.c["relationship"] == sql_constant("trigger")),
                                 table3.c["lifecycle"].in_(
                                     [
-                                        sql_constant("completed"),
-                                        sql_constant("failed"),
-                                        sql_constant("canceled"),
-                                        sql_constant("ignored"),
+                                        sql_constant(TaskLifecycle.COMPLETED.value),
+                                        sql_constant(TaskLifecycle.FAILED.value),
+                                        sql_constant(TaskLifecycle.CANCELED.value),
+                                        sql_constant(TaskLifecycle.IGNORED.value),
                                     ]
                                 ),
                             )
@@ -387,8 +389,8 @@ def find_for_receipt_facts(conn, key, target_id, target_id_3):
                                 not_(
                                     table2.c["lifecycle"].in_(
                                         [
-                                            sql_constant("canceled"),
-                                            sql_constant("ignored"),
+                                            sql_constant(TaskLifecycle.CANCELED.value),
+                                            sql_constant(TaskLifecycle.IGNORED.value),
                                         ]
                                     )
                                 ),

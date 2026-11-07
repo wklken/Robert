@@ -1,5 +1,8 @@
 """Pre-submit checks; diagnostics never reserve a final result slot."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import transactions as db_transactions
@@ -33,7 +36,14 @@ def context(conn, task_id, attempt_id, *, include_scope=True):
             "safe_error": "This attempt has no supported submission contract; prepare a new attempt.",
         }
     metadata = json.loads(row[2] or "{}")
-    if row[3] in {"canceled", "failed", "ignored"} or row[4] not in {"prepared", "running", "stale", "completed"}:
+    if row[3] in {TaskLifecycle.CANCELED.value, TaskLifecycle.FAILED.value, TaskLifecycle.IGNORED.value} or row[
+        4
+    ] not in {
+        AttemptStatus.PREPARED.value,
+        AttemptStatus.RUNNING.value,
+        AttemptStatus.STALE.value,
+        AttemptStatus.COMPLETED.value,
+    }:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     if json.loads(row[5] or "{}").get("result_validation"):
         return None, {"ok": False, "status": "rejected_by_supervisor"}
@@ -41,7 +51,7 @@ def context(conn, task_id, attempt_id, *, include_scope=True):
     if row[1] in audit_result.REMEDIATION_TASK_KINDS and metadata.get("remediation_episode_id"):
         subject_type, subject_id = "remediation_episode", metadata["remediation_episode_id"]
     owner = execution_store.get_binding(conn, subject_type, subject_id)
-    if owner and owner["binding_status"] != "active":
+    if owner and owner["binding_status"] != BindingStatus.ACTIVE:
         return None, {"ok": False, "status": "rejected_by_workflow_owner"}
     origin = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, row[0]))
     episode = (

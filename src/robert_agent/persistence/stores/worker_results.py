@@ -1,5 +1,7 @@
 """Shared stores operations for worker_results."""
 
+from robert_agent.foundation.contracts.delivery import OutputType
+
 from sqlalchemy import literal
 
 from robert_agent.persistence.expressions import sql_constant
@@ -18,7 +20,7 @@ def insert_canary_fixture(conn, value_1, value_2, now, value_4):
             "result_id": sql_constant("result-production-canary"),
             "task_id": sql_constant("task-production-canary"),
             "attempt_id": bindparam("p0"),
-            "output_type": sql_constant("comment_analysis"),
+            "output_type": sql_constant(OutputType.COMMENT_ANALYSIS.value),
             "consumed_event_fingerprints_json": bindparam("p1"),
             "verification_json": sql_constant("[]"),
             "handoff": sql_constant("production write canary"),

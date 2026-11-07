@@ -1,5 +1,7 @@
 """Shared queries operations for supervision_incidents."""
 
+from robert_agent.foundation.contracts.supervision import IncidentStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -32,7 +34,7 @@ def find_for_reserve(conn, task_id, lineage, rule):
                 not_(
                     tables["supervision_incidents"]
                     .c["status"]
-                    .in_([sql_constant("resolved"), sql_constant("dismissed")])
+                    .in_([sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value)])
                 ),
             )
         )
@@ -52,7 +54,7 @@ def find_for_execution_recovery(conn, task_id, lineage):
                 tables["supervision_incidents"].c["scope_id"] == bindparam("p0"),
                 tables["supervision_incidents"].c["rule_id"] == sql_constant("execution_failed"),
                 tables["supervision_incidents"].c["lineage_key"] == bindparam("p1"),
-                tables["supervision_incidents"].c["status"] != sql_constant("dismissed"),
+                tables["supervision_incidents"].c["status"] != sql_constant(IncidentStatus.DISMISSED.value),
             )
         )
         .correlate_except(tables["supervision_incidents"])
@@ -87,9 +89,9 @@ def find_for_targets(conn, cutoff):
             and_(
                 table1.c["status"].in_(
                     [
-                        sql_constant("open"),
-                        sql_constant("needs_attention"),
-                        sql_constant("diagnosing"),
+                        sql_constant(IncidentStatus.OPEN.value),
+                        sql_constant(IncidentStatus.NEEDS_ATTENTION.value),
+                        sql_constant(IncidentStatus.DIAGNOSING.value),
                     ]
                 ),
                 (
@@ -186,9 +188,9 @@ def find_for_poll(conn):
             and_(
                 table1.c["status"].in_(
                     [
-                        sql_constant("open"),
-                        sql_constant("needs_attention"),
-                        sql_constant("diagnosing"),
+                        sql_constant(IncidentStatus.OPEN.value),
+                        sql_constant(IncidentStatus.NEEDS_ATTENTION.value),
+                        sql_constant(IncidentStatus.DIAGNOSING.value),
                     ]
                 ),
                 table3.c["scope_id"].is_(null()),
@@ -254,7 +256,7 @@ def find_for_apply_observations(conn, value_1, value_2, value_3, value_4):
                 not_(
                     tables["supervision_incidents"]
                     .c["status"]
-                    .in_([sql_constant("resolved"), sql_constant("dismissed")])
+                    .in_([sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value)])
                 ),
             )
         )
@@ -278,7 +280,9 @@ def list_incidents(conn, status=None, limit=100):
     )
     if status == "active":
         query1 = query1.where(
-            tables["supervision_incidents"].c.status.not_in((sql_constant("resolved"), sql_constant("dismissed")))
+            tables["supervision_incidents"].c.status.not_in(
+                (sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value))
+            )
         )
     elif status is not None:
         query1 = query1.where(tables["supervision_incidents"].c.status == status)
