@@ -16,9 +16,7 @@ class ModelFallbackTests(RepositoryCycleFixture):
         self.assertEqual(call["reasoning_effort"], "high")
 
     def test_dispatch_keeps_primary_model_before_second_consecutive_timeout(self):
-        call = self._dispatch_model_after_failures(
-            [{"status": "failed_timeout"}]
-        )
+        call = self._dispatch_model_after_failures([{"status": "failed_timeout"}])
 
         self.assertEqual(call["model"], "route-model")
 

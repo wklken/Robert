@@ -45,8 +45,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
         with closing(sqlite3.connect(self.db_path)) as conn:
             event_types = {
-                row[0]
-                for row in conn.execute("SELECT event_type FROM daemon_events")
+                row[0] for row in conn.execute("SELECT event_type FROM daemon_events")
             }
         self.assertTrue(result["ok"], result)
         self.assertEqual(
@@ -92,8 +91,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
         with closing(sqlite3.connect(self.db_path)) as conn:
             event_types = {
-                row[0]
-                for row in conn.execute("SELECT event_type FROM daemon_events")
+                row[0] for row in conn.execute("SELECT event_type FROM daemon_events")
             }
         self.assertTrue(result["ok"], result)
         self.assertEqual(sleeps, [5])
@@ -137,6 +135,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_default_lease_ttl_covers_live_and_local_decision_window(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config()
         now = "2026-07-03T00:00:00+00:00"
         self._init_db()
@@ -161,6 +160,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_load_context_uses_existing_repo_ids_for_configured_repos(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config()
         now = "2026-07-03T00:00:00+00:00"
         self._init_db()
@@ -177,6 +177,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_run_once_decision_only_uses_run_on_start_once_before_next_poll(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config({"daemon": {"scan_on_start": True}})
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -221,6 +222,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_run_once_decision_full_capacity_uses_when_full_interval(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config({"scheduler": {"max_concurrency": 1}})
         now = "2026-07-03T00:00:00+00:00"
         self._init_db()
@@ -256,7 +258,9 @@ class DaemonSchedulingTests(DaemonFixture):
         self.assertIsNone(error)
         self.assertIsNotNone(context)
 
-        with mock.patch.object(daemon.loop_engine, "has_runnable_local_work", return_value=False):
+        with mock.patch.object(
+            daemon.loop_engine, "has_runnable_local_work", return_value=False
+        ):
             result = daemon.run_once_decision(context, now=now)
 
         self.assertEqual(result["decision"], "idle")
@@ -265,10 +269,16 @@ class DaemonSchedulingTests(DaemonFixture):
             "2026-07-03T00:10:00+00:00",
         )
 
-    def test_run_once_decision_running_attempt_initializes_and_honors_live_poll_schedule(self):
+    def test_run_once_decision_running_attempt_initializes_and_honors_live_poll_schedule(
+        self,
+    ):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config(
-            {"scheduler": {"max_concurrency": 3}, "github": {"account": "robot", "polling": {"fallback_seconds": 300}}}
+            {
+                "scheduler": {"max_concurrency": 3},
+                "github": {"account": "robot", "polling": {"fallback_seconds": 300}},
+            }
         )
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -306,7 +316,9 @@ class DaemonSchedulingTests(DaemonFixture):
         self.assertIsNotNone(context)
         self.assertIsNone(context.next_live_poll_at)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE attempts SET metadata_json=json_object('result_contract','compact-v1') WHERE attempt_id='attempt-1'")
+            conn.execute(
+                "UPDATE attempts SET metadata_json=json_object('result_contract','compact-v1') WHERE attempt_id='attempt-1'"
+            )
 
         def child_runner(command, **_kwargs):
             calls.append(command)
@@ -343,8 +355,16 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_run_once_decision_startup_live_poll_runs_at_full_capacity(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config(
-            {"scheduler": {"max_concurrency": 1}, "daemon": {"scan_on_start": True}, "github": {"account": "robot", "polling": {"synchronous": {"full_capacity_seconds": 300}}}}
+            {
+                "scheduler": {"max_concurrency": 1},
+                "daemon": {"scan_on_start": True},
+                "github": {
+                    "account": "robot",
+                    "polling": {"synchronous": {"full_capacity_seconds": 300}},
+                },
+            }
         )
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -400,7 +420,9 @@ class DaemonSchedulingTests(DaemonFixture):
             rate_limit_runner=rate_limit_runner,
         )
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE attempts SET status = 'completed' WHERE attempt_id = 'attempt-1'")
+            conn.execute(
+                "UPDATE attempts SET status = 'completed' WHERE attempt_id = 'attempt-1'"
+            )
         second = daemon.run_once_decision(
             context,
             now="2026-07-03T00:01:00+00:00",
@@ -418,8 +440,15 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_run_once_decision_due_live_poll_is_not_starved_by_running_attempt(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config(
-            {"scheduler": {"max_concurrency": 1}, "github": {"account": "robot", "polling": {"synchronous": {"full_capacity_seconds": 300}}}}
+            {
+                "scheduler": {"max_concurrency": 1},
+                "github": {
+                    "account": "robot",
+                    "polling": {"synchronous": {"full_capacity_seconds": 300}},
+                },
+            }
         )
         now = "2026-07-03T00:05:00+00:00"
         calls = []
@@ -553,7 +582,9 @@ class DaemonSchedulingTests(DaemonFixture):
         def rate_limit_runner(command, **_kwargs):
             class Completed:
                 returncode = 0
-                stdout = '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
+                stdout = (
+                    '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
+                )
                 stderr = ""
 
             return Completed()
@@ -624,7 +655,9 @@ class DaemonSchedulingTests(DaemonFixture):
         def rate_limit_runner(command, **_kwargs):
             class Completed:
                 returncode = 0
-                stdout = '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
+                stdout = (
+                    '{"resources":{"core":{"remaining":499},"search":{"remaining":30}}}'
+                )
                 stderr = ""
 
             return Completed()
@@ -644,6 +677,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_rate_limit_decision_uses_cache_within_cache_window(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config()
         now = "2026-07-03T00:00:00+00:00"
         calls = []
@@ -685,6 +719,7 @@ class DaemonSchedulingTests(DaemonFixture):
 
     def test_daemon_disabled_exits_before_acquiring_lease(self):
         from robert_agent.runtime import daemon
+
         config_path = self._write_config({"daemon": {"enabled": False}})
 
         result = daemon.run_daemon(
@@ -698,6 +733,8 @@ class DaemonSchedulingTests(DaemonFixture):
         self.assertEqual(result["status"], "disabled")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             lease_count = conn.execute("SELECT COUNT(*) FROM leases").fetchone()[0]
-            daemon_run_count = conn.execute("SELECT COUNT(*) FROM daemon_runs").fetchone()[0]
+            daemon_run_count = conn.execute(
+                "SELECT COUNT(*) FROM daemon_runs"
+            ).fetchone()[0]
         self.assertEqual(lease_count, 0)
         self.assertEqual(daemon_run_count, 0)

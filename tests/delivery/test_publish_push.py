@@ -7,6 +7,7 @@ from tests.support.publication import PublicationFixture
 class PublishPushTests(PublicationFixture):
     def test_publish_ready_push_existing_pr_pushes_branch(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -42,7 +43,9 @@ class PublishPushTests(PublicationFixture):
             calls.append((command, kwargs))
             return Completed()
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -65,10 +68,15 @@ class PublishPushTests(PublicationFixture):
                 WHERE action_id = 'action-1'
                 """
             ).fetchone()
-        self.assertEqual(row, ("published", "codex/dd-123", "https://github.com/x/y/pull/42"))
+        self.assertEqual(
+            row, ("published", "codex/dd-123", "https://github.com/x/y/pull/42")
+        )
 
-    def test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push(self):
+    def test_publish_ready_push_existing_pr_without_audited_head_uses_fast_forward_push(
+        self,
+    ):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -104,7 +112,9 @@ class PublishPushTests(PublicationFixture):
             calls.append((command, kwargs))
             return Completed()
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -120,6 +130,7 @@ class PublishPushTests(PublicationFixture):
 
     def test_publish_ready_push_existing_pr_uses_audited_head_sha_for_lease(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -182,11 +193,15 @@ class PublishPushTests(PublicationFixture):
                 return completed
             return Completed()
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
-        self.assertEqual(calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"])
+        self.assertEqual(
+            calls[0][0], ["git", "ls-remote", "--heads", "origin", "codex/dd-123"]
+        )
         self.assertEqual(
             calls[1][0],
             [
@@ -200,6 +215,7 @@ class PublishPushTests(PublicationFixture):
 
     def test_publish_ready_push_existing_pr_skips_diverged_result_actions(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -289,20 +305,35 @@ class PublishPushTests(PublicationFixture):
                 return Completed(returncode=1)
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 0)
         self.assertEqual(result["failed_count"], 0)
         self.assertEqual(result["skipped_count"], 2)
-        self.assertEqual([call[0] for call in calls], [
-            ["git", "ls-remote", "--heads", "origin", "codex/dd-123"],
+        self.assertEqual(
+            [call[0] for call in calls],
             [
-                "git", "fetch", "--no-tags", "--no-write-fetch-head",
-                "origin", "refs/heads/codex/dd-123",
+                ["git", "ls-remote", "--heads", "origin", "codex/dd-123"],
+                [
+                    "git",
+                    "fetch",
+                    "--no-tags",
+                    "--no-write-fetch-head",
+                    "origin",
+                    "refs/heads/codex/dd-123",
+                ],
+                [
+                    "git",
+                    "merge-base",
+                    "--is-ancestor",
+                    "manual-sha",
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                ],
             ],
-            ["git", "merge-base", "--is-ancestor", "manual-sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-        ])
+        )
         with closing(sqlite3.connect(db_path)) as conn:
             actions = conn.execute(
                 """
@@ -311,10 +342,13 @@ class PublishPushTests(PublicationFixture):
                 ORDER BY created_at, action_id
                 """
             ).fetchall()
-        self.assertEqual([row[:2] for row in actions], [
-            ("action-1", "skipped"),
-            ("action-2", "skipped"),
-        ])
+        self.assertEqual(
+            [row[:2] for row in actions],
+            [
+                ("action-1", "skipped"),
+                ("action-2", "skipped"),
+            ],
+        )
         self.assertIn(
             "remote branch diverged from audited result",
             json.loads(actions[0][2])["publish"]["safe_error"],
@@ -326,6 +360,7 @@ class PublishPushTests(PublicationFixture):
 
     def test_publish_ready_push_existing_pr_allows_remote_ancestor_of_result(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -394,7 +429,9 @@ class PublishPushTests(PublicationFixture):
                 return Completed("pushed\n")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -403,8 +440,12 @@ class PublishPushTests(PublicationFixture):
             [
                 ["git", "ls-remote", "--heads", "origin", "codex/dd-123"],
                 [
-                    "git", "fetch", "--no-tags", "--no-write-fetch-head",
-                    "origin", "refs/heads/codex/dd-123",
+                    "git",
+                    "fetch",
+                    "--no-tags",
+                    "--no-write-fetch-head",
+                    "origin",
+                    "refs/heads/codex/dd-123",
                 ],
                 ["git", "merge-base", "--is-ancestor", "current-sha", "result-sha"],
                 [
@@ -419,6 +460,7 @@ class PublishPushTests(PublicationFixture):
 
     def test_publish_ready_push_existing_pr_retries_ancestry_check_errors(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -483,7 +525,9 @@ class PublishPushTests(PublicationFixture):
                 return Completed(returncode=128, stderr="bad object current-sha")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["failed_count"], 1)
@@ -494,8 +538,11 @@ class PublishPushTests(PublicationFixture):
             ).fetchone()[0]
         self.assertEqual(publish_status, "not_published")
 
-    def test_publish_ready_push_existing_pr_without_audited_head_and_target_url_uses_fast_forward_push(self):
+    def test_publish_ready_push_existing_pr_without_audited_head_and_target_url_uses_fast_forward_push(
+        self,
+    ):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -531,7 +578,9 @@ class PublishPushTests(PublicationFixture):
             calls.append((command, kwargs))
             return Completed()
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)

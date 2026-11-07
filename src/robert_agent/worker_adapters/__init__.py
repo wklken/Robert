@@ -69,7 +69,9 @@ def _load_adapter(agent):
             f"worker_agent {agent} adapter missing required symbols: {', '.join(missing)}"
         )
     if module.AGENT_NAME != agent:
-        raise ValueError(f"worker_agent adapter name mismatch: {agent} != {module.AGENT_NAME}")
+        raise ValueError(
+            f"worker_agent adapter name mismatch: {agent} != {module.AGENT_NAME}"
+        )
     return module
 
 
@@ -79,7 +81,9 @@ def normalize_worker_agent_config(config):
     if not agent:
         raise ValueError("worker_agent must not be empty")
     adapter = _load_adapter(agent)
-    command = config.get("worker_command", config.get("command_argv", config.get("command")))
+    command = config.get(
+        "worker_command", config.get("command_argv", config.get("command"))
+    )
     if command is None:
         command = adapter.DEFAULT_COMMAND
     if agent == "command" and not isinstance(command, (list, tuple)):
@@ -91,8 +95,7 @@ def normalize_worker_agent_config(config):
         raise ValueError("timeout_seconds must be at least 1")
     environment_allowlist = config.get("environment_allowlist", [])
     if not isinstance(environment_allowlist, list) or any(
-        not isinstance(name, str) or not name.strip()
-        for name in environment_allowlist
+        not isinstance(name, str) or not name.strip() for name in environment_allowlist
     ):
         raise ValueError("environment_allowlist must contain variable names")
     return {
@@ -101,10 +104,7 @@ def normalize_worker_agent_config(config):
         "command_argv": command_argv,
         "prompt_transport": prompt_transport,
         "timeout_seconds": timeout_seconds,
-        "environment_allowlist": [
-            name.strip()
-            for name in environment_allowlist
-        ],
+        "environment_allowlist": [name.strip() for name in environment_allowlist],
     }
 
 

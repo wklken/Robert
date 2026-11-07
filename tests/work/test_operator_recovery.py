@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 from contextlib import closing
 
 
@@ -30,7 +29,9 @@ class RecoveryEntryTests(unittest.TestCase):
             conn.execute(
                 "UPDATE tasks SET lifecycle='running' WHERE task_id=?", (task_id,)
             )
-            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', '2026-10-24T00:00:00+00:00')
+            execution_store.ensure_subject(
+                conn, "task", task_id, "human_request", "2026-10-24T00:00:00+00:00"
+            )
             execution_store.mark_binding_attention(
                 conn, "task", task_id, "2026-10-24T00:00:00+00:00"
             )

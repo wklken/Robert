@@ -127,7 +127,9 @@ class DashboardTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        self.assertEqual(data["notification_center"][0]["id"], "notification:notification-2")
+        self.assertEqual(
+            data["notification_center"][0]["id"], "notification:notification-2"
+        )
 
     def test_web_exposes_knowledge_review_data(self):
         db_path = self.root / "dd.sqlite3"
@@ -140,5 +142,7 @@ class DashboardTests(DashboardFixture):
         self.assertEqual(review["counts"]["pending"], 1)
         self.assertEqual(review["counts"]["active"], 0)
         self.assertEqual(review["pending_candidates"][0]["candidate_id"], "kc-1")
-        self.assertEqual(review["pending_candidates"][0]["title"], "Prefer update-existing-pr")
+        self.assertEqual(
+            review["pending_candidates"][0]["title"], "Prefer update-existing-pr"
+        )
         self.assertEqual(review["submission_boundary"], "local_runtime_knowledge_only")

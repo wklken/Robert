@@ -1,4 +1,5 @@
 """Reauthorize preserved requests and append input under execution ownership."""
+
 import json
 from robert_agent.work import source_policy
 from robert_agent.execution import ownership as execution_ownership
@@ -40,16 +41,28 @@ def _json_object(value):
 
 
 def ordinary_dispatch_allowed(conn, task_id, repo):
-    row = conn.execute('SELECT task_kind,metadata_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
-    if not row or row[0] != 'human_request':
+    row = conn.execute(
+        "SELECT task_kind,metadata_json FROM tasks WHERE task_id=?", (task_id,)
+    ).fetchone()
+    if not row or row[0] != "human_request":
         return True  # System remediation is governed by its Episode policy.
     metadata = _json_object(row[1])
-    item = conn.execute("SELECT wi.origin_type FROM work_items wi JOIN tasks t ON t.workstream_id=wi.workstream_id WHERE t.task_id=?", (task_id,)).fetchone()
-    if (item and item[0] == 'web') or metadata.get('trigger_work_item_event_id'):
+    item = conn.execute(
+        "SELECT wi.origin_type FROM work_items wi JOIN tasks t ON t.workstream_id=wi.workstream_id WHERE t.task_id=?",
+        (task_id,),
+    ).fetchone()
+    if (item and item[0] == "web") or metadata.get("trigger_work_item_event_id"):
         return True
     events = work_queries.task_related_events(conn, task_id, include_consumed=True)
     if not events:
         return False
-    return any(source_policy.reauthorize_saved_request(event, repo,
-        known_workstreams=[] if event.get('event_type') in {'assigned', 'review_request', 'notification'}
-            else [event['workstream_id']]).get('drives_execution') for event in events)
+    return any(
+        source_policy.reauthorize_saved_request(
+            event,
+            repo,
+            known_workstreams=[]
+            if event.get("event_type") in {"assigned", "review_request", "notification"}
+            else [event["workstream_id"]],
+        ).get("drives_execution")
+        for event in events
+    )

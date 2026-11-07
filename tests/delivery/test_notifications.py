@@ -6,6 +6,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class NotificationTests(TemporaryWorkspace):
     def test_notify_records_local_notification(self):
         from robert_agent.delivery.application import notifications as notify
+
         db_path = self.root / "dd.sqlite3"
         self._init_notifications_db(db_path)
 
@@ -25,6 +26,7 @@ class NotificationTests(TemporaryWorkspace):
 
     def test_notify_command_uses_argv_not_shell(self):
         from robert_agent.delivery.application import notifications as notify
+
         db_path = self.root / "dd.sqlite3"
         self._init_notifications_db(db_path)
         calls = []

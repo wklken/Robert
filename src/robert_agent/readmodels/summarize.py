@@ -93,7 +93,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True)
     args = parser.parse_args(argv)
-    return emit({"ok": True, "status": "summarized", "summary": summarize_database(args.db)})
+    return emit(
+        {"ok": True, "status": "summarized", "summary": summarize_database(args.db)}
+    )
 
 
 if __name__ == "__main__":

@@ -38,6 +38,9 @@ class WorkstreamSourceQueryTests(unittest.TestCase):
 
             self.assertEqual(
                 sources_for_workstream(conn, "work-1"),
-                [{"source_type": "issue", "number": 4}, {"source_type": "pull_request", "number": 4}],
+                [
+                    {"source_type": "issue", "number": 4},
+                    {"source_type": "pull_request", "number": 4},
+                ],
             )
             self.assertEqual(sources_for_workstream(conn, "missing"), [])

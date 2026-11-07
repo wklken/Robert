@@ -397,10 +397,15 @@ def terminate_worker(db_path, attempt_id):
 
         metadata = _json_object(attempt.get("metadata_json"))
         from robert_agent.execution.rounds import terminate_children
+
         children_status = terminate_children(conn, attempt["task_id"])
         if children_status == "attention":
             status = "attention"
-            result = {**result, "status": status, "reason": "review_child_identity_unknown"}
+            result = {
+                **result,
+                "status": status,
+                "reason": "review_child_identity_unknown",
+            }
         metadata["termination"] = result
         conn.execute(
             "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
@@ -531,7 +536,9 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     logs = evidence.get("logs", {}) if isinstance(evidence, dict) else {}
     terminal_error = retry_policy.worker_error(logs)
     rate_limit = retry_policy.terminal_rate_limit(logs)
-    category = "rate_limited" if rate_limit else retry_policy.error_class(terminal_error)
+    category = (
+        "rate_limited" if rate_limit else retry_policy.error_class(terminal_error)
+    )
     if category not in {"transient_failure", "rate_limited"}:
         _mark_recovery_attention(conn, binding, now)
         if binding:

@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 from contextlib import closing
 
 
@@ -20,7 +19,9 @@ from robert_agent.adapters.sqlite import execution_control as execution_store
 
 class RecoveryBudgetTests(unittest.TestCase):
     def test_authentication_failure_never_consumes_resume_quota(self):
-        from tests.support.worker_lifecycle_workflow import WorkerLifecycleWorkflowFixture
+        from tests.support.worker_lifecycle_workflow import (
+            WorkerLifecycleWorkflowFixture,
+        )
 
         fixture = WorkerLifecycleWorkflowFixture()
         self.addCleanup(fixture.doCleanups)
@@ -46,6 +47,8 @@ class RecoveryBudgetTests(unittest.TestCase):
                 "attention",
             )
             self.assertEqual(
-                execution_store.get_binding(c, "task", "task:test")["recovery_attempts"],
+                execution_store.get_binding(c, "task", "task:test")[
+                    "recovery_attempts"
+                ],
                 0,
             )

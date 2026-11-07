@@ -5,6 +5,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class KnownWorkstreamContextTests(TemporaryWorkspace):
     def test_known_workstream_context_uses_latest_dd_mention_only(self):
         from robert_agent.adapters.github import discovery as discover
+
         class Completed:
             def __init__(self, stdout):
                 self.stdout = stdout

@@ -25,26 +25,45 @@ def resource_text(*parts: str) -> str:
 
 
 DAEMON_DEFAULTS = {
-    "enabled": True, "local_poll_seconds": 5, "github_poll_seconds": 300,
-    "github_poll_when_full_seconds": 600, "rate_limit_cache_seconds": 300,
-    "min_search_remaining": 10, "min_core_remaining": 500,
-    "live_run_timeout_seconds": 300, "local_drain_timeout_seconds": 180,
+    "enabled": True,
+    "local_poll_seconds": 5,
+    "github_poll_seconds": 300,
+    "github_poll_when_full_seconds": 600,
+    "rate_limit_cache_seconds": 300,
+    "min_search_remaining": 10,
+    "min_core_remaining": 500,
+    "live_run_timeout_seconds": 300,
+    "local_drain_timeout_seconds": 180,
     "run_on_start": False,
 }
 
 
 def maintenance_config():
-    return {"enabled": True, "interval_seconds": 300, "batch_size": 100,
-            "retention": {"runs_days": 7, "failed_runs_days": 30, "daemon_events_days": 7}}
+    return {
+        "enabled": True,
+        "interval_seconds": 300,
+        "batch_size": 100,
+        "retention": {"runs_days": 7, "failed_runs_days": 30, "daemon_events_days": 7},
+    }
 
 
-def init_test_checkout(path, branch='main'):
+def init_test_checkout(path, branch="main"):
     """A local-only upstream for tests exercising the public workspace policy."""
     import subprocess
+
     for args in (
-        ['git', 'init', '-b', branch],
-        ['git', '-c', 'user.name=Config test', '-c', 'user.email=config@example.invalid',
-         'commit', '--allow-empty', '-m', 'Initial test checkout'],
-        ['git', 'remote', 'add', 'upstream', str(path)],
+        ["git", "init", "-b", branch],
+        [
+            "git",
+            "-c",
+            "user.name=Config test",
+            "-c",
+            "user.email=config@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Initial test checkout",
+        ],
+        ["git", "remote", "add", "upstream", str(path)],
     ):
         subprocess.run(args, cwd=path, check=True, capture_output=True)

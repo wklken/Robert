@@ -19,15 +19,23 @@ def _body_context(raw, *, legacy_empty_unknown=False):
     observed = "body" in raw and raw.get("body_observed", default_observed) is True
     updated_at = raw.get("body_updated_at")
     if observed and not updated_at:
-        updated_at = (raw.get("source_updated_at") if raw.get("event_type") in {"assigned", "notification"}
-                      else raw.get("event_at"))
-    return {"body": raw.get("body") or "", "body_observed": observed,
-            "body_updated_at": updated_at if observed else None}
+        updated_at = (
+            raw.get("source_updated_at")
+            if raw.get("event_type") in {"assigned", "notification"}
+            else raw.get("event_at")
+        )
+    return {
+        "body": raw.get("body") or "",
+        "body_observed": observed,
+        "body_updated_at": updated_at if observed else None,
+    }
 
 
 def _body_time(context):
     try:
-        value = datetime.fromisoformat(context["body_updated_at"].replace("Z", "+00:00"))
+        value = datetime.fromisoformat(
+            context["body_updated_at"].replace("Z", "+00:00")
+        )
         return value if value.tzinfo is not None else None
     except (AttributeError, TypeError, ValueError):
         return None
@@ -35,17 +43,28 @@ def _body_time(context):
 
 def merge_event_body(preferred, duplicate):
     """Merge body observations without changing the preferred event's authority."""
-    if (preferred.get("source_key") != duplicate.get("source_key")
-            or preferred.get("event_fingerprint") != duplicate.get("event_fingerprint")
-            or preferred.get("authorization_status") != duplicate.get("authorization_status")):
+    if (
+        preferred.get("source_key") != duplicate.get("source_key")
+        or preferred.get("event_fingerprint") != duplicate.get("event_fingerprint")
+        or preferred.get("authorization_status")
+        != duplicate.get("authorization_status")
+    ):
         return preferred
     current = _body_context(preferred, legacy_empty_unknown=True)
     candidate = _body_context(duplicate, legacy_empty_unknown=True)
     current_time, candidate_time = _body_time(current), _body_time(candidate)
     use_candidate = candidate["body_observed"] and (
         not current["body_observed"]
-        or (candidate_time is not None and (current_time is None or candidate_time > current_time))
-        or (current_time is None and candidate_time is None and not current["body"] and bool(candidate["body"]))
+        or (
+            candidate_time is not None
+            and (current_time is None or candidate_time > current_time)
+        )
+        or (
+            current_time is None
+            and candidate_time is None
+            and not current["body"]
+            and bool(candidate["body"])
+        )
     )
     return {**preferred, **(candidate if use_candidate else current)}
 
@@ -75,7 +94,9 @@ def normalize_events(raw_events, repo_config):
             raise ValueError("event id or event_fingerprint is required")
         normalized_source_key = source_key(repo, source_type, number)
         metadata = dict(raw.get("metadata") or {})
-        dd_workstream = metadata.get("dd_workstream") or parse_dd_workstream_metadata(body)
+        dd_workstream = metadata.get("dd_workstream") or parse_dd_workstream_metadata(
+            body
+        )
         workstream_id = raw.get("workstream_id") or normalized_source_key
         origin_workstream_id = raw.get("origin_workstream_id")
         has_open_dd_pr = raw.get("has_open_dd_pr")
@@ -99,7 +120,11 @@ def normalize_events(raw_events, repo_config):
                 "origin_workstream_id": origin_workstream_id,
                 "event_fingerprint": normalized_event_fingerprint
                 or event_fingerprint(event_type, event_id),
-                "mentions_dd": (_mentions_dd(body, github_account) if "body" in raw else bool(raw.get("mentions_dd"))),
+                "mentions_dd": (
+                    _mentions_dd(body, github_account)
+                    if "body" in raw
+                    else bool(raw.get("mentions_dd"))
+                ),
                 **_body_context(raw),
                 "metadata": metadata,
                 "has_open_dd_pr": bool(has_open_dd_pr),
@@ -144,7 +169,9 @@ def _mentions_dd(body, github_account):
     return bool(bot_requests(body, github_account))
 
 
-ROBERT_WORKSTREAM_BLOCK = re.compile(r"<!--\s*robert-workstream(?P<body>.*?)-->", re.I | re.S)
+ROBERT_WORKSTREAM_BLOCK = re.compile(
+    r"<!--\s*robert-workstream(?P<body>.*?)-->", re.I | re.S
+)
 LINKED_ISSUE_REFERENCE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|addresses?)\s+(?:(?P<repo>[\w.-]+/[\w.-]+))?#(?P<number>\d+)\b"
 )
@@ -185,11 +212,18 @@ def _unquoted_text(body):
     fence = None
     for line in (body or "").splitlines():
         stripped = line.lstrip()
-        marker = (re.match(r"(`{3,}|~{3,})", stripped)
-                  if len(line) - len(stripped) <= 3 and not line.startswith("\t") else None)
+        marker = (
+            re.match(r"(`{3,}|~{3,})", stripped)
+            if len(line) - len(stripped) <= 3 and not line.startswith("\t")
+            else None
+        )
         if fence:
-            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence)
-                    and not stripped[marker.end():].strip()):
+            if (
+                marker
+                and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence)
+                and not stripped[marker.end() :].strip()
+            ):
                 fence = None
             continue
         if marker:
@@ -214,9 +248,13 @@ def bot_requests(body, github_account):
     request = re.sub(mention, "", text, flags=re.I)
     # Keep separately addressed instructions separate in multi-recipient messages.
     if not re.search(r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]*", request):
-        return [request.strip(' \t\n,:：，')]
-    return [re.split(r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]*", text[match.end():], maxsplit=1)[0].strip(' \t\n,:：，')
-            for match in matches]
+        return [request.strip(" \t\n,:：，")]
+    return [
+        re.split(r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]*", text[match.end() :], maxsplit=1)[
+            0
+        ].strip(" \t\n,:：，")
+        for match in matches
+    ]
 
 
 def is_vote_request(body, github_account=None):
@@ -224,16 +262,26 @@ def is_vote_request(body, github_account=None):
     chinese_prefix = r"(?:请(?:你|帮我)?|帮我|麻烦(?:你)?)?"
     chinese_actors = r"(?:(?:组织|让|调用)(?:多个模型|各模型|多个\s*Agent|多\s*Agent))?"
     chinese_vote = r"(?:投票|表决)(?=$|[\s:：，,。]|选择|选|决定)"
-    english_prefix = r"(?:(?:please(?:\s+help)?|(?:can|could|would)\s+you(?:\s+please)?)\s+)?"
+    english_prefix = (
+        r"(?:(?:please(?:\s+help)?|(?:can|could|would)\s+you(?:\s+please)?)\s+)?"
+    )
     english_vote = r"vote(?=\s*(?:$|[:：]|for\b|on\b|between\b|[A-Z](?:\b|/)))"
     commands = (
         chinese_prefix + chinese_actors + r"(?:进行|发起|组织)?" + chinese_vote,
-        english_prefix + r"(?:(?:organize|run|start|hold)\s+(?:a\s+)?|(?:let|have)\s+(?:multiple\s+)?(?:models|agents)\s+)?" + english_vote,
-        chinese_prefix + r"(?:比较|对比)[^\n;。！？]{0,160}(?:并|然后|再)(?:请)?" + chinese_vote,
+        english_prefix
+        + r"(?:(?:organize|run|start|hold)\s+(?:a\s+)?|(?:let|have)\s+(?:multiple\s+)?(?:models|agents)\s+)?"
+        + english_vote,
+        chinese_prefix
+        + r"(?:比较|对比)[^\n;。！？]{0,160}(?:并|然后|再)(?:请)?"
+        + chinese_vote,
         english_prefix + r"compare\b[^\n;.!?]{0,160}\b(?:and|then)\s+" + english_vote,
     )
     for request in bot_requests(body, github_account):
-        if re.search(r"(?:不要|不需要|先不|别|无需).{0,8}(?:投票|表决)|(?:do not|don't|no need to)\s+vote", request, re.I):
+        if re.search(
+            r"(?:不要|不需要|先不|别|无需).{0,8}(?:投票|表决)|(?:do not|don't|no need to)\s+vote",
+            request,
+            re.I,
+        ):
             continue
         if any(re.match(pattern, request, re.I) for pattern in commands):
             return True
@@ -249,32 +297,62 @@ def infer_intent(title, body, event_type, github_account=None):
         return "review_request"
     clean_body = _unquoted_text(body)
     requests = bot_requests(body, github_account)
-    instruction = (requests[0] if requests else re.sub(r'^@\S+\s+', '', clean_body.strip())).lower()
+    instruction = (
+        requests[0] if requests else re.sub(r"^@\S+\s+", "", clean_body.strip())
+    ).lower()
     text = f"{title or ''}\n{instruction}".lower()
-    fix_prohibited = re.search(r"(?:不要|无需|别).{0,8}修复|\b(?:do not|don't)\s+fix\b", instruction)
-    prefix = r'^(?:(?:please|can you|could you)\s+|请(?:帮我)?|帮我)?'
-    if re.match(prefix + r'(?:fix\b|修复)', instruction):
-        return 'bug_fix'
-    if re.match(prefix + r'(?:add\s+(?:unit\s+)?tests?\b|write\s+tests?\b|补充测试|增加测试)', instruction):
-        return 'add_tests'
-    if re.match(prefix + r'(?:implement\b|add\b|build\b|create\b|support\b|实现|支持|增加|添加)', instruction):
-        return 'small_change'
+    fix_prohibited = re.search(
+        r"(?:不要|无需|别).{0,8}修复|\b(?:do not|don't)\s+fix\b", instruction
+    )
+    prefix = r"^(?:(?:please|can you|could you)\s+|请(?:帮我)?|帮我)?"
+    if re.match(prefix + r"(?:fix\b|修复)", instruction):
+        return "bug_fix"
+    if re.match(
+        prefix + r"(?:add\s+(?:unit\s+)?tests?\b|write\s+tests?\b|补充测试|增加测试)",
+        instruction,
+    ):
+        return "add_tests"
+    if re.match(
+        prefix
+        + r"(?:implement\b|add\b|build\b|create\b|support\b|实现|支持|增加|添加)",
+        instruction,
+    ):
+        return "small_change"
     if not fix_prohibited and re.search(
-            r'(?:[;；。.!?\n]\s*|并|然后|再|\b(?:and|then)\s+)'
-            r'(?:(?:please|can you|could you)\s+|请(?:帮我)?|帮我)?(?:fix\b|修复)', instruction):
-        return 'bug_fix'
-    if re.match(prefix + r'(?:分析|讨论|解释|为什么|为何|analy[sz]e\b|analysis\b|explain\b|discuss\b)', instruction):
-        return 'analysis'
+        r"(?:[;；。.!?\n]\s*|并|然后|再|\b(?:and|then)\s+)"
+        r"(?:(?:please|can you|could you)\s+|请(?:帮我)?|帮我)?(?:fix\b|修复)",
+        instruction,
+    ):
+        return "bug_fix"
+    if re.match(
+        prefix
+        + r"(?:分析|讨论|解释|为什么|为何|analy[sz]e\b|analysis\b|explain\b|discuss\b)",
+        instruction,
+    ):
+        return "analysis"
     # Requests to count errors or assess repairability do not authorize a fix.
-    if re.search(r'(?:统计|汇总)(?:\s|分析|一下|下|结果|报错|错误|诊断|数量)|\bsummari[sz]e\b|'
-                 r'\b(?:provide|show|give|collect)\b[^?.!\n]{0,40}\b(?:statistics|summary|breakdown)\b|'
-                 r'是否.{0,20}(?:修复|忽略)|\b(?:can|could)\b[^?.!\n]{0,80}\b(?:fixed|ignored)\b', instruction):
-        return 'analysis'
-    if not fix_prohibited and re.search(r'\b(?:bug|fix|fixes|fixed)\b|修复|报错|失败', text):
-        return 'bug_fix'
+    if re.search(
+        r"(?:统计|汇总)(?:\s|分析|一下|下|结果|报错|错误|诊断|数量)|\bsummari[sz]e\b|"
+        r"\b(?:provide|show|give|collect)\b[^?.!\n]{0,40}\b(?:statistics|summary|breakdown)\b|"
+        r"是否.{0,20}(?:修复|忽略)|\b(?:can|could)\b[^?.!\n]{0,80}\b(?:fixed|ignored)\b",
+        instruction,
+    ):
+        return "analysis"
+    if not fix_prohibited and re.search(
+        r"\b(?:bug|fix|fixes|fixed)\b|修复|报错|失败", text
+    ):
+        return "bug_fix"
     if any(
         word in text
-        for word in ["分析", "analysis", "analyze", "explain", "discuss", "讨论", "方案"]
+        for word in [
+            "分析",
+            "analysis",
+            "analyze",
+            "explain",
+            "discuss",
+            "讨论",
+            "方案",
+        ]
     ):
         return "analysis"
     return "unclear"
@@ -299,7 +377,9 @@ def _issue_search_to_raw(item, event_type, github_account=None):
         "body_updated_at": item.get("updatedAt"),
         "url": item.get("url"),
         "event_at": item.get("updatedAt"),
-        "intent": _infer_intent(item.get("title", ""), body, event_type, github_account),
+        "intent": _infer_intent(
+            item.get("title", ""), body, event_type, github_account
+        ),
     }
     if item.get("id"):
         raw["id"] = item.get("id")
@@ -316,7 +396,9 @@ def _enrich_pull_request_metadata(raw, repo_config, runner):
         return raw
     repo = repo_config["full_name"]
     github_account = repo_config["github_account"]
-    details = github_client.try_read_json(["gh", "api", f"repos/{repo}/pulls/{raw['number']}"], runner=runner)
+    details = github_client.try_read_json(
+        ["gh", "api", f"repos/{repo}/pulls/{raw['number']}"], runner=runner
+    )
     details = details if isinstance(details, dict) else {}
     body = details.get("body") or raw.get("body") or ""
     dd_workstream = parse_dd_workstream_metadata(body)
@@ -385,12 +467,16 @@ def _notification_to_raw(notification):
     repository = notification.get("repository") or {}
     repo_full_name = repository.get("full_name")
     url = subject.get("url") or ""
-    match = re.search(r"/repos/(?P<repo>[^/]+/[^/]+)/(?:issues|pulls)/(?P<number>\d+)$", url)
+    match = re.search(
+        r"/repos/(?P<repo>[^/]+/[^/]+)/(?:issues|pulls)/(?P<number>\d+)$", url
+    )
     repo_full_name = repo_full_name or (match.group("repo") if match else None)
     if not match or not repo_full_name:
         return None
     subject_type = (subject.get("type") or "").lower()
-    source_type = "pull_request" if "pull" in subject_type or "/pulls/" in url else "issue"
+    source_type = (
+        "pull_request" if "pull" in subject_type or "/pulls/" in url else "issue"
+    )
     return {
         "id": notification.get("id"),
         "repo_full_name": repo_full_name,
@@ -405,7 +491,9 @@ def _notification_to_raw(notification):
     }
 
 
-def collect_account_notifications(repo_configs, runner=subprocess.run, read_session=None):
+def collect_account_notifications(
+    repo_configs, runner=subprocess.run, read_session=None
+):
     if read_session is not None:
         return read_session.collect_notifications(repo_configs)
     configured = {repo["full_name"] for repo in repo_configs}
@@ -429,7 +517,9 @@ def collect_account_notifications(repo_configs, runner=subprocess.run, read_sess
 
 def _source_metadata(raw, repo_config, runner):
     repo = repo_config["full_name"]
-    payload = github_client.try_read_json(["gh", "api", f"repos/{repo}/issues/{raw['number']}"], runner=runner)
+    payload = github_client.try_read_json(
+        ["gh", "api", f"repos/{repo}/issues/{raw['number']}"], runner=runner
+    )
     if not isinstance(payload, dict):
         return raw, None
     user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
@@ -437,9 +527,17 @@ def _source_metadata(raw, repo_config, runner):
         {
             **raw,
             "title": payload.get("title") or raw.get("title", ""),
-            **(_body_context({"body": payload["body"], "body_updated_at": payload.get("updated_at")})
-               if raw.get("event_type") in {"notification", "assigned"} and "body" in payload
-               else _body_context(raw)),
+            **(
+                _body_context(
+                    {
+                        "body": payload["body"],
+                        "body_updated_at": payload.get("updated_at"),
+                    }
+                )
+                if raw.get("event_type") in {"notification", "assigned"}
+                and "body" in payload
+                else _body_context(raw)
+            ),
             "state": payload.get("state") or raw.get("state", ""),
             "state_reason": payload.get("state_reason"),
             "source_updated_at": payload.get("updated_at"),
@@ -520,7 +618,11 @@ def _timeline_review_request(raw, repo_config, runner):
         if isinstance(requested_team, dict):
             requested_team_name = requested_team.get("name")
             requested_team_slug = requested_team.get("slug")
-        if github_account not in {requested_reviewer, requested_team_name, requested_team_slug}:
+        if github_account not in {
+            requested_reviewer,
+            requested_team_name,
+            requested_team_slug,
+        }:
             continue
         matches.append(
             (
@@ -581,8 +683,12 @@ def _comment_to_raw(raw, comment, event_type="comment", repo_config=None, runner
         "actor_permission": permission,
         "body": comment.get("body") or "",
         "body_observed": "body" in comment,
-        "body_updated_at": comment.get("updated_at") or comment.get("created_at") or comment.get("submitted_at"),
-        "event_at": comment.get("created_at") or comment.get("submitted_at") or raw.get("event_at"),
+        "body_updated_at": comment.get("updated_at")
+        or comment.get("created_at")
+        or comment.get("submitted_at"),
+        "event_at": comment.get("created_at")
+        or comment.get("submitted_at")
+        or raw.get("event_at"),
     }
     if comment.get("id"):
         enriched["event_fingerprint"] = event_fingerprint(event_type, comment["id"])
@@ -638,7 +744,12 @@ def _discussion_events(raw, repo_config, runner, predicate):
             repo_config=repo_config,
             runner=runner,
         )
-        enriched["intent"] = _infer_intent(raw.get("title"), enriched.get("body"), event_type, repo_config["github_account"])
+        enriched["intent"] = _infer_intent(
+            raw.get("title"),
+            enriched.get("body"),
+            event_type,
+            repo_config["github_account"],
+        )
         matched.append(enriched)
 
     return sorted(matched, key=_event_sort_key), True
@@ -661,8 +772,10 @@ def _enrich_mentions(raw, repo_config, runner):
         raw,
         repo_config,
         runner,
-        lambda item, _event_type: _mentions_dd(item.get("body"), github_account)
-        and (item.get("user") or {}).get("login") in trusted,
+        lambda item, _event_type: (
+            _mentions_dd(item.get("body"), github_account)
+            and (item.get("user") or {}).get("login") in trusted
+        ),
     )
     matches.extend(
         {
@@ -698,9 +811,11 @@ def _enrich_known_workstream_contexts(raw, repo_config, runner):
         raw,
         repo_config,
         runner,
-        lambda item, _event_type: (item.get("user") or {}).get("login") != github_account
-        and _mentions_dd(item.get("body"), github_account)
-        and bool((item.get("body") or "").strip()),
+        lambda item, _event_type: (
+            (item.get("user") or {}).get("login") != github_account
+            and _mentions_dd(item.get("body"), github_account)
+            and bool((item.get("body") or "").strip())
+        ),
     )
     if matches:
         return [
@@ -742,23 +857,41 @@ def _trusted_triggers_from_source(
     known_workstreams = set(known_workstreams or [])
     raw_workstream_id = _raw_workstream_id(raw, repo_config["full_name"])
 
-    if (raw.get('source_type') == 'pull_request' and raw.get('notification_reason') == 'review_requested'
-            and (raw.get('pr_author_login') or '').casefold() in (review_author_allowlist or ())):
+    if (
+        raw.get("source_type") == "pull_request"
+        and raw.get("notification_reason") == "review_requested"
+        and (raw.get("pr_author_login") or "").casefold()
+        in (review_author_allowlist or ())
+    ):
         # This notification requests a new native review round. An older
         # assignment is not its trigger, even if that assignment was trusted.
         requested = _timeline_review_request(raw, repo_config, runner)
-        return [{**requested,
-                'actor_login': requested.get('requester_login') or requested.get('actor_login'),
-                'trusted_trigger_found': requested.get('requester_login') in trusted}]
+        return [
+            {
+                **requested,
+                "actor_login": requested.get("requester_login")
+                or requested.get("actor_login"),
+                "trusted_trigger_found": requested.get("requester_login") in trusted,
+            }
+        ]
 
     # A known source may carry new requests after its assignment was consumed.
     # Keep every discussion event's identity; authorization uses current trust.
     # Review-request notifications retain their dedicated timeline semantics.
-    if raw_workstream_id in known_workstreams and raw.get('notification_reason') != 'review_requested':
+    if (
+        raw_workstream_id in known_workstreams
+        and raw.get("notification_reason") != "review_requested"
+    ):
         contexts = _enrich_known_workstream_contexts(raw, repo_config, runner)
-        if any(event.get('event_type') != 'notification'
-               or event.get('authorization_lookup_complete') is False for event in contexts):
-            return [{**event, 'trusted_trigger_found': False} for event in reversed(contexts)]
+        if any(
+            event.get("event_type") != "notification"
+            or event.get("authorization_lookup_complete") is False
+            for event in contexts
+        ):
+            return [
+                {**event, "trusted_trigger_found": False}
+                for event in reversed(contexts)
+            ]
 
     def _discussion_result():
         mention = _enrich_mention(raw, repo_config, runner)
@@ -768,7 +901,10 @@ def _trusted_triggers_from_source(
                 "trusted_trigger_found": False,
                 "authorization_lookup_complete": False,
             }
-        if _mentions_dd(mention.get("body"), github_account) and mention.get("actor_login") in trusted:
+        if (
+            _mentions_dd(mention.get("body"), github_account)
+            and mention.get("actor_login") in trusted
+        ):
             return {
                 **mention,
                 "trusted_trigger_found": True,
@@ -779,41 +915,51 @@ def _trusted_triggers_from_source(
 
     assigned = _timeline_assignment(raw, repo_config, runner)
     if assigned.get("authorization_lookup_complete") is False:
-        return [{
-            **raw,
-            "trusted_trigger_found": False,
-            "authorization_lookup_complete": False,
-        }]
+        return [
+            {
+                **raw,
+                "trusted_trigger_found": False,
+                "authorization_lookup_complete": False,
+            }
+        ]
     if assigned.get("assignment_actor_login") in trusted:
-        return [{
-            **assigned,
-            "trusted_trigger_found": True,
-            "authorization_lookup_complete": True,
-        }]
+        return [
+            {
+                **assigned,
+                "trusted_trigger_found": True,
+                "authorization_lookup_complete": True,
+            }
+        ]
 
     review_request = _timeline_review_request(raw, repo_config, runner)
     if review_request.get("authorization_lookup_complete") is False:
-        return [{
-            **raw,
-            "trusted_trigger_found": False,
-            "authorization_lookup_complete": False,
-        }]
+        return [
+            {
+                **raw,
+                "trusted_trigger_found": False,
+                "authorization_lookup_complete": False,
+            }
+        ]
     if review_request.get("requester_login") in trusted:
-        return [{
-            **review_request,
-            "trusted_trigger_found": True,
-            "authorization_lookup_complete": True,
-        }]
+        return [
+            {
+                **review_request,
+                "trusted_trigger_found": True,
+                "authorization_lookup_complete": True,
+            }
+        ]
 
     discussion_result = _discussion_result()
     if discussion_result is not None:
         return [discussion_result]
 
-    return [{
-        **raw,
-        "trusted_trigger_found": False,
-        "authorization_lookup_complete": True,
-    }]
+    return [
+        {
+            **raw,
+            "trusted_trigger_found": False,
+            "authorization_lookup_complete": True,
+        }
+    ]
 
 
 def collect_live_events(
@@ -834,11 +980,14 @@ def collect_live_events(
 
     if read_session is not None:
         runner = read_session
-    notification_raws = [raw for raw in (notification_hints or [])
-                         if raw.get("repo_full_name") == repo]
+    notification_raws = [
+        raw for raw in (notification_hints or []) if raw.get("repo_full_name") == repo
+    ]
     if include_notifications and notification_hints is None:
         notification_buckets = collect_account_notifications(
-            [repo_config], runner=runner, read_session=read_session,
+            [repo_config],
+            runner=runner,
+            read_session=read_session,
         )
         notification_raws = notification_buckets.get(repo, [])
 
@@ -850,11 +999,19 @@ def collect_live_events(
     def source_events(raw, load):
         if read_session is None:
             return load()
-        hints = [hint for hint in notification_raws if hint['number'] == raw['number']
-                 and hint['source_type'] == raw['source_type']]
+        hints = [
+            hint
+            for hint in notification_raws
+            if hint["number"] == raw["number"]
+            and hint["source_type"] == raw["source_type"]
+        ]
         return read_session.source_events(
-            repo_config, raw, load, known_workstreams=known_workstreams,
-            review_author_allowlist=review_author_allowlist, notification_hints=hints,
+            repo_config,
+            raw,
+            load,
+            known_workstreams=known_workstreams,
+            review_author_allowlist=review_author_allowlist,
+            notification_hints=hints,
         )
 
     assigned = search(
@@ -877,9 +1034,11 @@ def collect_live_events(
     )
     for item in assigned:
         raw = _issue_search_to_raw(item, "assigned", github_account)
+
         def load_assigned(raw=raw):
             enriched = _enrich_pull_request_metadata(raw, repo_config, runner)
             return [_timeline_assignment(enriched, repo_config, runner)]
+
         raw_events.extend(source_events(raw, load_assigned))
 
     mentions = search(
@@ -902,27 +1061,36 @@ def collect_live_events(
     )
     for item in mentions:
         raw = _issue_search_to_raw(item, "mention", github_account)
+
         def load_mentions(raw=raw):
             enriched = dict(raw)
             if enriched.get("author_association") in {None, "", "UNKNOWN"}:
-                enriched["actor_permission"] = _actor_permission(repo_config, enriched.get("actor_login"), runner)
+                enriched["actor_permission"] = _actor_permission(
+                    repo_config, enriched.get("actor_login"), runner
+                )
             enriched = _enrich_pull_request_metadata(enriched, repo_config, runner)
             if _raw_workstream_id(enriched, repo) in known_workstreams:
                 return _enrich_known_workstream_contexts(enriched, repo_config, runner)
             return _enrich_mentions(enriched, repo_config, runner)
+
         raw_events.extend(source_events(raw, load_mentions))
 
     for raw in notification_raws:
         if raw.get("repo_full_name") != repo:
             continue
+
         def load_notification(raw=raw):
             enriched, source_state = _source_metadata(raw, repo_config, runner)
             if source_state and source_state.lower() != "open":
                 return []
             return _trusted_triggers_from_source(
-                enriched, repo_config, runner, known_workstreams=known_workstreams,
+                enriched,
+                repo_config,
+                runner,
+                known_workstreams=known_workstreams,
                 review_author_allowlist=review_author_allowlist,
             )
+
         raw_events.extend(source_events(raw, load_notification))
 
     return raw_events

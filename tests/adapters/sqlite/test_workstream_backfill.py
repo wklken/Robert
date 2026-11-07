@@ -13,7 +13,10 @@ class WorkstreamBackfillTests(RepositoryCycleFixture):
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             # This fixture represents a database that predates the mainline migration.
-            conn.execute("DELETE FROM schema_migrations WHERE name=?", (storage.PR_MAINLINE_MIGRATION_NAME,))
+            conn.execute(
+                "DELETE FROM schema_migrations WHERE name=?",
+                (storage.PR_MAINLINE_MIGRATION_NAME,),
+            )
             conn.execute(
                 """
                 INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root)

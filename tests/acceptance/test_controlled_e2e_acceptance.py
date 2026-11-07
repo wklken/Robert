@@ -40,7 +40,7 @@ repos:
   trusted_actors:
   - wklken
   checkout: {self.source_repo}
-  worktrees: {self.source_repo / '.worktrees'}
+  worktrees: {self.source_repo / ".worktrees"}
   default_branch: main
 """,
             encoding="utf-8",
@@ -48,21 +48,27 @@ repos:
 
     def test_controlled_worker_uses_the_running_package_interpreter(self):
         from robert_agent.acceptance import controlled_e2e as controlled_e2e_acceptance
-        shadow_bin = self.root / 'shadow-bin'
+
+        shadow_bin = self.root / "shadow-bin"
         shadow_bin.mkdir()
-        wrong_python = shadow_bin / 'python3'
-        wrong_python.write_text('#!/bin/sh\nexit 86\n', encoding='utf-8')
+        wrong_python = shadow_bin / "python3"
+        wrong_python.write_text("#!/bin/sh\nexit 86\n", encoding="utf-8")
         wrong_python.chmod(0o755)
-        with patch.dict(os.environ, {'PATH': str(shadow_bin) + os.pathsep + os.environ['PATH']}):
+        with patch.dict(
+            os.environ, {"PATH": str(shadow_bin) + os.pathsep + os.environ["PATH"]}
+        ):
             result = controlled_e2e_acceptance.controlled_e2e_acceptance(
-                self.config_path, workspace_dir=self.root / 'interpreter-e2e',
-                timeout_seconds=5, poll_interval_seconds=0.05,
+                self.config_path,
+                workspace_dir=self.root / "interpreter-e2e",
+                timeout_seconds=5,
+                poll_interval_seconds=0.05,
             )
-        self.assertTrue(result['ok'], result)
-        self.assertEqual(result['publish_result']['published_count'], 2)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["publish_result"]["published_count"], 2)
 
     def test_controlled_e2e_acceptance_completes_new_pr_workflow(self):
         from robert_agent.acceptance import controlled_e2e as controlled_e2e_acceptance
+
         workspace_dir = (self.root / "controlled-e2e").resolve()
 
         result = controlled_e2e_acceptance.controlled_e2e_acceptance(
@@ -81,8 +87,16 @@ repos:
         self.assertEqual(result["worker_result"]["output_type"], "new_pr")
         self.assertEqual(result["publish_result"]["published_count"], 2)
         self.assertEqual(result["publish_result"]["finalized_task_count"], 1)
-        self.assertEqual(result["github_actions"], [("push_existing_pr", "accepted", "published"), ("open_pr", "accepted", "published")])
-        self.assertEqual(result["published_pr_url"], "https://github.com/example/repo/pull/42")
+        self.assertEqual(
+            result["github_actions"],
+            [
+                ("push_existing_pr", "accepted", "published"),
+                ("open_pr", "accepted", "published"),
+            ],
+        )
+        self.assertEqual(
+            result["published_pr_url"], "https://github.com/example/repo/pull/42"
+        )
         self.assertTrue(Path(result["worktree_path"]).is_dir())
         self.assertFalse((self.source_data_dir / "dd.sqlite3").exists())
         with closing(sqlite3.connect(result["db_path"])) as conn, conn:

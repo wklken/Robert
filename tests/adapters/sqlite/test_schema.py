@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
+
 WORKER_MODULE = PACKAGE_ROOT / "worker"
 
 
@@ -120,10 +121,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(workstreams)")
-            }
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(workstreams)")}
         self.assertIn("origin_workstream_id", columns)
 
     def test_github_actions_track_publish_status_separately_from_audit(self):
@@ -133,8 +131,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
             columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(github_actions)")
+                row[1] for row in conn.execute("PRAGMA table_info(github_actions)")
             }
         self.assertIn("publish_status", columns)
 
@@ -149,8 +146,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
                 for row in conn.execute("PRAGMA table_info(github_events)")
             }
             task_columns = {
-                row[1]: row[4]
-                for row in conn.execute("PRAGMA table_info(tasks)")
+                row[1]: row[4] for row in conn.execute("PRAGMA table_info(tasks)")
             }
             conn.execute(
                 """
@@ -293,8 +289,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
                 for row in conn.execute("PRAGMA table_info(knowledge_candidates)")
             }
             runtime_columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(runtime_knowledge)")
+                row[1] for row in conn.execute("PRAGMA table_info(runtime_knowledge)")
             }
         self.assertTrue({"knowledge_candidates", "runtime_knowledge"}.issubset(tables))
         self.assertIn("idx_knowledge_candidates_status", indexes)

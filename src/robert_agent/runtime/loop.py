@@ -1,5 +1,6 @@
 from robert_agent.work.application import synchronization as synchronization
 from robert_agent.work import scan_batches as scan_batches
+
 #!/usr/bin/env python3
 import argparse
 from contextlib import closing
@@ -31,36 +32,58 @@ def load_config_scope(config_path, skip_external=False, *, include_config=False)
     db_path = Path(config["db_path"])
     storage.init_database(db_path)
     with closing(run_journal.connect(db_path)) as conn:
-        repo_ids = [work_repositories.lookup_id(conn, repo["full_name"], fallback=f"repo:{repo['full_name']}")
-                    for repo in config["repos"]]
+        repo_ids = [
+            work_repositories.lookup_id(
+                conn, repo["full_name"], fallback=f"repo:{repo['full_name']}"
+            )
+            for repo in config["repos"]
+        ]
     return (db_path, repo_ids, config) if include_config else (db_path, repo_ids)
 
 
-def has_runnable_local_work(conn, repo_id=None, repo_ids=None, *, config_result=None, now=None, consume_observations=False, include_publication=True):
+def has_runnable_local_work(
+    conn,
+    repo_id=None,
+    repo_ids=None,
+    *,
+    config_result=None,
+    now=None,
+    consume_observations=False,
+    include_publication=True,
+):
     if repo_id is not None and repo_ids is not None:
         raise ValueError("repo_id and repo_ids are mutually exclusive")
     repo_ids = [repo_id] if repo_id else list(repo_ids or [])
     if consume_observations:
         contexts = None
-        if config_result and config_result.get('repos'):
+        if config_result and config_result.get("repos"):
             contexts = {}
-            for repo in config_result['repos']:
-                matched_repo = work_repositories.lookup_id(conn, repo['full_name'])
+            for repo in config_result["repos"]:
+                matched_repo = work_repositories.lookup_id(conn, repo["full_name"])
                 if matched_repo and (not repo_ids or matched_repo in repo_ids):
                     known = work_queries.load_known_workstreams(conn, matched_repo)
-                    contexts[matched_repo] = synchronization.context_digest(repo, known, config=config_result)
+                    contexts[matched_repo] = synchronization.context_digest(
+                        repo, known, config=config_result
+                    )
         scoped = repo_ids or work_repositories.list_ids(conn)
         when = values.parse_time(now).timestamp() if now is not None else None
         if scan_batches.has_pending(conn, scoped, now=when, contexts=contexts):
             return True
     return readiness.has_local_work(
-        conn, repo_ids, config_result=config_result, now=now, include_publication=include_publication,
+        conn,
+        repo_ids,
+        config_result=config_result,
+        now=now,
+        include_publication=include_publication,
     )
 
 
 def _write_latest_loop(db_path, summary):
     path = Path(db_path).parent / "latest-loop.json"
-    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     return str(path)
 
 
@@ -81,13 +104,19 @@ def run_loop(
     if max_publish_actions < 0:
         raise ValueError("max_publish_actions must be at least 0")
     db_path, repo_ids, config = load_config_scope(
-        config_path, skip_external=skip_external, include_config=True)
+        config_path, skip_external=skip_external, include_config=True
+    )
     cycle_results = []
     stop_reason = "max_cycles"
     publish_actions_used = 0
     with closing(run_journal.connect(db_path)) as conn, conn:
-        if not has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config,
-                consume_observations=consume_observations, include_publication=not skip_publish):
+        if not has_runnable_local_work(
+            conn,
+            repo_ids=repo_ids,
+            config_result=config,
+            consume_observations=consume_observations,
+            include_publication=not skip_publish,
+        ):
             summary = {
                 "ok": True,
                 "status": "completed",
@@ -117,7 +146,9 @@ def run_loop(
             break
         with closing(run_journal.connect(db_path)) as conn, conn:
             before = progress.snapshot_progress(conn)
-        observation_kwargs = {'consume_observations': True} if consume_observations else {}
+        observation_kwargs = (
+            {"consume_observations": True} if consume_observations else {}
+        )
         result = runner(
             config_path,
             workflow_path=workflow_path,
@@ -142,8 +173,13 @@ def run_loop(
         with closing(run_journal.connect(db_path)) as conn, conn:
             after = progress.snapshot_progress(conn)
             diff = progress.diff_progress(before, after)
-            runnable = has_runnable_local_work(conn, repo_ids=repo_ids, config_result=config,
-                consume_observations=consume_observations, include_publication=not skip_publish)
+            runnable = has_runnable_local_work(
+                conn,
+                repo_ids=repo_ids,
+                config_result=config,
+                consume_observations=consume_observations,
+                include_publication=not skip_publish,
+            )
         cycle_results[-1] = {**result, "progress": diff}
         if not diff["changed"]:
             stop_reason = "no_progress"
@@ -158,7 +194,11 @@ def run_loop(
         stop_reason = "max_cycles"
     summary = {
         "ok": stop_reason != "run_once_failed",
-        **({'failure_scope': cycle_results[-1]['failure_scope']} if cycle_results and cycle_results[-1].get('failure_scope') else {}),
+        **(
+            {"failure_scope": cycle_results[-1]["failure_scope"]}
+            if cycle_results and cycle_results[-1].get("failure_scope")
+            else {}
+        ),
         "status": "completed" if stop_reason != "run_once_failed" else "failed",
         "cycles": len(cycle_results),
         "stop_reason": stop_reason,
@@ -204,7 +244,10 @@ def main(argv=None):
             max_publish_actions=args.max_publish_actions,
         )
     except ValueError as exc:
-        return emit({"ok": False, "status": "failed_config", "safe_error": str(exc)}, exit_code=3)
+        return emit(
+            {"ok": False, "status": "failed_config", "safe_error": str(exc)},
+            exit_code=3,
+        )
     return emit(result, 0 if result.get("ok") else 3)
 
 

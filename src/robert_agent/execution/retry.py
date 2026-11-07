@@ -16,7 +16,9 @@ def error_class(message):
         text,
     ):
         return "authentication_required"
-    if re.search(r"\b429\b|rate.?limit|too many requests|secondary rate|abuse detection", text):
+    if re.search(
+        r"\b429\b|rate.?limit|too many requests|secondary rate|abuse detection", text
+    ):
         return "rate_limited"
     if re.search(r"\b403\b|\bforbidden\b|resource not accessible by", text):
         return "permission_required"
@@ -42,7 +44,13 @@ def error_class(message):
         return "permission_required"
     if any(
         value in text
-        for value in ("missing fields", "not a valid", "invalid configuration", "src refspec", "does not appear to be a git repository")
+        for value in (
+            "missing fields",
+            "not a valid",
+            "invalid configuration",
+            "src refspec",
+            "does not appear to be a git repository",
+        )
     ):
         return "configuration_required"
     return "transient_failure"
@@ -96,9 +104,7 @@ def failure_state(previous, message, now, *, retryable=True):
         "error_class": category,
         "reason_code": reason,
         "retryable": bool(allowed),
-        "next_retry_at": (
-            timestamp(now) + timedelta(seconds=delay)
-        ).isoformat()
+        "next_retry_at": (timestamp(now) + timedelta(seconds=delay)).isoformat()
         if allowed
         else None,
         "required_action": None
@@ -157,7 +163,11 @@ def worker_error(logs):
                 break
             if event.get("type") in {"error", "turn.failed"}:
                 error = event.get("error") or event.get("message") or ""
-                messages.append(str(error.get("message", "")) if isinstance(error, dict) else str(error))
+                messages.append(
+                    str(error.get("message", ""))
+                    if isinstance(error, dict)
+                    else str(error)
+                )
                 if event.get("type") == "turn.failed":
                     break
     return "\n".join(messages)
@@ -184,15 +194,28 @@ def terminal_rate_limit(logs):
             if event.get("type") == "result":
                 if not event.get("is_error"):
                     return None
-                errors.append({"type": "result", "message": str(event.get("errors") or event.get("result") or "")})
+                errors.append(
+                    {
+                        "type": "result",
+                        "message": str(
+                            event.get("errors") or event.get("result") or ""
+                        ),
+                    }
+                )
                 break
             if event.get("type") in {"error", "turn.failed"}:
                 error = event.get("error") or event.get("message") or ""
-                message = str(error.get("message", "")) if isinstance(error, dict) else str(error)
+                message = (
+                    str(error.get("message", ""))
+                    if isinstance(error, dict)
+                    else str(error)
+                )
                 errors.append({"type": event["type"], "message": message})
                 break
     # A terminal protocol error takes precedence over diagnostic stderr.
-    message = "\n".join(error["message"] for error in errors) if errors else "\n".join(stderr)
+    message = (
+        "\n".join(error["message"] for error in errors) if errors else "\n".join(stderr)
+    )
     if error_class(message) != "rate_limited":
         return None
     return {"type": errors[0]["type"] if errors else "stderr", "message": message}

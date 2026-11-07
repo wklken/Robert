@@ -1,4 +1,5 @@
 from robert_agent.supervision import health as supervision_health
+
 #!/usr/bin/env python3
 from robert_agent.adapters.processes import attempt as attempt_process
 import argparse
@@ -165,12 +166,23 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
             if _STOP_REQUESTED:
                 return _child_stopped_result(command, timeout_seconds, None, True)
             executor_id = uuid4().hex
-            margin = min(30, max(.05, timeout_seconds * .1))
-            environment = {**os.environ, '_ROBERT_EXECUTOR_ID': executor_id,
-                           '_ROBERT_CONTROL_DEADLINE': str(time.monotonic() + max(.01, timeout_seconds - margin))}
-            process = subprocess.Popen(command, cwd=str(AGENTS_ROOT), env=environment,
-                                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       start_new_session=True)
+            margin = min(30, max(0.05, timeout_seconds * 0.1))
+            environment = {
+                **os.environ,
+                "_ROBERT_EXECUTOR_ID": executor_id,
+                "_ROBERT_CONTROL_DEADLINE": str(
+                    time.monotonic() + max(0.01, timeout_seconds - margin)
+                ),
+            }
+            process = subprocess.Popen(
+                command,
+                cwd=str(AGENTS_ROOT),
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
             # The stop handler terminates this group so communicate() returns
             # promptly; Python would otherwise resume the wait after the handler.
             _ACTIVE_CHILD_PGID = process.pid
@@ -182,7 +194,9 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
                 except subprocess.TimeoutExpired:
                     _signal_child_group(process.pid, signal.SIGTERM)
                     try:
-                        process.communicate(timeout=min(CONTROL_TERM_GRACE_SECONDS, max(.1, margin)))
+                        process.communicate(
+                            timeout=min(CONTROL_TERM_GRACE_SECONDS, max(0.1, margin))
+                        )
                     except subprocess.TimeoutExpired:
                         _signal_child_group(process.pid, signal.SIGKILL)
                         process.communicate(timeout=CONTROL_KILL_REAP_SECONDS)
@@ -195,12 +209,22 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
                 _signal_child_group(process.pid, signal.SIGKILL)
                 if process.returncode is not None and process.returncode < 0:
                     group_stopped = attempt_process.group_stopped(process.pid)
-                    return _child_stopped_result(command, timeout_seconds, executor_id, group_stopped)
-            completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                    return _child_stopped_result(
+                        command, timeout_seconds, executor_id, group_stopped
+                    )
+            completed = subprocess.CompletedProcess(
+                command, process.returncode, stdout, stderr
+            )
             group_stopped = attempt_process.group_stopped(process.pid)
         else:
-            completed = runner(command, cwd=str(AGENTS_ROOT), text=True, capture_output=True,
-                               timeout=timeout_seconds, check=False)
+            completed = runner(
+                command,
+                cwd=str(AGENTS_ROOT),
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
     except subprocess.TimeoutExpired as exc:
         return {
             "ok": False,
@@ -230,7 +254,9 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
         return {
             "ok": False,
             "status": "child_failed",
-            "safe_error": _short_text(completed.stderr or completed.stdout or "child returned non-JSON output"),
+            "safe_error": _short_text(
+                completed.stderr or completed.stdout or "child returned non-JSON output"
+            ),
             "child": child,
         }
     payload = payload if isinstance(payload, dict) else {"payload": payload}
@@ -239,7 +265,8 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
             **payload,
             "ok": False,
             "status": payload.get("status") or "child_failed",
-            "safe_error": payload.get("safe_error") or _short_text(completed.stderr or "child failed"),
+            "safe_error": payload.get("safe_error")
+            or _short_text(completed.stderr or "child failed"),
             "child": child,
         }
     return {**payload, "child": child}
@@ -249,7 +276,9 @@ def parse_rate_limit(payload):
     resources = payload.get("resources") if isinstance(payload, dict) else {}
     resources = resources if isinstance(resources, dict) else {}
     core = resources.get("core") if isinstance(resources.get("core"), dict) else {}
-    search = resources.get("search") if isinstance(resources.get("search"), dict) else {}
+    search = (
+        resources.get("search") if isinstance(resources.get("search"), dict) else {}
+    )
     return {
         "core": {
             "remaining": int(core.get("remaining", 0)),
@@ -349,8 +378,11 @@ def _lease_ttl_seconds(daemon_config):
     heartbeat_margin = max(daemon_config["local_poll_seconds"] * 3, 30)
     # A live decision performs the rate query, live child, and local child in
     # sequence before the next heartbeat. Each child may need timeout cleanup.
-    child_cleanup = (CONTROL_TERM_GRACE_SECONDS + CONTROL_KILL_REAP_SECONDS
-                     + CONTROL_GROUP_PROOF_SECONDS)
+    child_cleanup = (
+        CONTROL_TERM_GRACE_SECONDS
+        + CONTROL_KILL_REAP_SECONDS
+        + CONTROL_GROUP_PROOF_SECONDS
+    )
     return (
         RATE_LIMIT_TIMEOUT_SECONDS
         + 3 * child_cleanup
@@ -375,9 +407,12 @@ def _schedule_next_live_poll(context, *, now, capacity_full):
 def _idle_sleep_seconds(context, *, now=None):
     now = now or daemon_state.utc_now()
     local_poll_seconds = context.daemon_config["local_poll_seconds"]
-    if context.background_lanes is not None and context.background_lanes['scan'].process is not None:
+    if (
+        context.background_lanes is not None
+        and context.background_lanes["scan"].process is not None
+    ):
         return local_poll_seconds
-    if _control_blocked(context, 'scan'):
+    if _control_blocked(context, "scan"):
         return local_poll_seconds
     if context.next_live_poll_at is None:
         return local_poll_seconds
@@ -389,8 +424,8 @@ def _idle_sleep_seconds(context, *, now=None):
 
 
 def _sleep_seconds_after_decision(context, result, *, now=None):
-    if result.get('decision') == 'control_attention':
-        return context.daemon_config['local_poll_seconds']
+    if result.get("decision") == "control_attention":
+        return context.daemon_config["local_poll_seconds"]
     if result.get("decision") == "idle":
         return _idle_sleep_seconds(context, now=now)
     if result.get("decision") == "local_drain":
@@ -428,7 +463,11 @@ def _load_context(config_path, workflow_path=None, *, dry_run=False, now=None):
         with closing(daemon_state.connect(db_path)) as conn:
             execution_store.require_migrated(conn)
     except execution_store.MigrationRequiredError as exc:
-        return None, {'ok':False,'status':'migration_required','safe_error':str(exc)}
+        return None, {
+            "ok": False,
+            "status": "migration_required",
+            "safe_error": str(exc),
+        }
     if not config_result["daemon"]["enabled"]:
         return None, {
             "ok": True,
@@ -501,19 +540,33 @@ def _event_result(result):
     cycles = result.get("cycle_results")
     if isinstance(cycles, list):
         payload["run_ids"] = [
-            item["run_id"][:128] for item in cycles[:20]
+            item["run_id"][:128]
+            for item in cycles[:20]
             if isinstance(item, dict) and isinstance(item.get("run_id"), str)
         ]
-    cause = next((item for item in reversed(cycles or []) if isinstance(item, dict) and not item.get('ok')), result)
-    if not result.get('ok'):
-        if isinstance(cause.get('status'), str):
-            payload['cause_status'] = cause['status'][:200]
-        if isinstance(cause.get('required_action'), str):
-            payload['required_action'] = cause['required_action'][:2000]
-        if isinstance(cause.get('blockers'), list):
-            payload['blockers'] = [{key: str(value)[:200] for key, value in item.items()
-                if key in {'kind', 'task_id', 'attempt_id', 'result_id'}}
-                for item in cause['blockers'][:50] if isinstance(item, dict)]
+    cause = next(
+        (
+            item
+            for item in reversed(cycles or [])
+            if isinstance(item, dict) and not item.get("ok")
+        ),
+        result,
+    )
+    if not result.get("ok"):
+        if isinstance(cause.get("status"), str):
+            payload["cause_status"] = cause["status"][:200]
+        if isinstance(cause.get("required_action"), str):
+            payload["required_action"] = cause["required_action"][:2000]
+        if isinstance(cause.get("blockers"), list):
+            payload["blockers"] = [
+                {
+                    key: str(value)[:200]
+                    for key, value in item.items()
+                    if key in {"kind", "task_id", "attempt_id", "result_id"}
+                }
+                for item in cause["blockers"][:50]
+                if isinstance(item, dict)
+            ]
     child = result.get("child")
     child = child if isinstance(child, dict) else {}
     if isinstance(child.get("returncode"), int):
@@ -521,11 +574,19 @@ def _event_result(result):
     if not result.get("ok", False):
         error = result.get("safe_error") or child.get("stderr")
         if not error and isinstance(cycles, list):
-            error = next((item.get("safe_error") for item in cycles
-                          if isinstance(item, dict) and item.get("safe_error")), None)
+            error = next(
+                (
+                    item.get("safe_error")
+                    for item in cycles
+                    if isinstance(item, dict) and item.get("safe_error")
+                ),
+                None,
+            )
         if error:
             safe = redaction.redact_and_truncate(str(error), 2000)
-            payload["safe_error"] = safe.get("text") if safe["ok"] else "[sensitive diagnostic omitted]"
+            payload["safe_error"] = (
+                safe.get("text") if safe["ok"] else "[sensitive diagnostic omitted]"
+            )
     # Status and identifiers also originate in child output. Fail closed if
     # a malformed response embeds a credential in those otherwise small fields.
     safe = redaction.redact_text(json.dumps(payload, ensure_ascii=False))
@@ -540,9 +601,9 @@ def _finish_stopped_executor(context, executor_id):
 
 
 def _reconcile_child_result(context, result):
-    child = result.get('child') or {}
-    if child.get('executor_id') and child.get('process_group_stopped'):
-        _finish_stopped_executor(context, child['executor_id'])
+    child = result.get("child") or {}
+    if child.get("executor_id") and child.get("process_group_stopped"):
+        _finish_stopped_executor(context, child["executor_id"])
 
 
 def _reconcile_abandoned_executors(context):
@@ -550,10 +611,13 @@ def _reconcile_abandoned_executors(context):
         rows = run_journal.running_executors(conn)
     for executor_id, raw in rows:
         identity = json.loads(raw)
-        if (not executor_id or identity.get('process_group_id') != identity.get('pid')
-                or worker_identity.inspect_recorded_identity(identity) != 'dead'):
+        if (
+            not executor_id
+            or identity.get("process_group_id") != identity.get("pid")
+            or worker_identity.inspect_recorded_identity(identity) != "dead"
+        ):
             continue
-        if attempt_process.group_stopped(identity['pid']):
+        if attempt_process.group_stopped(identity["pid"]):
             _finish_stopped_executor(context, executor_id)
 
 
@@ -565,40 +629,95 @@ def _maybe_prune(context, *, now):
         return
     config = context.runtime_config["maintenance"]
     result = retention.prune_database(
-        context.db_path, apply=True, now=now,
+        context.db_path,
+        apply=True,
+        now=now,
         batch_size=config["batch_size"],
-        max_batches=3, max_seconds=1,
+        max_batches=3,
+        max_seconds=1,
         run_retention_days=config["retention"]["runs_days"],
         failed_run_retention_days=config["retention"]["failed_runs_days"],
         event_retention_days=config["retention"]["daemon_events_days"],
     )
-    delay = context.daemon_config["local_poll_seconds"] if result["status"] == "busy" or result.get('more_work') else config["interval_seconds"]
+    delay = (
+        context.daemon_config["local_poll_seconds"]
+        if result["status"] == "busy" or result.get("more_work")
+        else config["interval_seconds"]
+    )
     context.next_maintenance_at = current + delay
-    if result['status'] != 'busy':
+    if result["status"] != "busy":
         try:
-            with closing(daemon_state.connect(context.db_path, busy_timeout_ms=100)) as conn, conn:
+            with (
+                closing(
+                    daemon_state.connect(context.db_path, busy_timeout_ms=100)
+                ) as conn,
+                conn,
+            ):
                 wakeup.expire_due_wakeups(conn, now=now)
         except sqlite3.OperationalError:
             pass
-    if result['status'] != 'busy' and current >= context.next_health_at:
-        context.next_health_at = current + config['interval_seconds']
+    if result["status"] != "busy" and current >= context.next_health_at:
+        context.next_health_at = current + config["interval_seconds"]
         try:
             from robert_agent.operations import health as reliability_health
-            health_options = {'supervision_owns_alerts': True} if supervision_health.owns_health_alerts(context.runtime_config, now) else {}
-            health = reliability_health.collect(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id], **health_options)
-            if not health.get('alerts_persisted', True):
-                context.next_health_at = current + context.daemon_config['local_poll_seconds']
-                context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
-            with closing(daemon_state.connect(context.db_path, busy_timeout_ms=100)) as conn, conn:
-                daemon_state.record_event(conn, context.daemon_run_id, "reliability_health", "ok", health, now=now)
+
+            health_options = (
+                {"supervision_owns_alerts": True}
+                if supervision_health.owns_health_alerts(context.runtime_config, now)
+                else {}
+            )
+            health = reliability_health.collect(
+                context.db_path,
+                now=now,
+                repo_ids=context.repo_ids or [context.repo_id],
+                **health_options,
+            )
+            if not health.get("alerts_persisted", True):
+                context.next_health_at = (
+                    current + context.daemon_config["local_poll_seconds"]
+                )
+                context.next_maintenance_at = min(
+                    context.next_maintenance_at, context.next_health_at
+                )
+            with (
+                closing(
+                    daemon_state.connect(context.db_path, busy_timeout_ms=100)
+                ) as conn,
+                conn,
+            ):
+                daemon_state.record_event(
+                    conn,
+                    context.daemon_run_id,
+                    "reliability_health",
+                    "ok",
+                    health,
+                    now=now,
+                )
         except sqlite3.OperationalError:
-            context.next_health_at = current + context.daemon_config['local_poll_seconds']
-            context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
-    if any(result["counts"].values()) or (not result["ok"] and result["status"] != "busy"):
+            context.next_health_at = (
+                current + context.daemon_config["local_poll_seconds"]
+            )
+            context.next_maintenance_at = min(
+                context.next_maintenance_at, context.next_health_at
+            )
+    if any(result["counts"].values()) or (
+        not result["ok"] and result["status"] != "busy"
+    ):
         try:
-            with closing(daemon_state.connect(context.db_path, busy_timeout_ms=100)) as conn, conn:
-                daemon_state.record_event(conn, context.daemon_run_id, "diagnostics_pruned",
-                                          "ok" if result["ok"] else "failed", result, now=now)
+            with (
+                closing(
+                    daemon_state.connect(context.db_path, busy_timeout_ms=100)
+                ) as conn,
+                conn,
+            ):
+                daemon_state.record_event(
+                    conn,
+                    context.daemon_run_id,
+                    "diagnostics_pruned",
+                    "ok" if result["ok"] else "failed",
+                    result,
+                    now=now,
+                )
         except sqlite3.OperationalError:
             # Maintenance must not prevent the next lease renewal or worker poll.
             pass
@@ -606,33 +725,51 @@ def _maybe_prune(context, *, now):
 
 def _supervise_paused_workers(context, *, child_runner=run_child_json, now=None):
     if context.dry_run:
-        return {'ok': True, 'status': 'dry_run'}
+        return {"ok": True, "status": "dry_run"}
     repo_ids = context.repo_ids or [context.repo_id]
     with closing(daemon_state.connect(context.db_path)) as conn:
         occupied = capacity.has_occupied_runnable_attempt(conn, repo_ids)
     if not occupied:
-        return {'ok': True, 'status': 'idle'}
-    result = child_runner([sys.executable, '-B', '-m', 'robert_agent.runtime.paused_monitor',
-                           '--config', str(context.config_path)],
-                          timeout_seconds=context.daemon_config['local_drain_timeout_seconds'])
+        return {"ok": True, "status": "idle"}
+    result = child_runner(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "robert_agent.runtime.paused_monitor",
+            "--config",
+            str(context.config_path),
+        ],
+        timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
+    )
     _reconcile_child_result(context, result)
     # The supervision outcome never clears the failure latch or permits admission.
-    if not result.get('ok') or result.get('supervised_count'):
+    if not result.get("ok") or result.get("supervised_count"):
         with closing(daemon_state.connect(context.db_path)) as conn, conn:
-            daemon_state.record_event(conn, context.daemon_run_id, 'paused_worker_supervision',
-                'ok' if result.get('ok') else 'failed', _event_result(result), now=now)
+            daemon_state.record_event(
+                conn,
+                context.daemon_run_id,
+                "paused_worker_supervision",
+                "ok" if result.get("ok") else "failed",
+                _event_result(result),
+                now=now,
+            )
     return result
 
 
-def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json, now=None):
-    blocked = _control_blocked(context, 'local')
+def _run_local_drain(
+    context, *, skip_publish=False, child_runner=run_child_json, now=None
+):
+    blocked = _control_blocked(context, "local")
     if blocked:
         return blocked
     command = build_loop_command(
         context.config_path,
         context.workflow_path,
         dry_run=context.dry_run,
-        max_seconds=max(1, int(context.daemon_config["local_drain_timeout_seconds"] * .9)),
+        max_seconds=max(
+            1, int(context.daemon_config["local_drain_timeout_seconds"] * 0.9)
+        ),
         skip_publish=skip_publish,
         consume_observations=context.background_lanes is not None,
     )
@@ -650,12 +787,14 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
         timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
     )
     _reconcile_child_result(context, result)
-    _record_control_outcome(context, 'local', result, now=now)
+    _record_control_outcome(context, "local", result, now=now)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
             conn,
             context.daemon_run_id,
-            "local_drain_completed" if result.get("ok") else result.get("status", "child_failed"),
+            "local_drain_completed"
+            if result.get("ok")
+            else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
             {**_event_result(result), "control_lane": "local"},
             now=now,
@@ -664,7 +803,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
 
 
 def _run_live_poll(context, child_runner=run_child_json, now=None):
-    blocked = _control_blocked(context, 'scan')
+    blocked = _control_blocked(context, "scan")
     if blocked:
         return blocked
     command = build_run_once_command(
@@ -686,12 +825,14 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
         timeout_seconds=context.daemon_config["live_run_timeout_seconds"],
     )
     _reconcile_child_result(context, result)
-    _record_control_outcome(context, 'scan', result, now=now)
+    _record_control_outcome(context, "scan", result, now=now)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
             conn,
             context.daemon_run_id,
-            "live_poll_completed" if result.get("ok") else result.get("status", "child_failed"),
+            "live_poll_completed"
+            if result.get("ok")
+            else result.get("status", "child_failed"),
             "ok" if result.get("ok") else "failed",
             {**_event_result(result), "control_lane": "scan"},
             now=now,
@@ -701,25 +842,36 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
 
 def _control_blocked(context, lane):
     if lane in context.control_attention:
-        return {**context.control_attention[lane], 'ok': False, 'status': 'control_plane_attention'}
+        return {
+            **context.control_attention[lane],
+            "ok": False,
+            "status": "control_plane_attention",
+        }
     if time.monotonic() < context.control_retry_at.get(lane, 0):
-        return {'ok': True, 'status': 'control_backoff', 'stop_reason': 'no_progress'}
+        return {"ok": True, "status": "control_backoff", "stop_reason": "no_progress"}
     return None
 
 
 def _record_control_outcome(context, lane, result, *, now=None):
     """Bound each control lane independently; an attention latch stays resident."""
-    quota_wait = (result.get('status') == 'core_rate_limit_floor'
-        or bool(result.get('failures')) and all(item.get('reason') == 'core_rate_limit_floor' for item in result['failures']))
-    domain_failure = result.get('failure_scope') in {'repository', 'task'}
+    quota_wait = (
+        result.get("status") == "core_rate_limit_floor"
+        or bool(result.get("failures"))
+        and all(
+            item.get("reason") == "core_rate_limit_floor" for item in result["failures"]
+        )
+    )
+    domain_failure = result.get("failure_scope") in {"repository", "task"}
     if quota_wait or domain_failure:
         # Defer the affected domain without turning healthy controller execution
         # into a permanent lane stop. Real crashes/deadlines still consume budget.
         context.control_failures[lane] = 0
         context.control_retry_at[lane] = time.monotonic() + max(
-            context.daemon_config['local_poll_seconds'], int(result.get('retry_after_seconds') or 0))
+            context.daemon_config["local_poll_seconds"],
+            int(result.get("retry_after_seconds") or 0),
+        )
         return
-    if result.get('ok'):
+    if result.get("ok"):
         context.control_failures[lane] = 0
         context.control_retry_at.pop(lane, None)
         if lane in context.control_attention:
@@ -729,24 +881,47 @@ def _record_control_outcome(context, lane, result, *, now=None):
         return
     failures = context.control_failures.get(lane, 0) + 1
     context.control_failures[lane] = failures
-    context.control_retry_at[lane] = time.monotonic() + context.daemon_config['local_poll_seconds'] * 2 ** (failures - 1)
+    context.control_retry_at[lane] = time.monotonic() + context.daemon_config[
+        "local_poll_seconds"
+    ] * 2 ** (failures - 1)
     diagnostic = _event_result(result)
-    permanent = diagnostic.get('cause_status') == 'blocked_result_contract_cutover' or result.get('status') == 'attention'
-    if context.control_attention.get(lane, {}).get('cause_status') == 'blocked_result_contract_cutover':
+    permanent = (
+        diagnostic.get("cause_status") == "blocked_result_contract_cutover"
+        or result.get("status") == "attention"
+    )
+    if (
+        context.control_attention.get(lane, {}).get("cause_status")
+        == "blocked_result_contract_cutover"
+    ):
         return  # Preserve the global stop while recording child outcomes separately.
     if not permanent and failures < CONTROL_MAX_ATTEMPTS:
         return
-    attention = {'control_lane': lane, 'reason_code': 'control_plane_failed',
-        'failure_count': failures, 'retryable': False,
-        'required_action': diagnostic.get('required_action') or
-            'Automatic retries stopped. Inspect the control failure, repair its cause, then restart the daemon.',
-        **diagnostic}
+    attention = {
+        "control_lane": lane,
+        "reason_code": "control_plane_failed",
+        "failure_count": failures,
+        "retryable": False,
+        "required_action": diagnostic.get("required_action")
+        or "Automatic retries stopped. Inspect the control failure, repair its cause, then restart the daemon.",
+        **diagnostic,
+    }
     context.control_attention[lane] = attention
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         execution_notifications.record_control_stop(
-            conn, context.daemon_run_id, lane, now or daemon_state.utc_now(), attention,
+            conn,
+            context.daemon_run_id,
+            lane,
+            now or daemon_state.utc_now(),
+            attention,
         )
-        daemon_state.record_event(conn, context.daemon_run_id, 'control_plane_attention', 'attention', attention, now=now)
+        daemon_state.record_event(
+            conn,
+            context.daemon_run_id,
+            "control_plane_attention",
+            "attention",
+            attention,
+            now=now,
+        )
 
 
 def _rate_limit_decision(context, rate_limit_runner, *, now=None):
@@ -788,34 +963,58 @@ def run_once_decision(
 ):
     now = now or daemon_state.utc_now()
     from robert_agent.execution.application import cutover as result_cutover
+
     _poll_background_lanes(context, now=now)
-    if (_control_blocked(context, 'local') or any(
-            item.get('cause_status') == 'blocked_result_contract_cutover' for item in context.control_attention.values())):
+    if _control_blocked(context, "local") or any(
+        item.get("cause_status") == "blocked_result_contract_cutover"
+        for item in context.control_attention.values()
+    ):
         _supervise_paused_workers(context, child_runner=child_runner, now=now)
-    if any(item.get('cause_status') == 'blocked_result_contract_cutover' for item in context.control_attention.values()):
+    if any(
+        item.get("cause_status") == "blocked_result_contract_cutover"
+        for item in context.control_attention.values()
+    ):
         _maybe_prune(context, now=now)
         if not context.dry_run:
             result_cutover.prepare(context.db_path, now=now, isolated_only=True)
-            notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
-        return {'ok': True, 'decision': 'control_attention'}
-    cutover = result_cutover.check(context.db_path) if context.dry_run else result_cutover.prepare(context.db_path, now=now)
-    if not cutover['ok']:
-        _record_control_outcome(context, 'local', cutover, now=now)
+            notify.deliver_pending(
+                context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id]
+            )
+        return {"ok": True, "decision": "control_attention"}
+    cutover = (
+        result_cutover.check(context.db_path)
+        if context.dry_run
+        else result_cutover.prepare(context.db_path, now=now)
+    )
+    if not cutover["ok"]:
+        _record_control_outcome(context, "local", cutover, now=now)
         if not context.dry_run:
-            notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
-        return {'ok': False, 'decision': 'control_attention', 'result': cutover}
+            notify.deliver_pending(
+                context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id]
+            )
+        return {"ok": False, "decision": "control_attention", "result": cutover}
     if context.background_lanes is not None:
         return _background_decision(context, now=now, child_runner=child_runner)
     _maybe_prune(context, now=now)
     if not context.dry_run:
         from robert_agent.delivery.application.submission import replay_pending_results
-        replay_pending_results(context.db_path,
-                               config=None if 'local' in context.control_attention else context.runtime_config)
-        notify.deliver_pending(context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id])
+
+        replay_pending_results(
+            context.db_path,
+            config=None
+            if "local" in context.control_attention
+            else context.runtime_config,
+        )
+        notify.deliver_pending(
+            context.db_path, now=now, repo_ids=context.repo_ids or [context.repo_id]
+        )
     repo_ids = context.repo_ids or [context.repo_id]
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         local_work = loop_engine.has_runnable_local_work(
-            conn, repo_ids=repo_ids, config_result=context.runtime_config, now=now,
+            conn,
+            repo_ids=repo_ids,
+            config_result=context.runtime_config,
+            now=now,
         )
         capacity_full = capacity.capacity_full_for_repos(
             conn,
@@ -847,7 +1046,7 @@ def run_once_decision(
                 "ok": True,
                 "decision": "live_poll_skipped_rate_limit",
                 "rate_limit": rate_decision,
-                }
+            }
         live_result = _run_live_poll(context, child_runner=child_runner, now=now)
         drain_result = _run_local_drain(context, child_runner=child_runner, now=now)
         return {
@@ -857,15 +1056,21 @@ def run_once_decision(
             "drain_result": drain_result,
         }
     if local_work:
-        if _control_blocked(context, 'local'):
-            return {'ok': True, 'decision': 'control_attention'}
+        if _control_blocked(context, "local"):
+            return {"ok": True, "decision": "control_attention"}
         rate_decision = _rate_limit_decision(context, rate_limit_runner, now=now)
         result = _run_local_drain(
             context,
-            skip_publish=bool(rate_decision['skip'] and (
-                rate_decision.get('reason') != 'search_rate_limit_floor'
-                or (rate_decision.get('rate_limit') or {}).get('core', {}).get('remaining', 0)
-                < context.daemon_config['min_core_remaining'])),
+            skip_publish=bool(
+                rate_decision["skip"]
+                and (
+                    rate_decision.get("reason") != "search_rate_limit_floor"
+                    or (rate_decision.get("rate_limit") or {})
+                    .get("core", {})
+                    .get("remaining", 0)
+                    < context.daemon_config["min_core_remaining"]
+                )
+            ),
             child_runner=child_runner,
             now=now,
         )
@@ -884,82 +1089,157 @@ def _poll_background_lanes(context, *, now):
         result = lane.poll()
         if result is not None:
             _record_control_outcome(context, name, result, now=now)
-            if name == 'publish':
-                context.publisher_retry_at = time.monotonic() + (5 if result.get('ok') else 30)
-            if name == 'scan' and context.scan_context_refresh:
+            if name == "publish":
+                context.publisher_retry_at = time.monotonic() + (
+                    5 if result.get("ok") else 30
+                )
+            if name == "scan" and context.scan_context_refresh:
                 context.context_refresh_retry_at = time.monotonic() + max(
-                    5 if result.get('ok') else 30, int(result.get('retry_after_seconds') or 0))
+                    5 if result.get("ok") else 30,
+                    int(result.get("retry_after_seconds") or 0),
+                )
                 context.scan_context_refresh = False
-            elif name == 'scan':
-                interval = max(1, int(result.get('poll_interval_seconds') or context.daemon_config['github_poll_seconds']))
+            elif name == "scan":
+                interval = max(
+                    1,
+                    int(
+                        result.get("poll_interval_seconds")
+                        or context.daemon_config["github_poll_seconds"]
+                    ),
+                )
                 context.next_live_poll_at = _iso_after(now, interval)
             with closing(daemon_state.connect(context.db_path)) as conn, conn:
-                daemon_state.record_event(conn, context.daemon_run_id, name + '_completed',
-                    'ok' if result.get('ok') else 'failed', result, now=now)
+                daemon_state.record_event(
+                    conn,
+                    context.daemon_run_id,
+                    name + "_completed",
+                    "ok" if result.get("ok") else "failed",
+                    result,
+                    now=now,
+                )
 
 
 def _background_decision(context, *, now, child_runner=run_child_json):
     from robert_agent.delivery.application.submission import replay_pending_results
+
     _maybe_prune(context, now=now)
     if not context.dry_run:
-        replay_pending_results(context.db_path,
-                               config=None if 'local' in context.control_attention else context.runtime_config)
+        replay_pending_results(
+            context.db_path,
+            config=None
+            if "local" in context.control_attention
+            else context.runtime_config,
+        )
     lanes = context.background_lanes
     with closing(daemon_state.connect(context.db_path)) as conn:
         repo_ids = context.repo_ids or [context.repo_id]
-        local_work = loop_engine.has_runnable_local_work(conn, repo_ids=repo_ids,
-            config_result=context.runtime_config, now=now, consume_observations=True, include_publication=False)
+        local_work = loop_engine.has_runnable_local_work(
+            conn,
+            repo_ids=repo_ids,
+            config_result=context.runtime_config,
+            now=now,
+            consume_observations=True,
+            include_publication=False,
+        )
         conn.row_factory = sqlite3.Row
-        pending_publish = any(delivery_queries.ready_actions(conn, 1, repo_id=repo_id) for repo_id in repo_ids)
-        pending_delivery = bool(os.environ.get('ROBERT_NOTIFICATION_COMMAND')
-                                and execution_notifications.has_pending_local_delivery(conn, repo_ids, now))
+        pending_publish = any(
+            delivery_queries.ready_actions(conn, 1, repo_id=repo_id)
+            for repo_id in repo_ids
+        )
+        pending_delivery = bool(
+            os.environ.get("ROBERT_NOTIFICATION_COMMAND")
+            and execution_notifications.has_pending_local_delivery(conn, repo_ids, now)
+        )
         refresh_pending = wakeup.has_due_context_refresh(conn, repo_ids, now)
-    due = context.startup_live_poll_pending or (context.next_live_poll_at is not None and _parse_time(now) >= _parse_time(context.next_live_poll_at))
+    due = context.startup_live_poll_pending or (
+        context.next_live_poll_at is not None
+        and _parse_time(now) >= _parse_time(context.next_live_poll_at)
+    )
     if context.next_live_poll_at is None and not due:
-        context.next_live_poll_at = _iso_after(now, context.daemon_config['github_poll_seconds'])
-    command = [sys.executable, '-B', _script_path('runtime/scan.py'), '--config', context.config_path]
-    refresh_due = refresh_pending and time.monotonic() >= context.context_refresh_retry_at
-    if (due or refresh_due) and lanes['scan'].process is None and not _control_blocked(context, 'scan'):
+        context.next_live_poll_at = _iso_after(
+            now, context.daemon_config["github_poll_seconds"]
+        )
+    command = [
+        sys.executable,
+        "-B",
+        _script_path("runtime/scan.py"),
+        "--config",
+        context.config_path,
+    ]
+    refresh_due = (
+        refresh_pending and time.monotonic() >= context.context_refresh_retry_at
+    )
+    if (
+        (due or refresh_due)
+        and lanes["scan"].process is None
+        and not _control_blocked(context, "scan")
+    ):
         context.scan_context_refresh = not due
         if context.scan_context_refresh:
-            scan_command = command + ['--refresh-context']
+            scan_command = command + ["--refresh-context"]
         else:
             scan_command = command
             context.startup_live_poll_pending = False
-        lanes['scan'].start(scan_command, timeout_seconds=context.daemon_config['live_run_timeout_seconds'])
-    if (pending_publish or pending_delivery) and lanes['publish'].process is None and time.monotonic() >= context.publisher_retry_at and not _control_blocked(context, 'publish'):
-        publish_command = command + ['--publish']
+        lanes["scan"].start(
+            scan_command,
+            timeout_seconds=context.daemon_config["live_run_timeout_seconds"],
+        )
+    if (
+        (pending_publish or pending_delivery)
+        and lanes["publish"].process is None
+        and time.monotonic() >= context.publisher_retry_at
+        and not _control_blocked(context, "publish")
+    ):
+        publish_command = command + ["--publish"]
         if context.dry_run:
-            publish_command.append('--dry-run')
-        lanes['publish'].start(publish_command, timeout_seconds=context.daemon_config['local_drain_timeout_seconds'])
+            publish_command.append("--dry-run")
+        lanes["publish"].start(
+            publish_command,
+            timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
+        )
     if local_work:
-        if _control_blocked(context, 'local'):
-            return {'ok': True, 'decision': 'control_attention'}
-        result = _run_local_drain(context, skip_publish=True, child_runner=child_runner, now=now)
-        return {'ok': result.get('ok', False), 'decision': 'local_drain', 'result': result}
-    return {'ok': True, 'decision': 'idle'}
+        if _control_blocked(context, "local"):
+            return {"ok": True, "decision": "control_attention"}
+        result = _run_local_drain(
+            context, skip_publish=True, child_runner=child_runner, now=now
+        )
+        return {
+            "ok": result.get("ok", False),
+            "decision": "local_drain",
+            "result": result,
+        }
+    return {"ok": True, "decision": "idle"}
 
 
-def _record_runtime_tick(context, *, status='running', now=None):
+def _record_runtime_tick(context, *, status="running", now=None):
     # This marker proves a controller opportunity, never task progress. Keep a
     # startup snapshot so an on-disk upgrade cannot relabel a running process.
     config = context.runtime_config
-    if not config or not config.get('data_dir'):
+    if not config or not config.get("data_dir"):
         return
     from robert_agent.adapters.processes import runtime_identity
+
     observed_at = now or daemon_state.utc_now()
     if context.runtime_identity is None:
         with closing(daemon_state.connect(context.db_path)) as conn:
             started_at = daemon_state.started_at(conn, context.daemon_run_id)
         context.runtime_identity = runtime_identity.runtime_snapshot(
-            run_id=context.daemon_run_id, started_at=started_at if started_at is not None else observed_at,
-            manifest_path=config.get('supervision', {}).get('build_manifest'))
+            run_id=context.daemon_run_id,
+            started_at=started_at if started_at is not None else observed_at,
+            manifest_path=config.get("supervision", {}).get("build_manifest"),
+        )
     try:
-        supervision_health.atomic_json(supervision_health.runtime_dir(config) / 'daemon.json',
-            {**context.runtime_identity, 'observed_at': observed_at, 'status': status,
-             'lease_id': context.lease_id})
+        supervision_health.atomic_json(
+            supervision_health.runtime_dir(config) / "daemon.json",
+            {
+                **context.runtime_identity,
+                "observed_at": observed_at,
+                "status": status,
+                "lease_id": context.lease_id,
+            },
+        )
     except OSError:
-        print('Robert daemon: runtime identity marker unavailable', file=sys.stderr)
+        print("Robert daemon: runtime identity marker unavailable", file=sys.stderr)
 
 
 def _finish_context(context, status, *, summary=None, error=None, now=None):
@@ -979,7 +1259,9 @@ def _finish_context(context, status, *, summary=None, error=None, now=None):
 def _heartbeat(context, now=None):
     ttl_seconds = _lease_ttl_seconds(context.daemon_config)
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
-        daemon_state.heartbeat_daemon_lease(conn, context.lease_id, ttl_seconds, now=now)
+        daemon_state.heartbeat_daemon_lease(
+            conn, context.lease_id, ttl_seconds, now=now
+        )
     _record_runtime_tick(context, now=now)
 
 
@@ -994,11 +1276,29 @@ def _resident_loop(
     _install_stop_handlers(context.db_path)
     listener = None
     from robert_agent.runtime.control import ControlLane, recover
-    if not recover(context.db_path, scope_key=_daemon_resource_key(context.runtime_config), current_owner=context.daemon_run_id):
-        _finish_context(context, 'failed', error={'reason_code': 'control_child_attention', 'safe_error': 'Previous control child ownership needs inspection'})
-        return {'ok': False, 'status': 'attention', 'safe_error': 'Previous control child ownership needs inspection'}
-    context.background_lanes = {name: ControlLane(context.db_path, name, context.daemon_run_id)
-                                for name in ('scan', 'publish')}
+
+    if not recover(
+        context.db_path,
+        scope_key=_daemon_resource_key(context.runtime_config),
+        current_owner=context.daemon_run_id,
+    ):
+        _finish_context(
+            context,
+            "failed",
+            error={
+                "reason_code": "control_child_attention",
+                "safe_error": "Previous control child ownership needs inspection",
+            },
+        )
+        return {
+            "ok": False,
+            "status": "attention",
+            "safe_error": "Previous control child ownership needs inspection",
+        }
+    context.background_lanes = {
+        name: ControlLane(context.db_path, name, context.daemon_run_id)
+        for name in ("scan", "publish")
+    }
     try:
         try:
             listener = listener_factory(context.db_path)
@@ -1043,9 +1343,20 @@ def _resident_loop(
             "ok",
             {},
         )
-    status = 'stopped' if cleanup_proven else 'attention'
-    _finish_context(context, 'stopped' if cleanup_proven else 'failed', summary={'reason': 'signal' if cleanup_proven else 'control_child_attention', 'cleanup_proven': cleanup_proven})
-    return {'ok': cleanup_proven, 'status': status, 'daemon_run_id': context.daemon_run_id}
+    status = "stopped" if cleanup_proven else "attention"
+    _finish_context(
+        context,
+        "stopped" if cleanup_proven else "failed",
+        summary={
+            "reason": "signal" if cleanup_proven else "control_child_attention",
+            "cleanup_proven": cleanup_proven,
+        },
+    )
+    return {
+        "ok": cleanup_proven,
+        "status": status,
+        "daemon_run_id": context.daemon_run_id,
+    }
 
 
 def run_daemon(
@@ -1063,7 +1374,12 @@ def run_daemon(
     _STOP_REQUESTED = False
     wait_for_lease = wait_for_lease and not once
     if wait_for_lease:
-        _install_stop_handlers(validate_config.validate_config(config_path, skip_external=True).get("db_path") or "")
+        _install_stop_handlers(
+            validate_config.validate_config(config_path, skip_external=True).get(
+                "db_path"
+            )
+            or ""
+        )
     while True:
         context, error = _load_context(
             config_path,
@@ -1071,16 +1387,30 @@ def run_daemon(
             dry_run=dry_run,
             now=now,
         )
-        if not (wait_for_lease and error and error.get("status") == "skipped_active_daemon"):
+        if not (
+            wait_for_lease and error and error.get("status") == "skipped_active_daemon"
+        ):
             break
         # A killed daemon cannot release its lease. Exiting 0 here makes
         # supervisord give up (FATAL) and systemd never restart, so a service
         # instance waits in-process until the holder heartbeats or it expires.
         expires_at = (error.get("lease") or {}).get("expires_at")
-        remaining = (_parse_time(expires_at) - _parse_time(daemon_state.utc_now())).total_seconds() if expires_at else 0
-        _stop_aware_sleep(min(LEASE_WAIT_MAX_SLICE_SECONDS, max(STOP_SLEEP_SLICE_SECONDS, remaining)))
+        remaining = (
+            (
+                _parse_time(expires_at) - _parse_time(daemon_state.utc_now())
+            ).total_seconds()
+            if expires_at
+            else 0
+        )
+        _stop_aware_sleep(
+            min(LEASE_WAIT_MAX_SLICE_SECONDS, max(STOP_SLEEP_SLICE_SECONDS, remaining))
+        )
         if _STOP_REQUESTED:
-            return {"ok": True, "status": "stopped_waiting_for_lease", "lease": error.get("lease")}
+            return {
+                "ok": True,
+                "status": "stopped_waiting_for_lease",
+                "lease": error.get("lease"),
+            }
     if error:
         return error
     try:
@@ -1092,7 +1422,11 @@ def run_daemon(
                 rate_limit_runner=rate_limit_runner,
             )
             _finish_context(context, "stopped", summary=result, now=now)
-            return {**result, "status": "stopped", "daemon_run_id": context.daemon_run_id}
+            return {
+                **result,
+                "status": "stopped",
+                "daemon_run_id": context.daemon_run_id,
+            }
         return _resident_loop(context)
     except Exception as exc:
         error_payload = {
@@ -1110,8 +1444,11 @@ def main(argv=None):
     parser.add_argument("--workflow")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--wait-for-lease", action="store_true",
-                        help="wait for another daemon's lease instead of exiting (service managers)")
+    parser.add_argument(
+        "--wait-for-lease",
+        action="store_true",
+        help="wait for another daemon's lease instead of exiting (service managers)",
+    )
     args = parser.parse_args(argv)
     result = run_daemon(
         args.config,

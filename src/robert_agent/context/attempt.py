@@ -1,4 +1,5 @@
 """Build the context artifacts and entrypoint paths for an attempt."""
+
 from pathlib import Path
 from robert_agent.context import knowledge as runtime_knowledge
 from robert_agent.context import project as project_memory
@@ -103,16 +104,20 @@ def github_context_paths(prompt_dir, attempt_id):
 
 def write_github_context_artifacts(prompt_dir, attempt_id, events):
     paths = github_context_paths(prompt_dir, attempt_id)
-    atomic_replace_files({
-        Path(paths["json_path"]): json.dumps(
-            {"events": events}, ensure_ascii=False, indent=2, sort_keys=True
-        ).encode("utf-8"),
-        Path(paths["md_path"]): _event_context_markdown(events).encode("utf-8"),
-    })
+    atomic_replace_files(
+        {
+            Path(paths["json_path"]): json.dumps(
+                {"events": events}, ensure_ascii=False, indent=2, sort_keys=True
+            ).encode("utf-8"),
+            Path(paths["md_path"]): _event_context_markdown(events).encode("utf-8"),
+        }
+    )
     return {
         **paths,
         "event_count": len(events),
-        "current_event_fingerprint": events[0].get("event_fingerprint") if events else None,
+        "current_event_fingerprint": events[0].get("event_fingerprint")
+        if events
+        else None,
         "event_fingerprints": [
             event.get("event_fingerprint")
             for event in events
@@ -133,7 +138,8 @@ def runtime_context(db_path, repo, worktree_result=None):
         "status_script": str(_agent_status_script()),
         "worktree_path": worktree_result.get("worktree_path", ""),
         "branch_name": worktree_result.get("branch_name", ""),
-        "target_base_branch": worktree_result.get("base_branch") or repo["default_base_branch"],
+        "target_base_branch": worktree_result.get("base_branch")
+        or repo["default_base_branch"],
         "head_ref": worktree_result.get("head_ref", ""),
         "base_ref": worktree_result.get("base_ref", ""),
         "observed_head_sha": worktree_result.get("observed_head_sha", ""),
@@ -154,7 +160,9 @@ def load_runtime_knowledge(conn, repo_id, workstream_id, route_result, events):
         return []
 
 
-def retrieve_project_memories(conn, repo_id, workstream_id, route_result, events, runtime_knowledge_items=None):
+def retrieve_project_memories(
+    conn, repo_id, workstream_id, route_result, events, runtime_knowledge_items=None
+):
     try:
         return project_memory.retrieve_memories(
             conn,

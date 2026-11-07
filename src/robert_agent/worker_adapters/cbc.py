@@ -43,16 +43,16 @@ def build_launch(
         command.extend(["--effort", reasoning_effort])
     command.extend(
         [
-        "--permission-mode",
-        "bypassPermissions",
-        "--disallowedTools",
-        DEFAULT_DISALLOWED_WORKER_TOOLS,
-        "--input-format",
-        "text",
-        "--output-format",
-        "stream-json",
-        "--add-dir",
-        str(prompt_path.parent),
+            "--permission-mode",
+            "bypassPermissions",
+            "--disallowedTools",
+            DEFAULT_DISALLOWED_WORKER_TOOLS,
+            "--input-format",
+            "text",
+            "--output-format",
+            "stream-json",
+            "--add-dir",
+            str(prompt_path.parent),
         ]
     )
     if worktree_path:

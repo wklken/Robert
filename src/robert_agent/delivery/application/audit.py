@@ -164,9 +164,7 @@ def _audit_issue_linking(actions, action_scope):
             return "issue-sourced open_pr requires issue_resolution complete or partial"
         if resolution == "complete":
             if not closing_reference.search(body):
-                return (
-                    f"complete issue resolution requires a closing keyword for #{issue_number}"
-                )
+                return f"complete issue resolution requires a closing keyword for #{issue_number}"
             continue
         if closing_reference.search(body):
             return "partial issue resolution must not use a closing keyword"
@@ -239,7 +237,9 @@ def action_scope_violation(actions, action_scope):
             if scoped_repo and repo.lower() != scoped_repo.lower():
                 return f"comment target repository {repo} is outside {scoped_repo}"
             if scoped_sources and (source_type, number) not in scoped_sources:
-                return f"comment target {source_type} #{number} is outside the workstream"
+                return (
+                    f"comment target {source_type} #{number} is outside the workstream"
+                )
             continue
         if action_type == "open_pr":
             repo = _string_value(action, "repo")
@@ -251,11 +251,18 @@ def action_scope_violation(actions, action_scope):
             scoped_branch = action_scope.get("branch_name", "")
             raw_head = _string_value(action, "head")
             head = raw_head.split(":", 1)[-1]
-            expected_owner = action_scope.get("head_owner") or scoped_repo.split("/", 1)[0]
+            expected_owner = (
+                action_scope.get("head_owner") or scoped_repo.split("/", 1)[0]
+            )
             supplied_owner = raw_head.split(":", 1)[0] if ":" in raw_head else ""
             for owner in [supplied_owner] + [
                 _string_value(action, name)
-                for name in ("head_owner", "fork_owner", "remote_owner", "head_repo_owner")
+                for name in (
+                    "head_owner",
+                    "fork_owner",
+                    "remote_owner",
+                    "head_repo_owner",
+                )
             ]:
                 if owner and expected_owner and owner.lower() != expected_owner.lower():
                     return "open_pr head owner is outside the assigned repository"
@@ -289,12 +296,16 @@ def _audit_expected_actions(output_type, actual_types):
         return f"output_type {output_type} requires no publication actions"
     if output_type == "pr_review_comment" and actual_types != ["comment"]:
         return "pr_review_comment requires exactly one comment"
-    if output_type == "waiting_for_user" and any(kind != "comment" for kind in actual_types):
+    if output_type == "waiting_for_user" and any(
+        kind != "comment" for kind in actual_types
+    ):
         return "waiting_for_user only allows question comments"
     if output_type == "multi_agent_vote_report" and actual_types != ["comment"]:
         return "multi_agent_vote_report requires exactly one comment"
     expected_types = EXPECTED_ACTIONS_FOR_OUTPUT.get(output_type, set())
-    if output_type == "multi_agent_review_report" and actual_types != ["submit_pr_review"]:
+    if output_type == "multi_agent_review_report" and actual_types != [
+        "submit_pr_review"
+    ]:
         return "multi_agent_review_report requires exactly one submit_pr_review action"
     if not expected_types:
         return None
@@ -306,13 +317,17 @@ def _audit_expected_actions(output_type, actual_types):
             )
         if "push_existing_pr" in actual_types:
             last_push = max(
-                index for index, action_type in enumerate(actual_types) if action_type == "push_existing_pr"
+                index
+                for index, action_type in enumerate(actual_types)
+                if action_type == "push_existing_pr"
             )
             if not any(
                 index > last_push and action_type == "comment"
                 for index, action_type in enumerate(actual_types)
             ):
-                return f"output_type {output_type} requires comment after push_existing_pr"
+                return (
+                    f"output_type {output_type} requires comment after push_existing_pr"
+                )
         return None
     missing = sorted(expected_types.difference(actual_types))
     if missing:
@@ -320,7 +335,9 @@ def _audit_expected_actions(output_type, actual_types):
             f"output_type {output_type} requires planned_github_actions to include "
             f"{missing}"
         )
-    if output_type == "new_pr" and actual_types.index("push_existing_pr") > actual_types.index("open_pr"):
+    if output_type == "new_pr" and actual_types.index(
+        "push_existing_pr"
+    ) > actual_types.index("open_pr"):
         return "output_type new_pr requires push_existing_pr before open_pr"
     return None
 
@@ -354,7 +371,9 @@ def _audit_review_point_evaluation(result, actual_types, input_policy="required"
         kind = result.get("review_input_kind")
         if kind not in ("request", "review_feedback", "mixed"):
             return ["invalid_review_input_kind"]
-        if kind == "mixed" and (not isinstance(result.get("handoff"), str) or not result["handoff"].strip()):
+        if kind == "mixed" and (
+            not isinstance(result.get("handoff"), str) or not result["handoff"].strip()
+        ):
             return ["missing_mixed_request_handoff"]
         if kind == "request" and (evaluation is None or evaluation == []):
             return None
@@ -370,10 +389,18 @@ def _audit_review_point_evaluation(result, actual_types, input_policy="required"
             return ["invalid_review_point_evaluation"]
         if entry["action"] not in policies.VALID_REVIEW_ACTIONS:
             return ["invalid_review_point_evaluation"]
-        if entry["action"] == "implement" and entry["verdict"] not in policies.IMPLEMENTABLE_VERDICTS:
+        if (
+            entry["action"] == "implement"
+            and entry["verdict"] not in policies.IMPLEMENTABLE_VERDICTS
+        ):
             return ["invalid_review_point_evaluation"]
-    if (output_type == "update_existing_pr" and "push_existing_pr" in actual_types
-            and not (input_policy == "classify" and result.get("review_input_kind") == "mixed")):
+    if (
+        output_type == "update_existing_pr"
+        and "push_existing_pr" in actual_types
+        and not (
+            input_policy == "classify" and result.get("review_input_kind") == "mixed"
+        )
+    ):
         if not any(entry.get("action") == "implement" for entry in evaluation):
             return ["no_implemented_review_points"]
     return None
@@ -395,9 +422,7 @@ def _audit_remediation_evidence(
     context = remediation_context
     if not isinstance(evidence, dict) or not isinstance(context, dict):
         return ["invalid_remediation_evidence"]
-    expected_kind = (
-        "ci" if task_kind == "ci_remediation" else "merge_conflict"
-    )
+    expected_kind = "ci" if task_kind == "ci_remediation" else "merge_conflict"
     required_fields = {
         "kind",
         "episode_id",
@@ -408,8 +433,7 @@ def _audit_remediation_evidence(
     if task_kind == "ci_remediation":
         required_fields.add("failure_signature")
     if any(
-        not isinstance(evidence.get(field), str)
-        or not evidence[field].strip()
+        not isinstance(evidence.get(field), str) or not evidence[field].strip()
         for field in required_fields
     ):
         return ["invalid_remediation_evidence"]
@@ -422,8 +446,7 @@ def _audit_remediation_evidence(
     if task_kind == "ci_remediation":
         comparisons["failure_signature"] = context.get("failure_signature")
     if expected_kind != evidence["kind"] or any(
-        evidence.get(field) != expected
-        for field, expected in comparisons.items()
+        evidence.get(field) != expected for field, expected in comparisons.items()
     ):
         return ["remediation_evidence_mismatch"]
     if not require_attestation:
@@ -455,10 +478,16 @@ def _audit_classification_recommendation(result):
         return f"classification_result recommended_route is not supported: {recommended_route}"
     branch_slug = result.get("branch_slug")
     if branch_slug in (None, ""):
-        return "classification_result new-pr requires branch_slug" if recommended_route == "new-pr" else None
+        return (
+            "classification_result new-pr requires branch_slug"
+            if recommended_route == "new-pr"
+            else None
+        )
     if not isinstance(branch_slug, str):
         return "classification_result branch_slug must be a string"
-    if len(branch_slug) > MAX_BRANCH_SLUG_LENGTH or not BRANCH_SLUG_RE.fullmatch(branch_slug):
+    if len(branch_slug) > MAX_BRANCH_SLUG_LENGTH or not BRANCH_SLUG_RE.fullmatch(
+        branch_slug
+    ):
         return (
             "classification_result branch_slug must be lowercase ASCII kebab-case "
             f"and at most {MAX_BRANCH_SLUG_LENGTH} characters"
@@ -546,12 +575,18 @@ def _audit_public_text(actions):
             field_path = f"planned_github_actions[{index}].{field}"
             if not result["ok"]:
                 finding = result["findings"][0]
-                return {"violations": ["redaction_blocked"], "field_path": field_path,
-                        "findings": result["findings"],
-                        "safe_error": f"redaction_blocked: {finding['rule']} at line {finding['line']}, column {finding['column']}"}
+                return {
+                    "violations": ["redaction_blocked"],
+                    "field_path": field_path,
+                    "findings": result["findings"],
+                    "safe_error": f"redaction_blocked: {finding['rule']} at line {finding['line']}, column {finding['column']}",
+                }
             if result.get("text") != value and needs_redaction is None:
-                needs_redaction = {"violations": ["redaction_required"], "field_path": field_path,
-                                   "safe_error": "Public text requires redaction before submission."}
+                needs_redaction = {
+                    "violations": ["redaction_required"],
+                    "field_path": field_path,
+                    "safe_error": "Public text requires redaction before submission.",
+                }
     return needs_redaction
 
 
@@ -583,7 +618,9 @@ def audit_result(
             "status": "failed",
             "safe_error": "consumed_event_fingerprints must list handled events",
         }
-    skill_guidance = recommended_skills if recommended_skills is not None else required_skills
+    skill_guidance = (
+        recommended_skills if recommended_skills is not None else required_skills
+    )
     if skill_guidance is not None:
         used_skills, skill_error = _validate_used_skills(result.get("used_skills"))
         if skill_error:
@@ -592,8 +629,11 @@ def audit_result(
                 "status": "failed",
                 "safe_error": skill_error,
             }
-        coverage_error = (None if result.get("output_type") == "multi_agent_review_report"
-                          else _audit_required_skills_coverage(used_skills, required_skills))
+        coverage_error = (
+            None
+            if result.get("output_type") == "multi_agent_review_report"
+            else _audit_required_skills_coverage(used_skills, required_skills)
+        )
         if coverage_error:
             return {
                 "ok": False,
@@ -611,22 +651,33 @@ def audit_result(
             "safe_error": action_error,
         }
 
-    violations = sorted({action_type for action_type in actual_types if action_type not in allowed})
+    violations = sorted(
+        {action_type for action_type in actual_types if action_type not in allowed}
+    )
     if violations:
         return {
             "ok": False,
             "status": "policy_violation",
             "violations": violations,
         }
-    if origin_type == "web" and any(kind in {"comment", "submit_pr_review"} for kind in actual_types):
+    if origin_type == "web" and any(
+        kind in {"comment", "submit_pr_review"} for kind in actual_types
+    ):
         return {
             "ok": False,
             "status": "policy_violation",
             "violations": ["web_origin_github_action"],
         }
-    if result.get('output_type') == 'multi_agent_vote_report' and (
-            len(actions) != 1 or not vote_publish.is_vote(actions[0]) or not isinstance(action_scope, dict)):
-        return {'ok': False, 'status': 'policy_violation', 'safe_error': 'vote report requires its registered round and scope'}
+    if result.get("output_type") == "multi_agent_vote_report" and (
+        len(actions) != 1
+        or not vote_publish.is_vote(actions[0])
+        or not isinstance(action_scope, dict)
+    ):
+        return {
+            "ok": False,
+            "status": "policy_violation",
+            "safe_error": "vote report requires its registered round and scope",
+        }
     scope_violation = action_scope_violation(actions, action_scope)
     if scope_violation:
         return {
@@ -638,10 +689,10 @@ def audit_result(
 
     output_type = result.get("output_type")
     waiting_alternate = output_type == "waiting_for_user"
-    if (
-        result.get("recommended_route") == "waiting-for-user"
-        and output_type not in {"classification_result", "waiting_for_user"}
-    ):
+    if result.get("recommended_route") == "waiting-for-user" and output_type not in {
+        "classification_result",
+        "waiting_for_user",
+    }:
         return {
             "ok": False,
             "status": "failed",
@@ -712,7 +763,9 @@ def audit_result(
             "safe_error": pr_review_author_error,
         }
 
-    verification_error = _audit_verification_contract(result, verification_policy, actual_types)
+    verification_error = _audit_verification_contract(
+        result, verification_policy, actual_types
+    )
     if verification_error:
         return {
             "ok": False,
@@ -724,14 +777,25 @@ def audit_result(
         submitted = result.get("submission_head_sha")
         observed = action_scope.get("result_head_sha")
         if not submitted or not observed or submitted != observed:
-            return {"ok": False, "status": "policy_violation",
-                    "violations": ["submission_head_changed"],
-                    "safe_error": "Final HEAD differs from the submitted commit or cannot be verified."}
+            return {
+                "ok": False,
+                "status": "policy_violation",
+                "violations": ["submission_head_changed"],
+                "safe_error": "Final HEAD differs from the submitted commit or cannot be verified.",
+            }
         worktree_status = action_scope.get("worktree_status")
         if worktree_status != "clean":
-            violation = "uncommitted_worktree" if worktree_status == "dirty" else "worktree_status_unavailable"
-            return {"ok": False, "status": "policy_violation", "violations": [violation],
-                    "safe_error": "Final push worktree has uncommitted changes or its clean state cannot be verified."}
+            violation = (
+                "uncommitted_worktree"
+                if worktree_status == "dirty"
+                else "worktree_status_unavailable"
+            )
+            return {
+                "ok": False,
+                "status": "policy_violation",
+                "violations": [violation],
+                "safe_error": "Final push worktree has uncommitted changes or its clean state cannot be verified.",
+            }
 
     remediation_violation = _audit_remediation_evidence(
         result,
@@ -777,9 +841,9 @@ def audit_result(
     if final and task_kind in REMEDIATION_TASK_KINDS and not waiting_alternate:
         accepted["remediation_attestation"] = remediation_attestation
         if action_scope is not None:
-            accepted["action_scope"]["result_head_sha"] = (
-                remediation_attestation["result_head_sha"]
-            )
+            accepted["action_scope"]["result_head_sha"] = remediation_attestation[
+                "result_head_sha"
+            ]
     return accepted
 
 

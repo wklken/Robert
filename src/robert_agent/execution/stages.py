@@ -1,4 +1,5 @@
 """Shared supervised model stages for review and vote rounds."""
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from datetime import datetime, timezone
@@ -23,20 +24,35 @@ from robert_agent.execution import progress as snapshot
 
 class StageStore(Protocol):
     def connect(self, db_path: str) -> ContextManager[sqlite3.Connection]: ...
-    def session(self, conn: sqlite3.Connection, *, task_id: str) -> dict[str, Any] | None: ...
+    def session(
+        self, conn: sqlite3.Connection, *, task_id: str
+    ) -> dict[str, Any] | None: ...
     def now(self) -> str: ...
     def digest(self, path: str | Path) -> str: ...
-    def update(self, conn: sqlite3.Connection, round_id: str, **fields: Any) -> None: ...
+    def update(
+        self, conn: sqlite3.Connection, round_id: str, **fields: Any
+    ) -> None: ...
     def runs(self, conn: sqlite3.Connection, round_id: str) -> list[dict[str, Any]]: ...
     def new_run(
-        self, conn: sqlite3.Connection, round_id: str, stage: str, worker_id: str,
-        owner_attempt_id: str, root: str, prompt_sha256: str, model: str | None = None,
+        self,
+        conn: sqlite3.Connection,
+        round_id: str,
+        stage: str,
+        worker_id: str,
+        owner_attempt_id: str,
+        root: str,
+        prompt_sha256: str,
+        model: str | None = None,
     ) -> dict[str, Any]: ...
-    def update_run(self, conn: sqlite3.Connection, run_id: str, **fields: Any) -> None: ...
+    def update_run(
+        self, conn: sqlite3.Connection, run_id: str, **fields: Any
+    ) -> None: ...
     def reserve_slot(self, conn: sqlite3.Connection, run_id: str) -> bool: ...
     def release_slot(self, conn: sqlite3.Connection, run_id: str) -> None: ...
     def reserved_runs(self, conn: sqlite3.Connection) -> list[dict[str, Any]]: ...
-    def release_finished_slot(self, conn: sqlite3.Connection, run: dict[str, Any]) -> None: ...
+    def release_finished_slot(
+        self, conn: sqlite3.Connection, run: dict[str, Any]
+    ) -> None: ...
 
 
 class StageWorkspace(Protocol):
@@ -62,30 +78,36 @@ class ModelRateLimited(RuntimeError):
 
 def _raise_rate_limit(launched):
     logs = {}
-    for kind in ('stdout', 'stderr'):
-        path = launched.get(kind + '_path')
+    for kind in ("stdout", "stderr"):
+        path = launched.get(kind + "_path")
         if not path:
             continue
         try:
-            with Path(path).open('rb') as stream:
+            with Path(path).open("rb") as stream:
                 stream.seek(max(0, Path(path).stat().st_size - 32768))
-                logs[kind] = {'tail': stream.read(32768).decode('utf-8', errors='replace')}
+                logs[kind] = {
+                    "tail": stream.read(32768).decode("utf-8", errors="replace")
+                }
         except OSError:
             continue
     failure = retry_policy.terminal_rate_limit(logs)
     if failure:
-        raise ModelRateLimited('rate_limited: ' + failure['message'])
+        raise ModelRateLimited("rate_limited: " + failure["message"])
 
 
 def _launch_failed_without_process(recorded):
-    return (recorded.get('ok') is False and recorded.get('status') == 'failed_dispatch'
-            and recorded.get('pid') is None and not recorded.get('cleanup_pending'))
+    return (
+        recorded.get("ok") is False
+        and recorded.get("status") == "failed_dispatch"
+        and recorded.get("pid") is None
+        and not recorded.get("cleanup_pending")
+    )
 
 
 def _group_finished(recorded):
     """A dead leader alone cannot prove its output files have stopped changing."""
-    pid = recorded.get('pid')
-    pgid = recorded.get('process_group_id', pid)
+    pid = recorded.get("pid")
+    pgid = recorded.get("process_group_id", pid)
     if type(pid) is not int or pid <= 1 or pgid != pid:
         return False
     try:
@@ -100,7 +122,7 @@ def _group_finished(recorded):
 def _wait_for_group_exit(recorded, timeout=2):
     deadline = time.monotonic() + timeout
     while True:
-        proc = dispatch.tracked_process(recorded.get('pid'))
+        proc = dispatch.tracked_process(recorded.get("pid"))
         if proc is not None and proc.poll() is not None:
             dispatch.reap_finished_process(proc.pid)
         if _group_finished(recorded):
@@ -111,60 +133,87 @@ def _wait_for_group_exit(recorded, timeout=2):
 
 
 def attempt_is_active(conn, task_id, attempt_id):
-    row = conn.execute('''SELECT t.lifecycle,a.status FROM tasks t JOIN attempts a ON a.task_id=t.task_id
+    row = conn.execute(
+        """SELECT t.lifecycle,a.status FROM tasks t JOIN attempts a ON a.task_id=t.task_id
         WHERE t.task_id=? AND a.attempt_id=? AND a.attempt_no=(
-            SELECT MAX(attempt_no) FROM attempts WHERE task_id=t.task_id)''', (task_id, attempt_id)).fetchone()
-    binding = execution_store.get_binding(conn, 'task', task_id)
-    return bool(row and row[0] in {'queued', 'running'} and row[1] in {'prepared', 'running', 'stale'}
-                and binding and binding['binding_status'] == 'active')
+            SELECT MAX(attempt_no) FROM attempts WHERE task_id=t.task_id)""",
+        (task_id, attempt_id),
+    ).fetchone()
+    binding = execution_store.get_binding(conn, "task", task_id)
+    return bool(
+        row
+        and row[0] in {"queued", "running"}
+        and row[1] in {"prepared", "running", "stale"}
+        and binding
+        and binding["binding_status"] == "active"
+    )
 
 
 def terminate_children(conn, task_id, *, store: StageStore):
     """Cancel all model process groups before allowing another attempt to start."""
     review = store.session(conn, task_id=task_id)
     if not review:
-        return 'already_dead'
+        return "already_dead"
     outcomes = []
     updates: list[tuple[str, dict[str, Any]]] = []
-    for run in store.runs(conn, review['round_id']):
-        if run['status'] in {'prepared', 'waiting'} and not run['slot_reserved']:
-            updates.append((run['run_id'], {'status': 'interrupted', 'error': 'coordinator stopped before launch'}))
+    for run in store.runs(conn, review["round_id"]):
+        if run["status"] in {"prepared", "waiting"} and not run["slot_reserved"]:
+            updates.append(
+                (
+                    run["run_id"],
+                    {
+                        "status": "interrupted",
+                        "error": "coordinator stopped before launch",
+                    },
+                )
+            )
             continue
-        if run['status'] not in {'starting', 'running', 'failed'}:
+        if run["status"] not in {"starting", "running", "failed"}:
             continue
-        recorded = run['dispatch']
+        recorded = run["dispatch"]
         if _launch_failed_without_process(recorded):
-            updates.append((run['run_id'], {'slot_reserved': 0}))
-            outcomes.append('already_dead')
+            updates.append((run["run_id"], {"slot_reserved": 0}))
+            outcomes.append("already_dead")
             continue
-        if run['status'] == 'failed' and not recorded.get('pid'):
-            if run['slot_reserved']:
-                outcomes.append('attention')
+        if run["status"] == "failed" and not recorded.get("pid"):
+            if run["slot_reserved"]:
+                outcomes.append("attention")
             continue
         if _group_finished(recorded):
-            updates.append((run['run_id'], {'slot_reserved': 0}))
-            outcomes.append('already_dead')
+            updates.append((run["run_id"], {"slot_reserved": 0}))
+            outcomes.append("already_dead")
             continue
-        if recorded.get('process_exited') or (recorded and worker_identity.inspect_recorded_identity(recorded) == 'dead'):
+        if recorded.get("process_exited") or (
+            recorded and worker_identity.inspect_recorded_identity(recorded) == "dead"
+        ):
             exited = _wait_for_group_exit(recorded)
             if exited:
-                updates.append((run['run_id'], {'slot_reserved': 0}))
-            outcomes.append('already_dead' if exited else 'attention')
+                updates.append((run["run_id"], {"slot_reserved": 0}))
+            outcomes.append("already_dead" if exited else "attention")
             continue
         if not recorded:
-            outcomes.append('attention')
+            outcomes.append("attention")
             continue
         result = worker_identity.terminate_recorded_identity(recorded)
-        if result['status'] != 'attention' and not _wait_for_group_exit(recorded):
-            result = {'status': 'attention'}
-        outcomes.append(result['status'])
-        if result['status'] != 'attention':
-            updates.append((run['run_id'], {'status': 'interrupted', 'slot_reserved': 0, 'error': 'coordinator stopped'}))
+        if result["status"] != "attention" and not _wait_for_group_exit(recorded):
+            result = {"status": "attention"}
+        outcomes.append(result["status"])
+        if result["status"] != "attention":
+            updates.append(
+                (
+                    run["run_id"],
+                    {
+                        "status": "interrupted",
+                        "slot_reserved": 0,
+                        "error": "coordinator stopped",
+                    },
+                )
+            )
     # Observe/stop every child before opening our write transaction. In
     # particular, stopping the second child must not hold the first's update.
     for run_id, fields in updates:
         store.update_run(conn, run_id, **fields)
-    return 'attention' if 'attention' in outcomes else 'terminated'
+    return "attention" if "attention" in outcomes else "terminated"
 
 
 class StageCoordinator:
@@ -179,7 +228,15 @@ class StageCoordinator:
     artifact_kinds: tuple[str, ...]
     workflow_name: str
 
-    def __init__(self, db_path, task_id, attempt_id, *, launcher=dispatch.dispatch_worker, poll_seconds=1):
+    def __init__(
+        self,
+        db_path,
+        task_id,
+        attempt_id,
+        *,
+        launcher=dispatch.dispatch_worker,
+        poll_seconds=1,
+    ):
         store = self.store
         self.db_path, self.task_id, self.attempt_id = str(db_path), task_id, attempt_id
         self.launcher = launcher
@@ -191,24 +248,26 @@ class StageCoordinator:
         with store.connect(db_path) as conn:
             self.session = store.session(conn, task_id=task_id)
         if not self.session:
-            raise ValueError('no registered review round for task')
-        self.round_id = self.session['round_id']
-        self.request = self.session['request']
+            raise ValueError("no registered review round for task")
+        self.round_id = self.session["round_id"]
+        self.request = self.session["request"]
         self.data_dir = Path(db_path).resolve().parent
-        self.manifest = self.session['manifest']
+        self.manifest = self.session["manifest"]
 
     def check_active(self):
         store = self.store
         if self.stopping.is_set():
-            raise StageStopped('review coordinator is stopping')
+            raise StageStopped("review coordinator is stopping")
         with store.connect(self.db_path) as conn:
             if not attempt_is_active(conn, self.task_id, self.attempt_id):
-                raise StageStopped('review attempt is no longer current')
+                raise StageStopped("review attempt is no longer current")
         # Ownership/cancellation is checked on every poll. The shared parent
         # heartbeat is diagnostic and must not turn a busy writer into a failed
         # model round or make every reviewer contend on the same UPDATE.
         now = time.monotonic()
-        if now < self._next_heartbeat_at or not self._heartbeat_lock.acquire(blocking=False):
+        if now < self._next_heartbeat_at or not self._heartbeat_lock.acquire(
+            blocking=False
+        ):
             return
         try:
             if now < self._next_heartbeat_at:
@@ -216,14 +275,20 @@ class StageCoordinator:
             try:
                 with closing(sqlite3.connect(self.db_path, timeout=0.1)) as conn, conn:
                     if not attempt_is_active(conn, self.task_id, self.attempt_id):
-                        raise StageStopped('review attempt is no longer current')
-                    conn.execute('UPDATE attempts SET heartbeat_at=? WHERE attempt_id=?',
-                                 (store.now(), self.attempt_id))
+                        raise StageStopped("review attempt is no longer current")
+                    conn.execute(
+                        "UPDATE attempts SET heartbeat_at=? WHERE attempt_id=?",
+                        (store.now(), self.attempt_id),
+                    )
             except sqlite3.OperationalError as exc:
                 message = str(exc)
-                if message not in {'database is locked', 'database table is locked',
-                                   'database schema is locked'} and not message.startswith(
-                        ('database table is locked:', 'database schema is locked:')):
+                if message not in {
+                    "database is locked",
+                    "database table is locked",
+                    "database schema is locked",
+                } and not message.startswith(
+                    ("database table is locked:", "database schema is locked:")
+                ):
                     raise
                 self._next_heartbeat_at = now + 1
             else:
@@ -236,38 +301,54 @@ class StageCoordinator:
         self.check_active()
         with store.connect(self.db_path) as conn:
             store.update(conn, self.round_id, status=status, error=None)
-        snapshot.record_snapshot(self.db_path, self.task_id, self.attempt_id,
-                                 'prepare' if status == 'preparing' else 'analyze', 'running',
-                                 f'{self.workflow_name.title()} {self.round_id}: {status}')
+        snapshot.record_snapshot(
+            self.db_path,
+            self.task_id,
+            self.attempt_id,
+            "prepare" if status == "preparing" else "analyze",
+            "running",
+            f"{self.workflow_name.title()} {self.round_id}: {status}",
+        )
 
     def save_manifest(self):
         store = self.store
         with store.connect(self.db_path) as conn:
-            store.update(conn, self.round_id, manifest_json=json.dumps(self.manifest, ensure_ascii=False))
-            conn.execute('UPDATE attempts SET worktree_path=? WHERE attempt_id=?',
-                         (self.manifest['worktree_path'], self.attempt_id))
+            store.update(
+                conn,
+                self.round_id,
+                manifest_json=json.dumps(self.manifest, ensure_ascii=False),
+            )
+            conn.execute(
+                "UPDATE attempts SET worktree_path=? WHERE attempt_id=?",
+                (self.manifest["worktree_path"], self.attempt_id),
+            )
 
     def reconcile_running(self):
         """Finish previous model processes before scheduling any new phase."""
         store = self.store
         with store.connect(self.db_path) as conn:
             previous = store.runs(conn, self.round_id)
-        workers = {worker['name']: worker for worker in self.request['workers']}
+        workers = {worker["name"]: worker for worker in self.request["workers"]}
         pending = []
         for run in previous:
-            if run['status'] == 'starting' and not run['dispatch']:
-                raise StageStopped('model launch outcome unknown; inspect before retry')
-            if run['status'] == 'running':
+            if run["status"] == "starting" and not run["dispatch"]:
+                raise StageStopped("model launch outcome unknown; inspect before retry")
+            if run["status"] == "running":
                 pending.append(run)
 
         def reconcile(run):
             try:
-                self._wait(run, run['dispatch'], workers[run['worker_id']]['timeout_seconds'])
+                self._wait(
+                    run, run["dispatch"], workers[run["worker_id"]]["timeout_seconds"]
+                )
             except StageStopped:
                 raise
             except RuntimeError as exc:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(conn, run['run_id'], status='failed', error=str(exc))
+                    store.update_run(
+                        conn, run["run_id"], status="failed", error=str(exc)
+                    )
+
         self.parallel(pending, reconcile)
 
     def parallel(self, items, operation):
@@ -292,7 +373,7 @@ class StageCoordinator:
     def release_slot(self, run):
         store = self.store
         with store.connect(self.db_path) as conn:
-            store.release_slot(conn, run['run_id'])
+            store.release_slot(conn, run["run_id"])
 
     def reclaim_finished_slots(self):
         # A shared pool must reclaim proven-dead groups from either workflow;
@@ -300,11 +381,16 @@ class StageCoordinator:
         reserved = []
         with self.store.connect(self.db_path) as conn:
             for run_store, table in self.slot_stores:
-                if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
-                    reserved.extend((run_store, run) for run in run_store.reserved_runs(conn))
+                if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name=?", (table,)
+                ).fetchone():
+                    reserved.extend(
+                        (run_store, run) for run in run_store.reserved_runs(conn)
+                    )
         for run_store, run in reserved:
-            if (_launch_failed_without_process(run['dispatch'])
-                    or (run['dispatch'] and _group_finished(run['dispatch']))):
+            if _launch_failed_without_process(run["dispatch"]) or (
+                run["dispatch"] and _group_finished(run["dispatch"])
+            ):
                 with self.store.connect(self.db_path) as conn:
                     run_store.release_finished_slot(conn, run)
 
@@ -320,26 +406,42 @@ class StageCoordinator:
                 if locked:
                     self.check_active()
                     with store.connect(self.db_path) as conn:
-                        conn.execute('BEGIN IMMEDIATE')
+                        conn.execute("BEGIN IMMEDIATE")
                         if not attempt_is_active(conn, self.task_id, self.attempt_id):
-                            raise StageStopped('review attempt is no longer current')
-                        acquired = store.reserve_slot(conn, run['run_id'])
+                            raise StageStopped("review attempt is no longer current")
+                        acquired = store.reserve_slot(conn, run["run_id"])
                     if acquired:
                         launched = self.launcher(
-                            task_id=self.task_id, attempt_id=run['run_id'], prompt_path=prompt_path,
-                            worktree_path=self.manifest['worktree_path'], worker_agent_config=worker,
-                            model=run['model'], reasoning_effort=worker['default_effort'],
-                            trusted_environment=environment, log_dir=run['output_dir'], dry_run=False,
+                            task_id=self.task_id,
+                            attempt_id=run["run_id"],
+                            prompt_path=prompt_path,
+                            worktree_path=self.manifest["worktree_path"],
+                            worker_agent_config=worker,
+                            model=run["model"],
+                            reasoning_effort=worker["default_effort"],
+                            trusted_environment=environment,
+                            log_dir=run["output_dir"],
+                            dry_run=False,
                         )
                         # Retain our Popen even when another thread's dispatch
                         # reaps the shared registry before this waiter polls it.
-                        process = dispatch.tracked_process(launched.get('pid'))
+                        process = dispatch.tracked_process(launched.get("pid"))
                         if process is not None:
-                            self.processes[launched['pid']] = process
+                            self.processes[launched["pid"]] = process
                         with store.connect(self.db_path) as conn:
-                            store.update_run(conn, run['run_id'], status='running' if launched.get('ok') or launched.get('pid') else 'failed',
-                                             dispatch_json=json.dumps(launched))
-                            fresh = next(r for r in store.runs(conn, self.round_id) if r['run_id'] == run['run_id'])
+                            store.update_run(
+                                conn,
+                                run["run_id"],
+                                status="running"
+                                if launched.get("ok") or launched.get("pid")
+                                else "failed",
+                                dispatch_json=json.dumps(launched),
+                            )
+                            fresh = next(
+                                r
+                                for r in store.runs(conn, self.round_id)
+                                if r["run_id"] == run["run_id"]
+                            )
                         run.update(fresh)
                         return launched
             self.stopping.wait(self.poll_seconds)
@@ -348,16 +450,32 @@ class StageCoordinator:
         store = self.store
         self.check_active()
         with store.connect(self.db_path) as conn:
-            store.update_run(conn, run['run_id'], status='succeeded', artifact_json=json.dumps(artifact), error=None)
+            store.update_run(
+                conn,
+                run["run_id"],
+                status="succeeded",
+                artifact_json=json.dumps(artifact),
+                error=None,
+            )
             for kind in self.artifact_kinds:
-                path = artifact.get(kind + '_path')
+                path = artifact.get(kind + "_path")
                 if not path:
                     continue
-                conn.execute('''INSERT OR IGNORE INTO artifacts(artifact_id,task_id,attempt_id,
-                    artifact_type,path,sha256,bytes,created_at) VALUES (?,?,?,?,?,?,?,?)''',
-                    (f"{run['run_id']}:{kind}", self.task_id, self.attempt_id, f'{self.workflow_name}_{kind}',
-                     path, artifact[kind + '_sha256'], Path(path).stat().st_size, store.now()))
-        return {**artifact, 'run_id': run['run_id'], 'worker_id': run['worker_id']}
+                conn.execute(
+                    """INSERT OR IGNORE INTO artifacts(artifact_id,task_id,attempt_id,
+                    artifact_type,path,sha256,bytes,created_at) VALUES (?,?,?,?,?,?,?,?)""",
+                    (
+                        f"{run['run_id']}:{kind}",
+                        self.task_id,
+                        self.attempt_id,
+                        f"{self.workflow_name}_{kind}",
+                        path,
+                        artifact[kind + "_sha256"],
+                        Path(path).stat().st_size,
+                        store.now(),
+                    ),
+                )
+        return {**artifact, "run_id": run["run_id"], "worker_id": run["worker_id"]}
 
     def sealed_output(self, run):
         """Copy handoff files to a separate registration directory and hash them.
@@ -367,185 +485,261 @@ class StageCoordinator:
         CLI. The marker also recovers a seal committed before SQLite.
         """
         store = self.store
-        names = self.handoff_files[run['stage']]
-        parent = 'runs' if run['stage'] == self.voter_stage else run['stage']
-        sealed = Path(self.manifest['artifact_root']) / parent / 'sealed' / run['run_id']
-        self.artifact_files.safe_path(sealed, self.manifest['artifact_root'])
+        names = self.handoff_files[run["stage"]]
+        parent = "runs" if run["stage"] == self.voter_stage else run["stage"]
+        sealed = (
+            Path(self.manifest["artifact_root"]) / parent / "sealed" / run["run_id"]
+        )
+        self.artifact_files.safe_path(sealed, self.manifest["artifact_root"])
         sealed.mkdir(parents=True, exist_ok=True)
-        marker = sealed / 'seal.json'
-        identity = {'run_id': run['run_id'], 'prompt_sha256': run['prompt_sha256']}
+        marker = sealed / "seal.json"
+        identity = {"run_id": run["run_id"], "prompt_sha256": run["prompt_sha256"]}
         if not marker.exists():
             hashes = {}
-            output = self.artifact_files.safe_path(run['output_dir'], self.manifest['artifact_root'])
+            output = self.artifact_files.safe_path(
+                run["output_dir"], self.manifest["artifact_root"]
+            )
             directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 for name in names:
                     # Anchor the open directory too: replacing the producer
                     # directory with a symlink cannot redirect this read.
-                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
-                    with os.fdopen(fd, 'rb') as stream:
+                    fd = os.open(
+                        name,
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        dir_fd=directory_fd,
+                    )
+                    with os.fdopen(fd, "rb") as stream:
                         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                            raise ValueError('review handoff must be a regular file')
+                            raise ValueError("review handoff must be a regular file")
                         raw = stream.read(16 * 1024 * 1024 + 1)
                     if len(raw) > 16 * 1024 * 1024:
-                        raise ValueError('review handoff exceeds 16 MiB')
-                    temporary = sealed / (name + '.tmp')
+                        raise ValueError("review handoff exceeds 16 MiB")
+                    temporary = sealed / (name + ".tmp")
                     temporary.write_bytes(raw)
                     temporary.replace(sealed / name)
                     hashes[name] = hashlib.sha256(raw).hexdigest()
             finally:
                 os.close(directory_fd)
-            self.artifact_files.atomic_json(marker, {**identity, 'files': hashes})
-        saved = json.loads(marker.read_text(encoding='utf-8'))
-        if any(saved.get(key) != value for key, value in identity.items()) or set(saved.get('files', {})) != set(names):
-            raise ValueError('review seal identity changed')
-        for name, expected in saved['files'].items():
+            self.artifact_files.atomic_json(marker, {**identity, "files": hashes})
+        saved = json.loads(marker.read_text(encoding="utf-8"))
+        if any(saved.get(key) != value for key, value in identity.items()) or set(
+            saved.get("files", {})
+        ) != set(names):
+            raise ValueError("review seal identity changed")
+        for name, expected in saved["files"].items():
             path = self.artifact_files.safe_path(sealed / name, sealed)
             if store.digest(path) != expected:
-                raise ValueError('sealed review artifact changed')
+                raise ValueError("sealed review artifact changed")
         return sealed
 
     def _wait(self, run, launched, timeout):
         store = self.store
-        started = datetime.fromisoformat(run.get('started_at') or run['created_at'])
-        while not launched.get('process_exited'):
+        started = datetime.fromisoformat(run.get("started_at") or run["created_at"])
+        while not launched.get("process_exited"):
             self.check_active()
-            proc = self.processes.get(launched.get('pid')) or dispatch.tracked_process(launched.get('pid'))
+            proc = self.processes.get(launched.get("pid")) or dispatch.tracked_process(
+                launched.get("pid")
+            )
             if proc is not None:
                 code = proc.poll()
                 if code is not None:
                     dispatch.reap_finished_process(proc.pid)
                     self.processes.pop(proc.pid, None)
-                    launched = {**launched, 'process_exited': True, 'returncode': code}
+                    launched = {**launched, "process_exited": True, "returncode": code}
                     break
             else:
                 identity = worker_identity.inspect_recorded_identity(launched)
-                if identity == 'dead':
+                if identity == "dead":
                     # The coordinator restarted after the model finished. Its
                     # complete expected file is the durable completion evidence.
-                    launched = {**launched, 'process_exited': True}
+                    launched = {**launched, "process_exited": True}
                     break
-                if identity != 'alive_same':
-                    raise StageStopped('review worker identity requires attention')
+                if identity != "alive_same":
+                    raise StageStopped("review worker identity requires attention")
             if (datetime.now(timezone.utc) - started).total_seconds() > timeout:
                 termination = worker_identity.terminate_recorded_identity(launched)
-                if termination['status'] == 'attention':
-                    raise StageStopped('review worker timeout termination requires attention')
+                if termination["status"] == "attention":
+                    raise StageStopped(
+                        "review worker timeout termination requires attention"
+                    )
                 if not _wait_for_group_exit(launched):
-                    raise StageStopped('review worker timeout left a process group; inspect remaining processes')
+                    raise StageStopped(
+                        "review worker timeout left a process group; inspect remaining processes"
+                    )
                 self.release_slot(run)
-                raise RuntimeError('review worker timed out')
+                raise RuntimeError("review worker timed out")
             time.sleep(self.poll_seconds)
         with store.connect(self.db_path) as conn:
-            store.update_run(conn, run['run_id'], dispatch_json=json.dumps(launched))
+            store.update_run(conn, run["run_id"], dispatch_json=json.dumps(launched))
         if not _wait_for_group_exit(launched):
-            raise StageStopped('review leader exited but process group remains; inspect and stop remaining processes before retry')
+            raise StageStopped(
+                "review leader exited but process group remains; inspect and stop remaining processes before retry"
+            )
         self.release_slot(run)
         _raise_rate_limit(launched)
-        if launched.get('returncode', 0) != 0:
-            raise RuntimeError(f"review worker exited with code {launched['returncode']}")
+        if launched.get("returncode", 0) != 0:
+            raise RuntimeError(
+                f"review worker exited with code {launched['returncode']}"
+            )
 
     def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""
         store = self.store
         self.workspace.verify_snapshot(self.manifest)
         prompt_hash = store.digest(prompt_path)
-        if stage == self.voter_stage and prompt_hash != self.manifest['prompt_sha256']:
-            raise ValueError('review prompt hash mismatch')
+        if stage == self.voter_stage and prompt_hash != self.manifest["prompt_sha256"]:
+            raise ValueError("review prompt hash mismatch")
         with store.connect(self.db_path) as conn:
-            prior = [r for r in store.runs(conn, self.round_id)
-                     if r['stage'] == stage and r['worker_id'] == worker['name']]
+            prior = [
+                r
+                for r in store.runs(conn, self.round_id)
+                if r["stage"] == stage and r["worker_id"] == worker["name"]
+            ]
         for run in reversed(prior):
-            if run['status'] in {'prepared', 'waiting'} and not run['slot_reserved']:
+            if run["status"] in {"prepared", "waiting"} and not run["slot_reserved"]:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(conn, run['run_id'], status='interrupted', error='recovered before launch')
+                    store.update_run(
+                        conn,
+                        run["run_id"],
+                        status="interrupted",
+                        error="recovered before launch",
+                    )
                 continue
-            if run['prompt_sha256'] != prompt_hash:
-                if stage == 'synthesis' or (stage == 'prepare' and not self.manifest.get('frozen')):
-                    if run['status'] in {'running', 'succeeded'}:
+            if run["prompt_sha256"] != prompt_hash:
+                if stage == "synthesis" or (
+                    stage == "prepare" and not self.manifest.get("frozen")
+                ):
+                    if run["status"] in {"running", "succeeded"}:
                         with store.connect(self.db_path) as conn:
-                            store.update_run(conn, run['run_id'], status='superseded', error='synthesis input set changed')
+                            store.update_run(
+                                conn,
+                                run["run_id"],
+                                status="superseded",
+                                error="synthesis input set changed",
+                            )
                     continue
-                raise ValueError('same-round prompt changed')
-            if run['status'] == 'starting' and not run['dispatch']:
-                raise StageStopped('model launch outcome unknown; cancel and inspect this round')
-            if run['status'] not in {'succeeded', 'running'}:
+                raise ValueError("same-round prompt changed")
+            if run["status"] == "starting" and not run["dispatch"]:
+                raise StageStopped(
+                    "model launch outcome unknown; cancel and inspect this round"
+                )
+            if run["status"] not in {"succeeded", "running"}:
                 continue
             try:
-                if run['status'] == 'running':
-                    self._wait(run, run['dispatch'], worker['timeout_seconds'])
-                model = run['model'] or worker['default_model']
+                if run["status"] == "running":
+                    self._wait(run, run["dispatch"], worker["timeout_seconds"])
+                model = run["model"] or worker["default_model"]
                 artifact = validate(self.sealed_output(run), model)
-                artifact['model'] = model
+                artifact["model"] = model
                 if input_hash:
-                    artifact['input_sha256'] = input_hash
-                if run['status'] == 'succeeded' and artifact != run['artifact']:
-                    raise ValueError('registered review artifact changed')
+                    artifact["input_sha256"] = input_hash
+                if run["status"] == "succeeded" and artifact != run["artifact"]:
+                    raise ValueError("registered review artifact changed")
                 self.workspace.verify_snapshot(self.manifest)
                 return self.register(run, artifact)
             except StageStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
                 with store.connect(self.db_path) as conn:
-                    store.update_run(conn, run['run_id'], status='failed', error=str(exc))
+                    store.update_run(
+                        conn, run["run_id"], status="failed", error=str(exc)
+                    )
                 break
         self.check_active()
         with store.connect(self.db_path) as conn:
-            previous = [r for r in store.runs(conn, self.round_id)
-                        if r['stage'] == stage and r['worker_id'] == worker['name']]
-            model = worker['default_model']
-            limited = [r for r in previous if r['prompt_sha256'] == prompt_hash
-                       and r['status'] == 'failed' and (r['error'] or '').startswith('rate_limited: ')]
+            previous = [
+                r
+                for r in store.runs(conn, self.round_id)
+                if r["stage"] == stage and r["worker_id"] == worker["name"]
+            ]
+            model = worker["default_model"]
+            limited = [
+                r
+                for r in previous
+                if r["prompt_sha256"] == prompt_hash
+                and r["status"] == "failed"
+                and (r["error"] or "").startswith("rate_limited: ")
+            ]
             if limited:
-                fallback = worker.get('fallback_model')
-                if not fallback or any(r['model'] == fallback for r in limited):
-                    raise ModelRateLimited(limited[-1]['error'])
+                fallback = worker.get("fallback_model")
+                if not fallback or any(r["model"] == fallback for r in limited):
+                    raise ModelRateLimited(limited[-1]["error"])
                 model = fallback
-            elif worker.get('fallback_model') and len(previous) >= 2 and all(
-                r['status'] == 'failed' and r['error'] == 'review worker timed out'
-                for r in previous[-2:]
+            elif (
+                worker.get("fallback_model")
+                and len(previous) >= 2
+                and all(
+                    r["status"] == "failed" and r["error"] == "review worker timed out"
+                    for r in previous[-2:]
+                )
             ):
-                model = worker['fallback_model']
-            run = store.new_run(conn, self.round_id, stage, worker['name'], self.attempt_id,
-                                self.manifest['artifact_root'], prompt_hash, model=model)
-            store.update_run(conn, run['run_id'], status='waiting')
+                model = worker["fallback_model"]
+            run = store.new_run(
+                conn,
+                self.round_id,
+                stage,
+                worker["name"],
+                self.attempt_id,
+                self.manifest["artifact_root"],
+                prompt_hash,
+                model=model,
+            )
+            store.update_run(conn, run["run_id"], status="waiting")
         try:
             environment = model_environment.stage_environment(
-                self.manifest, run['output_dir'], self.data_dir, workflow_name=self.workflow_name)
+                self.manifest,
+                run["output_dir"],
+                self.data_dir,
+                workflow_name=self.workflow_name,
+            )
             launched = self.launch_with_slot(run, worker, prompt_path, environment)
-            if not launched.get('ok'):
-                if launched.get('pid') and not _wait_for_group_exit(launched):
-                    raise StageStopped('failed model launch left a process group; inspect remaining processes')
+            if not launched.get("ok"):
+                if launched.get("pid") and not _wait_for_group_exit(launched):
+                    raise StageStopped(
+                        "failed model launch left a process group; inspect remaining processes"
+                    )
                 self.release_slot(run)
                 _raise_rate_limit(launched)
-                raise RuntimeError(launched.get('safe_error', 'review launch failed'))
-            self._wait(run, launched, worker['timeout_seconds'])
+                raise RuntimeError(launched.get("safe_error", "review launch failed"))
+            self._wait(run, launched, worker["timeout_seconds"])
             if store.digest(prompt_path) != prompt_hash:
-                raise ValueError('model changed prompt file')
+                raise ValueError("model changed prompt file")
             self.workspace.verify_snapshot(self.manifest)
             artifact = validate(self.sealed_output(run), model)
-            artifact['model'] = model
+            artifact["model"] = model
             if input_hash:
-                artifact['input_sha256'] = input_hash
+                artifact["input_sha256"] = input_hash
             return self.register(run, artifact)
         except StageStopped:
             raise
         except Exception as exc:
             with store.connect(self.db_path) as conn:
-                current = next(r for r in store.runs(conn, self.round_id) if r['run_id'] == run['run_id'])
-                if current['status'] == 'starting' and not current['dispatch']:
-                    raise StageStopped('model launch outcome unknown; inspect before retry') from exc
-                store.update_run(conn, run['run_id'], status='failed', error=str(exc))
-            if (isinstance(exc, ModelRateLimited) and worker.get('fallback_model')
-                    and model != worker['fallback_model']):
-                return self.run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
+                current = next(
+                    r
+                    for r in store.runs(conn, self.round_id)
+                    if r["run_id"] == run["run_id"]
+                )
+                if current["status"] == "starting" and not current["dispatch"]:
+                    raise StageStopped(
+                        "model launch outcome unknown; inspect before retry"
+                    ) from exc
+                store.update_run(conn, run["run_id"], status="failed", error=str(exc))
+            if (
+                isinstance(exc, ModelRateLimited)
+                and worker.get("fallback_model")
+                and model != worker["fallback_model"]
+            ):
+                return self.run_phase(
+                    stage, worker, prompt_path, validate, input_hash=input_hash
+                )
             raise
 
     def prompt(self, name, text):
-        path = Path(self.manifest['artifact_root']) / name
+        path = Path(self.manifest["artifact_root"]) / name
         if path.exists():
-            if path.read_bytes() != text.encode('utf-8'):
-                raise ValueError('registered phase prompt changed')
+            if path.read_bytes() != text.encode("utf-8"):
+                raise ValueError("registered phase prompt changed")
         else:
-            path.write_text(text, encoding='utf-8')
+            path.write_text(text, encoding="utf-8")
         return path

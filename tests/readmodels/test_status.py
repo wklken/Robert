@@ -56,8 +56,14 @@ class StatusTests(SummaryFixture):
             "live_poll_skipped_rate_limit",
         )
         self.assertEqual(dashboard_data["daemon"]["latest_lease"]["status"], "active")
-        self.assertEqual(dashboard_data["daemon"]["recent_events"][0]["event_type"], "live_poll_skipped_rate_limit")
-        self.assertEqual(dashboard_data["daemon"]["recent_events"][1]["event_type"], "run_once_triggered")
+        self.assertEqual(
+            dashboard_data["daemon"]["recent_events"][0]["event_type"],
+            "live_poll_skipped_rate_limit",
+        )
+        self.assertEqual(
+            dashboard_data["daemon"]["recent_events"][1]["event_type"],
+            "run_once_triggered",
+        )
         self.assertEqual(status["daemon"]["latest_run"]["status"], "running")
         self.assertIn("Daemon:", message)
         self.assertIn("live_poll_skipped_rate_limit", message)
@@ -94,9 +100,13 @@ class StatusTests(SummaryFixture):
         self.assertEqual(data["results"][0]["result_id"], "result-1")
         self.assertEqual(data["results"][0]["handoff"], "ready")
         self.assertEqual(data["action_counts"]["total"], 1)
-        self.assertEqual(data["latest_notification"]["notification_id"], "notification-1")
+        self.assertEqual(
+            data["latest_notification"]["notification_id"], "notification-1"
+        )
         self.assertEqual(data["actions"][0]["action_id"], "action-1")
-        self.assertIn("prompt", {artifact["artifact_type"] for artifact in data["artifacts"]})
+        self.assertIn(
+            "prompt", {artifact["artifact_type"] for artifact in data["artifacts"]}
+        )
         self.assertEqual(data["events"][0]["event_fingerprint"], "comment:1")
 
     def test_status_reports_run_attempt_and_workstream_by_id(self):
@@ -117,7 +127,9 @@ class StatusTests(SummaryFixture):
         self.assertEqual(attempt_payload["data"]["task_id"], "task-1")
         self.assertEqual(attempt_payload["data"]["dispatch"]["command"]["argv0"], "cbc")
         self.assertEqual(attempt_payload["data"]["dispatch"]["command"]["argc"], 4)
-        self.assertNotIn("very long prompt", json.dumps(attempt_payload["data"]["dispatch"]))
+        self.assertNotIn(
+            "very long prompt", json.dumps(attempt_payload["data"]["dispatch"])
+        )
         self.assertEqual(attempt_payload["data"]["process"]["pid"], os.getpid())
         self.assertEqual(attempt_payload["data"]["process"]["status"], "running")
         self.assertEqual(attempt_payload["data"]["phases"][0]["phase"], "analyze")
@@ -129,13 +141,19 @@ class StatusTests(SummaryFixture):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        latest_code, latest_payload = self._run_status("--db", str(db_path), "run", "latest")
-        runs_code, runs_payload = self._run_status("--db", str(db_path), "runs", "--limit", "3")
+        latest_code, latest_payload = self._run_status(
+            "--db", str(db_path), "run", "latest"
+        )
+        runs_code, runs_payload = self._run_status(
+            "--db", str(db_path), "runs", "--limit", "3"
+        )
         event_code, event_payload = self._run_status("--db", str(db_path), "event", "1")
         events_code, events_payload = self._run_status(
             "--db", str(db_path), "events", "analysis", "--limit", "5"
         )
-        source_code, source_payload = self._run_status("--db", str(db_path), "source", "1")
+        source_code, source_payload = self._run_status(
+            "--db", str(db_path), "source", "1"
+        )
         artifact_code, artifact_payload = self._run_status(
             "--db",
             str(db_path),
@@ -156,16 +174,29 @@ class StatusTests(SummaryFixture):
         self.assertEqual(event_payload["data"]["tasks"][0]["task_id"], "task-1")
         self.assertEqual(event_payload["data"]["tasks"][0]["workstream_id"], "ws-1")
         self.assertIsNone(event_payload["data"]["tasks"][0]["parent_task_id"])
-        self.assertEqual(event_payload["data"]["tasks"][0]["worktree_path"], "/repo/.worktrees/task-1")
-        self.assertEqual(event_payload["data"]["tasks"][0]["branch_name"], "codex/dd-1-task")
+        self.assertEqual(
+            event_payload["data"]["tasks"][0]["worktree_path"],
+            "/repo/.worktrees/task-1",
+        )
+        self.assertEqual(
+            event_payload["data"]["tasks"][0]["branch_name"], "codex/dd-1-task"
+        )
         self.assertEqual(events_code, 0)
         self.assertEqual(events_payload["data"][0]["event_fingerprint"], "comment:1")
         self.assertEqual(events_payload["data"][0]["linked_task_count"], 1)
         self.assertEqual(source_code, 0)
-        self.assertEqual(source_payload["data"]["sources"][0]["source_key"], "github:example/backend#1")
-        self.assertEqual(source_payload["data"]["workstreams"][0]["workstream_id"], "ws-1")
+        self.assertEqual(
+            source_payload["data"]["sources"][0]["source_key"],
+            "github:example/backend#1",
+        )
+        self.assertEqual(
+            source_payload["data"]["workstreams"][0]["workstream_id"], "ws-1"
+        )
         self.assertEqual(source_payload["data"]["tasks"][0]["task_id"], "task-1")
-        self.assertEqual(source_payload["data"]["tasks"][0]["worktree_path"], "/repo/.worktrees/task-1")
+        self.assertEqual(
+            source_payload["data"]["tasks"][0]["worktree_path"],
+            "/repo/.worktrees/task-1",
+        )
         self.assertEqual(artifact_code, 0)
         self.assertIn("stderr tail", artifact_payload["data"]["content"])
         self.assertEqual(artifact_payload["data"]["artifact_type"], "worker_stderr")
@@ -188,7 +219,11 @@ class StatusTests(SummaryFixture):
                 SET state = 'closed', metadata_json = ?
                 WHERE source_id = 'source-1'
                 """,
-                (json.dumps({"current_state_reconciliation": payload}, sort_keys=True),),
+                (
+                    json.dumps(
+                        {"current_state_reconciliation": payload}, sort_keys=True
+                    ),
+                ),
             )
             conn.execute(
                 """
@@ -197,11 +232,16 @@ class StatusTests(SummaryFixture):
                 )
                 VALUES ('audit-current-state-closed', 'repo-1', NULL, NULL, 'current_state_closed', ?, ?)
                 """,
-                (datetime.now(timezone.utc).isoformat(), json.dumps(payload, sort_keys=True)),
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps(payload, sort_keys=True),
+                ),
             )
 
         status_code, status_payload = self._run_status("--db", str(db_path), "status")
-        source_code, source_payload = self._run_status("--db", str(db_path), "source", "1")
+        source_code, source_payload = self._run_status(
+            "--db", str(db_path), "source", "1"
+        )
 
         self.assertEqual(status_code, 0)
         self.assertEqual(status_payload["data"]["summary"]["skipped_closed_sources"], 1)
@@ -220,7 +260,9 @@ class StatusTests(SummaryFixture):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
-        code, payload = self._run_status("--db", str(db_path), "attempt", "missing-attempt")
+        code, payload = self._run_status(
+            "--db", str(db_path), "attempt", "missing-attempt"
+        )
 
         self.assertEqual(code, 3)
         self.assertFalse(payload["ok"])
@@ -256,7 +298,9 @@ class StatusTests(SummaryFixture):
                     json.dumps(
                         {
                             "overall_status": "partial_failure",
-                            "repo_summaries": [{"repo_id": "repo:a", "status": "failed"}],
+                            "repo_summaries": [
+                                {"repo_id": "repo:a", "status": "failed"}
+                            ],
                         },
                         sort_keys=True,
                     ),
@@ -275,6 +319,7 @@ class StatusTests(SummaryFixture):
 
     def test_status_orders_multi_repo_run_steps_by_runtime_flow(self):
         from robert_agent.readmodels import status
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -299,14 +344,19 @@ class StatusTests(SummaryFixture):
 
         step_keys = [step["step_key"] for step in run["steps"]]
 
-        self.assertLess(step_keys.index("discover_notifications"), step_keys.index("acquire_lease"))
-        self.assertLess(step_keys.index("publish_actions"), step_keys.index("reconcile"))
+        self.assertLess(
+            step_keys.index("discover_notifications"), step_keys.index("acquire_lease")
+        )
+        self.assertLess(
+            step_keys.index("publish_actions"), step_keys.index("reconcile")
+        )
         self.assertLess(step_keys.index("reconcile"), step_keys.index("discover"))
         self.assertLess(step_keys.index("route"), step_keys.index("repo_pipelines"))
         self.assertLess(step_keys.index("repo_pipelines"), step_keys.index("dispatch"))
 
     def test_status_orders_repo_steps_by_pipeline_flow(self):
         from robert_agent.readmodels import status
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         now = datetime.now(timezone.utc).isoformat()
@@ -330,4 +380,6 @@ class StatusTests(SummaryFixture):
 
         step_keys = [step["step_key"] for step in run["repo_steps"]]
 
-        self.assertEqual(step_keys, ["acquire_lease", "supervise", "reconcile", "route"])
+        self.assertEqual(
+            step_keys, ["acquire_lease", "supervise", "reconcile", "route"]
+        )

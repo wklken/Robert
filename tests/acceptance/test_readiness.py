@@ -10,6 +10,7 @@ from tests.support.acceptance import AcceptanceFixture
 class ReadinessTests(AcceptanceFixture):
     def test_acceptance_preflight_reports_live_gate_statuses(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
 
         def command_exists(command):
@@ -40,10 +41,13 @@ class ReadinessTests(AcceptanceFixture):
         self.assertEqual(gates["gh_auth"]["status"], "failed")
         self.assertEqual(gates["worker_command"]["status"], "failed")
         self.assertIn("Run gh auth login", result["next_actions"])
-        self.assertIn("Install or configure cbc worker agent command: cbc", result["next_actions"])
+        self.assertIn(
+            "Install or configure cbc worker agent command: cbc", result["next_actions"]
+        )
 
     def test_acceptance_preflight_marks_live_gates_skipped_explicitly(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
 
         result = acceptance.acceptance_preflight(
@@ -64,9 +68,10 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_checks_configured_worker_command(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         document = yaml.safe_load(config_path.read_text())
-        document['workers']['default']['command'] = 'custom-cbc'
+        document["workers"]["default"]["command"] = "custom-cbc"
         config_path.write_text(yaml.safe_dump(document))
         probed = []
 
@@ -98,9 +103,12 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_checks_codex_worker_agent_command(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         document = yaml.safe_load(config_path.read_text())
-        document['workers']['default'].update(adapter='codex', command='/opt/homebrew/bin/codex')
+        document["workers"]["default"].update(
+            adapter="codex", command="/opt/homebrew/bin/codex"
+        )
         config_path.write_text(yaml.safe_dump(document))
         probed = []
 
@@ -126,16 +134,24 @@ class ReadinessTests(AcceptanceFixture):
         self.assertTrue(result["ok"], result)
         self.assertIn("/opt/homebrew/bin/codex", probed)
         self.assertEqual(gates["worker_command"]["status"], "passed")
-        self.assertEqual(gates["worker_command"]["summary"], "codex worker agent command is available")
+        self.assertEqual(
+            gates["worker_command"]["summary"],
+            "codex worker agent command is available",
+        )
         self.assertEqual(gates["worker_command"]["evidence"], "/opt/homebrew/bin/codex")
 
     def test_acceptance_preflight_checks_every_named_worker_command(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         document = yaml.safe_load(config_path.read_text())
-        document['workers']['default']['command'] = '/opt/bin/cbc'
-        document['workers']['reviewer'] = {'adapter': 'codex', 'command': '/opt/bin/review-codex',
-                                           'model': 'gpt-5.6-sol', 'effort': 'xhigh'}
+        document["workers"]["default"]["command"] = "/opt/bin/cbc"
+        document["workers"]["reviewer"] = {
+            "adapter": "codex",
+            "command": "/opt/bin/review-codex",
+            "model": "gpt-5.6-sol",
+            "effort": "xhigh",
+        }
         config_path.write_text(yaml.safe_dump(document))
         probed = []
 
@@ -171,6 +187,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_checks_configured_python_bin(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -207,6 +224,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_missing_python_bin(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -219,7 +237,9 @@ class ReadinessTests(AcceptanceFixture):
         result = acceptance.acceptance_preflight(
             config_path,
             skip_external=True,
-            command_exists=lambda command: None if command == "python" else f"/usr/bin/{command}",
+            command_exists=lambda command: (
+                None if command == "python" else f"/usr/bin/{command}"
+            ),
         )
 
         gates = {gate["id"]: gate for gate in result["gates"]}
@@ -284,7 +304,9 @@ class ReadinessTests(AcceptanceFixture):
             gates["control_plane_state"]["summary"],
             "1 prepared attempt will be eligible for dispatch on the next non-dry-run cycle",
         )
-        self.assertEqual(gates["control_plane_state"]["evidence"]["prepared_attempts"], 1)
+        self.assertEqual(
+            gates["control_plane_state"]["evidence"]["prepared_attempts"], 1
+        )
         self.assertIn(
             f"Review prepared attempts before non-dry-run: {sys.executable} -B "
             f"{acceptance.AGENT_ROOT / 'readmodels/summarize.py'} --db {db_path}",
@@ -293,6 +315,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_worktree_root_create_command(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         worktree_root = self.root / "repo" / ".worktrees"
         worktree_root.rmdir()
@@ -315,6 +338,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_rejects_worktree_root_file(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         worktree_root = self.root / "repo" / ".worktrees"
         worktree_root.rmdir()
@@ -330,7 +354,9 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(gates["worktree_root"]["status"], "failed")
-        self.assertEqual(gates["worktree_root"]["summary"], "worktree_root is not a directory")
+        self.assertEqual(
+            gates["worktree_root"]["summary"], "worktree_root is not a directory"
+        )
         self.assertEqual(gates["worktree_root"]["evidence"], str(worktree_root))
         self.assertIn(
             f"Remove file or set repos[0].worktrees to a directory: {worktree_root}",
@@ -339,6 +365,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_checks_all_configured_worktree_roots(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
@@ -369,7 +396,10 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(gates["worktree_root:org/repo-b"]["status"], "failed")
-        self.assertEqual(gates["worktree_root:org/repo-b"]["summary"], "worktree_root is not a directory")
+        self.assertEqual(
+            gates["worktree_root:org/repo-b"]["summary"],
+            "worktree_root is not a directory",
+        )
         self.assertEqual(gates["worktree_root:org/repo-b"]["evidence"], str(worktree_b))
         self.assertIn(
             f"Remove file or set repo org/repo-b worktrees to a directory: {worktree_b}",
@@ -378,6 +408,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_missing_config_without_traceback(self):
         from robert_agent.acceptance import readiness as acceptance
+
         result = acceptance.acceptance_preflight(self.root / "missing-config.yml")
 
         gates = {gate["id"]: gate for gate in result["gates"]}
@@ -396,9 +427,12 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_unconfigured_public_skeleton(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self.root / "config.yml"
         config_path.write_text(
-            (PACKAGE_ROOT / "resources" / "config.example.yml").read_text(encoding="utf-8"),
+            (PACKAGE_ROOT / "resources" / "config.example.yml").read_text(
+                encoding="utf-8"
+            ),
             encoding="utf-8",
         )
 
@@ -419,6 +453,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_data_dir_file(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         data_file = self.root / "data-file"
         data_file.write_text("not a directory", encoding="utf-8")
@@ -444,6 +479,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_empty_database_name(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -459,7 +495,10 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertEqual(gates["config_valid"]["summary"], "invalid config: config.database must be string")
+        self.assertEqual(
+            gates["config_valid"]["summary"],
+            "invalid config: config.database must be string",
+        )
         self.assertEqual(
             result["next_actions"],
             [f"Set database to a SQLite filename in {config_path.resolve()}"],
@@ -467,6 +506,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_database_path(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -493,6 +533,7 @@ class ReadinessTests(AcceptanceFixture):
 
     def test_acceptance_preflight_reports_nonpositive_max_concurrency(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -508,14 +549,20 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertEqual(gates["config_valid"]["summary"], "invalid config: config.scheduler.max_concurrency violates minimum 1")
+        self.assertEqual(
+            gates["config_valid"]["summary"],
+            "invalid config: config.scheduler.max_concurrency violates minimum 1",
+        )
         self.assertEqual(
             result["next_actions"],
-            [f"Set scheduler.max_concurrency to a positive integer in {config_path.resolve()}"],
+            [
+                f"Set scheduler.max_concurrency to a positive integer in {config_path.resolve()}"
+            ],
         )
 
     def test_acceptance_preflight_reports_nonpositive_runtime_threshold(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
@@ -531,14 +578,20 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertEqual(gates["config_valid"]["summary"], "invalid config: config.supervision.heartbeat_stale_seconds violates minimum 1")
+        self.assertEqual(
+            gates["config_valid"]["summary"],
+            "invalid config: config.supervision.heartbeat_stale_seconds violates minimum 1",
+        )
         self.assertEqual(
             result["next_actions"],
-            [f"Set supervision.heartbeat_stale_seconds to a positive integer in {config_path.resolve()}"],
+            [
+                f"Set supervision.heartbeat_stale_seconds to a positive integer in {config_path.resolve()}"
+            ],
         )
 
     def test_acceptance_preflight_reports_invalid_repo_root_path(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         bad_repo_root = self.root / "missing-repo"
         config_path.write_text(
@@ -558,11 +611,14 @@ class ReadinessTests(AcceptanceFixture):
         self.assertIn(str(bad_repo_root), gates["config_valid"]["summary"])
         self.assertEqual(
             result["next_actions"],
-            [f"Set repos[0].checkout to a real local git checkout in {config_path.resolve()}"],
+            [
+                f"Set repos[0].checkout to a real local git checkout in {config_path.resolve()}"
+            ],
         )
 
     def test_acceptance_preflight_reports_invalid_second_repo_root_path(self):
         from robert_agent.acceptance import readiness as acceptance
+
         config_path = self._write_acceptance_config()
         bad_repo_root = self.root / "missing-repo-b"
         config_path.write_text(
@@ -585,8 +641,12 @@ class ReadinessTests(AcceptanceFixture):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "failed_config")
         self.assertEqual(gates["config_valid"]["status"], "failed")
-        self.assertIn("repos[1].checkout is not a git checkout", gates["config_valid"]["summary"])
+        self.assertIn(
+            "repos[1].checkout is not a git checkout", gates["config_valid"]["summary"]
+        )
         self.assertEqual(
             result["next_actions"],
-            [f"Set repos[1].checkout to a real local git checkout in {config_path.resolve()}"],
+            [
+                f"Set repos[1].checkout to a real local git checkout in {config_path.resolve()}"
+            ],
         )

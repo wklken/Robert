@@ -46,11 +46,7 @@ def init_config(
 
     repo_path = Path(values["repo_path"]).expanduser()
     worker_name = str(values["worker"])
-    adapter = (
-        worker_name
-        if worker_name in {"cbc", "codex", "tcodex"}
-        else "codex"
-    )
+    adapter = worker_name if worker_name in {"cbc", "codex", "tcodex"} else "codex"
     config = {
         "version": 2,
         "data_dir": str(default_data_dir()),

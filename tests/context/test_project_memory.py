@@ -174,9 +174,13 @@ class ProjectMemoryTests(unittest.TestCase):
             )
 
         self.assertGreaterEqual(len(memories), 1)
-        self.assertEqual(memories[0]["title"], "PR review comments update the PR workstream")
+        self.assertEqual(
+            memories[0]["title"], "PR review comments update the PR workstream"
+        )
         self.assertIn("memory_id", memories[0])
-        self.assertEqual(memories[0]["short_summary"], "DD PR follow-up runs on update-existing-pr.")
+        self.assertEqual(
+            memories[0]["short_summary"], "DD PR follow-up runs on update-existing-pr."
+        )
 
     def test_retrieve_memories_applies_runtime_knowledge_boost_terms(self):
         from robert_agent.context import project as project_memory
@@ -230,7 +234,9 @@ class ProjectMemoryTests(unittest.TestCase):
             )
 
         self.assertGreaterEqual(len(memories), 1)
-        self.assertEqual(memories[0]["title"], "Use update-existing-pr for DD PR review loops")
+        self.assertEqual(
+            memories[0]["title"], "Use update-existing-pr for DD PR review loops"
+        )
 
     def _init_db(self):
         from robert_agent.adapters.sqlite import database as storage
@@ -270,7 +276,9 @@ class ProjectMemoryTests(unittest.TestCase):
                         "symbols": ["_create_task_attempt_and_prompt"],
                         "keywords": list(keywords or ["dd-pr-followup", "workstream"]),
                         "confidence": "medium",
-                        "evidence": [{"type": "test", "value": "python -B -m unittest"}],
+                        "evidence": [
+                            {"type": "test", "value": "python -B -m unittest"}
+                        ],
                     }
                 ],
             },

@@ -20,7 +20,7 @@ def directory(db_path):
 
 def _record_path(db_path, attempt_id):
     key = hashlib.sha256(str(attempt_id).encode()).hexdigest()
-    return directory(db_path) / (key + '.json')
+    return directory(db_path) / (key + ".json")
 
 
 @contextmanager
@@ -60,43 +60,58 @@ def atomic_write(path, record):
 
 
 def _archive_rejected(path, record):
-    archive = path.parent / 'rejected'
+    archive = path.parent / "rejected"
     archive.mkdir(mode=0o700, exist_ok=True)
     if archive.is_symlink():
-        raise ValueError('result archive must not be a symlink')
+        raise ValueError("result archive must not be a symlink")
     atomic_write(archive / path.name, record)
     path.unlink(missing_ok=True)
 
 
 def _validate_record(record):
-    if (not isinstance(record, dict) or record.get("status") != "pending"
-            or type(record.get("normalizer_version")) is not int or record["normalizer_version"] < 1
-            or record.get("result_contract") != result_contract.CONTRACT_ID
-            or not isinstance(record.get("payload"), dict)
-            or not isinstance(record.get("fingerprint"), str)
-            or record["payload"].get("_submission_fingerprint") != record["fingerprint"]
-            or record["payload"].get("_result_contract") != result_contract.CONTRACT_ID
-            or not isinstance(record["payload"].get("attempt_id"), str)
-            or not record["payload"].get("attempt_id")):
+    if (
+        not isinstance(record, dict)
+        or record.get("status") != "pending"
+        or type(record.get("normalizer_version")) is not int
+        or record["normalizer_version"] < 1
+        or record.get("result_contract") != result_contract.CONTRACT_ID
+        or not isinstance(record.get("payload"), dict)
+        or not isinstance(record.get("fingerprint"), str)
+        or record["payload"].get("_submission_fingerprint") != record["fingerprint"]
+        or record["payload"].get("_result_contract") != result_contract.CONTRACT_ID
+        or not isinstance(record["payload"].get("attempt_id"), str)
+        or not record["payload"].get("attempt_id")
+    ):
         raise ValueError("unsupported or invalid result spool contract")
 
 
 def _ingest(db_path, path, record, writer, notifier, *, defer_database_errors=False):
     from robert_agent.adapters.notifications import wakeup as wakeup_notifier
+
     try:
         response = writer(db_path, record["payload"], notifier=notifier)
     except sqlite3.Error as exc:
         # Submission already owns a durable final slot. Replay handles permanent
         # ingestion failures with its existing bounded retry/quarantine policy.
-        if not defer_database_errors and "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+        if (
+            not defer_database_errors
+            and "locked" not in str(exc).lower()
+            and "busy" not in str(exc).lower()
+        ):
             raise
         wakeup_notifier.notify(db_path, sender=notifier)
-        return {"ok": True, "status": "deferred", "safe_error": "Result durably saved; waiting for ingestion."}
+        return {
+            "ok": True,
+            "status": "deferred",
+            "safe_error": "Result durably saved; waiting for ingestion.",
+        }
     if response["ok"]:
-        if response['status'] not in {'deferred', 'replay_blocked'}:
+        if response["status"] not in {"deferred", "replay_blocked"}:
             path.unlink(missing_ok=True)
     else:
-        _archive_rejected(path, {**record, "status": "rejected", "reason": response["status"]})
+        _archive_rejected(
+            path, {**record, "status": "rejected", "reason": response["status"]}
+        )
     return response
 
 
@@ -109,30 +124,60 @@ def submit(db_path, envelope, writer, notifier=None, *, prepare, lookup):
                 record = json.loads(path.read_text())
                 _validate_record(record)
             except (ValueError, OSError, TypeError):
-                return {"ok": False, "status": "unsupported_contract", "safe_error": "Existing spool requires manual reconciliation before submission."}
+                return {
+                    "ok": False,
+                    "status": "unsupported_contract",
+                    "safe_error": "Existing spool requires manual reconciliation before submission.",
+                }
             if record["fingerprint"] != digest:
-                return {"ok": False, "status": "result_conflict", "safe_error": "A different final result is pending for this attempt."}
-            return _ingest(db_path, path, record, writer, notifier, defer_database_errors=True)
+                return {
+                    "ok": False,
+                    "status": "result_conflict",
+                    "safe_error": "A different final result is pending for this attempt.",
+                }
+            return _ingest(
+                db_path, path, record, writer, notifier, defer_database_errors=True
+            )
         existing = lookup(db_path, envelope, digest)
         if existing:
             return existing
         payload, rejection = prepare(db_path, envelope)
         if rejection:
             return rejection
-        payload.update(_submission_fingerprint=digest, _result_contract=result_contract.CONTRACT_ID,
-                       _normalizer_version=result_contract.NORMALIZER_VERSION)
-        record = {"status": "pending", "result_contract": result_contract.CONTRACT_ID,
-                  "normalizer_version": result_contract.NORMALIZER_VERSION, "fingerprint": digest,
-                  "payload": payload, "saved_at": datetime.now(timezone.utc).isoformat()}
+        payload.update(
+            _submission_fingerprint=digest,
+            _result_contract=result_contract.CONTRACT_ID,
+            _normalizer_version=result_contract.NORMALIZER_VERSION,
+        )
+        record = {
+            "status": "pending",
+            "result_contract": result_contract.CONTRACT_ID,
+            "normalizer_version": result_contract.NORMALIZER_VERSION,
+            "fingerprint": digest,
+            "payload": payload,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
         atomic_write(path, record)
-        return _ingest(db_path, path, record, writer, notifier, defer_database_errors=True)
+        return _ingest(
+            db_path, path, record, writer, notifier, defer_database_errors=True
+        )
 
 
 def _notify_rejection(db_path, path, reason):
     try:
         with closing(sqlite3.connect(db_path, timeout=0.1)) as conn, conn:
-            conn.execute("INSERT OR IGNORE INTO notifications(notification_id,notification_type,channel,status,created_at,metadata_json) VALUES (?,'worker_result_invalid','local','recorded',strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),?)",
-                         ("notification-invalid-" + path.stem, json.dumps({"reason_code": reason, "required_action": "Inspect preserved spool evidence before retrying."})))
+            conn.execute(
+                "INSERT OR IGNORE INTO notifications(notification_id,notification_type,channel,status,created_at,metadata_json) VALUES (?,'worker_result_invalid','local','recorded',strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),?)",
+                (
+                    "notification-invalid-" + path.stem,
+                    json.dumps(
+                        {
+                            "reason_code": reason,
+                            "required_action": "Inspect preserved spool evidence before retrying.",
+                        }
+                    ),
+                ),
+            )
     except sqlite3.Error:
         pass  # The preserved file remains authoritative diagnostic evidence.
 
@@ -140,7 +185,11 @@ def _notify_rejection(db_path, path, reason):
 def replay(db_path, writer, limit=100, *, attempt_id=None):
     counts = {"recorded": 0, "deferred": 0, "rejected": 0}
     deadline = time.monotonic() + 2
-    paths = sorted(directory(db_path).glob('*.json')) if attempt_id is None else [_record_path(db_path, attempt_id)]
+    paths = (
+        sorted(directory(db_path).glob("*.json"))
+        if attempt_id is None
+        else [_record_path(db_path, attempt_id)]
+    )
     for path in paths[:limit]:
         if time.monotonic() >= deadline:
             break
@@ -153,7 +202,7 @@ def replay(db_path, writer, limit=100, *, attempt_id=None):
                 try:
                     record = json.loads(path.read_text())
                     _validate_record(record)
-                    if path != _record_path(db_path, record['payload']['attempt_id']):
+                    if path != _record_path(db_path, record["payload"]["attempt_id"]):
                         raise ValueError("spool identity differs from its path")
                 except (ValueError, OSError, TypeError):
                     if path.exists():
@@ -164,7 +213,9 @@ def replay(db_path, writer, limit=100, *, attempt_id=None):
                 try:
                     response = _ingest(db_path, path, record, writer, None)
                 except Exception as exc:
-                    record["ingestion_failures"] = int(record.get("ingestion_failures", 0)) + 1
+                    record["ingestion_failures"] = (
+                        int(record.get("ingestion_failures", 0)) + 1
+                    )
                     record["reason"] = type(exc).__name__
                     if record["ingestion_failures"] < 3:
                         atomic_write(path, record)
@@ -178,8 +229,8 @@ def replay(db_path, writer, limit=100, *, attempt_id=None):
         if response["status"] == "deferred":
             counts["deferred"] += 1
             break
-        if response['status'] == 'replay_blocked':
-            counts['deferred'] += 1
+        if response["status"] == "replay_blocked":
+            counts["deferred"] += 1
             continue
         if response["ok"]:
             counts["recorded"] += 1

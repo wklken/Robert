@@ -27,7 +27,10 @@ def _acceptance_id():
 
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _workspace_dir(workspace_dir):
@@ -80,7 +83,9 @@ def _controlled_checkout(workspace_dir):
     )
     commands.append(_run(["git", "clone", "--bare", str(source), str(bare)]))
     commands.append(_run(["git", "clone", str(bare), str(checkout)]))
-    commands.append(_run(["git", "remote", "rename", "origin", "upstream"], cwd=checkout))
+    commands.append(
+        _run(["git", "remote", "rename", "origin", "upstream"], cwd=checkout)
+    )
     worktree_root = checkout / ".worktrees"
     worktree_root.mkdir(parents=True, exist_ok=True)
     return {
@@ -106,23 +111,44 @@ time.sleep(30)
 
 
 def _config(source_config_path, workspace_dir, checkout, worker):
-    source_config = validate_config.validate_config(source_config_path, skip_external=True)
+    source_config = validate_config.validate_config(
+        source_config_path, skip_external=True
+    )
     if not source_config["ok"]:
         return source_config
     repo = source_config["repos"][0]
     controlled = {
-        "version": 2, "default_worker": "default",
-        "data_dir": str(workspace_dir / "data"), "database": "dd.sqlite3",
+        "version": 2,
+        "default_worker": "default",
+        "data_dir": str(workspace_dir / "data"),
+        "database": "dd.sqlite3",
         "github": {"account": repo["github_account"]},
-        "workers": {"default": {"adapter": "cbc", "command": str(worker),
-                    "model": "default", "effort": "default"}},
-        "scheduler": {"max_concurrency": 1, "lease_ttl_seconds": source_config["lease_ttl_seconds"]},
-        "supervision": {"startup_grace_seconds": 30,
+        "workers": {
+            "default": {
+                "adapter": "cbc",
+                "command": str(worker),
+                "model": "default",
+                "effort": "default",
+            }
+        },
+        "scheduler": {
+            "max_concurrency": 1,
+            "lease_ttl_seconds": source_config["lease_ttl_seconds"],
+        },
+        "supervision": {
+            "startup_grace_seconds": 30,
             "heartbeat_stale_seconds": source_config["heartbeat_stale_seconds"],
-            "hard_timeout_seconds": source_config["hard_timeout_seconds"]},
-        "repos": [{"full_name": repo["full_name"], "trusted_actors": repo["trusted_actors"],
-                  "default_branch": "main", "checkout": str(checkout["repo_root"]),
-                  "worktrees": str(checkout["worktree_root"])}],
+            "hard_timeout_seconds": source_config["hard_timeout_seconds"],
+        },
+        "repos": [
+            {
+                "full_name": repo["full_name"],
+                "trusted_actors": repo["trusted_actors"],
+                "default_branch": "main",
+                "checkout": str(checkout["repo_root"]),
+                "worktrees": str(checkout["worktree_root"]),
+            }
+        ],
     }
     config_path = workspace_dir / "config.json"
     _write_json(config_path, controlled)
@@ -131,7 +157,11 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "status": "prepared",
         "config_path": config_path,
         "db_path": workspace_dir / "data" / "dd.sqlite3",
-        "repo": repo | {"repo_root": str(checkout["repo_root"]), "worktree_root": str(checkout["worktree_root"])},
+        "repo": repo
+        | {
+            "repo_root": str(checkout["repo_root"]),
+            "worktree_root": str(checkout["worktree_root"]),
+        },
     }
 
 
@@ -190,7 +220,15 @@ def _attempt_evidence(db_path):
         ).fetchone()
     if not row:
         return {}
-    route_id, task_lifecycle, attempt_id, attempt_status, worktree_path, branch_name, metadata_json = row
+    (
+        route_id,
+        task_lifecycle,
+        attempt_id,
+        attempt_status,
+        worktree_path,
+        branch_name,
+        metadata_json,
+    ) = row
     metadata = _json_load(metadata_json)
     return {
         "route_id": route_id,
@@ -252,7 +290,9 @@ def _terminate_worker(dispatch_result):
     return {"status": "signalled", "pid": pid}
 
 
-def live_worktree_acceptance(config_path, workspace_dir=None, workflow_path=DEFAULT_WORKFLOW):
+def live_worktree_acceptance(
+    config_path, workspace_dir=None, workflow_path=DEFAULT_WORKFLOW
+):
     workspace = _workspace_dir(workspace_dir)
     checkout = _controlled_checkout(workspace)
     worker = _mock_worker(workspace)
@@ -286,7 +326,9 @@ def live_worktree_acceptance(config_path, workspace_dir=None, workflow_path=DEFA
     worktree_path = Path(evidence.get("worktree_path") or "")
     branch_name = evidence.get("branch_name") or ""
     git_branch = _git_branch(worktree_path) if worktree_path.exists() else ""
-    in_worktree_list = _worktree_list_contains_branch(checkout["repo_root"], branch_name)
+    in_worktree_list = _worktree_list_contains_branch(
+        checkout["repo_root"], branch_name
+    )
     ok = (
         evidence.get("route_id") == "new-pr"
         and evidence.get("attempt_status") == "running"

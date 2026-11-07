@@ -11,6 +11,7 @@ from tests.support.repository_cycle import (
 class EventConsumptionTests(RepositoryCycleFixture):
     def test_dry_run_respects_max_dispatches(self):
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -74,6 +75,7 @@ class EventConsumptionTests(RepositoryCycleFixture):
 
     def test_second_run_preserves_existing_control_plane_rows(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -84,7 +86,9 @@ class EventConsumptionTests(RepositoryCycleFixture):
         db_path = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             first_task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
-            first_attempt_id = conn.execute("SELECT attempt_id FROM attempts").fetchone()[0]
+            first_attempt_id = conn.execute(
+                "SELECT attempt_id FROM attempts"
+            ).fetchone()[0]
 
         second = run_once.run_once(
             self.config_path,
@@ -99,7 +103,9 @@ class EventConsumptionTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_rows = conn.execute("SELECT task_id FROM tasks").fetchall()
             attempt_rows = conn.execute("SELECT attempt_id FROM attempts").fetchall()
-            result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
+            result_count = conn.execute(
+                "SELECT COUNT(*) FROM worker_results"
+            ).fetchone()[0]
             event_status = conn.execute(
                 """
                 SELECT authorization_status
@@ -117,6 +123,7 @@ class EventConsumptionTests(RepositoryCycleFixture):
     def test_completed_consumed_trigger_is_not_reprocessed(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -212,12 +219,20 @@ class EventConsumptionTests(RepositoryCycleFixture):
             ):
                 with self.subTest(lifecycle=lifecycle, relationship=relationship):
                     conn.execute("UPDATE tasks SET lifecycle = ?", (lifecycle,))
-                    conn.execute("UPDATE task_events SET relationship = ?", (relationship,))
-                    self.assertEqual(source_events.should_skip_terminal_trigger(conn, event), expected)
+                    conn.execute(
+                        "UPDATE task_events SET relationship = ?", (relationship,)
+                    )
+                    self.assertEqual(
+                        source_events.should_skip_terminal_trigger(conn, event),
+                        expected,
+                    )
             conn.execute("UPDATE task_events SET relationship = 'consumed'")
-            self.assertFalse(source_events.should_skip_terminal_trigger(
-                conn, {**event, "actor_kind": "github_system"},
-            ))
+            self.assertFalse(
+                source_events.should_skip_terminal_trigger(
+                    conn,
+                    {**event, "actor_kind": "github_system"},
+                )
+            )
 
     def test_waiting_task_ignores_consumed_comment_and_resumes_on_new_reply(self):
         from robert_agent.runtime import cycle as run_once
@@ -250,10 +265,22 @@ class EventConsumptionTests(RepositoryCycleFixture):
         )
         self.assertTrue(first["ok"], first)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE tasks SET lifecycle = 'waiting_for_user' WHERE task_id = ?", (task_id,))
-            conn.execute("UPDATE workstreams SET lifecycle = 'waiting_for_user' WHERE active_task_id = ?", (task_id,))
-            conn.execute("UPDATE attempts SET status = 'completed' WHERE attempt_id = ?", (attempt_id,))
-            conn.execute("UPDATE task_events SET relationship = 'consumed' WHERE task_id = ?", (task_id,))
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'waiting_for_user' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE workstreams SET lifecycle = 'waiting_for_user' WHERE active_task_id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE attempts SET status = 'completed' WHERE attempt_id = ?",
+                (attempt_id,),
+            )
+            conn.execute(
+                "UPDATE task_events SET relationship = 'consumed' WHERE task_id = ?",
+                (task_id,),
+            )
 
         replay = run_once.run_once(
             self.config_path,
@@ -264,15 +291,35 @@ class EventConsumptionTests(RepositoryCycleFixture):
         self.assertTrue(replay["ok"], replay)
         self.assertEqual(replay["prompt_paths"], [])
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone(), ("waiting_for_user", task_id))
-            self.assertEqual(conn.execute("SELECT relationship FROM task_events WHERE task_id = ?", (task_id,)).fetchone()[0], "consumed")
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT lifecycle, active_task_id FROM workstreams"
+                ).fetchone(),
+                ("waiting_for_user", task_id),
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT relationship FROM task_events WHERE task_id = ?", (task_id,)
+                ).fetchone()[0],
+                "consumed",
+            )
         item = workbench.get_work_item(db_path, "github:example/backend!456")
         self.assertEqual(item["operator_state"]["reason_code"], "waiting_for_user")
 
-        reply = {**event, "id": "waiting-reply", "body": "@robert-bot the dependency is ready; continue"}
-        self.fixture_path.write_text(json.dumps({"events": [event, reply]}), encoding="utf-8")
+        reply = {
+            **event,
+            "id": "waiting-reply",
+            "body": "@robert-bot the dependency is ready; continue",
+        }
+        self.fixture_path.write_text(
+            json.dumps({"events": [event, reply]}), encoding="utf-8"
+        )
         resumed = run_once.run_once(
             self.config_path,
             fixture_path=self.fixture_path,
@@ -282,11 +329,23 @@ class EventConsumptionTests(RepositoryCycleFixture):
         self.assertTrue(resumed["ok"], resumed)
         self.assertEqual(len(resumed["prompt_paths"]), 1)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
-            child_id, parent_id = conn.execute("SELECT task_id, parent_task_id FROM tasks WHERE task_id != ?", (task_id,)).fetchone()
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2
+            )
+            child_id, parent_id = conn.execute(
+                "SELECT task_id, parent_task_id FROM tasks WHERE task_id != ?",
+                (task_id,),
+            ).fetchone()
             self.assertEqual(parent_id, task_id)
-            self.assertEqual(conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone(), ("active", child_id))
+            self.assertEqual(
+                conn.execute(
+                    "SELECT lifecycle, active_task_id FROM workstreams"
+                ).fetchone(),
+                ("active", child_id),
+            )
             fingerprints = conn.execute(
                 "SELECT ge.event_fingerprint FROM task_events te JOIN github_events ge ON ge.event_id = te.event_id WHERE te.task_id = ?",
                 (child_id,),

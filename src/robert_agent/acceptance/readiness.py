@@ -62,7 +62,9 @@ def _config_next_action(config_path, safe_error):
             f"--config {shlex.quote(str(config_path))}"
         )
     if "placeholder values" in safe_error:
-        return f"Replace placeholder values in {Path(config_path).expanduser().resolve()}"
+        return (
+            f"Replace placeholder values in {Path(config_path).expanduser().resolve()}"
+        )
     if "data_dir is not a directory" in safe_error:
         return f"Set data_dir to a directory path in {Path(config_path).expanduser().resolve()}"
     if "config.database" in safe_error or "database must be a filename" in safe_error:
@@ -165,7 +167,9 @@ def acceptance_preflight(
         _gate(
             "acceptance_matrix",
             "passed" if matrix_path.is_file() else "failed",
-            "acceptance matrix is present" if matrix_path.is_file() else "acceptance matrix is missing",
+            "acceptance matrix is present"
+            if matrix_path.is_file()
+            else "acceptance matrix is missing",
             None if matrix_path.is_file() else "Restore resources/acceptance-matrix.md",
             str(matrix_path),
         )
@@ -205,8 +209,12 @@ def acceptance_preflight(
         worktree_root = Path(repo["worktree_root"])
         worktree_root_is_dir = worktree_root.is_dir()
         worktree_root_exists = worktree_root.exists()
-        repo_checkout_gate_id = f"repo_checkout:{repo_name}" if multi_repo else "repo_checkout"
-        worktree_root_gate_id = f"worktree_root:{repo_name}" if multi_repo else "worktree_root"
+        repo_checkout_gate_id = (
+            f"repo_checkout:{repo_name}" if multi_repo else "repo_checkout"
+        )
+        worktree_root_gate_id = (
+            f"worktree_root:{repo_name}" if multi_repo else "worktree_root"
+        )
         gates.append(
             _gate(
                 repo_checkout_gate_id,
@@ -214,7 +222,9 @@ def acceptance_preflight(
                 "repo_root is a git checkout"
                 if (repo_root / ".git").exists()
                 else "repo_root is not a git checkout",
-                None if (repo_root / ".git").exists() else f"Provide a real local git checkout for {repo_name}",
+                None
+                if (repo_root / ".git").exists()
+                else f"Provide a real local git checkout for {repo_name}",
                 str(repo_root),
             )
         )
@@ -299,7 +309,9 @@ def acceptance_preflight(
             _gate(
                 "gh_auth",
                 "passed" if auth.returncode == 0 else "failed",
-                "gh authentication is valid" if auth.returncode == 0 else "gh authentication is not ready",
+                "gh authentication is valid"
+                if auth.returncode == 0
+                else "gh authentication is not ready",
                 None if auth.returncode == 0 else "Run gh auth login",
                 getattr(auth, "stderr", ""),
             )
@@ -318,9 +330,7 @@ def acceptance_preflight(
         worker_executable = worker["command_argv"][0]
         worker_path = _command_path(command_exists, worker_executable)
         gate_id = (
-            f"worker_command:{worker_name}"
-            if multiple_workers
-            else "worker_command"
+            f"worker_command:{worker_name}" if multiple_workers else "worker_command"
         )
         summary_prefix = (
             f"{worker_name} ({worker_agent}) worker command"

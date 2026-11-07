@@ -16,6 +16,8 @@ These rules apply to the entire Robert repository.
 - Run `python3 -B -m unittest discover -s tests` for code changes.
 - Run `python3 -m ruff check src tests` and
   `lint-imports --config pyproject.toml --no-cache` for Python or dependency changes.
+- Format Python with `python3 -m ruff format src tests`; verify with
+  `python3 -m ruff format --check src tests`.
 - Run `python3 -m build` for packaging or resource changes.
 - Run `git diff --check` before committing.
 - Documentation-only changes do not require the Python test suite.

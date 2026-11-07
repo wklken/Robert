@@ -1,4 +1,5 @@
 """application delivery intents responsibilities."""
+
 from contextlib import closing
 import re
 import sqlite3
@@ -23,13 +24,17 @@ def derive_push_source_sha(action, action_scope, run_command):
     if scope.get("supervision_repair"):
         return scope, None
     metadata = publication_values.decode_json(action.get("metadata_json"))
-    worktree_path = publication_effects.metadata_value(metadata, "worktree_path") or scope.get("worktree_path")
+    worktree_path = publication_effects.metadata_value(
+        metadata, "worktree_path"
+    ) or scope.get("worktree_path")
     source_ref = publication_effects.metadata_value(metadata, "source_ref") or "HEAD"
     if not worktree_path:
         return scope, None
     command = ["git", "rev-parse", source_ref]
     try:
-        completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
+        completed = run_command(
+            command, cwd=worktree_path, capture_output=True, text=True
+        )
     except Exception:
         return scope, None
     if publication_effects.command_failure(completed, "git rev-parse failed"):
@@ -40,7 +45,6 @@ def derive_push_source_sha(action, action_scope, run_command):
         return scope, None
     scope["result_head_sha"] = source_sha
     return scope, source_sha
-
 
 
 def prepare_publication_intent(db_path, action_id, run_command):
@@ -60,10 +64,16 @@ def prepare_publication_intent(db_path, action_id, run_command):
         if not action_row:
             return {"state": "missing", "action": None, "intent": None, "scope": None}
         action = dict(action_row)
-        if not conn.execute("SELECT 1 FROM tasks t WHERE t.task_id=? AND " + execution_store.runnable_sql(),
-                            (action['task_id'],)).fetchone():
+        if not conn.execute(
+            "SELECT 1 FROM tasks t WHERE t.task_id=? AND "
+            + execution_store.runnable_sql(),
+            (action["task_id"],),
+        ).fetchone():
             return {"state": "missing", "action": action, "intent": None, "scope": None}
-        if action["publish_status"] != "not_published" or action["audit_status"] != "accepted":
+        if (
+            action["publish_status"] != "not_published"
+            or action["audit_status"] != "accepted"
+        ):
             return {"state": "missing", "action": action, "intent": None, "scope": None}
         scope = publication_scope.trusted_action_scope(conn, action)
         intent = intent_facts.load_intent(conn, action_id)
@@ -71,15 +81,36 @@ def prepare_publication_intent(db_path, action_id, run_command):
         try:
             supervision_git.binding(scope)
         except OSError:
-            return {"state": "scope_missing", "action": action, "intent": intent, "scope": scope}
+            return {
+                "state": "scope_missing",
+                "action": action,
+                "intent": intent,
+                "scope": scope,
+            }
     source_sha = None
     head_owner = None
     if intent is None and (scope is None or not isinstance(scope, dict)):
-        return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
-    if intent is not None and intent["status"] == "prepared" and not isinstance(scope, dict):
-        return {"state": "scope_missing", "action": action, "intent": intent, "scope": scope}
+        return {
+            "state": "scope_missing",
+            "action": action,
+            "intent": None,
+            "scope": None,
+        }
+    if (
+        intent is not None
+        and intent["status"] == "prepared"
+        and not isinstance(scope, dict)
+    ):
+        return {
+            "state": "scope_missing",
+            "action": action,
+            "intent": intent,
+            "scope": scope,
+        }
     if intent is not None:
-        persisted_evidence = publication_values.decode_json(intent.get("remote_evidence_json"))
+        persisted_evidence = publication_values.decode_json(
+            intent.get("remote_evidence_json")
+        )
         source_sha = persisted_evidence.get("source_sha") or None
         head_owner = persisted_evidence.get("head_owner") or None
     # Source SHA is read before deriving the fingerprint and before the
@@ -105,7 +136,12 @@ def prepare_publication_intent(db_path, action_id, run_command):
         and not scope.get("result_head_sha")
         and not source_sha
     ):
-        return {"state": "source_sha_missing", "action": action, "intent": intent, "scope": scope}
+        return {
+            "state": "source_sha_missing",
+            "action": action,
+            "intent": intent,
+            "scope": scope,
+        }
     if action.get("action_type") == "open_pr" and not head_owner:
         return {
             "state": "head_owner_missing",
@@ -115,18 +151,36 @@ def prepare_publication_intent(db_path, action_id, run_command):
         }
     if intent is None:
         if scope is None or not isinstance(scope, dict):
-            return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
+            return {
+                "state": "scope_missing",
+                "action": action,
+                "intent": None,
+                "scope": None,
+            }
         try:
-            idempotency_key, request_fingerprint = publication_reconcile.derive_publication_keys(
-                action, scope
+            idempotency_key, request_fingerprint = (
+                publication_reconcile.derive_publication_keys(action, scope)
             )
         except ValueError:
-            return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
+            return {
+                "state": "scope_missing",
+                "action": action,
+                "intent": None,
+                "scope": None,
+            }
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
-            conflicting = conn.execute("SELECT action_id FROM publication_intents WHERE idempotency_key=? AND action_id!=?", (idempotency_key, action_id)).fetchone()
+            conflicting = conn.execute(
+                "SELECT action_id FROM publication_intents WHERE idempotency_key=? AND action_id!=?",
+                (idempotency_key, action_id),
+            ).fetchone()
             if conflicting:
-                return {"state": "scope_missing", "action": action, "intent": None, "scope": scope}
+                return {
+                    "state": "scope_missing",
+                    "action": action,
+                    "intent": None,
+                    "scope": scope,
+                }
             intent = dict(
                 execution_store.prepare_publication_intent(
                     conn,
@@ -139,9 +193,19 @@ def prepare_publication_intent(db_path, action_id, run_command):
     # A terminal published intent is replay success.  Backfill the action if
     # a process crashed after intent completion but before the action update.
     if intent["status"] == "published":
-        return {"state": "published", "action": action, "intent": intent, "scope": scope}
+        return {
+            "state": "published",
+            "action": action,
+            "intent": intent,
+            "scope": scope,
+        }
     if intent["status"] == "attention":
-        return {"state": "attention", "action": action, "intent": intent, "scope": scope}
+        return {
+            "state": "attention",
+            "action": action,
+            "intent": intent,
+            "scope": scope,
+        }
 
     if intent["status"] == "executing":
         return {
@@ -172,10 +236,15 @@ def prepare_publication_intent(db_path, action_id, run_command):
                 )
             )
         elif latest["status"] in {"failed", "confirmed_absent"}:
-            if latest['status'] == 'confirmed_absent':
-                evidence = {**publication_values.decode_json(latest.get('remote_evidence_json')), **evidence,
-                            'retry_after_absence': True}
-                evidence.pop('status', None)
+            if latest["status"] == "confirmed_absent":
+                evidence = {
+                    **publication_values.decode_json(
+                        latest.get("remote_evidence_json")
+                    ),
+                    **evidence,
+                    "retry_after_absence": True,
+                }
+                evidence.pop("status", None)
             latest = dict(
                 execution_store.transition_publication_intent(
                     conn,

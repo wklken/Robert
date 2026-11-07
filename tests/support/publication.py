@@ -118,6 +118,5 @@ class PublicationFixture(SummaryFixture):
             "source_issue: 1\n"
             f"task_id: {task_id}\n"
             "created_by: robert\n"
-            "-->\n"
-            + text
+            "-->\n" + text
         )

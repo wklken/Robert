@@ -111,9 +111,7 @@ class RouteConfigTests(unittest.TestCase):
             self.assertEqual(result["dispatch_count"], 0)
             db_path = Path(config["data_dir"]).expanduser() / "robert.sqlite3"
             with closing(sqlite3.connect(db_path)) as conn:
-                task_status = conn.execute(
-                    "SELECT lifecycle FROM tasks"
-                ).fetchone()[0]
+                task_status = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
                 attempt_status, worktree_path = conn.execute(
                     "SELECT status, worktree_path FROM attempts"
                 ).fetchone()

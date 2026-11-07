@@ -24,7 +24,11 @@ def _run_arguments(executable, config_path, target):
 
 def render_systemd_unit(executable: Path, config_path: Path, *, target="daemon") -> str:
     command = shlex.join(_run_arguments(executable, config_path, target))
-    description = "Robert — Your Repo Teammate" if target == "daemon" else "Robert Task Supervisor"
+    description = (
+        "Robert — Your Repo Teammate"
+        if target == "daemon"
+        else "Robert Task Supervisor"
+    )
     return (
         "[Unit]\n"
         f"Description={description}\n"
@@ -153,7 +157,13 @@ def _service_path(backend, target):
 
 
 def _definition_result(backend, target, status, definitions):
-    result = {**definitions[0], "ok": True, "status": status, "backend": backend, "target": target}
+    result = {
+        **definitions[0],
+        "ok": True,
+        "status": status,
+        "backend": backend,
+        "target": target,
+    }
     if len(definitions) > 1:
         result["definitions"] = definitions
     return result
@@ -177,8 +187,11 @@ def install_service(
     executable = Path(executable).expanduser().absolute()
     config_path = Path(config_path).expanduser().absolute()
     definitions = [
-        {"target": name, "path": str(_service_path(backend, name)),
-         "content": render(executable, config_path, target=name)}
+        {
+            "target": name,
+            "path": str(_service_path(backend, name)),
+            "content": render(executable, config_path, target=name),
+        }
         for name in targets
     ]
     if not dry_run:
@@ -192,20 +205,23 @@ def install_service(
             temporary = path.with_suffix(path.suffix + ".tmp")
             temporary.write_text(definition["content"], encoding="utf-8")
             temporary.replace(path)
-    return _definition_result(backend, target, "planned" if dry_run else "installed", definitions)
+    return _definition_result(
+        backend, target, "planned" if dry_run else "installed", definitions
+    )
 
 
 def uninstall_service(platform_name, dry_run=False, *, target="all"):
     targets = _selected_targets(target)
     backend = _service_backend(platform_name)
     definitions = [
-        {"target": name, "path": str(_service_path(backend, name))}
-        for name in targets
+        {"target": name, "path": str(_service_path(backend, name))} for name in targets
     ]
     if not dry_run:
         for definition in definitions:
             Path(definition["path"]).unlink(missing_ok=True)
-    return _definition_result(backend, target, "planned" if dry_run else "uninstalled", definitions)
+    return _definition_result(
+        backend, target, "planned" if dry_run else "uninstalled", definitions
+    )
 
 
 def _linux_systemd_user_available():
@@ -233,7 +249,12 @@ def _native_command(backend, action, target):
     domain = f"gui/{os.getuid()}"
     label = f"{domain}/{_LAUNCHD_LABELS[target]}"
     commands = {
-        "start": ["launchctl", "bootstrap", domain, str(_service_path(backend, target))],
+        "start": [
+            "launchctl",
+            "bootstrap",
+            domain,
+            str(_service_path(backend, target)),
+        ],
         "stop": ["launchctl", "bootout", label],
         "restart": ["launchctl", "kickstart", "-k", label],
         "status": ["launchctl", "print", label],
@@ -246,7 +267,14 @@ def _parse_supervisor_status(stdout):
     for line in stdout.splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[1] in {
-            "STOPPED", "STARTING", "RUNNING", "BACKOFF", "STOPPING", "EXITED", "FATAL", "UNKNOWN",
+            "STOPPED",
+            "STARTING",
+            "RUNNING",
+            "BACKOFF",
+            "STOPPING",
+            "EXITED",
+            "FATAL",
+            "UNKNOWN",
         }:
             programs[parts[0]] = parts[1]
     return programs
@@ -263,7 +291,13 @@ def _run_command(command):
 
 def _command_result(backend, target, command, completed=None):
     if completed is None:
-        return {"ok": True, "status": "planned", "backend": backend, "target": target, "command": command}
+        return {
+            "ok": True,
+            "status": "planned",
+            "backend": backend,
+            "target": target,
+            "command": command,
+        }
     return {
         "ok": completed.returncode == 0,
         "status": "completed" if completed.returncode == 0 else "failed",
@@ -286,7 +320,10 @@ def _control_supervisor(action, target, whole_stack, dry_run):
     start_programs = ctl + ["start", "all" if whole_stack else program]
     commands = {
         "start": bootstrap if whole_stack else start_programs,
-        "stop": ctl + (["shutdown"] if whole_stack or target == "supervisor" else ["stop", program]),
+        "stop": ctl
+        + (
+            ["shutdown"] if whole_stack or target == "supervisor" else ["stop", program]
+        ),
         "restart": ctl + ["restart", program],
         "status": status_command,
     }
@@ -294,7 +331,11 @@ def _control_supervisor(action, target, whole_stack, dry_run):
     if dry_run:
         plan = _command_result(backend, target, command)
         if action == "start":
-            plan.update(status_command=status_command, bootstrap_command=bootstrap, start_programs_command=start_programs)
+            plan.update(
+                status_command=status_command,
+                bootstrap_command=bootstrap,
+                start_programs_command=start_programs,
+            )
         return plan
 
     if action == "start":
@@ -302,7 +343,9 @@ def _control_supervisor(action, target, whole_stack, dry_run):
         if before.returncode != 0:
             # `status` also fails when supervisord is up but programs are stopped.
             # Start them through the existing manager instead of opening its socket again.
-            command = start_programs if _parse_supervisor_status(before.stdout) else bootstrap
+            command = (
+                start_programs if _parse_supervisor_status(before.stdout) else bootstrap
+            )
             started = _run_command(command)
             if started.returncode != 0:
                 return _command_result(backend, target, command, started)
@@ -310,7 +353,11 @@ def _control_supervisor(action, target, whole_stack, dry_run):
     else:
         completed = _run_command(command)
     result = _command_result(backend, target, command, completed)
-    result["programs"] = _parse_supervisor_status(completed.stdout) if action in {"start", "status"} else {}
+    result["programs"] = (
+        _parse_supervisor_status(completed.stdout)
+        if action in {"start", "status"}
+        else {}
+    )
     return result
 
 
@@ -319,9 +366,17 @@ def _control_target(backend, action, target, whole_stack, dry_run):
         if backend == "supervisor":
             return _control_supervisor(action, target, whole_stack, dry_run)
         command = _native_command(backend, action, target)
-        return _command_result(backend, target, command, None if dry_run else _run_command(command))
+        return _command_result(
+            backend, target, command, None if dry_run else _run_command(command)
+        )
     except OSError as exc:
-        return {"ok": False, "status": "failed", "backend": backend, "target": target, "safe_error": str(exc)}
+        return {
+            "ok": False,
+            "status": "failed",
+            "backend": backend,
+            "target": target,
+            "safe_error": str(exc),
+        }
 
 
 def control_service(platform_name, action, dry_run=False, *, target="all"):
@@ -332,10 +387,15 @@ def control_service(platform_name, action, dry_run=False, *, target="all"):
     whole_stack = target == "all"
     if whole_stack:
         # Keep legacy behavior for installations without a supervision definition.
-        targets = tuple(name for name in targets if _service_path(backend, name).is_file()) or ("daemon",)
+        targets = tuple(
+            name for name in targets if _service_path(backend, name).is_file()
+        ) or ("daemon",)
         if action == "stop":
             targets = targets[::-1]
-    results = {name: _control_target(backend, action, name, whole_stack, dry_run) for name in targets}
+    results = {
+        name: _control_target(backend, action, name, whole_stack, dry_run)
+        for name in targets
+    }
     primary = results.get("daemon", results[targets[0]])
     if len(results) == 1:
         return {**primary, "target": target}
@@ -343,17 +403,31 @@ def control_service(platform_name, action, dry_run=False, *, target="all"):
     result = {
         **primary,
         "ok": succeeded == len(results),
-        "status": "planned" if dry_run else (
-            "completed" if succeeded == len(results) else "partial" if succeeded else "failed"
+        "status": "planned"
+        if dry_run
+        else (
+            "completed"
+            if succeeded == len(results)
+            else "partial"
+            if succeeded
+            else "failed"
         ),
         "target": target,
-        "commands": [entry["command"] for entry in results.values() if "command" in entry],
+        "commands": [
+            entry["command"] for entry in results.values() if "command" in entry
+        ],
         "results": results,
     }
     if not dry_run:
         failures = [entry for entry in results.values() if not entry["ok"]]
         result["returncode"] = failures[0].get("returncode", 1) if failures else 0
-        result["safe_error"] = "\n".join(entry["safe_error"] for entry in failures if entry["safe_error"])
+        result["safe_error"] = "\n".join(
+            entry["safe_error"] for entry in failures if entry["safe_error"]
+        )
         if backend == "supervisor":
-            result["programs"] = {name: state for entry in results.values() for name, state in entry.get("programs", {}).items()}
+            result["programs"] = {
+                name: state
+                for entry in results.values()
+                for name, state in entry.get("programs", {}).items()
+            }
     return result

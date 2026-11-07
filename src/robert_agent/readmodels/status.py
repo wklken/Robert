@@ -43,10 +43,13 @@ def _row_dict(row):
 
 
 def _table_exists(conn, name):
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (name,),
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _checked_at_utc():
@@ -108,7 +111,15 @@ def _compact_dispatch(dispatch):
         return {}
     compact = {
         key: dispatch.get(key)
-        for key in ["ok", "status", "task_id", "attempt_id", "pid", "returncode", "safe_error"]
+        for key in [
+            "ok",
+            "status",
+            "task_id",
+            "attempt_id",
+            "pid",
+            "returncode",
+            "safe_error",
+        ]
         if key in dispatch
     }
     if "command" in dispatch:
@@ -129,7 +140,11 @@ def _proc_process_status(pid_value):
         return {"status": "unknown", "pid": pid_value, "safe_error": str(exc)}
     parts = stat_text.rsplit(") ", 1)
     if len(parts) != 2:
-        return {"status": "unknown", "pid": pid_value, "safe_error": "invalid /proc stat"}
+        return {
+            "status": "unknown",
+            "pid": pid_value,
+            "safe_error": "invalid /proc stat",
+        }
     fields = parts[1].split()
     state = fields[0] if fields else ""
     return {
@@ -157,10 +172,26 @@ def _process_status(pid):
     except ProcessLookupError:
         return {"status": "not_found", "pid": pid_value}
     except PermissionError:
-        return {"status": "running", "pid": pid_value, "visibility": "permission_denied"}
+        return {
+            "status": "running",
+            "pid": pid_value,
+            "visibility": "permission_denied",
+        }
     try:
         result = subprocess.run(
-            ["ps", "-p", str(pid_value), "-o", "pid=", "-o", "etime=", "-o", "time=", "-o", "stat="],
+            [
+                "ps",
+                "-p",
+                str(pid_value),
+                "-o",
+                "pid=",
+                "-o",
+                "etime=",
+                "-o",
+                "time=",
+                "-o",
+                "stat=",
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -168,7 +199,12 @@ def _process_status(pid):
         )
     except (OSError, subprocess.SubprocessError) as exc:
         if alive_by_signal:
-            return {"status": "running", "pid": pid_value, "source": "signal", "safe_error": str(exc)}
+            return {
+                "status": "running",
+                "pid": pid_value,
+                "source": "signal",
+                "safe_error": str(exc),
+            }
         return {"status": "unknown", "pid": pid_value, "safe_error": str(exc)}
     output = result.stdout.strip()
     if result.returncode != 0 or not output:
@@ -218,11 +254,18 @@ def _compact_task(task):
 
 def build_status(db_path, history_limit=5):
     db_path = Path(db_path).expanduser()
-    data = web.build_dashboard_data(Path(db_path).expanduser(), history_limit=history_limit)
+    data = web.build_dashboard_data(
+        Path(db_path).expanduser(), history_limit=history_limit
+    )
     with closing(sqlite3.connect(db_path)) as conn:
         timings = execution_metrics.summarize(conn)
         from robert_agent.supervision import store as supervision_store
-        supervision = supervision_store.list_incidents(conn, status="active", limit=history_limit) if supervision_store.has_schema(conn) else []
+
+        supervision = (
+            supervision_store.list_incidents(conn, status="active", limit=history_limit)
+            if supervision_store.has_schema(conn)
+            else []
+        )
     latest_run = (data.get("recent_runs") or [{}])[0]
     return {
         "summary": data.get("summary") or {},
@@ -396,7 +439,9 @@ def _latest_notification_for_task(conn, task_id):
     )
     if not notification:
         return None
-    notification["metadata"] = _compact_json(_decode_json(notification.pop("metadata_json"), {}) or {})
+    notification["metadata"] = _compact_json(
+        _decode_json(notification.pop("metadata_json"), {}) or {}
+    )
     return notification
 
 
@@ -423,7 +468,9 @@ def build_task(conn, task_id, result_limit=5):
     )
     if not task:
         return None
-    task["allowed_github_actions"] = _decode_json(task.pop("allowed_github_actions_json"), [])
+    task["allowed_github_actions"] = _decode_json(
+        task.pop("allowed_github_actions_json"), []
+    )
     task["recommended_skills"] = _decode_json(task.pop("recommended_skills_json"), [])
     task["latest_attempt"] = _latest_attempt_for_task(conn, task_id)
     if task["latest_attempt"]:
@@ -432,7 +479,9 @@ def build_task(conn, task_id, result_limit=5):
             task["latest_attempt"]["attempt_id"],
             limit=5,
         )
-        task["latest_phase"] = task["recent_phases"][0] if task["recent_phases"] else None
+        task["latest_phase"] = (
+            task["recent_phases"][0] if task["recent_phases"] else None
+        )
     else:
         task["recent_phases"] = []
         task["latest_phase"] = None
@@ -444,8 +493,10 @@ def build_task(conn, task_id, result_limit=5):
     task["artifacts"] = _artifacts_for(conn, task_id=task_id)
     if _table_exists(conn, "review_sessions"):
         from robert_agent.adapters.sqlite import review_rounds as review_store
+
         task["review"] = review_store.task_status(conn, task_id)
     from robert_agent.adapters.sqlite import vote_rounds as vote_store
+
     task["vote"] = vote_store.task_status(conn, task_id)
     task["events"] = [
         _row_dict(row)
@@ -545,7 +596,13 @@ def build_run(conn, run_id):
     run["steps"] = [
         {
             **_row_dict(row),
-            "output": _compact_json(step_output(row["step_key"], _decode_json(row["output_json"], {}) or {}, _decode_json(row["referenced_summary_json"], {}) or {})),
+            "output": _compact_json(
+                step_output(
+                    row["step_key"],
+                    _decode_json(row["output_json"], {}) or {},
+                    _decode_json(row["referenced_summary_json"], {}) or {},
+                )
+            ),
             "error": _compact_json(_decode_json(row["error_json"], {}) or {}),
         }
         for row in conn.execute(
@@ -599,8 +656,12 @@ def build_run(conn, run_id):
         ]
         repo_order = {step: index for index, step in enumerate(REPO_STEP_ORDER)}
         for step in repo_steps:
-            step["output"] = _compact_json(_decode_json(step.pop("output_json"), {}) or {})
-            step["error"] = _compact_json(_decode_json(step.pop("error_json"), {}) or {})
+            step["output"] = _compact_json(
+                _decode_json(step.pop("output_json"), {}) or {}
+            )
+            step["error"] = _compact_json(
+                _decode_json(step.pop("error_json"), {}) or {}
+            )
         run["repo_steps"] = sorted(
             repo_steps,
             key=lambda step: (
@@ -681,7 +742,13 @@ def _payload_summary(payload):
 def _event_candidates(identifier):
     candidates = [identifier]
     if ":" not in identifier:
-        for prefix in ["comment", "review_comment", "review", "assigned", "notification"]:
+        for prefix in [
+            "comment",
+            "review_comment",
+            "review",
+            "assigned",
+            "notification",
+        ]:
             candidates.append(f"{prefix}:{identifier}")
     return list(dict.fromkeys(candidates))
 
@@ -816,7 +883,9 @@ def build_source(conn, identifier, limit=50):
     if not sources:
         return None
     for source in sources:
-        source["metadata"] = _compact_json(_decode_json(source.pop("metadata_json"), {}) or {})
+        source["metadata"] = _compact_json(
+            _decode_json(source.pop("metadata_json"), {}) or {}
+        )
     source_ids = [source["source_id"] for source in sources]
     placeholders = ",".join("?" for _source_id in source_ids)
     workstreams = [
@@ -1010,7 +1079,9 @@ def main(argv=None):
             if args.command == "status":
                 return emit(_ready("status", build_status(args.db, args.history_limit)))
             if args.command == "runs":
-                return emit(_ready("runs", build_runs(conn, args.limit or args.history_limit)))
+                return emit(
+                    _ready("runs", build_runs(conn, args.limit or args.history_limit))
+                )
             if args.command == "task":
                 payload = build_task(conn, args.task_id, result_limit=args.limit)
                 if not payload:
@@ -1029,15 +1100,21 @@ def main(argv=None):
             if args.command == "workstream":
                 payload = build_workstream(conn, args.workstream_id)
                 if not payload:
-                    return emit(_not_found("workstream", args.workstream_id), exit_code=3)
+                    return emit(
+                        _not_found("workstream", args.workstream_id), exit_code=3
+                    )
                 return emit(_ready("workstream", payload))
             if args.command == "event":
                 payload = build_event(conn, args.event_fingerprint)
                 if not payload:
-                    return emit(_not_found("event", args.event_fingerprint), exit_code=3)
+                    return emit(
+                        _not_found("event", args.event_fingerprint), exit_code=3
+                    )
                 return emit(_ready("event", payload))
             if args.command == "events":
-                return emit(_ready("events", build_events(conn, args.query, limit=args.limit)))
+                return emit(
+                    _ready("events", build_events(conn, args.query, limit=args.limit))
+                )
             if args.command == "source":
                 payload = build_source(conn, args.identifier, limit=args.limit)
                 if not payload:
@@ -1062,7 +1139,9 @@ def main(argv=None):
                 exit_code=3,
             )
 
-    return emit({"ok": False, "status": "unsupported", "safe_error": args.command}, exit_code=3)
+    return emit(
+        {"ok": False, "status": "unsupported", "safe_error": args.command}, exit_code=3
+    )
 
 
 if __name__ == "__main__":

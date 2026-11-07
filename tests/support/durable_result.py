@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 import unittest
 
 
@@ -14,7 +13,9 @@ class DurableResultFixture(unittest.TestCase):
         self.fixture = WorkerProtocolFixture()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        self.db = self.fixture._init_attempt_db(output_type="local_result", route_id="local-result")
+        self.db = self.fixture._init_attempt_db(
+            output_type="local_result", route_id="local-result"
+        )
         from robert_agent.delivery.application.submission import build_result
 
         self.payload = build_result(

@@ -134,7 +134,13 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, origin_workstream_id, lifecycle, created_at, updated_at) VALUES (?, ?, 'source-pr-81', ?, 'completed', ?, ?)",
-                (pr_workstream_id, self.repo_id, started["item"]["workstream_id"], now, now),
+                (
+                    pr_workstream_id,
+                    self.repo_id,
+                    started["item"]["workstream_id"],
+                    now,
+                    now,
+                ),
             )
             work_items.record_system_event(
                 conn,
@@ -212,7 +218,9 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
         self.assertEqual(projected["items"][0]["column"], "review")
         self.assertEqual(projected["items"][0]["pr"]["number"], 42)
         with closing(sqlite3.connect(result["db_path"])) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0], 1
+            )
             self.assertEqual(
                 conn.execute(
                     "SELECT COUNT(*) FROM work_item_events WHERE event_type = 'pr_opened'"
@@ -224,6 +232,7 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
         from robert_agent.delivery.application import audit as audit_result
         from tests.support.results import internal_result
         from robert_agent.interfaces.web import server as web
+
         base = {
             "task_id": "task-local",
             "attempt_id": "attempt-local",
@@ -234,8 +243,12 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
             "verification": [],
             "used_skills": [],
         }
-        analysis = internal_result(**base, handoff="Analysis completed without code changes.")
-        no_op = internal_result(**base, handoff="Code change is unnecessary; existing behavior is correct.")
+        analysis = internal_result(
+            **base, handoff="Analysis completed without code changes."
+        )
+        no_op = internal_result(
+            **base, handoff="Code change is unnecessary; existing behavior is correct."
+        )
         for payload in (analysis, no_op):
             audited = audit_result.audit_result(
                 payload,
@@ -245,7 +258,9 @@ class BoardControlIntegrationTests(BoardControlIntegrationFixture):
             )
             self.assertEqual(audited["status"], "accepted")
 
-        board_status, _headers, board_body = web.build_http_response("/board", self.db_path)
+        board_status, _headers, board_body = web.build_http_response(
+            "/board", self.db_path
+        )
         operations_status, _headers, operations_body = web.build_http_response(
             "/operations", self.db_path
         )

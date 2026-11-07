@@ -1,4 +1,5 @@
 """Task lifecycle transitions shared by execution and publication."""
+
 import json
 from robert_agent.execution import rounds as native_rounds
 from robert_agent.workflows import pr_remediation as remediation
@@ -21,7 +22,12 @@ def finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
         return False
     round_store, entry = native_rounds.owner(conn, task_id)
     if entry and native_rounds.terminate_children(conn, task_id) == "attention":
-        round_store.update(conn, entry["round_id"], status="attention", error="model child identity unknown")
+        round_store.update(
+            conn,
+            entry["round_id"],
+            status="attention",
+            error="model child identity unknown",
+        )
     conn.execute(
         "UPDATE tasks SET lifecycle = 'failed', updated_at = ? WHERE task_id = ?",
         (run_now, task_id),
@@ -42,11 +48,7 @@ def finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
     remediation.record_task_failure(
         conn,
         task_id=task_id,
-        reason=(
-            audit.get("status")
-            if isinstance(audit, dict)
-            else "task_failed"
-        )
+        reason=(audit.get("status") if isinstance(audit, dict) else "task_failed")
         or "task_failed",
         now=run_now,
     )
@@ -86,20 +88,53 @@ def mark_task_waiting_for_user(conn, task_id, workstream_id, run_now):
 
 
 def finalize_superseded_result(conn, result_id, now):
-    row = conn.execute("SELECT wr.task_id,t.workstream_id,t.task_kind FROM worker_results wr JOIN tasks t ON t.task_id=wr.task_id WHERE wr.result_id=?", (result_id,)).fetchone()
-    if not row or row[2] != 'human_request' or not execution_ownership.claim_task(conn, row[0], now):
+    row = conn.execute(
+        "SELECT wr.task_id,t.workstream_id,t.task_kind FROM worker_results wr JOIN tasks t ON t.task_id=wr.task_id WHERE wr.result_id=?",
+        (result_id,),
+    ).fetchone()
+    if (
+        not row
+        or row[2] != "human_request"
+        or not execution_ownership.claim_task(conn, row[0], now)
+    ):
         return False
-    actions = conn.execute("SELECT publish_status,metadata_json FROM github_actions WHERE result_id=?", (result_id,)).fetchall()
-    if not actions or any(status not in {'published', 'skipped'} for status, _ in actions):
+    actions = conn.execute(
+        "SELECT publish_status,metadata_json FROM github_actions WHERE result_id=?",
+        (result_id,),
+    ).fetchall()
+    if not actions or any(
+        status not in {"published", "skipped"} for status, _ in actions
+    ):
         return False
-    if not any(status == 'skipped' and _json_object(encoded).get('publish', {}).get('reason_code') == 'superseded' for status, encoded in actions):
+    if not any(
+        status == "skipped"
+        and _json_object(encoded).get("publish", {}).get("reason_code") == "superseded"
+        for status, encoded in actions
+    ):
         return False
-    finalize_failed_task(conn, row[0], row[1], now, {'status': 'publication_superseded',
-        'safe_error': 'The remote branch changed. Retry from the current head.'})
+    finalize_failed_task(
+        conn,
+        row[0],
+        row[1],
+        now,
+        {
+            "status": "publication_superseded",
+            "safe_error": "The remote branch changed. Retry from the current head.",
+        },
+    )
     item = work_items.resolve_work_item_for_workstream(conn, row[1])
     if item:
-        work_items.record_system_event(conn, item['work_item_id'], event_type='execution_failed',
-            idempotency_key='superseded:' + result_id, body='The remote branch changed. Retry from the current head.',
-            metadata={'task_id': row[0], 'result_id': result_id}, now=now)
-    conn.execute("UPDATE wakeups SET status='consumed',updated_at=? WHERE result_id=? AND status='pending'", (now, result_id))
+        work_items.record_system_event(
+            conn,
+            item["work_item_id"],
+            event_type="execution_failed",
+            idempotency_key="superseded:" + result_id,
+            body="The remote branch changed. Retry from the current head.",
+            metadata={"task_id": row[0], "result_id": result_id},
+            now=now,
+        )
+    conn.execute(
+        "UPDATE wakeups SET status='consumed',updated_at=? WHERE result_id=? AND status='pending'",
+        (now, result_id),
+    )
     return True

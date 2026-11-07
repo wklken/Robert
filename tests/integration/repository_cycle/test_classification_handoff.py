@@ -75,12 +75,17 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertTrue(finalized["ok"], finalized)
         self.assertEqual(finalized["dispatch_count"], 0)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed")
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed"
+            )
 
     def test_classification_result_child_keeps_canonical_trigger_payload(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         self.fixture_path.write_text(
             json.dumps(
                 {
@@ -238,7 +243,11 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
                 INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, route_id, expected_output, created_at, updated_at)
                 VALUES ('task-pr-existing', ?, 'completed', 'P1', 'update-existing-pr', 'update_existing_pr', ?, ?)
                 """,
-                (workstream_id, "2026-06-17T08:00:00+00:00", "2026-06-17T08:30:00+00:00"),
+                (
+                    workstream_id,
+                    "2026-06-17T08:00:00+00:00",
+                    "2026-06-17T08:30:00+00:00",
+                ),
             )
             conn.execute(
                 """
@@ -293,7 +302,9 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertEqual(row[2], "codex/issue-2884-fix-operator")
         self.assertIn("codex__issue-2884-fix-operator", row[3])
 
-    def test_completed_classification_result_with_consumed_trigger_recovers_child_task(self):
+    def test_completed_classification_result_with_consumed_trigger_recovers_child_task(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
         from robert_agent.delivery.application import submission as result
 
@@ -417,7 +428,9 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         self.assertEqual(child_relationship, "trigger")
         self.assertEqual(workstream, ("active", tasks[1][0]))
 
-    def test_recovered_classification_result_uses_consumed_trigger_not_older_context(self):
+    def test_recovered_classification_result_uses_consumed_trigger_not_older_context(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
         from robert_agent.delivery.application import submission as result
 
@@ -553,7 +566,9 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         child_context = json.loads(Path(child_context_path).read_text(encoding="utf-8"))
         child_event = child_context["events"][0]
         self.assertEqual(child_event["event_fingerprint"], "assigned:assign-16")
-        self.assertEqual(child_event["body"], "remove the DCO check from GitHub Actions")
+        self.assertEqual(
+            child_event["body"], "remove the DCO check from GitHub Actions"
+        )
         self.assertEqual(branch_name, "codex/dd-16-remove-dco-from-ci")
 
     def test_classification_result_branch_slug_names_child_worktree(self):
@@ -637,13 +652,21 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
             ).fetchone()[0]
         self.assertEqual(branch_name, "codex/dd-3022-model-service-connectivity-test")
 
-    def test_classification_result_uses_selected_worker_defaults_and_route_override(self):
+    def test_classification_result_uses_selected_worker_defaults_and_route_override(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         config = yaml.safe_load(self.config_path.read_text())
-        config['workers']['classifier'] = {
-            'adapter': 'codex', 'command': '/opt/homebrew/bin/codex',
-            'model': 'gpt-5.6-sol', 'effort': 'medium'}
-        config['routes'] = {'classification-result': {'worker': 'classifier', 'effort': 'xhigh'}}
+        config["workers"]["classifier"] = {
+            "adapter": "codex",
+            "command": "/opt/homebrew/bin/codex",
+            "model": "gpt-5.6-sol",
+            "effort": "medium",
+        }
+        config["routes"] = {
+            "classification-result": {"worker": "classifier", "effort": "xhigh"}
+        }
         self.config_path.write_text(yaml.safe_dump(config))
         self.fixture_path.write_text(
             json.dumps(

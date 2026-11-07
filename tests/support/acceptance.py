@@ -11,7 +11,7 @@ class AcceptanceFixture(TemporaryWorkspace):
         config_path = self.root / "config.yml"
         config_path.write_text(
             f"""version: 2
-data_dir: {self.root / 'data'}
+data_dir: {self.root / "data"}
 database: dd.sqlite3
 github:
   account: robot

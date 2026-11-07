@@ -177,9 +177,9 @@ def _inventory(conn, path):
                     "reason": "publication_outcome_unknown",
                 }
             )
-    for run in snapshot['agent_runs']:
-        if run['status']=='running':
-            blockers.append({'run_id':run['run_id'],'reason':'agent_run_must_stop'})
+    for run in snapshot["agent_runs"]:
+        if run["status"] == "running":
+            blockers.append({"run_id": run["run_id"], "reason": "agent_run_must_stop"})
     # An expired lease is not evidence that its old process has stopped.
     for lease in snapshot["leases"]:
         if lease["status"] == "active":
@@ -346,8 +346,8 @@ def apply(db_path, plan):
             return {"ok": False, "status": "stale_plan"}
         if not current["ok"]:
             return current
-        if not locks.enter_context(task_publication_lock(path,'dispatch-admission')):
-            return {'ok':False,'status':'dispatch_in_progress'}
+        if not locks.enter_context(task_publication_lock(path, "dispatch-admission")):
+            return {"ok": False, "status": "dispatch_in_progress"}
         for task in snapshot["tasks"]:
             if not locks.enter_context(task_publication_lock(path, task["task_id"])):
                 return {"ok": False, "status": "publication_in_progress"}

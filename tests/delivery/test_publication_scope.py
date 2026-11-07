@@ -38,7 +38,7 @@ class PublicationScopeTests(RepositoryCycleFixture):
                     (task_id, workstream_id, now, now),
                 )
                 conn.execute(
-                    'INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at, metadata_json) VALUES (?, ?, 1, \'completed\', ?, ?, \'{"result_contract":"compact-v1"}\')',
+                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at, metadata_json) VALUES (?, ?, 1, 'completed', ?, ?, '{\"result_contract\":\"compact-v1\"}')",
                     (f"attempt:{repo_id}", task_id, now, now),
                 )
                 conn.execute(
@@ -53,7 +53,9 @@ class PublicationScopeTests(RepositoryCycleFixture):
                         task_id,
                         f"https://github.com/{full_name}/issues/1",
                         now,
-                        json.dumps({"body": "[from-codex local repo] hi"}, sort_keys=True),
+                        json.dumps(
+                            {"body": "[from-codex local repo] hi"}, sort_keys=True
+                        ),
                     ),
                 )
 

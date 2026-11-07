@@ -12,6 +12,7 @@ from tests.support.repository_cycle import (
 class WorkerTimeoutTests(RepositoryCycleFixture):
     def test_worker_timeout_seconds_caps_attempt_runtime(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -67,12 +68,11 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
-            worker_identity.terminate_recorded_identity = (
-                lambda _identity: {"status": "terminated", "pid": 12345}
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
+            worker_identity.terminate_recorded_identity = lambda _identity: {
+                "status": "terminated",
+                "pid": 12345,
+            }
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -96,6 +96,7 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
 
     def test_stale_attempt_later_hard_timeout_signals_pid_and_releases_workstream(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -123,7 +124,9 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
                 (
                     old,
                     old,
-                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
+                    json.dumps(
+                        {"dispatch": self._recorded_identity(12345)}, sort_keys=True
+                    ),
                     attempt_id,
                 ),
             )
@@ -143,12 +146,11 @@ class WorkerTimeoutTests(RepositoryCycleFixture):
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
-            worker_identity.terminate_recorded_identity = (
-                lambda _identity: {"status": "terminated", "pid": 12345}
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
+            worker_identity.terminate_recorded_identity = lambda _identity: {
+                "status": "terminated",
+                "pid": 12345,
+            }
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",

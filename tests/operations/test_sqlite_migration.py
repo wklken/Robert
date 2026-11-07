@@ -276,12 +276,16 @@ class SQLiteMigrationTests(unittest.TestCase):
             execution_store.ensure_subject(conn, "task", "t", "human_request", "now")
         plan = sqlite_migration.preview(self.db)
         self.assertFalse(plan["ok"])
-        self.assertIn("execution_control_conflict", {b["reason"] for b in plan["blockers"]})
+        self.assertIn(
+            "execution_control_conflict", {b["reason"] for b in plan["blockers"]}
+        )
         self.assertFalse(sqlite_migration.apply(self.db, plan)["ok"])
 
     def test_running_standalone_cycle_blocks_handoff(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute("INSERT INTO agent_runs(run_id,status,started_at,config_path,dry_run) VALUES ('live','running','now','config',0)")
+            conn.execute(
+                "INSERT INTO agent_runs(run_id,status,started_at,config_path,dry_run) VALUES ('live','running','now','config',0)"
+            )
         plan = sqlite_migration.preview(self.db)
         self.assertFalse(plan["ok"])
         self.assertTrue(any(b.get("run_id") == "live" for b in plan["blockers"]), plan)
@@ -292,7 +296,9 @@ class SQLiteMigrationTests(unittest.TestCase):
         plan = sqlite_migration.preview(self.db)
         with task_publication_lock(self.db, "dispatch-admission") as acquired:
             self.assertTrue(acquired)
-            self.assertEqual(sqlite_migration.apply(self.db, plan)["status"], "dispatch_in_progress")
+            self.assertEqual(
+                sqlite_migration.apply(self.db, plan)["status"], "dispatch_in_progress"
+            )
         self.assertTrue(sqlite_migration.apply(self.db, plan)["ok"])
 
     def test_failed_handoff_rolls_back_and_can_retry_same_plan(self):
@@ -300,11 +306,25 @@ class SQLiteMigrationTests(unittest.TestCase):
         from robert_agent.adapters.sqlite import execution_control as execution_store
 
         plan = sqlite_migration.preview(self.db)
-        with patch.object(execution_store, "record_historical_facts", side_effect=RuntimeError("injected failure")):
+        with patch.object(
+            execution_store,
+            "record_historical_facts",
+            side_effect=RuntimeError("injected failure"),
+        ):
             with self.assertRaisesRegex(RuntimeError, "injected failure"):
                 sqlite_migration.apply(self.db, plan)
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[0], "active")
-            self.assertEqual(conn.execute("SELECT count(*) FROM execution_subjects").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT count(*) FROM execution_migrations").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT binding_status FROM workflow_bindings").fetchone()[
+                    0
+                ],
+                "active",
+            )
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM execution_subjects").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM execution_migrations").fetchone()[0],
+                0,
+            )
         self.assertTrue(sqlite_migration.apply(self.db, plan)["ok"])

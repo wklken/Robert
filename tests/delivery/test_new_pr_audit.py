@@ -10,7 +10,9 @@ class NewPRAuditTests(WorkerProtocolFixture):
             task_id="task-1",
             attempt_id="attempt-1",
             output_type="comment_analysis",
-            planned_github_actions=[{"type": "open_pr", "url": "https://github.com/x/y/pull/2"}],
+            planned_github_actions=[
+                {"type": "open_pr", "url": "https://github.com/x/y/pull/2"}
+            ],
             consumed_event_fingerprints=["comment:1"],
             verification=[],
             handoff="opened pr",

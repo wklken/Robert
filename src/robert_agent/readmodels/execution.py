@@ -1,4 +1,5 @@
 """Safe, bounded execution information for the operator board."""
+
 import json
 from pathlib import Path
 
@@ -14,27 +15,35 @@ def publication_history(conn, task_id):
     ):
         try:
             metadata = json.loads(row["metadata_json"] or "{}")
-            publication = metadata.get("publish", {}) if isinstance(metadata, dict) else {}
+            publication = (
+                metadata.get("publish", {}) if isinstance(metadata, dict) else {}
+            )
         except (TypeError, ValueError):
             publication = {}
         if not isinstance(publication, dict):
             publication = {}
         # Only expose the receipt fields; bodies, responses and worktree paths
         # are not part of the board's public read model.
-        actions.append({
-            "action_id": row["action_id"],
-            "action_type": safe_text(row["action_type"]),
-            "audit_status": safe_text(row["audit_status"]),
-            "status": safe_text(row["publish_status"] if row["publish_status"] in {"published", "skipped"} else publication.get("status") or row["publish_status"]),
-            "created_at": row["created_at"],
-            "published_at": safe_text(publication.get("published_at")),
-            "safe_error": safe_text(publication.get("safe_error")),
-            "reason_code": safe_text(publication.get("reason_code")),
-            "attempt_count": publication.get("attempt_count", 0),
-            "max_attempts": publication.get("max_attempts"),
-            "next_retry_at": safe_text(publication.get("next_retry_at")),
-            "required_action": safe_text(publication.get("required_action")),
-        })
+        actions.append(
+            {
+                "action_id": row["action_id"],
+                "action_type": safe_text(row["action_type"]),
+                "audit_status": safe_text(row["audit_status"]),
+                "status": safe_text(
+                    row["publish_status"]
+                    if row["publish_status"] in {"published", "skipped"}
+                    else publication.get("status") or row["publish_status"]
+                ),
+                "created_at": row["created_at"],
+                "published_at": safe_text(publication.get("published_at")),
+                "safe_error": safe_text(publication.get("safe_error")),
+                "reason_code": safe_text(publication.get("reason_code")),
+                "attempt_count": publication.get("attempt_count", 0),
+                "max_attempts": publication.get("max_attempts"),
+                "next_retry_at": safe_text(publication.get("next_retry_at")),
+                "required_action": safe_text(publication.get("required_action")),
+            }
+        )
     return actions
 
 
@@ -68,10 +77,30 @@ def attempt_summary(conn, attempt):
     except (ValueError, AttributeError):
         termination = {}
     cleanup_reason = ""
-    if isinstance(termination, dict) and termination.get("status") not in {None, "terminated", "not_found", "already_dead"}:
-        cleanup_reason = safe_text(termination.get("reason") or termination.get("status"))
+    if isinstance(termination, dict) and termination.get("status") not in {
+        None,
+        "terminated",
+        "not_found",
+        "already_dead",
+    }:
+        cleanup_reason = safe_text(
+            termination.get("reason") or termination.get("status")
+        )
     # Never return raw stderr, environment, metadata or arbitrary failure JSON.
-    reason = next((failure[key] for key in ("safe_error", "reason", "original_status", "status", "error_type") if isinstance(failure.get(key), str)), "")
+    reason = next(
+        (
+            failure[key]
+            for key in (
+                "safe_error",
+                "reason",
+                "original_status",
+                "status",
+                "error_type",
+            )
+            if isinstance(failure.get(key), str)
+        ),
+        "",
+    )
     return {
         "attempt_id": attempt["attempt_id"],
         "attempt_no": attempt["attempt_no"],
@@ -93,15 +122,28 @@ def attempt_history(conn, attempt):
     return {
         **attempt_summary(conn, attempt),
         "artifacts": [
-            {"artifact_id": row["artifact_id"], "artifact_type": row["artifact_type"],
-             "bytes": row["bytes"], "available": Path(row["path"]).expanduser().is_file()}
+            {
+                "artifact_id": row["artifact_id"],
+                "artifact_type": row["artifact_type"],
+                "bytes": row["bytes"],
+                "available": Path(row["path"]).expanduser().is_file(),
+            }
             for row in conn.execute(
                 "SELECT artifact_id,artifact_type,path,bytes FROM artifacts WHERE attempt_id=? ORDER BY created_at,artifact_id",
                 (attempt["attempt_id"],),
             )
         ],
-        "phases": [{"phase": safe_text(row["phase"]), "status": safe_text(row["status"]),
-                    "summary": safe_text(row["summary"]), "next_step": safe_text(row["next_step"]),
-                    "created_at": row["created_at"]}
-                   for row in conn.execute("SELECT * FROM worker_phases WHERE attempt_id=? ORDER BY created_at, phase_id", (attempt["attempt_id"],))],
+        "phases": [
+            {
+                "phase": safe_text(row["phase"]),
+                "status": safe_text(row["status"]),
+                "summary": safe_text(row["summary"]),
+                "next_step": safe_text(row["next_step"]),
+                "created_at": row["created_at"],
+            }
+            for row in conn.execute(
+                "SELECT * FROM worker_phases WHERE attempt_id=? ORDER BY created_at, phase_id",
+                (attempt["attempt_id"],),
+            )
+        ],
     }

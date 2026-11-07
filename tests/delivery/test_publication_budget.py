@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 from contextlib import closing
 
 
@@ -52,7 +51,11 @@ class PublicationBudgetTests(PublicationBudgetFixture):
                     "accepted",
                     "not_published",
                     "zzz",
-                    json.dumps({"body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"}),
+                    json.dumps(
+                        {
+                            "body": "Done <!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->"
+                        }
+                    ),
                 ),
             )
         self.cycle()

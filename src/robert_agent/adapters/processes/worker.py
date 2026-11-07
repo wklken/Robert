@@ -44,12 +44,11 @@ def _reap_background_processes():
 
 def _worker_environment(allowed_names=(), environ=None):
     source = dict(os.environ if environ is None else environ)
-    names = (DEFAULT_WORKER_ENV | set(allowed_names)) - {'_ROBERT_EXECUTOR_ID', '_ROBERT_CONTROL_DEADLINE'}
-    result = {
-        name: source[name]
-        for name in names
-        if name in source
+    names = (DEFAULT_WORKER_ENV | set(allowed_names)) - {
+        "_ROBERT_EXECUTOR_ID",
+        "_ROBERT_CONTROL_DEADLINE",
     }
+    result = {name: source[name] for name in names if name in source}
     result.setdefault(
         "BASH_DEFAULT_TIMEOUT_MS",
         DEFAULT_WORKER_BASH_DEFAULT_TIMEOUT_MS,
@@ -130,8 +129,16 @@ def dispatch_worker(
             "worker_launch": launch.metadata(),
         }
 
-    stdout_path = Path(log_dir) / "stdout.log" if log_dir else prompt_path.parent / f"{attempt_id}.stdout.log"
-    stderr_path = Path(log_dir) / "stderr.log" if log_dir else prompt_path.parent / f"{attempt_id}.stderr.log"
+    stdout_path = (
+        Path(log_dir) / "stdout.log"
+        if log_dir
+        else prompt_path.parent / f"{attempt_id}.stdout.log"
+    )
+    stderr_path = (
+        Path(log_dir) / "stderr.log"
+        if log_dir
+        else prompt_path.parent / f"{attempt_id}.stderr.log"
+    )
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     environment = _worker_environment(launch.environment_allowlist)
@@ -166,6 +173,7 @@ def dispatch_worker(
             "worker_agent": launch.agent,
             "worker_launch": launch.metadata(),
         }
+
     def exited_result(returncode):
         if returncode == 0:
             return {

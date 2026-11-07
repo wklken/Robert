@@ -1,4 +1,5 @@
 """Shared fixtures for pr remediation integration tests."""
+
 from contextlib import closing
 import json
 from pathlib import Path

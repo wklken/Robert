@@ -13,7 +13,9 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        task = next(task for task in data["recent_tasks"] if task["task_id"] == "task-1")
+        task = next(
+            task for task in data["recent_tasks"] if task["task_id"] == "task-1"
+        )
         artifact_dir = self.root / "task-artifacts"
         prompt_path = artifact_dir / "prompt.md"
         stdout_path = artifact_dir / "worker.stdout.log"
@@ -45,8 +47,7 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
         self.assertEqual(data["recent_runs"][0]["run_id"], "run-1")
         self.assertEqual(data["recent_runs"][0]["status"], "failed")
         steps = {
-            step["step_key"]: step["status"]
-            for step in data["recent_runs"][0]["steps"]
+            step["step_key"]: step["status"] for step in data["recent_runs"][0]["steps"]
         }
         self.assertEqual(steps["validate_config"], "succeeded")
         self.assertEqual(steps["dispatch"], "failed")
@@ -101,7 +102,9 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
         data = dashboard.build_dashboard_data(db_path)
         step_keys = [step["step_key"] for step in data["recent_runs"][0]["steps"]]
 
-        self.assertLess(step_keys.index("audit_results"), step_keys.index("publish_actions"))
+        self.assertLess(
+            step_keys.index("audit_results"), step_keys.index("publish_actions")
+        )
         self.assertLess(step_keys.index("publish_actions"), step_keys.index("discover"))
 
     def test_web_orders_multi_repo_run_steps_by_runtime_flow(self):
@@ -128,8 +131,12 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
         data = dashboard.build_dashboard_data(db_path)
         step_keys = [step["step_key"] for step in data["recent_runs"][0]["steps"]]
 
-        self.assertLess(step_keys.index("discover_notifications"), step_keys.index("acquire_lease"))
-        self.assertLess(step_keys.index("publish_actions"), step_keys.index("reconcile"))
+        self.assertLess(
+            step_keys.index("discover_notifications"), step_keys.index("acquire_lease")
+        )
+        self.assertLess(
+            step_keys.index("publish_actions"), step_keys.index("reconcile")
+        )
         self.assertLess(step_keys.index("reconcile"), step_keys.index("discover"))
         self.assertLess(step_keys.index("route"), step_keys.index("repo_pipelines"))
         self.assertLess(step_keys.index("repo_pipelines"), step_keys.index("dispatch"))
@@ -157,7 +164,9 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
         data = dashboard.build_dashboard_data(db_path)
         step_keys = [step["step_key"] for step in data["recent_runs"][0]["repo_steps"]]
 
-        self.assertEqual(step_keys, ["acquire_lease", "supervise", "reconcile", "route"])
+        self.assertEqual(
+            step_keys, ["acquire_lease", "supervise", "reconcile", "route"]
+        )
 
     def test_web_exposes_recent_github_action_audit_and_publish_status(self):
         db_path = self.root / "dd.sqlite3"
@@ -196,7 +205,10 @@ class DashboardExecutionEvidenceTests(DashboardFixture):
         self.assertEqual(result["result_id"], "result-1")
         self.assertEqual(result["task_id"], "task-1")
         self.assertEqual(result["consumed_event_fingerprints"], ["comment:1"])
-        self.assertEqual(result["verification"], [{"command": "python -m unittest", "status": "passed"}])
+        self.assertEqual(
+            result["verification"],
+            [{"command": "python -m unittest", "status": "passed"}],
+        )
         self.assertEqual(result["metadata"]["used_skills"], ["fast-code-path"])
         self.assertEqual(result["metadata"]["audit"]["status"], "accepted")
         self.assertEqual(data["used_skill_counts"], {"fast-code-path": 1})

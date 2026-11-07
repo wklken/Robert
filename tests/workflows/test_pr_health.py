@@ -204,7 +204,9 @@ class PrHealthTests(unittest.TestCase):
             commands,
         )
 
-    def test_collect_ci_observations_marks_workflow_unavailable_when_any_failed_job_log_is_unreadable(self):
+    def test_collect_ci_observations_marks_workflow_unavailable_when_any_failed_job_log_is_unreadable(
+        self,
+    ):
         from robert_agent.workflows import pr_health
 
         responses = {

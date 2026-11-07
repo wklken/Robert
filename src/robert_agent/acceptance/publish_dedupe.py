@@ -48,7 +48,13 @@ class _DedupeRunner:
 
     def __call__(self, command, **kwargs):
         self.calls.append({"command": list(command), "kwargs": dict(kwargs)})
-        if command == ["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"]:
+        if command == [
+            "gh",
+            "api",
+            "repos/x/y/issues/1/comments?per_page=100",
+            "--paginate",
+            "--slurp",
+        ]:
             return _Completed(
                 json.dumps(
                     [
@@ -162,7 +168,13 @@ def _insert_fixture(db_path):
             VALUES (?, ?, ?, ?, '["comment:1"]', '[]', 'ready', ?, json_object('result_contract','compact-v1'))
             """,
             [
-                ("result-comment", "task-comment", "attempt-comment", "comment_analysis", now),
+                (
+                    "result-comment",
+                    "task-comment",
+                    "attempt-comment",
+                    "comment_analysis",
+                    now,
+                ),
                 ("result-pr", "task-pr", "attempt-pr", "new_pr", now),
             ],
         )
@@ -232,7 +244,9 @@ def publish_dedupe_acceptance(workspace_dir=None):
     db_path = workspace / "dd.sqlite3"
     _insert_fixture(db_path)
     runner = _DedupeRunner()
-    publish_result = publish.publish_ready_actions(db_path, dry_run=False, run_command=runner)
+    publish_result = publish.publish_ready_actions(
+        db_path, dry_run=False, run_command=runner
+    )
     action_counts = _action_counts(db_path)
     create_commands = [
         call

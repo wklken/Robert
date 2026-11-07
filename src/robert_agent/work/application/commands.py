@@ -1,8 +1,26 @@
 """Transactional commands for repository-scoped DD work items."""
-from robert_agent.work.inputs import COMMANDS, CommandContext, DECISION_EVENTS, FAILURE_EVENTS, MAX_DESCRIPTION, MAX_REPLY, MAX_TITLE, QUESTION_EVENTS, validate_idempotency_key, validate_priority, validate_routing, validate_text
+
+from robert_agent.work.inputs import (
+    COMMANDS,
+    CommandContext,
+    DECISION_EVENTS,
+    FAILURE_EVENTS,
+    MAX_DESCRIPTION,
+    MAX_REPLY,
+    MAX_TITLE,
+    QUESTION_EVENTS,
+    validate_idempotency_key,
+    validate_priority,
+    validate_routing,
+    validate_text,
+)
 from robert_agent.work import control_queries
 
-from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
+from robert_agent.work.errors import (
+    WorkItemValidationError,
+    WorkItemConflictError,
+    WorkItemNotFoundError,
+)
 from contextlib import closing, ExitStack
 from datetime import datetime, timezone
 import hashlib
@@ -16,10 +34,6 @@ from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import wakeup
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.work.application import control as work_item_control
-
-
-
-
 
 
 def utc_now():
@@ -36,21 +50,27 @@ def _decode_json(value, default):
     return parsed
 
 
-
-
-
-
-
-
-
-
 def _item_from_row(row):
     if not hasattr(row, "keys"):
         columns = (
-            "work_item_id", "repo_id", "title", "description", "priority",
-            "origin_type", "origin_source_id", "routing_mode", "requested_worker",
-            "workstream_id", "creation_idempotency_key", "created_by", "activated_at",
-            "completed_at", "canceled_at", "version", "created_at", "updated_at",
+            "work_item_id",
+            "repo_id",
+            "title",
+            "description",
+            "priority",
+            "origin_type",
+            "origin_source_id",
+            "routing_mode",
+            "requested_worker",
+            "workstream_id",
+            "creation_idempotency_key",
+            "created_by",
+            "activated_at",
+            "completed_at",
+            "canceled_at",
+            "version",
+            "created_at",
+            "updated_at",
             "metadata_json",
         )
         row = dict(zip(columns, row))
@@ -88,9 +108,16 @@ def _load_item(conn, work_item_id):
 def _event_from_row(row):
     if not hasattr(row, "keys"):
         columns = (
-            "event_id", "work_item_id", "event_type", "actor_kind",
-            "actor_identity", "body", "resolves_event_id", "idempotency_key",
-            "created_at", "metadata_json",
+            "event_id",
+            "work_item_id",
+            "event_type",
+            "actor_kind",
+            "actor_identity",
+            "body",
+            "resolves_event_id",
+            "idempotency_key",
+            "created_at",
+            "metadata_json",
         )
         row = dict(zip(columns, row))
     return {
@@ -294,9 +321,13 @@ def ensure_github_work_item(
         (root_workstream_id, root_source_id),
     ).fetchone()
     if not item:
-        raise WorkItemConflictError("GitHub work item identity conflicts with existing data")
+        raise WorkItemConflictError(
+            "GitHub work item identity conflicts with existing data"
+        )
     item_payload = _item_from_row(item)
-    event_type = "github_intake" if route_confidence == "high" else "operator_decision_required"
+    event_type = (
+        "github_intake" if route_confidence == "high" else "operator_decision_required"
+    )
     _insert_event(
         conn,
         item_payload["work_item_id"],
@@ -383,7 +414,9 @@ def record_github_response(
         actor_identity=actor_identity,
         idempotency_key=idempotency_key,
         body=body,
-        resolves_event_id=(question["event_id"] if hasattr(question, "keys") else question[0]),
+        resolves_event_id=(
+            question["event_id"] if hasattr(question, "keys") else question[0]
+        ),
         metadata={"event_fingerprint": event_fingerprint, **(metadata or {})},
         now=now,
     )
@@ -448,7 +481,7 @@ def _create_task(
     workstream_id=None,
     lineage_key=None,
 ):
-    workstream_id = workstream_id or item['workstream_id']
+    workstream_id = workstream_id or item["workstream_id"]
     task_id = f"task-{uuid4().hex}"
     routing_mode = routing_mode or item["routing_mode"]
     if routing_mode == "auto":
@@ -459,10 +492,10 @@ def _create_task(
         "origin_type": item["origin_type"],
         "work_item_id": item["work_item_id"],
     }
-    repair = (_decode_json(item['metadata_json'], {}) or {}).get('supervision_repair')
-    if repair and repair.get('automatic') is True:
-        routing_mode, requested_worker = 'manual', repair['worker']
-        metadata['supervision_repair'] = repair
+    repair = (_decode_json(item["metadata_json"], {}) or {}).get("supervision_repair")
+    if repair and repair.get("automatic") is True:
+        routing_mode, requested_worker = "manual", repair["worker"]
+        metadata["supervision_repair"] = repair
     if trigger_event_id:
         metadata["trigger_work_item_event_id"] = trigger_event_id
     if lineage_key:
@@ -530,35 +563,56 @@ def retrigger_failed_github_task(
     recovery_snapshot = None
     with closing(sqlite3.connect(db_path)) as reader:
         reader.row_factory = sqlite3.Row
-        snapshot = reader.execute("""SELECT t.metadata_json, r.full_name, r.github_account, w.repo_id
+        snapshot = reader.execute(
+            """SELECT t.metadata_json, r.full_name, r.github_account, w.repo_id
             FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-            JOIN repos r ON r.repo_id=w.repo_id WHERE t.task_id=?""", (task_id,)).fetchone()
-        if snapshot and snapshot['repo_id'] in context.allowed_repo_ids:
-            attention = _decode_json(snapshot['metadata_json'], {}).get('execution_attention', {})
-            if attention.get('reason_code') == 'result_contract_cutover':
-                recovery_snapshot = snapshot['metadata_json']
+            JOIN repos r ON r.repo_id=w.repo_id WHERE t.task_id=?""",
+            (task_id,),
+        ).fetchone()
+        if snapshot and snapshot["repo_id"] in context.allowed_repo_ids:
+            attention = _decode_json(snapshot["metadata_json"], {}).get(
+                "execution_attention", {}
+            )
+            if attention.get("reason_code") == "result_contract_cutover":
+                recovery_snapshot = snapshot["metadata_json"]
                 from robert_agent.adapters.github import discovery as discover
                 from robert_agent.work.queries import task_related_events
+
                 refreshed_context = task_related_events(reader, task_id)
                 refreshed = []
                 for event in refreshed_context:
-                    updated, state = discover._source_metadata(event, dict(snapshot), subprocess.run)
+                    updated, state = discover._source_metadata(
+                        event, dict(snapshot), subprocess.run
+                    )
                     if state is None:
-                        raise WorkItemConflictError('GitHub source refresh failed; retry after access is restored')
-                    if state.lower() != 'open':
-                        raise WorkItemConflictError('retrigger requires an open GitHub source')
+                        raise WorkItemConflictError(
+                            "GitHub source refresh failed; retry after access is restored"
+                        )
+                    if state.lower() != "open":
+                        raise WorkItemConflictError(
+                            "retrigger requires an open GitHub source"
+                        )
                     refreshed.append(updated)
                 if not refreshed:
-                    raise WorkItemConflictError('source context is unavailable; inspect the original task')
+                    raise WorkItemConflictError(
+                        "source context is unavailable; inspect the original task"
+                    )
                 refreshed_context = refreshed
     from robert_agent.delivery.lock import task_publication_lock
-    with ExitStack() as locks, closing(sqlite3.connect(db_path, isolation_level=None)) as conn:
+
+    with (
+        ExitStack() as locks,
+        closing(sqlite3.connect(db_path, isolation_level=None)) as conn,
+    ):
         if not locks.enter_context(task_publication_lock(db_path, task_id)):
-            raise WorkItemConflictError('A publication is in progress; retry after it finishes')
+            raise WorkItemConflictError(
+                "A publication is in progress; retry after it finishes"
+            )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         from robert_agent.execution import rounds as native_rounds
+
         native_exit = native_rounds.observe_exit(conn, task_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -576,17 +630,28 @@ def retrigger_failed_github_task(
             ).fetchone()
             if not row or row["repo_id"] not in context.allowed_repo_ids:
                 raise WorkItemNotFoundError("task not found")
-            from robert_agent.adapters.sqlite import execution_control as execution_store
+            from robert_agent.adapters.sqlite import (
+                execution_control as execution_store,
+            )
+
             binding = execution_store.get_binding(conn, "task", task_id)
-            attention = _decode_json(row['metadata_json'], {}).get('execution_attention', {})
-            cutover_recovery = attention.get('reason_code') == 'result_contract_cutover'
-            if cutover_recovery and recovery_snapshot != row['metadata_json']:
-                raise WorkItemConflictError('execution state changed; refresh before recovery')
+            attention = _decode_json(row["metadata_json"], {}).get(
+                "execution_attention", {}
+            )
+            cutover_recovery = attention.get("reason_code") == "result_contract_cutover"
+            if cutover_recovery and recovery_snapshot != row["metadata_json"]:
+                raise WorkItemConflictError(
+                    "execution state changed; refresh before recovery"
+                )
             if row["lifecycle"] != "failed" and not cutover_recovery:
-                raise WorkItemConflictError("only a failed GitHub task can be retriggered")
+                raise WorkItemConflictError(
+                    "only a failed GitHub task can be retriggered"
+                )
             if row["source_state"].lower() != "open":
                 raise WorkItemConflictError("retrigger requires an open GitHub source")
-            if row["active_task_id"] is not None and not (cutover_recovery and row['active_task_id'] == task_id):
+            if row["active_task_id"] is not None and not (
+                cutover_recovery and row["active_task_id"] == task_id
+            ):
                 raise WorkItemConflictError("the workstream already has an active task")
             latest = conn.execute(
                 """
@@ -598,45 +663,95 @@ def retrigger_failed_github_task(
                 (row["workstream_id"],),
             ).fetchone()
             if not latest or latest[0] != task_id:
-                raise WorkItemConflictError("only the latest failed GitHub task can be retriggered")
+                raise WorkItemConflictError(
+                    "only the latest failed GitHub task can be retriggered"
+                )
 
             # Explicit recovery creates a new subject; never reopen or transfer
             # ownership of the old workflow, nor overlap an uncertain process.
-            if conn.execute("SELECT 1 FROM attempts WHERE task_id=? AND status IN ('prepared','running','stale')", (task_id,)).fetchone():
-                raise WorkItemConflictError("worker termination must be confirmed before retry")
-            if conn.execute("SELECT 1 FROM github_actions WHERE task_id=? AND audit_status IN ('pending','accepted') AND publish_status='not_published'", (task_id,)).fetchone():
-                raise WorkItemConflictError("pending publication must be reconciled or canceled before retry")
-            failed_attempt = conn.execute("SELECT metadata_json FROM attempts WHERE task_id=? ORDER BY attempt_no DESC LIMIT 1", (task_id,)).fetchone()
+            if conn.execute(
+                "SELECT 1 FROM attempts WHERE task_id=? AND status IN ('prepared','running','stale')",
+                (task_id,),
+            ).fetchone():
+                raise WorkItemConflictError(
+                    "worker termination must be confirmed before retry"
+                )
+            if conn.execute(
+                "SELECT 1 FROM github_actions WHERE task_id=? AND audit_status IN ('pending','accepted') AND publish_status='not_published'",
+                (task_id,),
+            ).fetchone():
+                raise WorkItemConflictError(
+                    "pending publication must be reconciled or canceled before retry"
+                )
+            failed_attempt = conn.execute(
+                "SELECT metadata_json FROM attempts WHERE task_id=? ORDER BY attempt_no DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
             if failed_attempt:
-                process_metadata = json.loads(failed_attempt[0] or '{}')
-                if process_metadata.get('dispatch'):
+                process_metadata = json.loads(failed_attempt[0] or "{}")
+                if process_metadata.get("dispatch"):
                     from robert_agent.adapters.processes.attempt import dispatch_status
-                    if dispatch_status(process_metadata)['status'] != 'dead':
-                        raise WorkItemConflictError("worker termination must be confirmed before retry")
+
+                    if dispatch_status(process_metadata)["status"] != "dead":
+                        raise WorkItemConflictError(
+                            "worker termination must be confirmed before retry"
+                        )
             if cutover_recovery:
-                if not native_exit['all_stopped'] or not native_rounds.exit_observation_current(conn, task_id, native_exit):
-                    raise WorkItemConflictError('Review workers must be reconciled before recovery')
+                if not native_exit[
+                    "all_stopped"
+                ] or not native_rounds.exit_observation_current(
+                    conn, task_id, native_exit
+                ):
+                    raise WorkItemConflictError(
+                        "Review workers must be reconciled before recovery"
+                    )
                 recovery_now = utc_now()
-                work_item_control.require_idle_repository(conn, row['repo_id'], recovery_now)
-                metadata = _decode_json(row['metadata_json'], {})
-                metadata['recovered_execution_attention'] = {**metadata.pop('execution_attention'),
-                    'recovered_at': recovery_now, 'requested_by': context.actor_identity}
-                conn.execute("UPDATE tasks SET lifecycle='failed',metadata_json=?,updated_at=? WHERE task_id=?",
-                             (json.dumps(metadata), recovery_now, task_id))
-                conn.execute("UPDATE workstreams SET lifecycle='failed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",
-                             (recovery_now, row['workstream_id']))
-                item = resolve_work_item_for_workstream(conn, row['workstream_id'])
+                work_item_control.require_idle_repository(
+                    conn, row["repo_id"], recovery_now
+                )
+                metadata = _decode_json(row["metadata_json"], {})
+                metadata["recovered_execution_attention"] = {
+                    **metadata.pop("execution_attention"),
+                    "recovered_at": recovery_now,
+                    "requested_by": context.actor_identity,
+                }
+                conn.execute(
+                    "UPDATE tasks SET lifecycle='failed',metadata_json=?,updated_at=? WHERE task_id=?",
+                    (json.dumps(metadata), recovery_now, task_id),
+                )
+                conn.execute(
+                    "UPDATE workstreams SET lifecycle='failed',active_task_id=NULL,updated_at=? WHERE workstream_id=?",
+                    (recovery_now, row["workstream_id"]),
+                )
+                item = resolve_work_item_for_workstream(conn, row["workstream_id"])
                 if item:
-                    unresolved = conn.execute("SELECT event_id FROM work_item_events WHERE work_item_id=? AND idempotency_key=?",
-                                              (item['work_item_id'], 'result-contract-cutover:' + task_id)).fetchone()
-                    _insert_event(conn, item['work_item_id'], event_type='execution_recovery_requested',
-                        actor_kind=context.actor_kind, actor_identity=context.actor_identity,
-                        idempotency_key='cutover-recovery:' + hashlib.sha256(idempotency_key.encode()).hexdigest(),
-                        resolves_event_id=unresolved['event_id'] if unresolved else None,
-                        body='Replace incompatible execution using refreshed GitHub context; preserve original evidence.',
-                        metadata={'task_id': task_id, 'kind': 'result_contract_cutover'}, now=recovery_now)
-                conn.execute("UPDATE notifications SET status='resolved' WHERE notification_id=?", ('notification-cutover-' + task_id,))
-            if binding and binding['binding_status'] != 'terminal':
+                    unresolved = conn.execute(
+                        "SELECT event_id FROM work_item_events WHERE work_item_id=? AND idempotency_key=?",
+                        (item["work_item_id"], "result-contract-cutover:" + task_id),
+                    ).fetchone()
+                    _insert_event(
+                        conn,
+                        item["work_item_id"],
+                        event_type="execution_recovery_requested",
+                        actor_kind=context.actor_kind,
+                        actor_identity=context.actor_identity,
+                        idempotency_key="cutover-recovery:"
+                        + hashlib.sha256(idempotency_key.encode()).hexdigest(),
+                        resolves_event_id=unresolved["event_id"]
+                        if unresolved
+                        else None,
+                        body="Replace incompatible execution using refreshed GitHub context; preserve original evidence.",
+                        metadata={
+                            "task_id": task_id,
+                            "kind": "result_contract_cutover",
+                        },
+                        now=recovery_now,
+                    )
+                conn.execute(
+                    "UPDATE notifications SET status='resolved' WHERE notification_id=?",
+                    ("notification-cutover-" + task_id,),
+                )
+            if binding and binding["binding_status"] != "terminal":
                 execution_store.close_binding(conn, "task", task_id, utc_now())
 
             dedupe_key = f"github-retrigger:{idempotency_key}"
@@ -666,7 +781,11 @@ def retrigger_failed_github_task(
                     "parent_task_id": task_id,
                     "requested_by": context.actor_identity,
                     "workstream_id": row["workstream_id"],
-                    **({'refreshed_context': refreshed_context} if refreshed_context is not None else {}),
+                    **(
+                        {"refreshed_context": refreshed_context}
+                        if refreshed_context is not None
+                        else {}
+                    ),
                 },
             )
             should_notify = requested.get("status") != "already_pending"
@@ -714,9 +833,20 @@ def _activate(conn, item, context, idempotency_key, now, *, initial_version=None
         (workstream_id, now, now, version, item["work_item_id"]),
     )
     item = _load_item(conn, item["work_item_id"])
-    task_id = _create_task(conn, item, now=now,
-                           lineage_key=supervision_lineage.operator_key(item['work_item_id'], idempotency_key))
-    result = {"ok": True, "command": "start", "item": _item_from_row(_load_item(conn, item["work_item_id"])), "task_id": task_id}
+    task_id = _create_task(
+        conn,
+        item,
+        now=now,
+        lineage_key=supervision_lineage.operator_key(
+            item["work_item_id"], idempotency_key
+        ),
+    )
+    result = {
+        "ok": True,
+        "command": "start",
+        "item": _item_from_row(_load_item(conn, item["work_item_id"])),
+        "task_id": task_id,
+    }
     activation = _insert_event(
         conn,
         item["work_item_id"],
@@ -745,8 +875,21 @@ def _activate(conn, item, context, idempotency_key, now, *, initial_version=None
     return result
 
 
-def _insert_work_item(conn, *, context, repo_id, title, description, priority,
-                      routing_mode, requested_worker, start, idempotency_key, now, metadata=None):
+def _insert_work_item(
+    conn,
+    *,
+    context,
+    repo_id,
+    title,
+    description,
+    priority,
+    routing_mode,
+    requested_worker,
+    start,
+    idempotency_key,
+    now,
+    metadata=None,
+):
     metadata = dict(metadata or {})
     work_item_id = f"wi-{uuid4().hex}"
     conn.execute(
@@ -758,44 +901,95 @@ def _insert_work_item(conn, *, context, repo_id, title, description, priority,
           created_at, updated_at, metadata_json
         ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, 1, ?, ?, ?)
         """,
-        (work_item_id, repo_id, title, description, priority, routing_mode, requested_worker,
-         idempotency_key, context.actor_identity, now, now, json.dumps(metadata, sort_keys=True)),
+        (
+            work_item_id,
+            repo_id,
+            title,
+            description,
+            priority,
+            routing_mode,
+            requested_worker,
+            idempotency_key,
+            context.actor_identity,
+            now,
+            now,
+            json.dumps(metadata, sort_keys=True),
+        ),
     )
-    _insert_event(conn, work_item_id, event_type='created', actor_kind=context.actor_kind,
-                  actor_identity=context.actor_identity, idempotency_key=f'create:{idempotency_key}', now=now)
+    _insert_event(
+        conn,
+        work_item_id,
+        event_type="created",
+        actor_kind=context.actor_kind,
+        actor_identity=context.actor_identity,
+        idempotency_key=f"create:{idempotency_key}",
+        now=now,
+    )
     item = _load_item(conn, work_item_id)
     if start:
-        result = _activate(conn, item, context, f'start:{idempotency_key}', now, initial_version=1)
-        result['command'] = 'create_and_start'
+        result = _activate(
+            conn, item, context, f"start:{idempotency_key}", now, initial_version=1
+        )
+        result["command"] = "create_and_start"
     else:
-        result = {'ok': True, 'command': 'create', 'item': _item_from_row(item)}
-    metadata['command_result'] = result
-    conn.execute('UPDATE work_items SET metadata_json=? WHERE work_item_id=?',
-                 (json.dumps(metadata, ensure_ascii=False, sort_keys=True), work_item_id))
+        result = {"ok": True, "command": "create", "item": _item_from_row(item)}
+    metadata["command_result"] = result
+    conn.execute(
+        "UPDATE work_items SET metadata_json=? WHERE work_item_id=?",
+        (json.dumps(metadata, ensure_ascii=False, sort_keys=True), work_item_id),
+    )
     return result
 
 
-def create_supervision_repair(conn, *, repo_id, title, description, repair, now, idempotency_key):
+def create_supervision_repair(
+    conn, *, repo_id, title, description, repair, now, idempotency_key
+):
     """Caller-owned transaction for a policy-authorized system maintenance item."""
     validate_idempotency_key(idempotency_key)
-    title = validate_text(title, 'title', MAX_TITLE, required=True)
-    description = validate_text(description, 'description', MAX_DESCRIPTION)
-    if not conn.execute('SELECT 1 FROM repos WHERE repo_id=? AND enabled=1', (repo_id,)).fetchone():
-        raise WorkItemValidationError('maintenance repository is not enabled')
-    existing = conn.execute('SELECT * FROM work_items WHERE creation_idempotency_key=?', (idempotency_key,)).fetchone()
+    title = validate_text(title, "title", MAX_TITLE, required=True)
+    description = validate_text(description, "description", MAX_DESCRIPTION)
+    if not conn.execute(
+        "SELECT 1 FROM repos WHERE repo_id=? AND enabled=1", (repo_id,)
+    ).fetchone():
+        raise WorkItemValidationError("maintenance repository is not enabled")
+    existing = conn.execute(
+        "SELECT * FROM work_items WHERE creation_idempotency_key=?", (idempotency_key,)
+    ).fetchone()
     if existing:
-        metadata = _decode_json(existing['metadata_json'], {}) or {}
-        if (existing['repo_id'] != repo_id or existing['created_by'] != 'system:supervisor'
-                or (metadata.get('supervision_repair') or {}).get('root_key') != repair['root_key']):
-            raise WorkItemConflictError('maintenance item idempotency key conflicts')
-        return metadata['command_result'], False
-    start = repair.get('automatic') is True
-    worker = repair.get('worker') if start else None
-    context = CommandContext('system', 'system:supervisor', frozenset({repo_id}), frozenset({worker} if worker else ()))
-    routing_mode, worker = validate_routing(context, 'manual' if start else 'auto', worker)
-    return _insert_work_item(conn, context=context, repo_id=repo_id, title=title, description=description,
-                             priority='P2', routing_mode=routing_mode, requested_worker=worker, start=start,
-                             idempotency_key=idempotency_key, now=now, metadata={'supervision_repair': repair}), True
+        metadata = _decode_json(existing["metadata_json"], {}) or {}
+        if (
+            existing["repo_id"] != repo_id
+            or existing["created_by"] != "system:supervisor"
+            or (metadata.get("supervision_repair") or {}).get("root_key")
+            != repair["root_key"]
+        ):
+            raise WorkItemConflictError("maintenance item idempotency key conflicts")
+        return metadata["command_result"], False
+    start = repair.get("automatic") is True
+    worker = repair.get("worker") if start else None
+    context = CommandContext(
+        "system",
+        "system:supervisor",
+        frozenset({repo_id}),
+        frozenset({worker} if worker else ()),
+    )
+    routing_mode, worker = validate_routing(
+        context, "manual" if start else "auto", worker
+    )
+    return _insert_work_item(
+        conn,
+        context=context,
+        repo_id=repo_id,
+        title=title,
+        description=description,
+        priority="P2",
+        routing_mode=routing_mode,
+        requested_worker=worker,
+        start=start,
+        idempotency_key=idempotency_key,
+        now=now,
+        metadata={"supervision_repair": repair},
+    ), True
 
 
 def create_work_item(
@@ -842,12 +1036,26 @@ def create_work_item(
                 result = metadata.get("command_result")
                 if result:
                     return _commit_result(conn, db_path, result, notifier)
-                result = {"ok": True, "command": "create", "item": _item_from_row(existing)}
+                result = {
+                    "ok": True,
+                    "command": "create",
+                    "item": _item_from_row(existing),
+                }
                 return _commit_result(conn, db_path, result, notifier)
 
-            result = _insert_work_item(conn, context=context, repo_id=repo_id, title=title, description=description,
-                                       priority=priority, routing_mode=routing_mode, requested_worker=requested_worker,
-                                       start=start, idempotency_key=idempotency_key, now=utc_now())
+            result = _insert_work_item(
+                conn,
+                context=context,
+                repo_id=repo_id,
+                title=title,
+                description=description,
+                priority=priority,
+                routing_mode=routing_mode,
+                requested_worker=requested_worker,
+                start=start,
+                idempotency_key=idempotency_key,
+                now=utc_now(),
+            )
             return _commit_result(conn, db_path, result, notifier)
         except Exception:
             conn.rollback()
@@ -902,27 +1110,43 @@ def execute_command(
     if not isinstance(expected_version, int) or isinstance(expected_version, bool):
         raise WorkItemValidationError("expected_version must be an integer")
     if expected_event_id is not None:
-        expected_event_id = validate_text(expected_event_id, "expected_event_id", 128, required=True)
+        expected_event_id = validate_text(
+            expected_event_id, "expected_event_id", 128, required=True
+        )
     body = validate_text(body, "body", MAX_REPLY)
     if abandon_review_run_ids is None:
         abandon_review_run_ids = []
     if not isinstance(abandon_review_run_ids, list):
-        raise WorkItemValidationError('abandon_review_run_ids must be a list of run IDs')
-    abandon_review_run_ids = [validate_text(value, 'review run ID', 128, required=True)
-                             for value in abandon_review_run_ids]
+        raise WorkItemValidationError(
+            "abandon_review_run_ids must be a list of run IDs"
+        )
+    abandon_review_run_ids = [
+        validate_text(value, "review run ID", 128, required=True)
+        for value in abandon_review_run_ids
+    ]
     if len(set(abandon_review_run_ids)) != len(abandon_review_run_ids):
-        raise WorkItemValidationError('abandon_review_run_ids must not contain duplicates')
-    if abandon_review_run_ids and command != 'cancel':
-        raise WorkItemValidationError('unknown review launches can only be abandoned during cancel')
+        raise WorkItemValidationError(
+            "abandon_review_run_ids must not contain duplicates"
+        )
+    if abandon_review_run_ids and command != "cancel":
+        raise WorkItemValidationError(
+            "unknown review launches can only be abandoned during cancel"
+        )
 
     db_path = Path(db_path).expanduser()
-    with closing(sqlite3.connect(db_path, isolation_level=None)) as conn, ExitStack() as locks:
+    with (
+        closing(sqlite3.connect(db_path, isolation_level=None)) as conn,
+        ExitStack() as locks,
+    ):
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("BEGIN IMMEDIATE")
         try:
-            from robert_agent.adapters.sqlite import execution_control as execution_store
+            from robert_agent.adapters.sqlite import (
+                execution_control as execution_store,
+            )
+
             execution_store.require_migrated(conn)
             item = _load_item(conn, work_item_id)
             if item["repo_id"] not in context.allowed_repo_ids:
@@ -936,45 +1160,113 @@ def execute_command(
             if item["canceled_at"] is not None:
                 raise WorkItemConflictError("a canceled work item cannot be changed")
             if item["completed_at"] is not None and command != "reopen":
-                raise WorkItemConflictError("a completed work item must be reopened first")
+                raise WorkItemConflictError(
+                    "a completed work item must be reopened first"
+                )
 
             facts = control_queries.lifecycle_facts(conn, item)
-            if command != 'cancel' and 'result_contract_cutover' in facts['workflow_attention']:
-                raise WorkItemConflictError('Incompatible execution requires explicit recovery. Confirm workers stopped and use Retrigger for GitHub tasks, or Cancel and create replacement work.')
+            if (
+                command != "cancel"
+                and "result_contract_cutover" in facts["workflow_attention"]
+            ):
+                raise WorkItemConflictError(
+                    "Incompatible execution requires explicit recovery. Confirm workers stopped and use Retrigger for GitHub tasks, or Cancel and create replacement work."
+                )
             if facts["source_closed"] and command != "cancel":
-                raise WorkItemConflictError("The GitHub source is closed. Cancel this item; reopen the source on GitHub before starting new work.")
-            audit_task = control_queries.current_task(conn, facts['streams'])
-            audit_result_id = (_decode_json(audit_task['metadata_json'], {}).get('audit_retry_required') if audit_task else None)
-            if command == 'retry' and audit_result_id:
-                work_item_control.require_idle_repository(conn, item['repo_id'], utc_now())
+                raise WorkItemConflictError(
+                    "The GitHub source is closed. Cancel this item; reopen the source on GitHub before starting new work."
+                )
+            audit_task = control_queries.current_task(conn, facts["streams"])
+            audit_result_id = (
+                _decode_json(audit_task["metadata_json"], {}).get(
+                    "audit_retry_required"
+                )
+                if audit_task
+                else None
+            )
+            if command == "retry" and audit_result_id:
+                work_item_control.require_idle_repository(
+                    conn, item["repo_id"], utc_now()
+                )
                 from robert_agent.delivery.lock import task_publication_lock
-                if (facts['running'] or facts['workflow_attention'] or facts['cleanup_pending']
-                        or not locks.enter_context(task_publication_lock(db_path, audit_task['task_id']))):
-                    raise WorkItemConflictError('The saved result is not idle. Resolve active ownership before retrying its audit.')
-                saved = conn.execute("SELECT attempt_id,metadata_json FROM worker_results WHERE result_id=? AND task_id=?", (audit_result_id, audit_task['task_id'])).fetchone()
-                if not saved or _decode_json(saved['metadata_json'], {}).get('audit'):
-                    raise WorkItemConflictError('The audit state changed. Refresh before retrying.')
-                if conn.execute('SELECT 1 FROM publication_intents pi JOIN github_actions ga ON ga.action_id=pi.action_id WHERE ga.result_id=?', (audit_result_id,)).fetchone():
-                    raise WorkItemConflictError('Publication has started; reconcile it before retrying.')
+
+                if (
+                    facts["running"]
+                    or facts["workflow_attention"]
+                    or facts["cleanup_pending"]
+                    or not locks.enter_context(
+                        task_publication_lock(db_path, audit_task["task_id"])
+                    )
+                ):
+                    raise WorkItemConflictError(
+                        "The saved result is not idle. Resolve active ownership before retrying its audit."
+                    )
+                saved = conn.execute(
+                    "SELECT attempt_id,metadata_json FROM worker_results WHERE result_id=? AND task_id=?",
+                    (audit_result_id, audit_task["task_id"]),
+                ).fetchone()
+                if not saved or _decode_json(saved["metadata_json"], {}).get("audit"):
+                    raise WorkItemConflictError(
+                        "The audit state changed. Refresh before retrying."
+                    )
+                if conn.execute(
+                    "SELECT 1 FROM publication_intents pi JOIN github_actions ga ON ga.action_id=pi.action_id WHERE ga.result_id=?",
+                    (audit_result_id,),
+                ).fetchone():
+                    raise WorkItemConflictError(
+                        "Publication has started; reconcile it before retrying."
+                    )
                 now = utc_now()
-                conn.execute("UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.audit_observation') WHERE result_id=?", (audit_result_id,))
-                conn.execute("UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.audit_retry_required'),updated_at=? WHERE task_id=?", (now, audit_task['task_id']))
-                unresolved = _unresolved_event(conn, work_item_id, {'execution_failed'})
-                if expected_event_id and (not unresolved or unresolved['event_id'] != expected_event_id):
-                    raise WorkItemConflictError('The audit failure changed. Refresh before retrying.')
-                conn.execute('UPDATE work_items SET version=version+1,updated_at=? WHERE work_item_id=?', (now, work_item_id))
-                retry = {'ok': True, 'command': command, 'item': _item_from_row(_load_item(conn, work_item_id)),
-                         'task_id': audit_task['task_id'], 'result_id': audit_result_id,
-                         'resolved_event_id': unresolved['event_id'] if unresolved else None}
-                retry_event = _insert_event(conn, work_item_id, event_type='retry_requested', actor_kind=context.actor_kind,
-                    actor_identity=context.actor_identity, idempotency_key=idempotency_key,
-                    resolves_event_id=retry['resolved_event_id'], metadata={'command_result': retry}, now=now)
-                supervision_lineage.record_operator_admission(conn, item, retry_event, audit_task['task_id'], now)
+                conn.execute(
+                    "UPDATE worker_results SET metadata_json=json_remove(metadata_json,'$.audit_observation') WHERE result_id=?",
+                    (audit_result_id,),
+                )
+                conn.execute(
+                    "UPDATE tasks SET metadata_json=json_remove(metadata_json,'$.audit_retry_required'),updated_at=? WHERE task_id=?",
+                    (now, audit_task["task_id"]),
+                )
+                unresolved = _unresolved_event(conn, work_item_id, {"execution_failed"})
+                if expected_event_id and (
+                    not unresolved or unresolved["event_id"] != expected_event_id
+                ):
+                    raise WorkItemConflictError(
+                        "The audit failure changed. Refresh before retrying."
+                    )
+                conn.execute(
+                    "UPDATE work_items SET version=version+1,updated_at=? WHERE work_item_id=?",
+                    (now, work_item_id),
+                )
+                retry = {
+                    "ok": True,
+                    "command": command,
+                    "item": _item_from_row(_load_item(conn, work_item_id)),
+                    "task_id": audit_task["task_id"],
+                    "result_id": audit_result_id,
+                    "resolved_event_id": unresolved["event_id"] if unresolved else None,
+                }
+                retry_event = _insert_event(
+                    conn,
+                    work_item_id,
+                    event_type="retry_requested",
+                    actor_kind=context.actor_kind,
+                    actor_identity=context.actor_identity,
+                    idempotency_key=idempotency_key,
+                    resolves_event_id=retry["resolved_event_id"],
+                    metadata={"command_result": retry},
+                    now=now,
+                )
+                supervision_lineage.record_operator_admission(
+                    conn, item, retry_event, audit_task["task_id"], now
+                )
                 return _commit_result(conn, db_path, retry, notifier)
             if facts["running"] and command not in {"cancel", "approve"}:
-                raise WorkItemConflictError("An attempt is still running; stop it before starting another attempt.")
+                raise WorkItemConflictError(
+                    "An attempt is still running; stop it before starting another attempt."
+                )
             if facts["actions"] and command not in {"cancel", "retry_publish"}:
-                raise WorkItemConflictError("A result is awaiting publication. Retry publication or cancel; do not start another worker.")
+                raise WorkItemConflictError(
+                    "A result is awaiting publication. Retry publication or cancel; do not start another worker."
+                )
             now = utc_now()
             if command == "start":
                 result = _activate(conn, item, context, idempotency_key, now)
@@ -985,7 +1277,9 @@ def execute_command(
                     raise WorkItemConflictError("only a Backlog item can be edited")
                 updates = {}
                 if title is not None:
-                    updates["title"] = validate_text(title, "title", MAX_TITLE, required=True)
+                    updates["title"] = validate_text(
+                        title, "title", MAX_TITLE, required=True
+                    )
                 if description is not None:
                     updates["description"] = validate_text(
                         description,
@@ -1003,7 +1297,9 @@ def execute_command(
                     updates["routing_mode"] = selected_mode
                     updates["requested_worker"] = selected_worker
                 elif requested_worker is not None:
-                    raise WorkItemValidationError("routing_mode is required with requested_worker")
+                    raise WorkItemValidationError(
+                        "routing_mode is required with requested_worker"
+                    )
                 if not updates:
                     raise WorkItemValidationError("edit requires at least one field")
                 assignments = ", ".join(f"{field} = ?" for field in updates)
@@ -1018,8 +1314,15 @@ def execute_command(
                 resolved_event_id = None
                 task_id = None
             elif command == "cancel":
-                work_item_control.cancel_execution(conn, item, facts, now, db_path, locks,
-                                                   abandon_review_run_ids=abandon_review_run_ids)
+                work_item_control.cancel_execution(
+                    conn,
+                    item,
+                    facts,
+                    now,
+                    db_path,
+                    locks,
+                    abandon_review_run_ids=abandon_review_run_ids,
+                )
                 conn.execute(
                     """
                     UPDATE work_items
@@ -1032,40 +1335,114 @@ def execute_command(
                 task_id = None
             elif command == "retry_publish":
                 if facts["publication_retry_blocked"]:
-                    raise WorkItemConflictError("Publication reconciliation requires operator attention. Cancel the task and resolve the reported cause before starting new work.")
+                    raise WorkItemConflictError(
+                        "Publication reconciliation requires operator attention. Cancel the task and resolve the reported cause before starting new work."
+                    )
                 if not facts["publish_failures"]:
-                    raise WorkItemConflictError("No failed publication is available to retry.")
+                    raise WorkItemConflictError(
+                        "No failed publication is available to retry."
+                    )
                 if facts["publication_retry_pending"]:
-                    raise WorkItemConflictError("A publication retry is already queued.")
+                    raise WorkItemConflictError(
+                        "A publication retry is already queued."
+                    )
                 failed_action_id = facts["publish_failures"][0]["action_id"]
-                task_id = next(action["task_id"] for action in facts["actions"] if action["action_id"] == failed_action_id)
-                wakeup.request_wakeup(conn, repo_id=item["repo_id"], reason="manual_operator_request",
-                    dedupe_key=f"publication-retry:{idempotency_key}", work_item_id=work_item_id,
-                    task_id=task_id, metadata={"kind": "publication_retry"}, now=now)
-                conn.execute("UPDATE work_items SET updated_at=?, version=version+1 WHERE work_item_id=?", (now, work_item_id))
+                task_id = next(
+                    action["task_id"]
+                    for action in facts["actions"]
+                    if action["action_id"] == failed_action_id
+                )
+                wakeup.request_wakeup(
+                    conn,
+                    repo_id=item["repo_id"],
+                    reason="manual_operator_request",
+                    dedupe_key=f"publication-retry:{idempotency_key}",
+                    work_item_id=work_item_id,
+                    task_id=task_id,
+                    metadata={"kind": "publication_retry"},
+                    now=now,
+                )
+                conn.execute(
+                    "UPDATE work_items SET updated_at=?, version=version+1 WHERE work_item_id=?",
+                    (now, work_item_id),
+                )
                 resolved_event_id = None
-            elif command == 'retry' and (handoff_failure := _unresolved_event(conn, work_item_id, {'execution_failed'})) and (
-                    _decode_json(handoff_failure['metadata_json'], {}).get('kind') == 'pending_handoff'):
-                work_item_control.require_idle_repository(conn, item['repo_id'], now)
-                parent = _active_or_latest_task(conn, item['workstream_id'])
-                handoff = _decode_json(parent['metadata_json'], {}).get('pending_handoff', {}) if parent else {}
+            elif (
+                command == "retry"
+                and (
+                    handoff_failure := _unresolved_event(
+                        conn, work_item_id, {"execution_failed"}
+                    )
+                )
+                and (
+                    _decode_json(handoff_failure["metadata_json"], {}).get("kind")
+                    == "pending_handoff"
+                )
+            ):
+                work_item_control.require_idle_repository(conn, item["repo_id"], now)
+                parent = _active_or_latest_task(conn, item["workstream_id"])
+                handoff = (
+                    _decode_json(parent["metadata_json"], {}).get("pending_handoff", {})
+                    if parent
+                    else {}
+                )
                 from robert_agent.execution.ownership import subject_for_task
-                binding = execution_store.get_binding(conn, *subject_for_task(conn, parent['task_id'])) if parent else None
-                stream = conn.execute('SELECT lifecycle,active_task_id FROM workstreams WHERE workstream_id=?', (item['workstream_id'],)).fetchone()
-                if (not parent or parent['lifecycle'] != 'completed' or handoff.get('status') != 'attention'
-                        or _decode_json(handoff_failure['metadata_json'], {}).get('task_id') != parent['task_id']
-                        or not stream or stream[0] != 'active' or stream[1] != parent['task_id']
-                        or not binding or binding['binding_status'] != 'active'
-                        or (expected_event_id and handoff_failure['event_id'] != expected_event_id)):
-                    raise WorkItemConflictError('The pending request changed. Refresh before retrying.')
-                conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.pending_handoff',json(?)),updated_at=? WHERE task_id=?",
-                    (json.dumps({'status': 'pending', 'retryable': True, 'previous_failure': handoff}), now, parent['task_id']))
-                conn.execute('UPDATE work_items SET updated_at=?,version=version+1 WHERE work_item_id=?', (now, work_item_id))
-                task_id = parent['task_id']
-                resolved_event_id = handoff_failure['event_id']
+
+                binding = (
+                    execution_store.get_binding(
+                        conn, *subject_for_task(conn, parent["task_id"])
+                    )
+                    if parent
+                    else None
+                )
+                stream = conn.execute(
+                    "SELECT lifecycle,active_task_id FROM workstreams WHERE workstream_id=?",
+                    (item["workstream_id"],),
+                ).fetchone()
+                if (
+                    not parent
+                    or parent["lifecycle"] != "completed"
+                    or handoff.get("status") != "attention"
+                    or _decode_json(handoff_failure["metadata_json"], {}).get("task_id")
+                    != parent["task_id"]
+                    or not stream
+                    or stream[0] != "active"
+                    or stream[1] != parent["task_id"]
+                    or not binding
+                    or binding["binding_status"] != "active"
+                    or (
+                        expected_event_id
+                        and handoff_failure["event_id"] != expected_event_id
+                    )
+                ):
+                    raise WorkItemConflictError(
+                        "The pending request changed. Refresh before retrying."
+                    )
+                conn.execute(
+                    "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.pending_handoff',json(?)),updated_at=? WHERE task_id=?",
+                    (
+                        json.dumps(
+                            {
+                                "status": "pending",
+                                "retryable": True,
+                                "previous_failure": handoff,
+                            }
+                        ),
+                        now,
+                        parent["task_id"],
+                    ),
+                )
+                conn.execute(
+                    "UPDATE work_items SET updated_at=?,version=version+1 WHERE work_item_id=?",
+                    (now, work_item_id),
+                )
+                task_id = parent["task_id"]
+                resolved_event_id = handoff_failure["event_id"]
             elif command == "reopen":
                 if item["completed_at"] is None or item["canceled_at"] is not None:
-                    raise WorkItemConflictError("only a completed work item can be reopened")
+                    raise WorkItemConflictError(
+                        "only a completed work item can be reopened"
+                    )
                 conn.execute(
                     "UPDATE work_items SET completed_at = NULL, updated_at = ?, version = version + 1 WHERE work_item_id = ?",
                     (now, work_item_id),
@@ -1079,7 +1456,9 @@ def execute_command(
                     parent_task_id=parent_task_id,
                     trigger_event_id=idempotency_key,
                     now=now,
-                    lineage_key=supervision_lineage.operator_key(work_item_id, idempotency_key),
+                    lineage_key=supervision_lineage.operator_key(
+                        work_item_id, idempotency_key
+                    ),
                 )
                 resolved_event_id = None
             else:
@@ -1089,38 +1468,91 @@ def execute_command(
                 elif command == "retry":
                     allowed_events = FAILURE_EVENTS
                 elif command == "approve":
-                    allowed_events = DECISION_EVENTS | {"completion_acceptance_requested"}
+                    allowed_events = DECISION_EVENTS | {
+                        "completion_acceptance_requested"
+                    }
                 unresolved = _unresolved_event(conn, work_item_id, allowed_events)
-                if expected_event_id is not None and (not unresolved or unresolved["event_id"] != expected_event_id):
-                    raise WorkItemConflictError("The attention item changed. Review the latest question or failure before continuing.")
+                if expected_event_id is not None and (
+                    not unresolved or unresolved["event_id"] != expected_event_id
+                ):
+                    raise WorkItemConflictError(
+                        "The attention item changed. Review the latest question or failure before continuing."
+                    )
                 review_changes = (
                     command == "request_changes"
                     and not unresolved
                     and _has_open_pull_request(conn, item["workstream_id"])
                 )
                 parent = _active_or_latest_task(conn, item["workstream_id"])
-                failed_retry = command == "retry" and parent and parent["lifecycle"] == "failed" and item["origin_type"] == "web"
+                failed_retry = (
+                    command == "retry"
+                    and parent
+                    and parent["lifecycle"] == "failed"
+                    and item["origin_type"] == "web"
+                )
                 if not unresolved and not review_changes and not failed_retry:
-                    raise WorkItemConflictError("work item is not waiting for operator input")
-                if command == "reply" and unresolved["event_type"] not in QUESTION_EVENTS:
-                    raise WorkItemConflictError("the current attention item does not accept a reply")
-                if command == "retry" and unresolved and unresolved["event_type"] not in FAILURE_EVENTS:
-                    raise WorkItemConflictError("the current attention item is not retryable")
+                    raise WorkItemConflictError(
+                        "work item is not waiting for operator input"
+                    )
+                if (
+                    command == "reply"
+                    and unresolved["event_type"] not in QUESTION_EVENTS
+                ):
+                    raise WorkItemConflictError(
+                        "the current attention item does not accept a reply"
+                    )
+                if (
+                    command == "retry"
+                    and unresolved
+                    and unresolved["event_type"] not in FAILURE_EVENTS
+                ):
+                    raise WorkItemConflictError(
+                        "the current attention item is not retryable"
+                    )
                 if command in {"reply", "request_changes"} and not body.strip():
                     raise WorkItemValidationError("body is required")
-                if facts["running"] and (not unresolved or unresolved["event_type"] not in DECISION_EVENTS):
+                if facts["running"] and (
+                    not unresolved or unresolved["event_type"] not in DECISION_EVENTS
+                ):
                     raise WorkItemConflictError("An attempt is still running.")
                 unavailable_retry = (
-                    command == "retry" and unresolved and unresolved["event_type"] == "manual_worker_unavailable"
-                    and parent and parent["lifecycle"] in {"detected", "authorized", "classified", "queued"}
-                    and (_decode_json(unresolved["metadata_json"], {}) or {}).get("task_id") == parent["task_id"]
+                    command == "retry"
+                    and unresolved
+                    and unresolved["event_type"] == "manual_worker_unavailable"
+                    and parent
+                    and parent["lifecycle"]
+                    in {"detected", "authorized", "classified", "queued"}
+                    and (_decode_json(unresolved["metadata_json"], {}) or {}).get(
+                        "task_id"
+                    )
+                    == parent["task_id"]
                 )
                 if unavailable_retry:
-                    work_item_control.require_idle_repository(conn, item["repo_id"], now)
-                    conn.execute("UPDATE attempts SET status='canceled',finished_at=? WHERE task_id=? AND status='prepared'", (now, parent["task_id"]))
-                    conn.execute("UPDATE tasks SET lifecycle='canceled',updated_at=? WHERE task_id=?", (now, parent["task_id"]))
-                if not unavailable_retry and parent and parent["lifecycle"] in {"detected", "authorized", "classified", "queued", "running"} and not (command == "approve" and unresolved and unresolved["event_type"] in DECISION_EVENTS):
-                    raise WorkItemConflictError("An active task already exists. Wait for its result or cancel it.")
+                    work_item_control.require_idle_repository(
+                        conn, item["repo_id"], now
+                    )
+                    conn.execute(
+                        "UPDATE attempts SET status='canceled',finished_at=? WHERE task_id=? AND status='prepared'",
+                        (now, parent["task_id"]),
+                    )
+                    conn.execute(
+                        "UPDATE tasks SET lifecycle='canceled',updated_at=? WHERE task_id=?",
+                        (now, parent["task_id"]),
+                    )
+                if (
+                    not unavailable_retry
+                    and parent
+                    and parent["lifecycle"]
+                    in {"detected", "authorized", "classified", "queued", "running"}
+                    and not (
+                        command == "approve"
+                        and unresolved
+                        and unresolved["event_type"] in DECISION_EVENTS
+                    )
+                ):
+                    raise WorkItemConflictError(
+                        "An active task already exists. Wait for its result or cancel it."
+                    )
                 unresolved_metadata = (
                     _decode_json(unresolved["metadata_json"], {}) or {}
                     if unresolved
@@ -1128,7 +1560,9 @@ def execute_command(
                 )
                 if command == "approve" and unresolved["event_type"] in DECISION_EVENTS:
                     if not facts["approval_task_id"]:
-                        raise WorkItemConflictError("The route decision has no active task. Refresh and reconcile or cancel this item.")
+                        raise WorkItemConflictError(
+                            "The route decision has no active task. Refresh and reconcile or cancel this item."
+                        )
                     conn.execute(
                         """
                         UPDATE work_items
@@ -1140,7 +1574,10 @@ def execute_command(
                         (now, now, work_item_id),
                     )
                     task_id = None
-                elif command == "approve" and unresolved_metadata.get("kind") == "completion_acceptance":
+                elif (
+                    command == "approve"
+                    and unresolved_metadata.get("kind") == "completion_acceptance"
+                ):
                     parent = _active_or_latest_task(conn, item["workstream_id"])
                     if parent and parent["lifecycle"] in {"waiting_for_user", "failed"}:
                         conn.execute(
@@ -1170,14 +1607,27 @@ def execute_command(
                             (selected_mode, selected_worker, work_item_id),
                         )
                     elif requested_worker is not None:
-                        raise WorkItemValidationError("routing_mode is required with requested_worker")
+                        raise WorkItemValidationError(
+                            "routing_mode is required with requested_worker"
+                        )
                     parent = _active_or_latest_task(conn, item["workstream_id"])
-                    question_task_id = unresolved_metadata.get('task_id') if command == 'reply' else None
+                    question_task_id = (
+                        unresolved_metadata.get("task_id")
+                        if command == "reply"
+                        else None
+                    )
                     if question_task_id:
-                        question_task = conn.execute('SELECT * FROM tasks WHERE task_id=?', (question_task_id,)).fetchone()
-                        if (not question_task or question_task['workstream_id'] not in facts['streams']
-                                or question_task['lifecycle'] != 'waiting_for_user'):
-                            raise WorkItemConflictError('The question owner changed. Refresh before replying.')
+                        question_task = conn.execute(
+                            "SELECT * FROM tasks WHERE task_id=?", (question_task_id,)
+                        ).fetchone()
+                        if (
+                            not question_task
+                            or question_task["workstream_id"] not in facts["streams"]
+                            or question_task["lifecycle"] != "waiting_for_user"
+                        ):
+                            raise WorkItemConflictError(
+                                "The question owner changed. Refresh before replying."
+                            )
                         parent = question_task
                     parent_task_id = _finish_parent_for_child(conn, parent, now)
                     conn.execute(
@@ -1193,8 +1643,12 @@ def execute_command(
                         requested_worker=selected_worker,
                         trigger_event_id=idempotency_key,
                         now=now,
-                        workstream_id=parent['workstream_id'] if question_task_id else None,
-                        lineage_key=supervision_lineage.get_task_lineage(conn, parent_task_id),
+                        workstream_id=parent["workstream_id"]
+                        if question_task_id
+                        else None,
+                        lineage_key=supervision_lineage.get_task_lineage(
+                            conn, parent_task_id
+                        ),
                     )
                 resolved_event_id = unresolved["event_id"] if unresolved else None
 
@@ -1207,7 +1661,7 @@ def execute_command(
                 "resolved_event_id": resolved_event_id,
             }
             if abandon_review_run_ids:
-                result['abandoned_review_run_ids'] = abandon_review_run_ids
+                result["abandoned_review_run_ids"] = abandon_review_run_ids
             command_event = _insert_event(
                 conn,
                 work_item_id,
@@ -1220,7 +1674,9 @@ def execute_command(
                 metadata={"command_result": result, "task_id": task_id},
                 now=now,
             )
-            supervision_lineage.record_operator_admission(conn, item, command_event, task_id, now)
+            supervision_lineage.record_operator_admission(
+                conn, item, command_event, task_id, now
+            )
             return _commit_result(conn, db_path, result, notifier)
         except Exception:
             conn.rollback()

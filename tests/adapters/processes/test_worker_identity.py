@@ -77,24 +77,40 @@ class WorkerIdentityTests(unittest.TestCase):
             "command_fingerprint": "f" * 64,
             "identity_source": "proc",
         }
-        for states, expected in ((["Z"], "dead"), (["S", "Z"], "dead"), (["S", "S"], "unknown")):
+        for states, expected in (
+            (["Z"], "dead"),
+            (["S", "Z"], "dead"),
+            (["S", "S"], "unknown"),
+        ):
             with self.subTest(states=states):
-                stats = ["77 (worker) " + " ".join([state, "1", "77"] + ["0"] * 16 + ["123"]) for state in states]
-                with patch.object(worker_identity.os, "kill"), \
-                     patch.object(Path, "read_text", side_effect=stats), \
-                     patch.object(Path, "read_bytes", return_value=b""):
-                    self.assertEqual(worker_identity.inspect_recorded_identity(recorded), expected)
+                stats = [
+                    "77 (worker) " + " ".join([state, "1", "77"] + ["0"] * 16 + ["123"])
+                    for state in states
+                ]
+                with (
+                    patch.object(worker_identity.os, "kill"),
+                    patch.object(Path, "read_text", side_effect=stats),
+                    patch.object(Path, "read_bytes", return_value=b""),
+                ):
+                    self.assertEqual(
+                        worker_identity.inspect_recorded_identity(recorded), expected
+                    )
 
     def test_capturing_exited_proc_does_not_fall_back_to_ps(self):
         from unittest.mock import patch
         from robert_agent.adapters.processes import identity as worker_identity
 
         stat = "77 (worker) " + " ".join(["Z", "1", "77"] + ["0"] * 16 + ["123"])
-        with patch.object(Path, "read_text", return_value=stat), \
-             patch.object(Path, "read_bytes", return_value=b""):
+        with (
+            patch.object(Path, "read_text", return_value=stat),
+            patch.object(Path, "read_bytes", return_value=b""),
+        ):
             with self.assertRaises(worker_identity.ZombieProcess):
                 worker_identity.capture_process_identity(
-                    77, ps_runner=lambda *_args, **_kwargs: self.fail("must not capture a zombie")
+                    77,
+                    ps_runner=lambda *_args, **_kwargs: self.fail(
+                        "must not capture a zombie"
+                    ),
                 )
 
     def test_proc_disappearance_rechecks_pid_before_calling_it_dead(self):
@@ -212,15 +228,20 @@ class WorkerIdentityTests(unittest.TestCase):
         from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
-            "pid": 7, "process_group_id": 7, "process_start_token": "123",
-            "command_fingerprint": "f" * 64, "identity_source": "proc",
+            "pid": 7,
+            "process_group_id": 7,
+            "process_start_token": "123",
+            "command_fingerprint": "f" * 64,
+            "identity_source": "proc",
         }
         states = iter(["alive_same", "unknown", "dead"])
         signals = []
         result = worker_identity.terminate_recorded_identity(
-            recorded, inspect=lambda _: next(states),
+            recorded,
+            inspect=lambda _: next(states),
             signal_group=lambda *args: signals.append(args),
-            supervisor_process_group_id=99, sleep=lambda _: None,
+            supervisor_process_group_id=99,
+            sleep=lambda _: None,
         )
         self.assertEqual(result["status"], "terminated")
         self.assertEqual(len(signals), 1)
@@ -229,8 +250,11 @@ class WorkerIdentityTests(unittest.TestCase):
         from robert_agent.adapters.processes import identity as worker_identity
 
         recorded = {
-            "pid": 7, "process_group_id": 7, "process_start_token": "123",
-            "command_fingerprint": "f" * 64, "identity_source": "proc",
+            "pid": 7,
+            "process_group_id": 7,
+            "process_start_token": "123",
+            "command_fingerprint": "f" * 64,
+            "identity_source": "proc",
         }
         states = iter(["alive_same", "unknown"])
         elapsed = [0.0]
@@ -240,14 +264,17 @@ class WorkerIdentityTests(unittest.TestCase):
             elapsed[0] += seconds
 
         result = worker_identity.terminate_recorded_identity(
-            recorded, inspect=lambda _: next(states, "alive_same"),
+            recorded,
+            inspect=lambda _: next(states, "alive_same"),
             signal_group=lambda *args: signals.append(args),
-            supervisor_process_group_id=99, clock=lambda: elapsed[0],
-            sleep=sleep, timeout_seconds=.1,
+            supervisor_process_group_id=99,
+            clock=lambda: elapsed[0],
+            sleep=sleep,
+            timeout_seconds=0.1,
         )
         self.assertEqual(result["status"], "attention")
         self.assertEqual(len(signals), 1)
-        self.assertGreaterEqual(elapsed[0], .1)
+        self.assertGreaterEqual(elapsed[0], 0.1)
 
     def test_db_backed_identity_operations_load_only_attempt_dispatch_metadata(self):
         from robert_agent.adapters.sqlite import database as storage
@@ -295,11 +322,15 @@ class WorkerIdentityTests(unittest.TestCase):
             )
             try:
                 self.assertEqual(
-                    execution_operations.inspect_worker_identity(db_path, "attempt:test"),
+                    execution_operations.inspect_worker_identity(
+                        db_path, "attempt:test"
+                    ),
                     "alive_same",
                 )
             finally:
-                execution_operations.worker_identity.inspect_recorded_identity = original
+                execution_operations.worker_identity.inspect_recorded_identity = (
+                    original
+                )
 
     def test_terminate_worker_persists_redacted_result_once_and_marks_attention(self):
         from robert_agent.adapters.sqlite import database as storage
@@ -342,7 +373,9 @@ class WorkerIdentityTests(unittest.TestCase):
                         ),
                     ),
                 )
-                execution_store.ensure_subject(conn, 'task', 'task:test', 'human_request', now)
+                execution_store.ensure_subject(
+                    conn, "task", "task:test", "human_request", now
+                )
 
             original = execution_operations.worker_identity.terminate_recorded_identity
             execution_operations.worker_identity.terminate_recorded_identity = (
@@ -363,7 +396,9 @@ class WorkerIdentityTests(unittest.TestCase):
                     "attention",
                 )
             finally:
-                execution_operations.worker_identity.terminate_recorded_identity = original
+                execution_operations.worker_identity.terminate_recorded_identity = (
+                    original
+                )
 
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 metadata_json = conn.execute(

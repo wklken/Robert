@@ -169,8 +169,6 @@ class WorkflowStoreTests(unittest.TestCase):
         self.assertEqual(binding["binding_status"], "active")
         self.assertEqual(binding["owner_engine"], "legacy")
 
-
-
     def test_publication_intent_is_idempotent(self):
         first = execution_store.prepare_publication_intent(
             self.conn, "action-1", "publish:action-1", "request-1", NOW
@@ -197,7 +195,9 @@ class WorkflowStoreTests(unittest.TestCase):
             self.conn, "action-1", "publish:action-1", "request-1", NOW
         )
 
-        with self.assertRaisesRegex(ValueError, "illegal publication intent transition"):
+        with self.assertRaisesRegex(
+            ValueError, "illegal publication intent transition"
+        ):
             execution_store.transition_publication_intent(
                 self.conn, intent["publication_id"], "published", NOW
             )
@@ -213,7 +213,9 @@ class WorkflowStoreTests(unittest.TestCase):
         attention = execution_store.transition_publication_intent(
             self.conn, retrying["publication_id"], "attention", NOW
         )
-        with self.assertRaisesRegex(ValueError, "illegal publication intent transition"):
+        with self.assertRaisesRegex(
+            ValueError, "illegal publication intent transition"
+        ):
             execution_store.transition_publication_intent(
                 self.conn, attention["publication_id"], "executing", NOW
             )

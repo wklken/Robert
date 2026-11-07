@@ -2,6 +2,7 @@ import json
 import unittest
 from tests.support import PACKAGE_ROOT
 from tests.support import REPO_ROOT
+
 WORKER_MODULE = PACKAGE_ROOT / "worker"
 
 
@@ -12,7 +13,9 @@ class NewSkillSkeletonTests(unittest.TestCase):
         self.assertTrue((WORKER_MODULE / "heartbeat.py").exists())
         self.assertTrue((PACKAGE_ROOT / "resources" / "worker-protocol.md").exists())
         self.assertTrue((PACKAGE_ROOT / "resources" / "result-contract.md").exists())
-        self.assertTrue((PACKAGE_ROOT / "resources" / "schemas" / "snapshot.schema.json").exists())
+        self.assertTrue(
+            (PACKAGE_ROOT / "resources" / "schemas" / "snapshot.schema.json").exists()
+        )
 
     def test_package_version_is_public_beta(self):
         from robert_agent import __version__
@@ -46,11 +49,17 @@ class NewSkillSkeletonTests(unittest.TestCase):
             PACKAGE_ROOT / "resources" / "result-contract.md",
             PACKAGE_ROOT / "resources" / "schemas" / "snapshot.schema.json",
         ]
-        missing = [str(path.relative_to(REPO_ROOT)) for path in required_paths if not path.exists()]
+        missing = [
+            str(path.relative_to(REPO_ROOT))
+            for path in required_paths
+            if not path.exists()
+        ]
         self.assertEqual(missing, [])
 
     def test_acceptance_matrix_names_collaboration_workflows(self):
-        text = (PACKAGE_ROOT / "resources" / "acceptance-matrix.md").read_text(encoding="utf-8")
+        text = (PACKAGE_ROOT / "resources" / "acceptance-matrix.md").read_text(
+            encoding="utf-8"
+        )
         required_fragments = [
             "issue-assignment-analysis",
             "issue-assignment-new-pr",
@@ -77,14 +86,19 @@ class NewSkillSkeletonTests(unittest.TestCase):
             for path in root.rglob("*.py"):
                 text = path.read_text(encoding="utf-8")
                 for literal in forbidden_literals:
-                    if literal == "result.json" and path.relative_to(PACKAGE_ROOT).as_posix() in {
-                        "workflows/review/files.py", "workflows/review/coordinator.py"
+                    if literal == "result.json" and path.relative_to(
+                        PACKAGE_ROOT
+                    ).as_posix() in {
+                        "workflows/review/files.py",
+                        "workflows/review/coordinator.py",
                     }:
                         # Native review results are registered artifacts, not the
                         # removed file-backed task/control plane.
                         continue
                     if literal in text:
-                        offenders.append(f"{path.relative_to(REPO_ROOT)} contains {literal}")
+                        offenders.append(
+                            f"{path.relative_to(REPO_ROOT)} contains {literal}"
+                        )
         self.assertEqual(offenders, [])
 
     def test_result_schemas_require_used_skills(self):
@@ -104,14 +118,24 @@ class NewSkillSkeletonTests(unittest.TestCase):
         self.assertNotIn("minItems", schema["properties"]["used_skills"])
 
     def test_config_schema_documents_public_yaml_contract(self):
-        schema = json.loads((PACKAGE_ROOT / "resources" / "schemas" / "config.schema.json").read_text(encoding="utf-8"))
+        schema = json.loads(
+            (PACKAGE_ROOT / "resources" / "schemas" / "config.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertEqual(
             schema["required"],
-            ["version", "data_dir", "database", "github", "default_worker", "workers", "repos"],
+            [
+                "version",
+                "data_dir",
+                "database",
+                "github",
+                "default_worker",
+                "workers",
+                "repos",
+            ],
         )
-        self.assertFalse(
-            schema["properties"]["github"]["additionalProperties"]
-        )
+        self.assertFalse(schema["properties"]["github"]["additionalProperties"])
         worker_config = schema["properties"]["workers"]["additionalProperties"]
         self.assertEqual(
             worker_config["required"],
@@ -122,7 +146,9 @@ class NewSkillSkeletonTests(unittest.TestCase):
             {"type": "string", "minLength": 1},
         )
         daemon_config = schema["properties"]["daemon"]
-        self.assertIn("local_poll_seconds", schema["properties"]["scheduler"]["properties"])
+        self.assertIn(
+            "local_poll_seconds", schema["properties"]["scheduler"]["properties"]
+        )
         self.assertFalse(daemon_config["additionalProperties"])
         repo_config = schema["properties"]["repos"]["items"]
         self.assertEqual(

@@ -7,7 +7,7 @@ name = "robert-github-agent"
 version = "0.1.0b2"
 description = "An AI teammate that takes care of your GitHub work."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [{name = "Robert contributors"}]
 dependencies = [
@@ -22,11 +22,11 @@ classifiers = [
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Software Development",
 ]
 
@@ -41,19 +41,22 @@ Issues = "https://github.com/wklken/robert/issues"
 [project.optional-dependencies]
 dev = [
   "build",
-  # 2.16 drops Python 3.10. Keep the same contract engine across the CI matrix.
+  # Keep the same contract engine across the CI matrix.
   "import-linter>=2.15,<2.16",
   "mypy",
-  # Audit tooling uses Python 3.11+; CI still audits the resolved 3.10 environment.
-  "pip-audit; python_version >= '3.11'",
-  "ruff",
+  "pip-audit",
+  # Pin the formatter so local runs and CI produce the same style.
+  "ruff==0.17.4",
   "twine",
-  "tomli; python_version < '3.11'",
   "types-PyYAML",
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
+
+[tool.ruff.format]
+# Python formatting must not rewrite Markdown prompt fixtures or instructions.
+exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "PGH004"]

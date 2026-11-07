@@ -19,18 +19,26 @@ class DispatchExitRaceTests(unittest.TestCase):
             with (
                 patch.object(dispatch.subprocess, "Popen", return_value=proc),
                 patch.object(
-                    worker_identity, "capture_process_identity",
-                    return_value=identity, side_effect=error,
+                    worker_identity,
+                    "capture_process_identity",
+                    return_value=identity,
+                    side_effect=error,
                 ) as capture,
                 patch.object(
-                    worker_identity, "cleanup_new_process", return_value=cleaned_up,
+                    worker_identity,
+                    "cleanup_new_process",
+                    return_value=cleaned_up,
                 ) as cleanup,
                 patch.dict(dispatch._BACKGROUND_PROCESSES, {}, clear=True),
             ):
                 result = dispatch.dispatch_worker(
-                    "task-1", "attempt-1", prompt,
-                    worker_agent="command", worker_command=[sys.executable],
-                    dry_run=False, startup_probe_seconds=0,
+                    "task-1",
+                    "attempt-1",
+                    prompt,
+                    worker_agent="command",
+                    worker_command=[sys.executable],
+                    dry_run=False,
+                    startup_probe_seconds=0,
                 )
                 capture.assert_called_once_with(proc.pid)
                 self.assertNotIn(proc.pid, dispatch._BACKGROUND_PROCESSES)
@@ -38,7 +46,9 @@ class DispatchExitRaceTests(unittest.TestCase):
 
     def _assert_exited(self, result, proc, cleanup, returncode):
         self.assertEqual(result["ok"], returncode == 0, result)
-        self.assertEqual(result["status"], "running" if returncode == 0 else "failed_dispatch")
+        self.assertEqual(
+            result["status"], "running" if returncode == 0 else "failed_dispatch"
+        )
         self.assertTrue(result["process_exited"])
         self.assertEqual(result["returncode"], returncode)
         self.assertEqual(result["pid"], proc.pid)
@@ -49,14 +59,21 @@ class DispatchExitRaceTests(unittest.TestCase):
             cleanup.assert_not_called()
         else:
             cleanup.assert_called_once_with(proc)
-            self.assertEqual(result["safe_error"], f"worker exited immediately with code {returncode}")
+            self.assertEqual(
+                result["safe_error"],
+                f"worker exited immediately with code {returncode}",
+            )
 
     def test_exit_during_identity_capture_uses_child_returncode(self):
         for returncode in (0, 7):
-            for error_type in (worker_identity.ProcessIdentityMissing, worker_identity.IdentityReadError):
+            for error_type in (
+                worker_identity.ProcessIdentityMissing,
+                worker_identity.IdentityReadError,
+            ):
                 with self.subTest(returncode=returncode, error_type=error_type):
                     result, proc, cleanup = self._dispatch(
-                        returncode, error=error_type("identity unavailable"),
+                        returncode,
+                        error=error_type("identity unavailable"),
                     )
                     self._assert_exited(result, proc, cleanup, returncode)
 
@@ -69,23 +86,33 @@ class DispatchExitRaceTests(unittest.TestCase):
             "identity_source": "ps",
             "process_state": "R",
         }
-        for identity in (None, {}, {**complete, "process_state": "Z"},
-                         {**complete, "command_fingerprint": "invalid"}):
+        for identity in (
+            None,
+            {},
+            {**complete, "process_state": "Z"},
+            {**complete, "command_fingerprint": "invalid"},
+        ):
             for returncode in (0, 7):
                 with self.subTest(identity=identity, returncode=returncode):
-                    result, proc, cleanup = self._dispatch(returncode, identity=identity)
+                    result, proc, cleanup = self._dispatch(
+                        returncode, identity=identity
+                    )
                     self._assert_exited(result, proc, cleanup, returncode)
 
     def test_live_child_identity_capture_failure_still_fails_and_cleans_up(self):
         for cleaned_up in (True, False):
             with self.subTest(cleaned_up=cleaned_up):
                 result, proc, cleanup = self._dispatch(
-                    None, error=worker_identity.IdentityReadError("permission denied"),
+                    None,
+                    error=worker_identity.IdentityReadError("permission denied"),
                     cleaned_up=cleaned_up,
                 )
                 self.assertFalse(result["ok"], result)
                 self.assertEqual(result["status"], "failed_dispatch")
-                self.assertEqual(result["safe_error"], "worker process identity could not be captured")
+                self.assertEqual(
+                    result["safe_error"],
+                    "worker process identity could not be captured",
+                )
                 self.assertEqual(result["error_type"], "IdentityReadError")
                 self.assertTrue(result["identity_capture_failed"])
                 self.assertEqual(result["cleanup_pending"], not cleaned_up)
@@ -97,11 +124,15 @@ class DispatchExitRaceTests(unittest.TestCase):
             for cleaned_up in (True, False):
                 with self.subTest(identity=identity, cleaned_up=cleaned_up):
                     result, proc, cleanup = self._dispatch(
-                        None, identity=identity, cleaned_up=cleaned_up,
+                        None,
+                        identity=identity,
+                        cleaned_up=cleaned_up,
                     )
                     self.assertFalse(result["ok"], result)
                     self.assertEqual(result["status"], "failed_dispatch")
-                    self.assertEqual(result["safe_error"], "worker process identity was incomplete")
+                    self.assertEqual(
+                        result["safe_error"], "worker process identity was incomplete"
+                    )
                     self.assertTrue(result["identity_capture_failed"])
                     self.assertEqual(result["cleanup_pending"], not cleaned_up)
                     self.assertNotIn("process_exited", result)
@@ -109,7 +140,9 @@ class DispatchExitRaceTests(unittest.TestCase):
 
     def test_nonzero_exit_during_capture_preserves_pending_cleanup(self):
         result, proc, cleanup = self._dispatch(
-            7, error=worker_identity.ProcessIdentityMissing("exited"), cleaned_up=False,
+            7,
+            error=worker_identity.ProcessIdentityMissing("exited"),
+            cleaned_up=False,
         )
         self._assert_exited(result, proc, cleanup, 7)
         self.assertTrue(result["cleanup_pending"])

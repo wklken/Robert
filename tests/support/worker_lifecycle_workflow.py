@@ -1,4 +1,5 @@
 """Shared fixtures for worker lifecycle workflow tests."""
+
 from contextlib import closing
 import json
 import sqlite3
@@ -34,5 +35,7 @@ class WorkerLifecycleWorkflowFixture(unittest.TestCase):
                 "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, metadata_json) VALUES ('attempt:test', 'task:test', 1, 'failed', ?)",
                 (json.dumps({"dispatch": {"pid": 7}}),),
             )
-            execution_store.ensure_subject(conn, 'task', 'task:test', 'human_request', now)
+            execution_store.ensure_subject(
+                conn, "task", "task:test", "human_request", now
+            )
         return db_path

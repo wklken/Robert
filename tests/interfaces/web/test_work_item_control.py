@@ -12,7 +12,9 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = 'task-2'")
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = 'task-2'"
+            )
             conn.execute(
                 "UPDATE workstreams SET lifecycle = 'failed', active_task_id = NULL WHERE workstream_id = 'ws-1'"
             )
@@ -59,7 +61,8 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertEqual(
                 conn.execute(
-                    "SELECT status FROM wakeups WHERE task_id = ?", (payload["task_id"],)
+                    "SELECT status FROM wakeups WHERE task_id = ?",
+                    (payload["task_id"],),
                 ).fetchone()[0],
                 "pending",
             )
@@ -133,7 +136,9 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         missing_csrf.pop("x-robert-csrf-token")
         denied_status, _headers, _body = web.handle_dashboard_post(
             f"/api/work-items/{work_item_id}/commands",
-            json.dumps({"command": "start", "expected_version": detail["version"]}).encode(),
+            json.dumps(
+                {"command": "start", "expected_version": detail["version"]}
+            ).encode(),
             db_path,
             control_context=context,
             request_headers=missing_csrf,
@@ -143,7 +148,9 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         command_headers = {**request_headers, "x-idempotency-key": "start-api-1"}
         start_status, _headers, start_body = web.handle_dashboard_post(
             f"/api/work-items/{work_item_id}/commands",
-            json.dumps({"command": "start", "expected_version": detail["version"]}).encode(),
+            json.dumps(
+                {"command": "start", "expected_version": detail["version"]}
+            ).encode(),
             db_path,
             control_context=context,
             request_headers=command_headers,
@@ -164,7 +171,9 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
             request_headers=stale_headers,
         )
         self.assertEqual(stale_status, 409)
-        self.assertEqual(json.loads(stale_body)["current"]["work_item_id"], work_item_id)
+        self.assertEqual(
+            json.loads(stale_body)["current"]["work_item_id"], work_item_id
+        )
 
     def test_board_api_rejects_bad_filters_and_read_only_writes(self):
         from robert_agent.interfaces.web import server as web
@@ -220,38 +229,65 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         from robert_agent.interfaces.web import server as web
 
         context = web.build_control_context_from_config(
-            self._write_acceptance_config(), host="0.0.0.0", port=8765,
-            operator_identity="local-owner", public_origin="https://robert.example.com",
+            self._write_acceptance_config(),
+            host="0.0.0.0",
+            port=8765,
+            operator_identity="local-owner",
+            public_origin="https://robert.example.com",
         )
         server = web.ThreadingHTTPServer(
-            ("127.0.0.1", 0), web.make_handler(context.db_path, context),
+            ("127.0.0.1", 0),
+            web.make_handler(context.db_path, context),
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_port, timeout=3
+        )
         self.addCleanup(connection.close)
-        connection.request("GET", "/api/session", headers={"Host": "robert.example.com"})
+        connection.request(
+            "GET", "/api/session", headers={"Host": "robert.example.com"}
+        )
         response = connection.getresponse()
         session = json.loads(response.read())
         self.assertEqual(response.status, 200)
         headers = {
-            "Host": "robert.example.com", "Origin": "https://robert.example.com",
-            "Content-Type": "application/json", "X-Robert-CSRF-Token": session["csrf_token"],
+            "Host": "robert.example.com",
+            "Origin": "https://robert.example.com",
+            "Content-Type": "application/json",
+            "X-Robert-CSRF-Token": session["csrf_token"],
             "X-Idempotency-Key": "proxy-create",
         }
-        connection.request("POST", "/api/work-items", json.dumps({
-            "repo_id": "repo:x/y", "title": "Proxy control", "mode": "backlog",
-        }), headers)
+        connection.request(
+            "POST",
+            "/api/work-items",
+            json.dumps(
+                {
+                    "repo_id": "repo:x/y",
+                    "title": "Proxy control",
+                    "mode": "backlog",
+                }
+            ),
+            headers,
+        )
         response = connection.getresponse()
         detail = json.loads(response.read())
         self.assertEqual(response.status, 201, detail)
         path = f"/api/work-items/{detail['work_item_id']}/commands"
         headers["X-Idempotency-Key"] = "proxy-cancel"
-        connection.request("POST", path, json.dumps({
-            "command": "cancel", "expected_version": detail["version"],
-        }), headers)
+        connection.request(
+            "POST",
+            path,
+            json.dumps(
+                {
+                    "command": "cancel",
+                    "expected_version": detail["version"],
+                }
+            ),
+            headers,
+        )
         response = connection.getresponse()
         canceled = json.loads(response.read())
         self.assertEqual(response.status, 200, canceled)
@@ -260,6 +296,7 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
 
     def test_web_config_mode_initializes_control_context_and_repos(self):
         from robert_agent.interfaces.web import server as web
+
         config_path = self._write_acceptance_config()
         context = web.build_control_context_from_config(
             config_path,

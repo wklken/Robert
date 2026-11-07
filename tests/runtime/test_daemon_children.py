@@ -58,6 +58,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_build_child_commands(self):
         from robert_agent.runtime import daemon
+
         run_once_cmd = daemon.build_run_once_command(
             "/tmp/config.yml",
             "/tmp/workflow.yml",
@@ -89,6 +90,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_run_child_json_parses_single_json_object(self):
         from robert_agent.runtime import daemon
+
         class Completed:
             returncode = 0
             stdout = '{"ok": true, "status": "completed"}\n'
@@ -109,6 +111,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_run_child_json_reports_non_json_and_nonzero(self):
         from robert_agent.runtime import daemon
+
         class Completed:
             returncode = 3
             stdout = "not json"
@@ -131,6 +134,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
     def test_run_child_json_reports_timeout(self):
         import subprocess
         from robert_agent.runtime import daemon
+
         def runner(command, **kwargs):
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
@@ -145,6 +149,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_rate_limit_guard_skips_low_search_or_core(self):
         from robert_agent.runtime import daemon
+
         config = {"min_search_remaining": 10, "min_core_remaining": 500}
         parsed = daemon.parse_rate_limit(
             {
@@ -174,6 +179,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_rate_limit_guard_allows_sufficient_budget(self):
         from robert_agent.runtime import daemon
+
         parsed = daemon.parse_rate_limit(
             {
                 "resources": {
@@ -192,6 +198,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_fetch_rate_limit_parses_gh_payload(self):
         from robert_agent.runtime import daemon
+
         class Completed:
             returncode = 0
             stdout = (
@@ -213,6 +220,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_idle_sleep_seconds_uses_nearest_live_poll_deadline(self):
         from robert_agent.runtime import daemon
+
         context = daemon.DaemonContext(
             config_path="/tmp/config.yml",
             workflow_path=None,
@@ -255,6 +263,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_sleep_seconds_after_failed_local_drain_uses_local_poll_interval(self):
         from robert_agent.runtime import daemon
+
         context = daemon.DaemonContext(
             config_path="/tmp/config.yml",
             workflow_path=None,
@@ -281,6 +290,7 @@ class DaemonChildRunnerTests(unittest.TestCase):
 
     def test_sleep_seconds_after_no_progress_local_drain_uses_local_poll_interval(self):
         from robert_agent.runtime import daemon
+
         context = daemon.DaemonContext(
             config_path="/tmp/config.yml",
             workflow_path=None,

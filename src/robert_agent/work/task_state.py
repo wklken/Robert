@@ -29,17 +29,28 @@ def clear_repository_busy(conn, repo_id):
 
 
 def complete_waiting_parent(conn, task_id, now):
-    conn.execute("UPDATE tasks SET lifecycle = 'completed', updated_at = ? WHERE task_id = ?", (now, task_id))
+    conn.execute(
+        "UPDATE tasks SET lifecycle = 'completed', updated_at = ? WHERE task_id = ?",
+        (now, task_id),
+    )
 
 
 def repository_task_ids(conn, repo_id):
-    return [task_id for (task_id,) in conn.execute(
-        """SELECT task_id FROM tasks
+    return [
+        task_id
+        for (task_id,) in conn.execute(
+            """SELECT task_id FROM tasks
            WHERE workstream_id IN (SELECT workstream_id FROM workstreams WHERE repo_id=?)
              AND lifecycle IN ('queued','running')""",
-        (repo_id,),
-    ).fetchall()]
+            (repo_id,),
+        ).fetchall()
+    ]
 
 
 def event_is_attached(conn, event_id):
-    return conn.execute("SELECT 1 FROM task_events WHERE event_id=? LIMIT 1", (event_id,)).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM task_events WHERE event_id=? LIMIT 1", (event_id,)
+        ).fetchone()
+        is not None
+    )

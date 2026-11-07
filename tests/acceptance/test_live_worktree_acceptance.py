@@ -37,14 +37,17 @@ repos:
   trusted_actors:
   - wklken
   checkout: {self.source_repo}
-  worktrees: {self.source_repo / '.worktrees'}
+  worktrees: {self.source_repo / ".worktrees"}
   default_branch: main
 """,
             encoding="utf-8",
         )
 
-    def test_live_worktree_acceptance_creates_real_git_worktree_in_isolated_checkout(self):
+    def test_live_worktree_acceptance_creates_real_git_worktree_in_isolated_checkout(
+        self,
+    ):
         from robert_agent.acceptance import worktree as live_worktree_acceptance
+
         workspace_dir = (self.root / "worktree-acceptance").resolve()
 
         result = live_worktree_acceptance.live_worktree_acceptance(
@@ -58,7 +61,9 @@ repos:
         self.assertEqual(result["attempt_status"], "running")
         self.assertEqual(result["branch_name"], "codex/dd-77-fix-worktree-acceptance")
         self.assertTrue(Path(result["worktree_path"]).is_dir())
-        self.assertTrue(str(Path(result["worktree_path"])).startswith(str(workspace_dir)))
+        self.assertTrue(
+            str(Path(result["worktree_path"])).startswith(str(workspace_dir))
+        )
         self.assertEqual(result["git_branch"], result["branch_name"])
         self.assertTrue(result["git_worktree_list_contains_branch"])
         self.assertFalse((self.source_data_dir / "dd.sqlite3").exists())
@@ -192,14 +197,17 @@ repos:
             checkout, worktrees, 13, "review-feature", "main", dry_run=False
         )
         worktree_path = Path(first["worktree_path"])
-        (worktree_path / "value.txt").write_text("local review changes\n", encoding="utf-8")
+        (worktree_path / "value.txt").write_text(
+            "local review changes\n", encoding="utf-8"
+        )
         result = worktree.plan_review_worktree(
             checkout, worktrees, 13, "review-feature", "main", dry_run=False
         )
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["status"], "blocked_dirty_worktree")
         self.assertEqual(
-            (worktree_path / "value.txt").read_text(encoding="utf-8"), "local review changes\n"
+            (worktree_path / "value.txt").read_text(encoding="utf-8"),
+            "local review changes\n",
         )
         self.assertEqual(self._git(["rev-parse", "HEAD"], cwd=worktree_path), head_sha)
 
@@ -208,10 +216,17 @@ repos:
 
         checkout, worktrees, head_sha, _base_sha = self._existing_pr_fixture()
         external = self.root / "external-review"
-        self._git([
-            "worktree", "add", str(external),
-            "-b", "review/pr-13-review-feature", head_sha,
-        ], cwd=checkout)
+        self._git(
+            [
+                "worktree",
+                "add",
+                str(external),
+                "-b",
+                "review/pr-13-review-feature",
+                head_sha,
+            ],
+            cwd=checkout,
+        )
         result = worktree.plan_review_worktree(
             checkout, worktrees, 13, "review-feature", "main", dry_run=False
         )
@@ -347,9 +362,7 @@ repos:
     def test_existing_pr_write_worktree_never_resets_unmanaged_checkout(self):
         from robert_agent.adapters.git import workspace as worktree
 
-        _checkout, worktrees, head_sha, base_sha = (
-            self._existing_pr_fixture()
-        )
+        _checkout, worktrees, head_sha, base_sha = self._existing_pr_fixture()
         seed = self.root / "seed"
         before = self._git(["rev-parse", "HEAD"], cwd=seed)
 

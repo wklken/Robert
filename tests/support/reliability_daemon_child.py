@@ -5,6 +5,7 @@ inject its local Git runner and crash the owning daemon immediately after a push
 Background process isolation is covered separately by test_github_scan. All domain,
 scheduling, audit, publication and notification code is the production implementation.
 """
+
 from robert_agent.delivery.application import lane as delivery_lane
 from robert_agent.adapters.github import budget as github_budget
 from contextlib import redirect_stdout
@@ -22,7 +23,7 @@ from robert_agent.delivery.application import publish
 from robert_agent.runtime import control as control_lane
 
 root = Path(sys.argv[1])
-crash_after_push = sys.argv[2] == 'crash'
+crash_after_push = sys.argv[2] == "crash"
 load_context = daemon._load_context
 local_drain = daemon._run_local_drain
 publisher = publish.publish_ready_actions
@@ -34,61 +35,71 @@ def context(*args, **kwargs):
     value, error = load_context(*args, **kwargs)
     if value:
         value.startup_live_poll_pending = False
-        value.next_live_poll_at = '2099-01-01T00:00:00+00:00'
+        value.next_live_poll_at = "2099-01-01T00:00:00+00:00"
     return value, error
 
 
 def local_git(command, **kwargs):
-    if command[0] != 'git':
-        raise AssertionError('Unexpected external command: ' + command[0])
-    with (root / 'calls.jsonl').open('a') as output:
-        output.write(json.dumps(command) + '\n')
+    if command[0] != "git":
+        raise AssertionError("Unexpected external command: " + command[0])
+    with (root / "calls.jsonl").open("a") as output:
+        output.write(json.dumps(command) + "\n")
     completed = subprocess.run(command, **kwargs)
-    if crash_after_push and command[:2] == ['git', 'push'] and completed.returncode == 0:
+    if (
+        crash_after_push
+        and command[:2] == ["git", "push"]
+        and completed.returncode == 0
+    ):
         os._exit(73)
     return completed
 
 
 def local_publish(*args, **kwargs):
-    return publisher(*args, **{**kwargs, 'run_command': local_git})
+    return publisher(*args, **{**kwargs, "run_command": local_git})
 
 
 def inline_child(command, **kwargs):
-    stream=io.StringIO()
+    stream = io.StringIO()
     with redirect_stdout(stream):
         loop_engine.main(command[3:])
     return json.loads(stream.getvalue())
 
 
 def drain(value, **kwargs):
-    return local_drain(value, **{**kwargs,'child_runner':inline_child})
+    return local_drain(value, **{**kwargs, "child_runner": inline_child})
 
 
 def inline_publisher_start(self, command, **kwargs):
-    if '--publish' not in command:
+    if "--publish" not in command:
         return lane_start(self, command, **kwargs)
-    with patch.object(github_budget, 'budget', return_value=True):
-        self.test_result = delivery_lane.publish(root / 'daemon.yml')
+    with patch.object(github_budget, "budget", return_value=True):
+        self.test_result = delivery_lane.publish(root / "daemon.yml")
     return True
 
 
 def inline_publisher_poll(self):
-    if hasattr(self, 'test_result'):
+    if hasattr(self, "test_result"):
         result = self.test_result
         del self.test_result
         return result
     return lane_poll(self)
 
 
-with patch.object(daemon, '_load_context', side_effect=context), \
-     patch.object(daemon, 'fetch_rate_limit', return_value={
-         'ok': True,
-         'rate_limit': {'core': {'remaining': 5000}, 'search': {'remaining': 30}},
-     }), \
-     patch.object(daemon, '_run_local_drain', side_effect=drain), \
-     patch.object(control_lane.ControlLane, 'start', inline_publisher_start), \
-     patch.object(control_lane.ControlLane, 'poll', inline_publisher_poll), \
-     patch.object(publish, 'publish_ready_actions', side_effect=local_publish):
-    result = daemon.run_daemon(root / 'daemon.yml')
+with (
+    patch.object(daemon, "_load_context", side_effect=context),
+    patch.object(
+        daemon,
+        "fetch_rate_limit",
+        return_value={
+            "ok": True,
+            "rate_limit": {"core": {"remaining": 5000}, "search": {"remaining": 30}},
+        },
+    ),
+    patch.object(daemon, "_run_local_drain", side_effect=drain),
+    patch.object(control_lane.ControlLane, "start", inline_publisher_start),
+    patch.object(control_lane.ControlLane, "poll", inline_publisher_poll),
+    patch.object(publish, "publish_ready_actions", side_effect=local_publish),
+):
+    result = daemon.run_daemon(root / "daemon.yml")
     print(json.dumps(result), flush=True)
-    raise SystemExit(0 if result.get('ok') else 1)
+    raise SystemExit(0 if result.get("ok") else 1)

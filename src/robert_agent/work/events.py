@@ -191,7 +191,9 @@ def _permission_change(fact):
     if old is None and new is None:
         return None, None, False
     if old is None or new is None:
-        raise ValueError("workflow invalidation requires old_permission and new_permission")
+        raise ValueError(
+            "workflow invalidation requires old_permission and new_permission"
+        )
     old = _required_id(old, "old_permission").lower()
     new = _required_id(new, "new_permission").lower()
     return old, new, old != new
@@ -203,19 +205,27 @@ def _validate_claimed_invalidation(fact):
     if reason in {"head_changed"}:
         old, new, _changed = _changed_pair(fact, "old_head_sha", "new_head_sha")
         if old is None and new is None:
-            raise ValueError("workflow invalidation requires old_head_sha and new_head_sha")
+            raise ValueError(
+                "workflow invalidation requires old_head_sha and new_head_sha"
+            )
     elif reason in {"base_changed"}:
         old, new, _changed = _changed_pair(fact, "old_base_sha", "new_base_sha")
         if old is None and new is None:
-            raise ValueError("workflow invalidation requires old_base_sha and new_base_sha")
+            raise ValueError(
+                "workflow invalidation requires old_base_sha and new_base_sha"
+            )
     elif reason in {"base_ref_changed"}:
         old, new, _changed = _changed_pair(fact, "old_base_ref", "new_base_ref")
         if old is None and new is None:
-            raise ValueError("workflow invalidation requires old_base_ref and new_base_ref")
+            raise ValueError(
+                "workflow invalidation requires old_base_ref and new_base_ref"
+            )
     elif reason in {"permission_revoked", "permission_denied", "authorization_revoked"}:
         old, new, _changed = _permission_change(fact)
         if old is None and new is None:
-            raise ValueError("workflow invalidation requires old_permission and new_permission")
+            raise ValueError(
+                "workflow invalidation requires old_permission and new_permission"
+            )
     pairs = (
         ("old_head_sha", "new_head_sha", (), ()),
         ("old_base_sha", "new_base_sha", (), ()),
@@ -234,9 +244,7 @@ def _validate_claimed_invalidation(fact):
         changed = changed or branch_exists is False
 
     _old_permission, new_permission, permission_changed = _permission_change(fact)
-    changed = changed or (
-        permission_changed and new_permission in _REVOKED_PERMISSIONS
-    )
+    changed = changed or (permission_changed and new_permission in _REVOKED_PERMISSIONS)
     if reason in _INVALIDATING_REASONS and not changed:
         raise ValueError("workflow invalidation claim lacks proven evidence")
     return changed
@@ -257,10 +265,14 @@ def classify_subject_fact(fact):
     source_state = _state(fact)
     new_source_state = fact.get("new_source_state")
     merged = fact.get("merged") is True or bool(fact.get("merged_at"))
-    if source_state in _TERMINAL_STATES or (
-        isinstance(new_source_state, str)
-        and new_source_state.strip().lower() in _TERMINAL_STATES
-    ) or merged:
+    if (
+        source_state in _TERMINAL_STATES
+        or (
+            isinstance(new_source_state, str)
+            and new_source_state.strip().lower() in _TERMINAL_STATES
+        )
+        or merged
+    ):
         return TERMINAL
 
     claimed_invalidation = _has_invalidation_claim(fact)
@@ -312,9 +324,11 @@ def normalize_fact_evidence(fact, classification=None):
     }
     reason = _reason(fact)
     if classification == TERMINAL and not reason:
-        reason = "source_merged" if (
-            fact.get("merged") is True or fact.get("merged_at")
-        ) else "source_closed"
+        reason = (
+            "source_merged"
+            if (fact.get("merged") is True or fact.get("merged_at"))
+            else "source_closed"
+        )
     if classification == INVALIDATING and not reason:
         for old_key, new_key, derived in (
             ("old_head_sha", "new_head_sha", "head_changed"),
@@ -325,10 +339,15 @@ def normalize_fact_evidence(fact, classification=None):
             if old is not None and new is not None and old != new:
                 reason = derived
                 break
-        if not reason and _snapshot_value(fact, "source_branch_exists", "branch_exists") is False:
+        if (
+            not reason
+            and _snapshot_value(fact, "source_branch_exists", "branch_exists") is False
+        ):
             reason = "branch_disappeared"
         if not reason:
-            _old_permission, new_permission, permission_changed = _permission_change(fact)
+            _old_permission, new_permission, permission_changed = _permission_change(
+                fact
+            )
             if permission_changed and new_permission in _REVOKED_PERMISSIONS:
                 reason = "permission_revoked"
     if reason:
@@ -349,7 +368,9 @@ def normalize_fact_evidence(fact, classification=None):
                 decision = {}
                 for key in ("old", "new"):
                     if key in value:
-                        decision[key] = _required_id(value[key], f"permission_{key}").lower()
+                        decision[key] = _required_id(
+                            value[key], f"permission_{key}"
+                        ).lower()
                 evidence[target] = decision
             else:
                 evidence[target] = _required_id(value, target).lower()
@@ -366,7 +387,10 @@ def normalize_fact_evidence(fact, classification=None):
     evidence["classification"] = classification
     import json
 
-    if len(json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode("utf-8")) > _MAX_EVIDENCE_BYTES:
+    if (
+        len(json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        > _MAX_EVIDENCE_BYTES
+    ):
         raise ValueError("workflow fact evidence is bounded")
     return evidence
 

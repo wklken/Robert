@@ -24,12 +24,16 @@ def snapshot_progress(conn):
             "github_actions",
             "audit_status = 'accepted' AND publish_status = 'not_published'",
         ),
-        "published_actions": _count(conn, "github_actions", "publish_status = 'published'"),
+        "published_actions": _count(
+            conn, "github_actions", "publish_status = 'published'"
+        ),
         "running_tasks": _count(conn, "tasks", "lifecycle IN ('queued', 'running')"),
         "completed_tasks": _count(conn, "tasks", "lifecycle = 'completed'"),
         "failed_tasks": _count(conn, "tasks", "lifecycle = 'failed'"),
         "active_workstreams": _count(conn, "workstreams", "lifecycle = 'active'"),
-        "waiting_workstreams": _count(conn, "workstreams", "lifecycle = 'waiting_for_user'"),
+        "waiting_workstreams": _count(
+            conn, "workstreams", "lifecycle = 'waiting_for_user'"
+        ),
         "completed_workstreams": _count(conn, "workstreams", "lifecycle = 'completed'"),
     }
 

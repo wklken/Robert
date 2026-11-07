@@ -27,5 +27,9 @@ class LoopRunnableScopeTests(TemporaryWorkspace):
                 "INSERT INTO wakeups(wakeup_id, repo_id, reason, dedupe_key, status, not_before_at, created_at, updated_at) VALUES ('wakeup-a', 'repo:a', 'manual_operator_request', 'manual-a', 'pending', ?, ?, ?)",
                 (now, now, now),
             )
-            self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:a"]))
-            self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:b"]))
+            self.assertTrue(
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:a"])
+            )
+            self.assertFalse(
+                loop_engine.has_runnable_local_work(conn, repo_ids=["repo:b"])
+            )

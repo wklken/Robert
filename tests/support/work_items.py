@@ -1,4 +1,5 @@
 """Shared fixtures for work items tests."""
+
 from contextlib import closing
 import json
 import sqlite3

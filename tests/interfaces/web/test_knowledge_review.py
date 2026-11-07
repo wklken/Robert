@@ -7,6 +7,7 @@ from tests.support.dashboard import DashboardFixture
 class KnowledgeReviewHTTPTests(DashboardFixture):
     def test_web_post_approves_knowledge_candidate_locally(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_knowledge_candidate(db_path)
@@ -37,6 +38,7 @@ class KnowledgeReviewHTTPTests(DashboardFixture):
 
     def test_web_post_proposes_knowledge_candidates_locally(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_project_memory_entry(db_path)
@@ -65,6 +67,7 @@ class KnowledgeReviewHTTPTests(DashboardFixture):
 
     def test_web_post_rejects_knowledge_candidate_locally(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_knowledge_candidate(db_path)
@@ -86,6 +89,7 @@ class KnowledgeReviewHTTPTests(DashboardFixture):
 
     def test_web_post_refuses_unknown_write_action(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -100,6 +104,7 @@ class KnowledgeReviewHTTPTests(DashboardFixture):
 
     def test_web_post_refuses_knowledge_write_when_tables_are_missing(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "old.sqlite3"
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute("CREATE TABLE repos(repo_id TEXT PRIMARY KEY, full_name TEXT)")

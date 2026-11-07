@@ -273,8 +273,7 @@ def _notify_exhausted_episode(conn, episode, reason, now):
                                 "failures",
                                 [],
                             )
-                            if isinstance(failure, dict)
-                            and failure.get("details_url")
+                            if isinstance(failure, dict) and failure.get("details_url")
                         }
                     ),
                     "reason": reason,
@@ -498,10 +497,9 @@ def upsert_health_episodes(
                 and ci_summary.get("failure_signature") == episode["failure_signature"]
             ):
                 suppress_current_ci_episode = True
-        if (
-            episode["status"] != "waiting_for_signal"
-            or episode["result_head_sha"] != snapshot.get("head_sha")
-        ):
+        if episode["status"] != "waiting_for_signal" or episode[
+            "result_head_sha"
+        ] != snapshot.get("head_sha"):
             continue
         if (
             episode["episode_kind"] == "merge_conflict"
@@ -537,8 +535,7 @@ def upsert_health_episodes(
                 )
             elif (
                 ci_summary.get("status") == "failing"
-                and ci_summary.get("failure_signature")
-                == episode["failure_signature"]
+                and ci_summary.get("failure_signature") == episode["failure_signature"]
             ):
                 suppress_current_ci_episode = True
                 transition = _transition(
@@ -615,10 +612,7 @@ def upsert_health_episodes(
             ),
             None,
         )
-        if (
-            ci_summary.get("status") == "failing"
-            and not suppress_current_ci_episode
-        ):
+        if ci_summary.get("status") == "failing" and not suppress_current_ci_episode:
             episode = _create_episode(
                 conn,
                 workstream=workstream,
@@ -635,9 +629,7 @@ def upsert_health_episodes(
             _store_ci_observations(
                 conn,
                 episode["episode_id"],
-                ci_summary.get("observations")
-                or ci_summary.get("failures")
-                or [],
+                ci_summary.get("observations") or ci_summary.get("failures") or [],
             )
         elif ci_summary.get("status") == "manual":
             episode = _create_episode(
@@ -661,9 +653,7 @@ def upsert_health_episodes(
             _store_ci_observations(
                 conn,
                 episode["episode_id"],
-                ci_summary.get("observations")
-                or ci_summary.get("failures")
-                or [],
+                ci_summary.get("observations") or ci_summary.get("failures") or [],
             )
             if episode["status"] == "open":
                 transition = _transition(
@@ -735,8 +725,7 @@ def budget_status(conn, *, episode, policy, now):
     current = _parse_time(now)
     if first_seen and current:
         elapsed_minutes = (
-            current.astimezone(timezone.utc)
-            - first_seen.astimezone(timezone.utc)
+            current.astimezone(timezone.utc) - first_seen.astimezone(timezone.utc)
         ).total_seconds() / 60
         result["elapsed_minutes"] = elapsed_minutes
         if elapsed_minutes >= policy["max_wall_minutes"]:
@@ -930,9 +919,7 @@ def record_task_failure(conn, *, task_id, reason, now):
         "merge_conflict_remediation",
     }:
         return False
-    episode_id = _json_object(row[1]).get(
-        "remediation_episode_id"
-    )
+    episode_id = _json_object(row[1]).get("remediation_episode_id")
     episode = _load_episode(conn, episode_id)
     if not episode or episode["status"] not in {
         "queued",

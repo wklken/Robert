@@ -13,7 +13,6 @@ from tests.support import PACKAGE_ROOT  # noqa: F401
 
 
 class HealthTests(PublicationBudgetFixture):
-
     def test_health_reports_delayed_publication_and_storage_without_deleting(self):
         from robert_agent.operations import health as reliability_health
 

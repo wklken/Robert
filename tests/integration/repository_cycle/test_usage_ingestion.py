@@ -3,7 +3,8 @@ import json
 import sqlite3
 from tests.support import PACKAGE_ROOT
 from tests.support.repository_cycle import (
-    RepositoryCycleFixture, _verification_evidence,
+    RepositoryCycleFixture,
+    _verification_evidence,
 )
 
 
@@ -11,6 +12,7 @@ class CycleUsageIngestionTests(RepositoryCycleFixture):
     def test_run_once_copies_worker_usage_from_stdout_log(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",

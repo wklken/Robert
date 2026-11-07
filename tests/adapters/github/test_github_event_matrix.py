@@ -23,6 +23,7 @@ def _empty_discovery(args):
 class GitHubEventMatrixTests(unittest.TestCase):
     def collect_normalized(self, fake_runner, known_workstreams=None):
         from robert_agent.adapters.github import discovery as discover
+
         raw_events = discover.collect_live_events(
             REPO_CONFIG,
             runner=fake_runner,
@@ -32,6 +33,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
     def collect_decisions(self, fake_runner, known_workstreams=None):
         from robert_agent.security import authorization as authorize
+
         events = self.collect_normalized(
             fake_runner,
             known_workstreams=known_workstreams,
@@ -156,7 +158,9 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["event_type"], "notification")
-        self.assertEqual(decisions[0]["authorization_status"], "ignored_untrusted_trigger")
+        self.assertEqual(
+            decisions[0]["authorization_status"], "ignored_untrusted_trigger"
+        )
         self.assertFalse(decisions[0]["creates_task"])
 
     def test_notification_review_request_resolves_to_review_request_trigger(self):
@@ -222,7 +226,9 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["event_type"], "review_request")
-        self.assertEqual(decisions[0]["event_fingerprint"], "review_request:review-request-3103")
+        self.assertEqual(
+            decisions[0]["event_fingerprint"], "review_request:review-request-3103"
+        )
         self.assertEqual(decisions[0]["requester_login"], "wklken")
         self.assertEqual(decisions[0]["requested_reviewer"], "robert-bot")
         self.assertEqual(decisions[0]["base_branch"], "master")
@@ -326,7 +332,9 @@ class GitHubEventMatrixTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["event_type"], "review_comment")
-        self.assertEqual(decisions[0]["event_fingerprint"], "review_comment:review-comment-latest")
+        self.assertEqual(
+            decisions[0]["event_fingerprint"], "review_comment:review-comment-latest"
+        )
         self.assertEqual(decisions[0]["body"], "@robert-bot latest diff feedback")
         self.assertEqual(decisions[0]["authorization_status"], "context_only")
         self.assertFalse(decisions[0]["drives_execution"])
@@ -376,8 +384,7 @@ class GitHubEventMatrixTests(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertFalse(
             any(
-                call[:3]
-                == ["gh", "api", "repos/example/backend/issues/3105/comments"]
+                call[:3] == ["gh", "api", "repos/example/backend/issues/3105/comments"]
                 for call in calls
             )
         )

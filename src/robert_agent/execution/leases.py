@@ -1,4 +1,5 @@
 """Acquire repository run leases only after proving prior owner exit."""
+
 from datetime import datetime, timedelta
 from uuid import uuid4
 from robert_agent.adapters.processes import identity as worker_identity
@@ -39,10 +40,14 @@ def acquire(conn, repo_id, run_id, run_now, ttl_seconds):
         (resource_key,),
     ).fetchone()
     if active and _parse_time(active[2]) <= now_dt:
-        owner = conn.execute("SELECT summary_json FROM agent_runs WHERE run_id=?", (active[1],)).fetchone()
+        owner = conn.execute(
+            "SELECT summary_json FROM agent_runs WHERE run_id=?", (active[1],)
+        ).fetchone()
         identity = _json_object(owner[0]).get("executor_identity") if owner else None
         if identity and worker_identity.inspect_recorded_identity(identity) == "dead":
-            conn.execute("UPDATE leases SET status='expired' WHERE lease_id=?", (active[0],))
+            conn.execute(
+                "UPDATE leases SET status='expired' WHERE lease_id=?", (active[0],)
+            )
             active = None
     if active:
         return {

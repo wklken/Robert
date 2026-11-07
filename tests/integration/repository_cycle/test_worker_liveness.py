@@ -28,12 +28,14 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             "identity_source": "ps",
         }
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            conn.execute("UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,))
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'running' WHERE task_id = ?", (task_id,)
+            )
             conn.execute(
                 "UPDATE attempts SET status = 'running', started_at = ?, heartbeat_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
                 (now, now, json.dumps({"dispatch": dispatch_metadata}), attempt_id),
             )
-            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
+            execution_store.ensure_subject(conn, "task", task_id, "human_request", now)
             original = worker_identity.inspect_recorded_identity
             worker_identity.inspect_recorded_identity = lambda _identity: "unknown"
             try:
@@ -61,6 +63,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_supervise_marks_stale_running_attempt_and_notifies(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -81,7 +84,12 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
-                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
+                (
+                    old,
+                    old,
+                    json.dumps({"dispatch": self._recorded_identity(987654)}),
+                    attempt_id,
+                ),
             )
             conn.execute(
                 """
@@ -95,9 +103,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -121,6 +127,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_supervise_retains_running_attempt_without_cleanup_pid(self):
         from robert_agent.runtime import cycle as run_once
+
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace(
@@ -149,18 +156,22 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
-                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
+                (
+                    old,
+                    old,
+                    json.dumps({"dispatch": self._recorded_identity(987654)}),
+                    attempt_id,
+                ),
             )
 
         original_inspect = worker_identity.inspect_recorded_identity
         original_terminate = worker_identity.terminate_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
-            worker_identity.terminate_recorded_identity = (
-                lambda _identity: {"status": "attention", "reason": "invalid_identity"}
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
+            worker_identity.terminate_recorded_identity = lambda _identity: {
+                "status": "attention",
+                "reason": "invalid_identity",
+            }
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -195,6 +206,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_supervise_fails_running_attempt_when_dispatch_pid_is_gone(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -229,9 +241,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -263,6 +273,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         import sys
         from robert_agent.execution import command as heartbeat
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -310,16 +321,21 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         self.addCleanup(proc.kill)
         command_dir = self.data_dir / "artifacts" / task_id
         command_dir.mkdir(parents=True, exist_ok=True)
-        (command_dir / f"{attempt_id}.verify.1.command.json").write_text(json.dumps({
-            "task_id": task_id, "attempt_id": attempt_id, "phase": "verify",
-            "status": "running", "pid": proc.pid,
-            "process_identity": heartbeat.process_identity(proc.pid),
-        }))
+        (command_dir / f"{attempt_id}.verify.1.command.json").write_text(
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "attempt_id": attempt_id,
+                    "phase": "verify",
+                    "status": "running",
+                    "pid": proc.pid,
+                    "process_identity": heartbeat.process_identity(proc.pid),
+                }
+            )
+        )
 
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -334,7 +350,9 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             attempts = conn.execute(
                 "SELECT attempt_id, status, metadata_json FROM attempts ORDER BY attempt_no"
             ).fetchall()
-            notification_count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
+            notification_count = conn.execute(
+                "SELECT COUNT(*) FROM notifications"
+            ).fetchone()[0]
         self.assertEqual(len(attempts), 1)
         self.assertEqual(attempts[0][1], "running")
         supervise_status = json.loads(attempts[0][2])["supervise"]["status"]
@@ -343,6 +361,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_supervise_keeps_started_worker_with_prepare_snapshot_running(self):
         from robert_agent.runtime import cycle as run_once
+
         config_text = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             config_text.replace(
@@ -371,7 +390,12 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "UPDATE attempts SET status = 'running', heartbeat_at = ?, started_at = ?, metadata_json = json_set(?, '$.result_contract', 'compact-v1') WHERE attempt_id = ?",
-                (old, old, json.dumps({"dispatch": self._recorded_identity(987654)}), attempt_id),
+                (
+                    old,
+                    old,
+                    json.dumps({"dispatch": self._recorded_identity(987654)}),
+                    attempt_id,
+                ),
             )
             conn.execute(
                 """
@@ -385,9 +409,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -408,6 +430,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_supervise_restores_recovered_stale_attempt(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -451,9 +474,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -473,6 +494,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_supervise_does_not_restore_stale_attempt_when_pid_is_gone(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -520,9 +542,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -553,6 +573,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_stale_attempt_retains_dispatch_capacity(self):
         from robert_agent.runtime import cycle as run_once
+
         self.config_path.write_text(
             self.config_path.read_text(encoding="utf-8").replace(
                 "max_concurrency: 3", "max_concurrency: 1"
@@ -586,7 +607,9 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 (
                     old,
                     old,
-                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
+                    json.dumps(
+                        {"dispatch": self._recorded_identity(12345)}, sort_keys=True
+                    ),
                     attempt_id,
                 ),
             )
@@ -632,9 +655,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
         try:
             cycle_worker.dispatch_worker = fake_dispatch_worker
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -658,6 +679,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
 
     def test_live_discovery_failure_preserves_supervision_state(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -685,7 +707,9 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 (
                     old,
                     old,
-                    json.dumps({"dispatch": self._recorded_identity(12345)}, sort_keys=True),
+                    json.dumps(
+                        {"dispatch": self._recorded_identity(12345)}, sort_keys=True
+                    ),
                     attempt_id,
                 ),
             )
@@ -713,12 +737,11 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         try:
             # The fake PID must not inspect unrelated processes on the CI host.
             worker_identity.live_process_group = lambda _pid: False
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "alive_same"
-            )
-            worker_identity.terminate_recorded_identity = (
-                lambda _identity: {"status": "terminated", "pid": 12345}
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "alive_same"
+            worker_identity.terminate_recorded_identity = lambda _identity: {
+                "status": "terminated",
+                "pid": 12345,
+            }
             discover.collect_account_notifications = fake_collect_notifications
             discover.collect_live_events = fake_collect
             second = run_once.run_once(

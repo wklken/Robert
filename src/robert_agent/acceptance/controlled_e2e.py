@@ -32,7 +32,10 @@ def _workspace_dir(workspace_dir):
 
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _mock_new_pr_worker(workspace_dir):
@@ -91,23 +94,44 @@ raise SystemExit(0 if record["ok"] else 1)
 
 
 def _config(source_config_path, workspace_dir, checkout, worker):
-    source_config = validate_config.validate_config(source_config_path, skip_external=True)
+    source_config = validate_config.validate_config(
+        source_config_path, skip_external=True
+    )
     if not source_config["ok"]:
         return source_config
     repo = source_config["repos"][0]
     config = {
-        "version": 2, "default_worker": "default",
-        "data_dir": str(workspace_dir / "data"), "database": "dd.sqlite3",
+        "version": 2,
+        "default_worker": "default",
+        "data_dir": str(workspace_dir / "data"),
+        "database": "dd.sqlite3",
         "github": {"account": repo["github_account"]},
-        "workers": {"default": {"adapter": "cbc", "command": [sys.executable, str(worker)],
-                    "model": "default", "effort": "default"}},
-        "scheduler": {"max_concurrency": 1, "lease_ttl_seconds": source_config["lease_ttl_seconds"]},
-        "supervision": {"startup_grace_seconds": 1,
+        "workers": {
+            "default": {
+                "adapter": "cbc",
+                "command": [sys.executable, str(worker)],
+                "model": "default",
+                "effort": "default",
+            }
+        },
+        "scheduler": {
+            "max_concurrency": 1,
+            "lease_ttl_seconds": source_config["lease_ttl_seconds"],
+        },
+        "supervision": {
+            "startup_grace_seconds": 1,
             "heartbeat_stale_seconds": source_config["heartbeat_stale_seconds"],
-            "hard_timeout_seconds": source_config["hard_timeout_seconds"]},
-        "repos": [{"full_name": repo["full_name"], "trusted_actors": repo["trusted_actors"],
-                  "default_branch": "main", "checkout": str(checkout["repo_root"]),
-                  "worktrees": str(checkout["worktree_root"])}],
+            "hard_timeout_seconds": source_config["hard_timeout_seconds"],
+        },
+        "repos": [
+            {
+                "full_name": repo["full_name"],
+                "trusted_actors": repo["trusted_actors"],
+                "default_branch": "main",
+                "checkout": str(checkout["repo_root"]),
+                "worktrees": str(checkout["worktree_root"]),
+            }
+        ],
     }
     config_path = workspace_dir / "config.json"
     _write_json(config_path, config)
@@ -116,7 +140,11 @@ def _config(source_config_path, workspace_dir, checkout, worker):
         "status": "prepared",
         "config_path": config_path,
         "db_path": workspace_dir / "data" / "dd.sqlite3",
-        "repo": repo | {"repo_root": str(checkout["repo_root"]), "worktree_root": str(checkout["worktree_root"])},
+        "repo": repo
+        | {
+            "repo_root": str(checkout["repo_root"]),
+            "worktree_root": str(checkout["worktree_root"]),
+        },
     }
 
 
@@ -188,7 +216,11 @@ class _PublishRunner:
         if command[:3] == ["gh", "pr", "list"]:
             return Completed("[]")
         if command[:3] == ["gh", "pr", "create"]:
-            repo = command[command.index("--repo") + 1] if "--repo" in command else "example/repo"
+            repo = (
+                command[command.index("--repo") + 1]
+                if "--repo" in command
+                else "example/repo"
+            )
             return Completed(f"https://github.com/{repo}/pull/42\n")
         return Completed("[]")
 
@@ -218,8 +250,7 @@ def _evidence(db_path, repo_full_name):
             SELECT lifecycle
             FROM workstreams
             WHERE workstream_id = ?
-            """
-            ,
+            """,
             (issue_workstream_id,),
         ).fetchone()
         pr_stream = conn.execute(
@@ -227,8 +258,7 @@ def _evidence(db_path, repo_full_name):
             SELECT lifecycle
             FROM workstreams
             WHERE workstream_id = ?
-            """
-            ,
+            """,
             (pr_workstream_id,),
         ).fetchone()
         result = conn.execute(
@@ -245,9 +275,7 @@ def _evidence(db_path, repo_full_name):
         "route_id": task[2] if task else "",
         "worktree_path": task[3] if task else "",
         "branch_name": task[4] if task else "",
-        "github_actions": [
-            (row[0], row[1], row[2]) for row in action_rows
-        ],
+        "github_actions": [(row[0], row[1], row[2]) for row in action_rows],
         "published_pr_url": next(
             (row[3] for row in action_rows if row[0] == "open_pr" and row[3]),
             "",
@@ -287,14 +315,18 @@ def controlled_e2e_acceptance(
         return {
             "ok": False,
             "status": first_run.get("status", "failed_first_run"),
-            "safe_error": first_run.get("safe_error", "controlled e2e first run failed"),
+            "safe_error": first_run.get(
+                "safe_error", "controlled e2e first run failed"
+            ),
             "workspace_dir": str(workspace),
             "config_path": str(config["config_path"]),
             "fixture_path": str(fixture),
             "db_path": str(config["db_path"]),
             "first_run": first_run,
         }
-    worker_result = _wait_for_result(config["db_path"], timeout_seconds, poll_interval_seconds)
+    worker_result = _wait_for_result(
+        config["db_path"], timeout_seconds, poll_interval_seconds
+    )
     if not worker_result:
         return {
             "ok": False,
@@ -336,11 +368,13 @@ def controlled_e2e_acceptance(
         and evidence["task_lifecycle"] == "completed"
         and evidence["issue_workstream_lifecycle"] == "completed"
         and evidence["derived_pr_workstream_lifecycle"] == "completed"
-        and evidence["github_actions"] == [
+        and evidence["github_actions"]
+        == [
             ("push_existing_pr", "accepted", "published"),
             ("open_pr", "accepted", "published"),
         ]
-        and evidence["published_pr_url"] == f"https://github.com/{repo_full_name}/pull/42"
+        and evidence["published_pr_url"]
+        == f"https://github.com/{repo_full_name}/pull/42"
     )
     return {
         "ok": bool(ok),

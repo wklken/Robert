@@ -1,4 +1,5 @@
 import unittest
+
 REPO_CONFIG = {
     "full_name": "example/backend",
     "github_account": "robert-bot",
@@ -17,6 +18,7 @@ class AuthorizationTests(unittest.TestCase):
     def normalize_and_authorize(self, raw_events, existing_workstreams=None):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
+
         events = discover.normalize_events(raw_events, REPO_CONFIG)
         return authorize.authorize_events(
             events,
@@ -27,16 +29,32 @@ class AuthorizationTests(unittest.TestCase):
     def test_quoted_partial_and_code_mentions_do_not_authorize(self):
         from robert_agent.adapters.github import discovery as discover
 
-        for body in ("@robert-bot-helper fix", "a@robert-bot.com", "> @robert-bot fix",
-                     "```\n@robert-bot fix\n```", "`@robert-bot` fix",
-                     "~~~python\n@robert-bot fix\n~~~", "```\n@robert-bot fix",
-                     "    @robert-bot fix", "```python\n    ```\n@robert-bot fix this\n```", "```python\ncode\n```python\n@robert-bot fix\n```"):
+        for body in (
+            "@robert-bot-helper fix",
+            "a@robert-bot.com",
+            "> @robert-bot fix",
+            "```\n@robert-bot fix\n```",
+            "`@robert-bot` fix",
+            "~~~python\n@robert-bot fix\n~~~",
+            "```\n@robert-bot fix",
+            "    @robert-bot fix",
+            "```python\n    ```\n@robert-bot fix this\n```",
+            "```python\ncode\n```python\n@robert-bot fix\n```",
+        ):
             with self.subTest(body=body):
                 self.assertFalse(discover._mentions_dd(body, "robert-bot"))
-                decision = self.normalize_and_authorize([{
-                    "id": "unsafe-mention", "number": 123, "event_type": "comment",
-                    "actor_login": "wklken", "body": body, "mentions_dd": True,
-                }])[0]
+                decision = self.normalize_and_authorize(
+                    [
+                        {
+                            "id": "unsafe-mention",
+                            "number": 123,
+                            "event_type": "comment",
+                            "actor_login": "wklken",
+                            "body": body,
+                            "mentions_dd": True,
+                        }
+                    ]
+                )[0]
                 self.assertFalse(decision["drives_execution"])
 
     def test_trailing_mention_authorizes_analysis_of_the_complete_request(self):
@@ -44,9 +62,14 @@ class AuthorizationTests(unittest.TestCase):
 
         body = "目前有哪些报错，是否可以修复？\n你跑一遍，统计分析下结果 @robert-bot"
         raw = discover._issue_search_to_raw(
-            {"number": 123, "title": "类型检查调研", "body": body,
-             "author": {"login": "wklken"}},
-            "mention", "robert-bot",
+            {
+                "number": 123,
+                "title": "类型检查调研",
+                "body": body,
+                "author": {"login": "wklken"},
+            },
+            "mention",
+            "robert-bot",
         )
         decision = self.normalize_and_authorize([raw])[0]
         self.assertTrue(decision["drives_execution"])
@@ -57,13 +80,23 @@ class AuthorizationTests(unittest.TestCase):
         for association in ("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", None):
             for permission in ("admin", "maintain", "write", "triage", None):
                 with self.subTest(association=association, permission=permission):
-                    decision = self.normalize_and_authorize([{
-                        "id": "untrusted-followup", "number": 123, "source_type": "pull_request",
-                        "event_type": "comment", "actor_login": "external-author",
-                        "author_association": association, "actor_permission": permission,
-                        "review_participants": ["external-author"],
-                        "body": "@robert-bot fix this", "workstream_id": "known",
-                    }], existing_workstreams={"known"})[0]
+                    decision = self.normalize_and_authorize(
+                        [
+                            {
+                                "id": "untrusted-followup",
+                                "number": 123,
+                                "source_type": "pull_request",
+                                "event_type": "comment",
+                                "actor_login": "external-author",
+                                "author_association": association,
+                                "actor_permission": permission,
+                                "review_participants": ["external-author"],
+                                "body": "@robert-bot fix this",
+                                "workstream_id": "known",
+                            }
+                        ],
+                        existing_workstreams={"known"},
+                    )[0]
                     self.assertFalse(decision["drives_execution"])
                     self.assertFalse(decision["creates_task"])
                     self.assertEqual(decision["authorization_status"], "context_only")
@@ -104,7 +137,9 @@ class AuthorizationTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(decisions[0]["authorization_status"], "ignored_untrusted_trigger")
+        self.assertEqual(
+            decisions[0]["authorization_status"], "ignored_untrusted_trigger"
+        )
         self.assertFalse(decisions[0]["creates_task"])
 
     def test_external_event_cannot_claim_github_system_authority(self):
@@ -201,7 +236,9 @@ class AuthorizationTests(unittest.TestCase):
             "github:example/backend!125",
         )
 
-    def test_owner_member_collaborator_followup_is_accepted_only_for_existing_workstream(self):
+    def test_owner_member_collaborator_followup_is_accepted_only_for_existing_workstream(
+        self,
+    ):
         accepted, ignored = self.normalize_and_authorize(
             [
                 {

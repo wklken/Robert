@@ -1,4 +1,5 @@
 """Queue prepared attempts and claim launches under the task fence."""
+
 from robert_agent.supervision import store as supervision_store
 from contextlib import closing
 from pathlib import Path
@@ -52,20 +53,42 @@ def _prepared_attempt_dispatch_priority(conn, attempt_id):
 
 
 def _record_dispatch_result(conn, attempt_id, dispatch_result):
-    if dispatch_result.get('cleanup_pending'):
-        row = conn.execute('SELECT task_id,metadata_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
+    if dispatch_result.get("cleanup_pending"):
+        row = conn.execute(
+            "SELECT task_id,metadata_json FROM attempts WHERE attempt_id=?",
+            (attempt_id,),
+        ).fetchone()
         if row:
             metadata = values.json_object(row[1])
-            metadata['dispatch'] = dispatch_result
-            metadata['supervise'] = {'status': 'worker_identity_attention', 'reason': 'startup_cleanup_unconfirmed'}
+            metadata["dispatch"] = dispatch_result
+            metadata["supervise"] = {
+                "status": "worker_identity_attention",
+                "reason": "startup_cleanup_unconfirmed",
+            }
             now = values.utc_now()
-            conn.execute("""UPDATE attempts SET status='stale',finished_at=NULL,
+            conn.execute(
+                """UPDATE attempts SET status='stale',finished_at=NULL,
                 started_at=COALESCE(started_at,?),heartbeat_at=?,metadata_json=?,failure_json=?
-                WHERE attempt_id=?""", (now, now, json.dumps(metadata), json.dumps(dispatch_result), attempt_id))
+                WHERE attempt_id=?""",
+                (
+                    now,
+                    now,
+                    json.dumps(metadata),
+                    json.dumps(dispatch_result),
+                    attempt_id,
+                ),
+            )
             execution_ownership.mark_attention(conn, row[0], now)
         return
     status = dispatch_result.get("status", "prepared")
-    if status not in {"prepared", "running", "completed", "failed", "stale", "canceled"}:
+    if status not in {
+        "prepared",
+        "running",
+        "completed",
+        "failed",
+        "stale",
+        "canceled",
+    }:
         status = "failed" if not dispatch_result.get("ok", True) else "prepared"
     current = conn.execute(
         "SELECT status, metadata_json FROM attempts WHERE attempt_id = ?",
@@ -195,7 +218,7 @@ def queue_dispatch(
     if not task_info or task_info.get("blocked"):
         return False
     if dispatch_budget is not None:
-        repo_remaining = dispatch_budget.get('repo_remaining', {})
+        repo_remaining = dispatch_budget.get("repo_remaining", {})
         if repo_id in repo_remaining and repo_remaining[repo_id] <= 0:
             return False
         if dispatch_budget["remaining"] <= 0:
@@ -215,10 +238,17 @@ def queue_dispatch(
 
 
 def queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
-    if repo.get('max_concurrency') is not None:
-        reserved = sum(item['repo_id'] == repo_id for item in dispatch_queue)
-        capacity = min(capacity, max(0, int(repo['max_concurrency'])
-            - attempt_capacity.running_attempt_count(conn, repo_id) - reserved))
+    if repo.get("max_concurrency") is not None:
+        reserved = sum(item["repo_id"] == repo_id for item in dispatch_queue)
+        capacity = min(
+            capacity,
+            max(
+                0,
+                int(repo["max_concurrency"])
+                - attempt_capacity.running_attempt_count(conn, repo_id)
+                - reserved,
+            ),
+        )
     if capacity <= 0:
         return 0
     rows = conn.execute(
@@ -411,11 +441,15 @@ def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
-        event, route_result = _prepared_attempt_event_and_route(conn, task_info["attempt_id"])
+        event, route_result = _prepared_attempt_event_and_route(
+            conn, task_info["attempt_id"]
+        )
     if not event or not route_result.get("needs_worktree"):
         return worktree_result
 
-    refreshed = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run=False)
+    refreshed = assigned_workspace.prepare_worktree(
+        repo, event, route_result, dry_run=False
+    )
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
@@ -442,10 +476,17 @@ def _model_for_dispatch(
     primary_model,
 ):
     fallback_model = selected_worker.get("fallback_model")
-    current = conn.execute("SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
-    model_fallback = (values.json_object(current[0] if current else None).get("resume") or {}).get("model_fallback")
-    if (model_fallback and model_fallback.get("worker_name") == selected_worker.get("name")
-            and model_fallback.get("model") == fallback_model):
+    current = conn.execute(
+        "SELECT metadata_json FROM attempts WHERE attempt_id=?", (attempt_id,)
+    ).fetchone()
+    model_fallback = (
+        values.json_object(current[0] if current else None).get("resume") or {}
+    ).get("model_fallback")
+    if (
+        model_fallback
+        and model_fallback.get("worker_name") == selected_worker.get("name")
+        and model_fallback.get("model") == fallback_model
+    ):
         return fallback_model
     if not fallback_model:
         return primary_model
@@ -474,22 +515,47 @@ def _model_for_dispatch(
     return primary_model
 
 
-def dispatch_queued(db_path, repo_ids, dispatch_queue, dry_run, max_concurrency,
-                     workers=None, default_worker=None, config_result=None):
+def dispatch_queued(
+    db_path,
+    repo_ids,
+    dispatch_queue,
+    dry_run,
+    max_concurrency,
+    workers=None,
+    default_worker=None,
+    config_result=None,
+):
     # The process-owned task lock covers target validation, spawn and PID
     # persistence. Cancellation/publication take this same lock.
-    with task_publication_lock(db_path,'dispatch-admission') as admission:
+    with task_publication_lock(db_path, "dispatch-admission") as admission:
         if not admission:
             return []
-        results=[]
-        if not dry_run and len(dispatch_queue)>1:
+        results = []
+        if not dry_run and len(dispatch_queue) > 1:
             with closing(sqlite3.connect(db_path)) as conn:
-                dispatch_queue=sorted(dispatch_queue,key=lambda item:_prepared_attempt_dispatch_priority(conn,item['task_info']['attempt_id']))
+                dispatch_queue = sorted(
+                    dispatch_queue,
+                    key=lambda item: _prepared_attempt_dispatch_priority(
+                        conn, item["task_info"]["attempt_id"]
+                    ),
+                )
         for item in dispatch_queue:
-            with task_publication_lock(db_path,item['task_info']['task_id']) as acquired:
+            with task_publication_lock(
+                db_path, item["task_info"]["task_id"]
+            ) as acquired:
                 if acquired:
-                    results.extend(dispatch_queued_locked(db_path,repo_ids,[item],dry_run,max_concurrency,
-                        workers,default_worker,config_result))
+                    results.extend(
+                        dispatch_queued_locked(
+                            db_path,
+                            repo_ids,
+                            [item],
+                            dry_run,
+                            max_concurrency,
+                            workers,
+                            default_worker,
+                            config_result,
+                        )
+                    )
         return results
 
 
@@ -509,8 +575,7 @@ def dispatch_queued_locked(
     results = []
     default_worker = default_worker or (workers or [])[0]
     workers_by_name = {
-        worker["name"]: worker
-        for worker in (workers or [default_worker])
+        worker["name"]: worker for worker in (workers or [default_worker])
     }
     for item in dispatch_queue:
         task_info = item["task_info"]
@@ -521,7 +586,10 @@ def dispatch_queued_locked(
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("PRAGMA busy_timeout = 5000")
-                if attempt_capacity.running_attempt_count_for_repos(conn, repo_ids) >= max_concurrency:
+                if (
+                    attempt_capacity.running_attempt_count_for_repos(conn, repo_ids)
+                    >= max_concurrency
+                ):
                     continue
                 if attempt_capacity.running_attempt_count(conn, repo_id) >= int(
                     (repo or {}).get("max_concurrency", max_concurrency)
@@ -531,7 +599,9 @@ def dispatch_queued_locked(
                 if current_target is None:
                     continue
                 task_info, worktree_result = current_target
-            worktree_result = ensure_dispatch_worktree(db_path, repo, task_info, worktree_result)
+            worktree_result = ensure_dispatch_worktree(
+                db_path, repo, task_info, worktree_result
+            )
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("PRAGMA busy_timeout = 5000")
@@ -563,8 +633,10 @@ def dispatch_queued_locked(
                                 "requested_worker": task_info.get("requested_worker"),
                             },
                         )
-                    conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.dispatch_wait','manual_worker_unavailable') WHERE task_id=?",
-                                 (task_info['task_id'],))
+                    conn.execute(
+                        "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.dispatch_wait','manual_worker_unavailable') WHERE task_id=?",
+                        (task_info["task_id"],),
+                    )
                 continue
         elif config_result:
             policy = route_config.ROUTE_POLICIES.get(task_info.get("route_id"))
@@ -574,9 +646,7 @@ def dispatch_queued_locked(
                     repo,
                     policy,
                 )
-                selected_worker = workers_by_name[
-                    effective_route["worker"]
-                ]
+                selected_worker = workers_by_name[effective_route["worker"]]
         primary_model = (
             effective_route["model"]
             if effective_route and task_info.get("routing_mode") != "manual"
@@ -610,85 +680,201 @@ def dispatch_queued_locked(
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
         if not native_review and config_result:
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                if not work_admission.ordinary_dispatch_allowed(conn, task_info['task_id'], repo):
+                if not work_admission.ordinary_dispatch_allowed(
+                    conn, task_info["task_id"], repo
+                ):
                     now = values.utc_now()
-                    conn.execute("UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'", (now, task_info['attempt_id']))
-                    work_application_lifecycle.finalize_failed_task(conn, task_info['task_id'], task_info['workstream_id'], now,
-                        {'status': 'current_authorization_rejected'})
-                    execution_notifications.insert(conn, 'execution_authorization_rejected', 'recorded', now,
-                        {'task_id': task_info['task_id'], 'reason_code': 'current_authorization_rejected',
-                         'required_action': 'Review current trust policy before explicitly retrying.'})
+                    conn.execute(
+                        "UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'",
+                        (now, task_info["attempt_id"]),
+                    )
+                    work_application_lifecycle.finalize_failed_task(
+                        conn,
+                        task_info["task_id"],
+                        task_info["workstream_id"],
+                        now,
+                        {"status": "current_authorization_rejected"},
+                    )
+                    execution_notifications.insert(
+                        conn,
+                        "execution_authorization_rejected",
+                        "recorded",
+                        now,
+                        {
+                            "task_id": task_info["task_id"],
+                            "reason_code": "current_authorization_rejected",
+                            "required_action": "Review current trust policy before explicitly retrying.",
+                        },
+                    )
                     continue
-        if native_review and config_result and not workflow_routing.native_request_allowed(native_review, repo, config_result):
+        if (
+            native_review
+            and config_result
+            and not workflow_routing.native_request_allowed(
+                native_review, repo, config_result
+            )
+        ):
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute('BEGIN IMMEDIATE')
-                current = current_dispatch_target(conn, task_info['attempt_id'])
+                conn.execute("BEGIN IMMEDIATE")
+                current = current_dispatch_target(conn, task_info["attempt_id"])
                 if current is not None:
                     now = values.utc_now()
-                    conn.execute("UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'", (now, task_info['attempt_id']))
-                    conn.execute("UPDATE tasks SET lifecycle='canceled',updated_at=? WHERE task_id=?", (now, task_info['task_id']))
-                    conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL,updated_at=? WHERE active_task_id=?", (now, task_info['task_id']))
-                    round_store = vote_store if 'source_type' in native_review else review_store
-                    round_store.update(conn, native_review['round_id'], status='canceled', error='current authorization or native route no longer permits this request')
-                    execution_ownership.close_terminal_task(conn, task_info['task_id'], now)
-                    execution_notifications.insert(conn, 'native_request_canceled', 'recorded', now,
-                        {'task_id': task_info['task_id'], 'round_id': native_review['round_id'], 'reason_code': 'current_policy_rejected'})
+                    conn.execute(
+                        "UPDATE attempts SET status='canceled',finished_at=? WHERE attempt_id=? AND status='prepared'",
+                        (now, task_info["attempt_id"]),
+                    )
+                    conn.execute(
+                        "UPDATE tasks SET lifecycle='canceled',updated_at=? WHERE task_id=?",
+                        (now, task_info["task_id"]),
+                    )
+                    conn.execute(
+                        "UPDATE workstreams SET lifecycle='completed',active_task_id=NULL,updated_at=? WHERE active_task_id=?",
+                        (now, task_info["task_id"]),
+                    )
+                    round_store = (
+                        vote_store if "source_type" in native_review else review_store
+                    )
+                    round_store.update(
+                        conn,
+                        native_review["round_id"],
+                        status="canceled",
+                        error="current authorization or native route no longer permits this request",
+                    )
+                    execution_ownership.close_terminal_task(
+                        conn, task_info["task_id"], now
+                    )
+                    execution_notifications.insert(
+                        conn,
+                        "native_request_canceled",
+                        "recorded",
+                        now,
+                        {
+                            "task_id": task_info["task_id"],
+                            "round_id": native_review["round_id"],
+                            "reason_code": "current_policy_rejected",
+                        },
+                    )
             continue
         if config_result and not native_review:
             from robert_agent.workflows.maintenance import repair as supervision_repair
+
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.row_factory = sqlite3.Row
-                if supervision_store.repair_task(conn, task_info['task_id']):
+                if supervision_store.repair_task(conn, task_info["task_id"]):
                     repair_authorization = supervision_repair.authorized_repair(
-                        conn, task_info['task_id'], config_result, repo['repo_id'] if 'repo_id' in repo else
-                        conn.execute('SELECT repo_id FROM workstreams WHERE workstream_id=?',
-                                     (task_info['workstream_id'],)).fetchone()[0])
+                        conn,
+                        task_info["task_id"],
+                        config_result,
+                        repo["repo_id"]
+                        if "repo_id" in repo
+                        else conn.execute(
+                            "SELECT repo_id FROM workstreams WHERE workstream_id=?",
+                            (task_info["workstream_id"],),
+                        ).fetchone()[0],
+                    )
                     if not repair_authorization:
                         now = values.utc_now()
-                        conn.execute("UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=? AND status='prepared'",
-                                     (now, task_info['attempt_id']))
-                        work_application_lifecycle.finalize_failed_task(conn, task_info['task_id'], task_info['workstream_id'], now,
-                                              {'status': 'maintenance_policy_rejected'})
+                        conn.execute(
+                            "UPDATE attempts SET status='failed',finished_at=? WHERE attempt_id=? AND status='prepared'",
+                            (now, task_info["attempt_id"]),
+                        )
+                        work_application_lifecycle.finalize_failed_task(
+                            conn,
+                            task_info["task_id"],
+                            task_info["workstream_id"],
+                            now,
+                            {"status": "maintenance_policy_rejected"},
+                        )
                         continue
-                    from robert_agent.workflows.maintenance import worker as supervision_repair_worker
-                    worker_kwargs['worker_agent_config'] = supervision_repair_worker.launch_profile(
-                        config_result, task_info['task_id'], task_info['attempt_id'], repair_authorization['worker'])
+                    from robert_agent.workflows.maintenance import (
+                        worker as supervision_repair_worker,
+                    )
+
+                    worker_kwargs["worker_agent_config"] = (
+                        supervision_repair_worker.launch_profile(
+                            config_result,
+                            task_info["task_id"],
+                            task_info["attempt_id"],
+                            repair_authorization["worker"],
+                        )
+                    )
         if native_review:
             configured = native_review["request"]["workers"]
-            timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
-            environment_names = sorted({"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
-                                       | {name for w in configured for name in w["environment_allowlist"]})
+            timeout = (
+                sum(w["timeout_seconds"] for w in configured)
+                + 2 * configured[0]["timeout_seconds"]
+                + 600
+            )
+            environment_names = sorted(
+                {
+                    "GH_TOKEN",
+                    "GITHUB_TOKEN",
+                    "GH_HOST",
+                    "CODEX_HOME",
+                    "CLAUDE_CONFIG_DIR",
+                }
+                | {name for w in configured for name in w["environment_allowlist"]}
+            )
             worker_kwargs.update(
                 worktree_path=str(Path(db_path).resolve().parent),
-                worker_agent_config={"agent": "command", "command_argv": [
-                    sys.executable, "-m", ("robert_agent.workflows.vote.coordinator" if "source_type" in native_review else "robert_agent.workflows.review.coordinator"), "--db", str(Path(db_path).resolve()),
-                    "--task-id", task_info["task_id"], "--attempt-id", task_info["attempt_id"],
-                ], "timeout_seconds": timeout, "environment_allowlist": environment_names},
+                worker_agent_config={
+                    "agent": "command",
+                    "command_argv": [
+                        sys.executable,
+                        "-m",
+                        (
+                            "robert_agent.workflows.vote.coordinator"
+                            if "source_type" in native_review
+                            else "robert_agent.workflows.review.coordinator"
+                        ),
+                        "--db",
+                        str(Path(db_path).resolve()),
+                        "--task-id",
+                        task_info["task_id"],
+                        "--attempt-id",
+                        task_info["attempt_id"],
+                    ],
+                    "timeout_seconds": timeout,
+                    "environment_allowlist": environment_names,
+                },
             )
         if not dry_run:
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute('BEGIN IMMEDIATE')
-                target=current_dispatch_target(conn,task_info['attempt_id'])
+                conn.execute("BEGIN IMMEDIATE")
+                target = current_dispatch_target(conn, task_info["attempt_id"])
                 if target is None:
                     continue
-                task_info,worktree_result=target
-                if not execution_ownership.claim_task(conn,task_info['task_id']):
+                task_info, worktree_result = target
+                if not execution_ownership.claim_task(conn, task_info["task_id"]):
                     continue
-                subject_type, subject_id = execution_ownership.subject_for_task(conn,task_info['task_id'])
-                binding=execution_store.get_binding(conn,subject_type,subject_id)
-                metadata=values.json_object(binding['metadata_json']) if binding else {}
-                if metadata.get('dispatch_inflight'):
+                subject_type, subject_id = execution_ownership.subject_for_task(
+                    conn, task_info["task_id"]
+                )
+                binding = execution_store.get_binding(conn, subject_type, subject_id)
+                metadata = (
+                    values.json_object(binding["metadata_json"]) if binding else {}
+                )
+                if metadata.get("dispatch_inflight"):
                     if binding:
-                        metadata['reason_code']='dispatch_outcome_unknown'
-                        conn.execute("UPDATE execution_subjects SET binding_status='attention',metadata_json=? WHERE subject_type=? AND subject_id=?",(json.dumps(metadata),subject_type,subject_id))
+                        metadata["reason_code"] = "dispatch_outcome_unknown"
+                        conn.execute(
+                            "UPDATE execution_subjects SET binding_status='attention',metadata_json=? WHERE subject_type=? AND subject_id=?",
+                            (json.dumps(metadata), subject_type, subject_id),
+                        )
                     continue
                 if binding:
-                    metadata['dispatch_inflight']=task_info['attempt_id']
-                    conn.execute('UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?',(json.dumps(metadata),subject_type,subject_id))
+                    metadata["dispatch_inflight"] = task_info["attempt_id"]
+                    conn.execute(
+                        "UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?",
+                        (json.dumps(metadata), subject_type, subject_id),
+                    )
         try:
             if worktree_result and not worktree_result.get("ok", True):
-                dispatch_result = {"ok": False, "status": "failed_dispatch",
-                                   "safe_error": worktree_result.get("status", "worktree_unavailable")}
+                dispatch_result = {
+                    "ok": False,
+                    "status": "failed_dispatch",
+                    "safe_error": worktree_result.get("status", "worktree_unavailable"),
+                }
             else:
                 dispatch_result = dispatch.dispatch_worker(**worker_kwargs)
         except Exception as exc:
@@ -697,23 +883,35 @@ def dispatch_queued_locked(
                 "task_id": task_info["task_id"],
                 "attempt_id": task_info["attempt_id"],
             }
-        dispatch_logs = ({
-            kind: {"tail": evidence.tail_file(dispatch_result.get(f"{kind}_path"))}
-            for kind in ("stdout", "stderr")
-        } if not dispatch_result.get("ok", True) and dispatch_result.get("pid") else {})
+        dispatch_logs = (
+            {
+                kind: {"tail": evidence.tail_file(dispatch_result.get(f"{kind}_path"))}
+                for kind in ("stdout", "stderr")
+            }
+            if not dispatch_result.get("ok", True) and dispatch_result.get("pid")
+            else {}
+        )
         if (
             not dispatch_result.get("ok", True)
             and dispatch_result.get("pid")
-            and (evidence.terminal_transport_failure(dispatch_logs) or retry_policy.terminal_rate_limit(dispatch_logs))
+            and (
+                evidence.terminal_transport_failure(dispatch_logs)
+                or retry_policy.terminal_rate_limit(dispatch_logs)
+            )
         ):
             # Even an exit during the startup probe must pass through the same
             # supervised, bounded continuation path as a later stream failure.
             dispatch_result = {
-                **dispatch_result, "ok": True, "status": "running",
-                "original_status": dispatch_result.get("status"), "process_exited": True,
+                **dispatch_result,
+                "ok": True,
+                "status": "running",
+                "original_status": dispatch_result.get("status"),
+                "process_exited": True,
             }
         dispatch_result = {
-            **dispatch_result, "worker_name": selected_worker["name"], "model": model,
+            **dispatch_result,
+            "worker_name": selected_worker["name"],
+            "model": model,
             "fallback_model": selected_worker.get("fallback_model"),
             "reasoning_effort": worker_kwargs["reasoning_effort"],
         }
@@ -723,33 +921,50 @@ def dispatch_queued_locked(
             if not execution_ownership.claim_task(conn, task_info["task_id"]):
                 continue
             _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
-            subject_type, subject_id = execution_ownership.subject_for_task(conn,task_info['task_id'])
-            binding=execution_store.get_binding(conn,subject_type,subject_id)
+            subject_type, subject_id = execution_ownership.subject_for_task(
+                conn, task_info["task_id"]
+            )
+            binding = execution_store.get_binding(conn, subject_type, subject_id)
             if binding:
-                metadata=values.json_object(binding['metadata_json'])
-                metadata.pop('dispatch_inflight',None)
-                conn.execute('UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?',(json.dumps(metadata),subject_type,subject_id))
-            _record_dispatch_artifacts(conn, task_info, dispatch_result, values.utc_now())
-            if dispatch_result.get('cleanup_pending'):
-                execution_notifications.insert(conn, 'worker_identity_attention', 'recorded', values.utc_now(), {
-                    'task_id': task_info['task_id'], 'attempt_id': task_info['attempt_id'],
-                    'workstream_id': task_info['workstream_id'],
-                    'reason_code': 'startup_cleanup_unconfirmed',
-                    'required_action': 'Verify the launch process group has stopped, then cancel this execution.',
-                })
+                metadata = values.json_object(binding["metadata_json"])
+                metadata.pop("dispatch_inflight", None)
+                conn.execute(
+                    "UPDATE execution_subjects SET metadata_json=? WHERE subject_type=? AND subject_id=?",
+                    (json.dumps(metadata), subject_type, subject_id),
+                )
+            _record_dispatch_artifacts(
+                conn, task_info, dispatch_result, values.utc_now()
+            )
+            if dispatch_result.get("cleanup_pending"):
+                execution_notifications.insert(
+                    conn,
+                    "worker_identity_attention",
+                    "recorded",
+                    values.utc_now(),
+                    {
+                        "task_id": task_info["task_id"],
+                        "attempt_id": task_info["attempt_id"],
+                        "workstream_id": task_info["workstream_id"],
+                        "reason_code": "startup_cleanup_unconfirmed",
+                        "required_action": "Verify the launch process group has stopped, then cancel this execution.",
+                    },
+                )
                 results.append(dispatch_result)
                 continue
             if (
-                (not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed")
-                and _completed_by_worker_result(conn, task_info["attempt_id"])
-            ):
+                not dispatch_result.get("ok", True)
+                or dispatch_result.get("status") == "failed"
+            ) and _completed_by_worker_result(conn, task_info["attempt_id"]):
                 dispatch_result = {
                     **dispatch_result,
                     "ok": True,
                     "status": "completed_by_worker_result",
                     "original_status": dispatch_result.get("status"),
                 }
-            if not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed":
+            if (
+                not dispatch_result.get("ok", True)
+                or dispatch_result.get("status") == "failed"
+            ):
                 run_now = values.utc_now()
                 work_application_lifecycle.finalize_failed_task(
                     conn,

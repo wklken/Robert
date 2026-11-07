@@ -1,4 +1,5 @@
 """Run one repository cycle with its existing lease and rollback boundaries."""
+
 from robert_agent.adapters.sqlite import transactions
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution import journal as run_journal
@@ -33,9 +34,12 @@ def _publish_ready_actions_for_repo(
     }
     if limit is not None:
         kwargs["limit"] = limit
-    from robert_agent.supervision.application import publication as supervision_publication
+    from robert_agent.supervision.application import (
+        publication as supervision_publication,
+    )
+
     if supervision_publication.needs_config(config_result):
-        kwargs['config'] = config_result
+        kwargs["config"] = config_result
     return publish.publish_ready_actions(db_path, **kwargs)
 
 
@@ -102,7 +106,9 @@ def run_repo_pipeline(
     conn.commit()
     transactions.savepoint(conn, "repo_pipeline")
     try:
-        run_journal.mark_repo_run_step(conn, run_id, repo_id, "acquire_lease", "running", run_now)
+        run_journal.mark_repo_run_step(
+            conn, run_id, repo_id, "acquire_lease", "running", run_now
+        )
         lease_result = execution_leases.acquire(
             conn,
             repo_id,
@@ -112,7 +118,9 @@ def run_repo_pipeline(
         )
         summary["lease_status"] = lease_result["status"]
         if not lease_result["ok"]:
-            task_state.mark_repository_busy(conn, repo_id, run_now, lease_result.get('expires_at'))
+            task_state.mark_repository_busy(
+                conn, repo_id, run_now, lease_result.get("expires_at")
+            )
             summary["status"] = lease_result["status"]
             summary["failure_status"] = lease_result["status"]
             run_journal.mark_repo_run_step(
@@ -147,7 +155,9 @@ def run_repo_pipeline(
             output=lease_result,
         )
 
-        run_journal.mark_repo_run_step(conn, run_id, repo_id, "supervise", "running", run_now)
+        run_journal.mark_repo_run_step(
+            conn, run_id, repo_id, "supervise", "running", run_now
+        )
         supervised_count = monitor.supervise_running_attempts(
             conn,
             repo_id,
@@ -183,7 +193,9 @@ def run_repo_pipeline(
             },
         )
 
-        run_journal.mark_repo_run_step(conn, run_id, repo_id, "audit_results", "running", run_now)
+        run_journal.mark_repo_run_step(
+            conn, run_id, repo_id, "audit_results", "running", run_now
+        )
         try:
             audited_result_count = result_audit.audit_completed_results(
                 conn,
@@ -225,7 +237,13 @@ def run_repo_pipeline(
                 values.utc_now(),
                 error=error,
             )
-            for step in ["publish_actions", "reconcile", "discover", "authorize", "route"]:
+            for step in [
+                "publish_actions",
+                "reconcile",
+                "discover",
+                "authorize",
+                "route",
+            ]:
                 run_journal.mark_repo_run_step(
                     conn,
                     run_id,
@@ -236,8 +254,18 @@ def run_repo_pipeline(
                     output={"reason": error["status"]},
                 )
             return summary
-        audited_result_count += completion.recover_pending_handoffs(conn, repo_id, data_dir, db_path, repo,
-            run_now, dry_run, dispatch_queue, dispatch_budget, config_result)
+        audited_result_count += completion.recover_pending_handoffs(
+            conn,
+            repo_id,
+            data_dir,
+            db_path,
+            repo,
+            run_now,
+            dry_run,
+            dispatch_queue,
+            dispatch_budget,
+            config_result,
+        )
         summary["audited_result_count"] = audited_result_count
         run_journal.mark_repo_run_step(
             conn,
@@ -270,7 +298,9 @@ def run_repo_pipeline(
                 output=publish_result,
             )
         else:
-            run_journal.mark_repo_run_step(conn, run_id, repo_id, "publish_actions", "running", run_now)
+            run_journal.mark_repo_run_step(
+                conn, run_id, repo_id, "publish_actions", "running", run_now
+            )
             conn.commit()
             publish_limit = publish_budget["remaining"]
             if publish_limit == 0:
@@ -298,8 +328,7 @@ def run_repo_pipeline(
                 if publish_limit is not None:
                     publish_budget["remaining"] = max(
                         0,
-                        publish_limit
-                        - int(publish_result.get("pending_count", 0)),
+                        publish_limit - int(publish_result.get("pending_count", 0)),
                     )
             publish_failed = not publish_result["ok"]
             try:
@@ -347,7 +376,9 @@ def run_repo_pipeline(
             }
             if publish_failed:
                 summary["status"] = "failed"
-                summary["failure_status"] = publish_result.get("status", "publish_failed")
+                summary["failure_status"] = publish_result.get(
+                    "status", "publish_failed"
+                )
                 summary["safe_error"] = publish_result.get(
                     "safe_error",
                     "GitHub action publication failed",
@@ -373,9 +404,20 @@ def run_repo_pipeline(
                     output=publish_result,
                 )
         if skip_publish and finalize_external:
-            publish_result["finalized_task_count"] = completion.finalize_published_results(
-                conn, repo_id, data_dir, db_path, repo, run_id, run_now, dry_run,
-                dispatch_queue, dispatch_budget, config_result=config_result,
+            publish_result["finalized_task_count"] = (
+                completion.finalize_published_results(
+                    conn,
+                    repo_id,
+                    data_dir,
+                    db_path,
+                    repo,
+                    run_id,
+                    run_now,
+                    dry_run,
+                    dispatch_queue,
+                    dispatch_budget,
+                    config_result=config_result,
+                )
             )
         summary["publish_pending_count"] = publish_result.get("pending_count", 0)
         summary["published_count"] = publish_result.get("published_count", 0)
@@ -394,7 +436,9 @@ def run_repo_pipeline(
                 output={"reason": "skip_external" if skip_external else "fixture_path"},
             )
         else:
-            run_journal.mark_repo_run_step(conn, run_id, repo_id, "reconcile", "running", run_now)
+            run_journal.mark_repo_run_step(
+                conn, run_id, repo_id, "reconcile", "running", run_now
+            )
             conn.commit()
             reconciled_source_count = source_lifecycle.reconcile_remote_source_states(
                 conn,
@@ -422,23 +466,44 @@ def run_repo_pipeline(
             )
 
         discovered = discovery.discover_requests(
-            conn, repo=repo, repo_id=repo_id, run_id=run_id, run_now=run_now,
-            config_result=config_result, fixture_path=fixture_path,
-            skip_external=skip_external, observation=observation,
-            discovery_runner=discovery_runner, notification_hints=notification_hints,
-            system_decisions=system_decisions, summary=summary,
+            conn,
+            repo=repo,
+            repo_id=repo_id,
+            run_id=run_id,
+            run_now=run_now,
+            config_result=config_result,
+            fixture_path=fixture_path,
+            skip_external=skip_external,
+            observation=observation,
+            discovery_runner=discovery_runner,
+            notification_hints=notification_hints,
+            system_decisions=system_decisions,
+            summary=summary,
         )
         if discovered is None:
             return summary
         decisions, known_workstreams, active_workstreams = discovered
 
-        run_journal.mark_repo_run_step(conn, run_id, repo_id, "route", "running", run_now)
+        run_journal.mark_repo_run_step(
+            conn, run_id, repo_id, "route", "running", run_now
+        )
         route_failures = intake.admit_requests(
-            conn, data_dir=data_dir, db_path=db_path, repo=repo, repo_id=repo_id,
-            run_id=run_id, run_now=run_now, dry_run=dry_run,
-            dispatch_queue=dispatch_queue, dispatch_budget=dispatch_budget,
-            prompt_paths=prompt_paths, config_result=config_result, decisions=decisions,
-            known_workstreams=known_workstreams, active_workstreams=active_workstreams, summary=summary,
+            conn,
+            data_dir=data_dir,
+            db_path=db_path,
+            repo=repo,
+            repo_id=repo_id,
+            run_id=run_id,
+            run_now=run_now,
+            dry_run=dry_run,
+            dispatch_queue=dispatch_queue,
+            dispatch_budget=dispatch_budget,
+            prompt_paths=prompt_paths,
+            config_result=config_result,
+            decisions=decisions,
+            known_workstreams=known_workstreams,
+            active_workstreams=active_workstreams,
+            summary=summary,
         )
 
         if route_failures:
@@ -457,7 +522,9 @@ def run_repo_pipeline(
                     "prompt_count": len(prompt_paths) - repo_prompt_start,
                     "dispatch_queue_count": len(dispatch_queue) - repo_dispatch_start,
                     "reconciled_source_count": summary["reconciled_source_count"],
-                    "current_state_closed_skip_count": summary["current_state_closed_skip_count"],
+                    "current_state_closed_skip_count": summary[
+                        "current_state_closed_skip_count"
+                    ],
                 },
                 error=route_error,
             )
@@ -474,7 +541,9 @@ def run_repo_pipeline(
                 "prompt_count": len(prompt_paths) - repo_prompt_start,
                 "dispatch_queue_count": len(dispatch_queue) - repo_dispatch_start,
                 "reconciled_source_count": summary["reconciled_source_count"],
-                "current_state_closed_skip_count": summary["current_state_closed_skip_count"],
+                "current_state_closed_skip_count": summary[
+                    "current_state_closed_skip_count"
+                ],
             },
         )
         pipeline_succeeded = True
@@ -489,21 +558,39 @@ def run_repo_pipeline(
         del dispatch_queue[repo_dispatch_start:]
         dispatch_budget["remaining"] += removed_dispatches
         del prompt_paths[repo_prompt_start:]
-        summary.update(status="failed", failure_status="repository_pipeline_failed",
-                       safe_error=f"Repository pipeline failed ({type(exc).__name__}).")
-        error = {"status": summary["failure_status"], "safe_error": summary["safe_error"],
-                 "error_type": type(exc).__name__}
-        run_journal.mark_repo_failure(conn, run_id, repo_id, failed_step, run_now, error)
-        execution_notifications.update_failure(conn, "repository_pipeline_failed", repo_id, run_now,
-            {"repo_id": repo_id, **error,
-             "reason_code": "repository_pipeline_failed",
-             "required_action": "Inspect the failed repository; other repositories continue."})
+        summary.update(
+            status="failed",
+            failure_status="repository_pipeline_failed",
+            safe_error=f"Repository pipeline failed ({type(exc).__name__}).",
+        )
+        error = {
+            "status": summary["failure_status"],
+            "safe_error": summary["safe_error"],
+            "error_type": type(exc).__name__,
+        }
+        run_journal.mark_repo_failure(
+            conn, run_id, repo_id, failed_step, run_now, error
+        )
+        execution_notifications.update_failure(
+            conn,
+            "repository_pipeline_failed",
+            repo_id,
+            run_now,
+            {
+                "repo_id": repo_id,
+                **error,
+                "reason_code": "repository_pipeline_failed",
+                "required_action": "Inspect the failed repository; other repositories continue.",
+            },
+        )
         return summary
     finally:
         if lease_result and lease_result.get("ok"):
             execution_leases.release(conn, lease_result["lease_id"], values.utc_now())
         if pipeline_succeeded:
-            execution_notifications.update_failure(conn, "repository_pipeline_failed", repo_id, run_now)
+            execution_notifications.update_failure(
+                conn, "repository_pipeline_failed", repo_id, run_now
+            )
         transactions.finish_isolation(conn, "repo_pipeline")
         summary["prompt_count"] = len(prompt_paths) - repo_prompt_start
         summary["dispatch_queue_count"] = len(dispatch_queue) - repo_dispatch_start

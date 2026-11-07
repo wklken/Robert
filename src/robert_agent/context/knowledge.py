@@ -137,7 +137,9 @@ def propose_candidates(conn, repo_id, run_now):
                 _candidate_prompt_text(row, metadata),
                 _candidate_type(row["kind"]),
                 source_json,
-                json.dumps(metadata.get("evidence") or [], ensure_ascii=False, sort_keys=True),
+                json.dumps(
+                    metadata.get("evidence") or [], ensure_ascii=False, sort_keys=True
+                ),
                 row["confidence"],
                 run_now,
                 json.dumps(
@@ -148,22 +150,41 @@ def propose_candidates(conn, repo_id, run_now):
             ),
         )
         proposed.append(candidate_id)
-    return {"ok": True, "status": "proposed", "candidate_count": len(proposed), "candidate_ids": proposed}
+    return {
+        "ok": True,
+        "status": "proposed",
+        "candidate_count": len(proposed),
+        "candidate_ids": proposed,
+    }
 
 
-def approve_candidate(conn, candidate_id, scope_type, scope_value, approved_by, run_now):
+def approve_candidate(
+    conn, candidate_id, scope_type, scope_value, approved_by, run_now
+):
     scope_type = _text(scope_type)
     if scope_type not in VALID_SCOPE_TYPES:
-        return {"ok": False, "status": "failed_validation", "safe_error": f"invalid scope_type: {scope_type}"}
+        return {
+            "ok": False,
+            "status": "failed_validation",
+            "safe_error": f"invalid scope_type: {scope_type}",
+        }
     if scope_type == "global":
         scope_value = ""
     else:
         scope_value = _text(scope_value)
         if not scope_value:
-            return {"ok": False, "status": "failed_validation", "safe_error": "scope_value is required"}
+            return {
+                "ok": False,
+                "status": "failed_validation",
+                "safe_error": "scope_value is required",
+            }
     approved_by = _text(approved_by)
     if not approved_by:
-        return {"ok": False, "status": "failed_validation", "safe_error": "approved_by is required"}
+        return {
+            "ok": False,
+            "status": "failed_validation",
+            "safe_error": "approved_by is required",
+        }
     row = conn.execute(
         """
         SELECT repo_id, title, prompt_text, metadata_json, status
@@ -173,10 +194,18 @@ def approve_candidate(conn, candidate_id, scope_type, scope_value, approved_by, 
         (candidate_id,),
     ).fetchone()
     if not row:
-        return {"ok": False, "status": "not_found", "safe_error": f"candidate not found: {candidate_id}"}
+        return {
+            "ok": False,
+            "status": "not_found",
+            "safe_error": f"candidate not found: {candidate_id}",
+        }
     repo_id, title, prompt_text, metadata_json, status = row
     if status != "pending":
-        return {"ok": False, "status": "not_pending", "safe_error": f"candidate is {status}"}
+        return {
+            "ok": False,
+            "status": "not_pending",
+            "safe_error": f"candidate is {status}",
+        }
     metadata = _decode_json(metadata_json, {})
     knowledge_id = _id("rk")
     conn.execute(
@@ -229,15 +258,27 @@ def approve_candidate(conn, candidate_id, scope_type, scope_value, approved_by, 
 def reject_candidate(conn, candidate_id, reviewer, review_note, run_now):
     reviewer = _text(reviewer)
     if not reviewer:
-        return {"ok": False, "status": "failed_validation", "safe_error": "reviewer is required"}
+        return {
+            "ok": False,
+            "status": "failed_validation",
+            "safe_error": "reviewer is required",
+        }
     row = conn.execute(
         "SELECT status FROM knowledge_candidates WHERE candidate_id = ?",
         (candidate_id,),
     ).fetchone()
     if not row:
-        return {"ok": False, "status": "not_found", "safe_error": f"candidate not found: {candidate_id}"}
+        return {
+            "ok": False,
+            "status": "not_found",
+            "safe_error": f"candidate not found: {candidate_id}",
+        }
     if row[0] != "pending":
-        return {"ok": False, "status": "not_pending", "safe_error": f"candidate is {row[0]}"}
+        return {
+            "ok": False,
+            "status": "not_pending",
+            "safe_error": f"candidate is {row[0]}",
+        }
     conn.execute(
         """
         UPDATE knowledge_candidates
@@ -286,7 +327,9 @@ def _knowledge_score(row, route_result, event_terms, workstream_id):
     return 0
 
 
-def load_runtime_knowledge(conn, repo_id, route_result, events, workstream_id=None, limit=5):
+def load_runtime_knowledge(
+    conn, repo_id, route_result, events, workstream_id=None, limit=5
+):
     rows = conn.execute(
         """
         SELECT knowledge_id, candidate_id, repo_id, scope_type, scope_value,
@@ -318,7 +361,9 @@ def load_runtime_knowledge(conn, repo_id, route_result, events, workstream_id=No
             continue
         item["score"] = score
         matched.append(item)
-    matched.sort(key=lambda item: (-item["score"], item["approved_at"], item["knowledge_id"]))
+    matched.sort(
+        key=lambda item: (-item["score"], item["approved_at"], item["knowledge_id"])
+    )
     return matched[:limit]
 
 

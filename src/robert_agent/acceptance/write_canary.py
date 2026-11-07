@@ -78,7 +78,12 @@ def _insert_canary_fixture(db_path, target, marker_id):
             INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url)
             VALUES ('source-production-canary', 'repo-production-canary', ?, ?, ?, ?)
             """,
-            (target["source_key"], target["source_type"], target["number"], target["html_url"]),
+            (
+                target["source_key"],
+                target["source_type"],
+                target["number"],
+                target["html_url"],
+            ),
         )
         conn.execute(
             """
@@ -145,7 +150,7 @@ def _insert_canary_fixture(db_path, target, marker_id):
                                     }
                                 ],
                             },
-                        }
+                        },
                     },
                     sort_keys=True,
                 ),
@@ -236,7 +241,9 @@ def production_write_canary(
     action_state = _action_state(db_path)
     status = "publish_failed"
     if publish_result.get("ok"):
-        status = "deduplicated" if publish_result.get("deduplicated_count") else "published"
+        status = (
+            "deduplicated" if publish_result.get("deduplicated_count") else "published"
+        )
     return {
         "ok": bool(publish_result.get("ok")),
         "status": status,

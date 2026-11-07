@@ -25,7 +25,16 @@ class WorkerRecordingTests(WorkerProtocolFixture):
             output_type="comment_analysis",
             planned_github_actions=[{"type": "comment", "body": "Completed analysis."}],
             consumed_event_fingerprints=["comment:1"],
-            verification=[{"command": "python -m unittest", "status": "passed", "purpose": "regression", "required": False, "exit_code": 0, "source": "worker_reported"}],
+            verification=[
+                {
+                    "command": "python -m unittest",
+                    "status": "passed",
+                    "purpose": "regression",
+                    "required": False,
+                    "exit_code": 0,
+                    "source": "worker_reported",
+                }
+            ],
             handoff="done",
             used_skills=["fast-code-path"],
         )
@@ -34,9 +43,15 @@ class WorkerRecordingTests(WorkerProtocolFixture):
         self.assertTrue(snapshot_result["ok"], snapshot_result)
         self.assertTrue(result_result["ok"], result_result)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            phase_count = conn.execute("SELECT COUNT(*) FROM worker_phases").fetchone()[0]
-            result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
-            action_count = conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0]
+            phase_count = conn.execute("SELECT COUNT(*) FROM worker_phases").fetchone()[
+                0
+            ]
+            result_count = conn.execute(
+                "SELECT COUNT(*) FROM worker_results"
+            ).fetchone()[0]
+            action_count = conn.execute(
+                "SELECT COUNT(*) FROM github_actions"
+            ).fetchone()[0]
         self.assertEqual(phase_count, 1)
         self.assertEqual(result_count, 1)
         self.assertEqual(action_count, 1)

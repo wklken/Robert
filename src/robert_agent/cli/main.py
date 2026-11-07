@@ -164,8 +164,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wait for another daemon's lease instead of exiting (used by service managers).",
     )
 
-    supervisor_parser = subparsers.add_parser("supervisor", help="Independently supervise task progress.")
-    supervisor_commands = supervisor_parser.add_subparsers(dest="supervisor_command", required=True)
+    supervisor_parser = subparsers.add_parser(
+        "supervisor", help="Independently supervise task progress."
+    )
+    supervisor_commands = supervisor_parser.add_subparsers(
+        dest="supervisor_command", required=True
+    )
     for name in ("run", "check", "status"):
         sub = supervisor_commands.add_parser(name)
         _add_config_argument(sub)
@@ -173,7 +177,9 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "run":
             sub.add_argument("--once", action="store_true")
 
-    manifest = supervisor_commands.add_parser("build-manifest", help="Bind a built wheel to clean Git source.")
+    manifest = supervisor_commands.add_parser(
+        "build-manifest", help="Bind a built wheel to clean Git source."
+    )
     manifest.add_argument("--repo", required=True)
     manifest.add_argument("--wheel", required=True)
     manifest.add_argument("--output-file", required=True)
@@ -231,20 +237,40 @@ def build_parser() -> argparse.ArgumentParser:
     ]:
         command_parser = service_subparsers.add_parser(name)
         command_parser.add_argument("--dry-run", action="store_true")
-        command_parser.add_argument("--target", choices=["all", "daemon", "supervisor"], default="all")
+        command_parser.add_argument(
+            "--target", choices=["all", "daemon", "supervisor"], default="all"
+        )
         _add_output_argument(command_parser)
         if name == "install":
             _add_config_argument(command_parser)
 
-    maintenance_parser = subparsers.add_parser("maintenance", help="Manage diagnostic history.")
-    prune_parser = maintenance_parser.add_subparsers(dest="maintenance_command", required=True).add_parser(
-        "prune", help="Preview one retention batch; --apply deletes expired diagnostics.",
+    maintenance_parser = subparsers.add_parser(
+        "maintenance", help="Manage diagnostic history."
+    )
+    prune_parser = maintenance_parser.add_subparsers(
+        dest="maintenance_command", required=True
+    ).add_parser(
+        "prune",
+        help="Preview one retention batch; --apply deletes expired diagnostics.",
     )
     _add_config_argument(prune_parser)
     _add_output_argument(prune_parser)
-    prune_parser.add_argument("--apply", action="store_true", help="Apply retention (default: read-only preview).")
-    prune_parser.add_argument("--batch-size", type=int, help="Runs, events and leases per transaction (1-500).")
-    prune_parser.add_argument("--batches", type=int, default=1, help="Maximum apply transactions (1-1000); preview always shows one batch.")
+    prune_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply retention (default: read-only preview).",
+    )
+    prune_parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Runs, events and leases per transaction (1-500).",
+    )
+    prune_parser.add_argument(
+        "--batches",
+        type=int,
+        default=1,
+        help="Maximum apply transactions (1-1000); preview always shows one batch.",
+    )
 
     diagnostics_parser = subparsers.add_parser(
         "diagnostics",
@@ -371,10 +397,7 @@ def _init_values(args):
         "github_account": "GitHub bot account: ",
         "trusted_actor": "Trusted GitHub actor: ",
     }
-    return {
-        key: value or input(prompts[key]).strip()
-        for key, value in fields.items()
-    }
+    return {key: value or input(prompts[key]).strip() for key, value in fields.items()}
 
 
 def _emit_and_code(result, output):
@@ -426,11 +449,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "supervisor":
             from robert_agent.runtime import supervisor
+
             if args.supervisor_command == "build-manifest":
                 from robert_agent.adapters.processes import runtime_identity
+
                 manifest = runtime_identity.build_manifest(args.repo, args.wheel)
-                supervision_health.atomic_json(Path(args.output_file).expanduser(), manifest)
-                return _emit_and_code({"ok": True, "status": "recorded", "manifest": manifest}, args.output)
+                supervision_health.atomic_json(
+                    Path(args.output_file).expanduser(), manifest
+                )
+                return _emit_and_code(
+                    {"ok": True, "status": "recorded", "manifest": manifest},
+                    args.output,
+                )
             validated = validate_config.validate_config(args.config, skip_external=True)
             if not validated.get("ok"):
                 return _emit_and_code(validated, args.output)
@@ -439,12 +469,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.supervisor_command == "check":
                 result = supervision_checks.check(validated)
             elif args.supervisor_command.startswith("repair-"):
-                from robert_agent.workflows.maintenance import repair as supervision_repair
+                from robert_agent.workflows.maintenance import (
+                    repair as supervision_repair,
+                )
+
                 if args.supervisor_command == "repair-propose":
                     result = supervision_repair.propose(validated, args.incident_id)
                 elif args.supervisor_command == "repair-verify":
-                    result = supervision_repair.verify(validated, args.incident_id, checkout=args.checkout,
-                                                       runtime=supervision_health.runtime_status(validated))
+                    result = supervision_repair.verify(
+                        validated,
+                        args.incident_id,
+                        checkout=args.checkout,
+                        runtime=supervision_health.runtime_status(validated),
+                    )
                 else:
                     result = supervision_repair.status(validated, args.incident_id)
             else:
@@ -457,9 +494,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else ("linux" if sys.platform.startswith("linux") else sys.platform)
             )
             if args.service_command == "install":
-                executable = Path(
-                    shutil.which("robert") or sys.argv[0]
-                ).resolve()
+                executable = Path(shutil.which("robert") or sys.argv[0]).resolve()
                 result = service.install_service(
                     platform_name,
                     executable,
@@ -487,8 +522,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return _emit_and_code(validated, args.output)
             config = validated["maintenance"]
             result = retention.prune_database(
-                validated["db_path"], apply=args.apply,
-                batch_size=args.batch_size if args.batch_size is not None else config["batch_size"],
+                validated["db_path"],
+                apply=args.apply,
+                batch_size=args.batch_size
+                if args.batch_size is not None
+                else config["batch_size"],
                 max_batches=args.batches,
                 run_retention_days=config["retention"]["runs_days"],
                 failed_run_retention_days=config["retention"]["failed_runs_days"],
@@ -497,21 +535,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             emit_result(result, output=args.output)
             if result["ok"]:
                 return exit_codes.SUCCESS
-            return exit_codes.RETRYABLE if result["status"] == "busy" else exit_codes.STATE_FAILURE
-        if (
-            args.command == "diagnostics"
-            and args.diagnostics_command == "export"
-        ):
+            return (
+                exit_codes.RETRYABLE
+                if result["status"] == "busy"
+                else exit_codes.STATE_FAILURE
+            )
+        if args.command == "diagnostics" and args.diagnostics_command == "export":
             result = diagnostics.export_diagnostics(
                 args.config,
                 args.output_path,
             )
             emit_result(result, output="text")
-            return (
-                exit_codes.SUCCESS
-                if result.get("ok")
-                else exit_codes.STATE_FAILURE
-            )
+            return exit_codes.SUCCESS if result.get("ok") else exit_codes.STATE_FAILURE
         if args.command == "web" and args.web_command == "run":
             web_argv = [
                 "--host",
@@ -566,17 +601,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                     )
                 ok = all(step.get("ok") for step in steps)
-                failed_steps = [
-                    step
-                    for step in steps
-                    if not step.get("ok")
-                ]
+                failed_steps = [step for step in steps if not step.get("ok")]
                 result = {
                     "ok": ok,
                     "status": (
-                        "planned"
-                        if args.dry_run
-                        else ("installed" if ok else "failed")
+                        "planned" if args.dry_run else ("installed" if ok else "failed")
                     ),
                     "plugin_dir": str(args.plugin_dir),
                     "steps": steps,
@@ -607,14 +636,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             validated = _validated_config(args)
             if args.config_command == "show":
-                from robert_agent.configuration.routes import load_route_policies, resolve_route_config
+                from robert_agent.configuration.routes import (
+                    load_route_policies,
+                    resolve_route_config,
+                )
+
                 validated["effective_routes"] = {
                     repo["full_name"]: {
                         policy["id"]: resolve_route_config(validated, repo, policy)
                         for policy in load_route_policies()
-                    } for repo in validated["repos"]
+                    }
+                    for repo in validated["repos"]
                 }
-                validated["model_scope"] = "Route model/effort apply to ordinary automatic execution only; manual and native multi-model execution use each named worker's own settings."
+                validated["model_scope"] = (
+                    "Route model/effort apply to ordinary automatic execution only; manual and native multi-model execution use each named worker's own settings."
+                )
             return _emit_and_code(validated, args.output)
         if args.command == "run" and args.run_command == "once":
             return run_once.main(_run_once_argv(args))
@@ -649,7 +685,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         parser.error(f"command is not wired yet: {args.command}")
     except execution_store.MigrationRequiredError as exc:
-        emit_result({'ok':False,'status':'migration_required','safe_error':str(exc)},output=getattr(args,'output','text'))
+        emit_result(
+            {"ok": False, "status": "migration_required", "safe_error": str(exc)},
+            output=getattr(args, "output", "text"),
+        )
         return exit_codes.STATE_FAILURE
     except (OSError, TypeError, ValueError) as exc:
         output = getattr(args, "output", "text")

@@ -41,14 +41,21 @@ def parse_cbc_stream_json_lines(lines):
             event = json.loads(text)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("type") in {"result", "turn.completed"}:
+        if isinstance(event, dict) and event.get("type") in {
+            "result",
+            "turn.completed",
+        }:
             final_result = event
     if not final_result:
         return {"usage_available": False, "source": "no_result_event"}
     provider_data = final_result.get("providerData") or {}
     usage = final_result.get("usage") or {}
-    provider_usage = provider_data.get("usage") if isinstance(provider_data, dict) else {}
-    provider_raw_usage = provider_data.get("rawUsage") if isinstance(provider_data, dict) else {}
+    provider_usage = (
+        provider_data.get("usage") if isinstance(provider_data, dict) else {}
+    )
+    provider_raw_usage = (
+        provider_data.get("rawUsage") if isinstance(provider_data, dict) else {}
+    )
     total_cost = final_result.get("total_cost_usd")
     available = any(
         [
@@ -60,10 +67,14 @@ def parse_cbc_stream_json_lines(lines):
     )
     return {
         "usage_available": bool(available),
-        "source": "codex_json" if final_result.get("type") == "turn.completed" else "cbc_stream_json",
+        "source": "codex_json"
+        if final_result.get("type") == "turn.completed"
+        else "cbc_stream_json",
         "usage": usage if isinstance(usage, dict) else {},
         "provider_usage": provider_usage if isinstance(provider_usage, dict) else {},
-        "provider_raw_usage": provider_raw_usage if isinstance(provider_raw_usage, dict) else {},
+        "provider_raw_usage": provider_raw_usage
+        if isinstance(provider_raw_usage, dict)
+        else {},
         "total_cost_usd": total_cost,
         "duration_ms": final_result.get("duration_ms"),
         "num_turns": final_result.get("num_turns"),
@@ -143,7 +154,9 @@ def _add_usage_totals(totals, usage_payload):
         return False
     block = _first_usage_block(usage_payload)
     totals["total_input_tokens"] += _usage_value(block, "input_tokens", "inputTokens")
-    totals["total_output_tokens"] += _usage_value(block, "output_tokens", "outputTokens")
+    totals["total_output_tokens"] += _usage_value(
+        block, "output_tokens", "outputTokens"
+    )
     totals["total_cache_creation_input_tokens"] += _usage_value(
         block,
         "cache_creation_input_tokens",
@@ -173,17 +186,16 @@ def summarize_usage_payloads(usage_payloads):
         available = _add_usage_totals(totals, payload) or available
     return {
         "usage_available": available,
-        "total_tokens": (
-            totals["total_input_tokens"]
-            + totals["total_output_tokens"]
-        ),
+        "total_tokens": (totals["total_input_tokens"] + totals["total_output_tokens"]),
         **totals,
     }
 
 
 def summarize_acceptance_metrics(conn):
     accepted_results, rejected_results = _result_counts(conn)
-    published_actions, publish_failed_actions, deduplicated_actions = _action_counts(conn)
+    published_actions, publish_failed_actions, deduplicated_actions = _action_counts(
+        conn
+    )
     payloads = []
     for row in conn.execute("SELECT metadata_json FROM worker_results"):
         try:
@@ -200,11 +212,11 @@ def summarize_acceptance_metrics(conn):
         "published_actions": published_actions,
         "publish_failed_actions": publish_failed_actions,
         "deduplicated_actions": deduplicated_actions,
-        "accepted_result_rate": accepted_results / result_total if result_total else 0.0,
-        "publish_success_rate": published_actions / publish_total if publish_total else 0.0,
-        **{
-            key: value
-            for key, value in usage_summary.items()
-            if key != "total_tokens"
-        },
+        "accepted_result_rate": accepted_results / result_total
+        if result_total
+        else 0.0,
+        "publish_success_rate": published_actions / publish_total
+        if publish_total
+        else 0.0,
+        **{key: value for key, value in usage_summary.items() if key != "total_tokens"},
     }

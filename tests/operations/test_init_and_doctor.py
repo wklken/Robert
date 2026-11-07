@@ -57,16 +57,23 @@ class InitAndDoctorTests(unittest.TestCase):
 
     def test_config_rejects_github_token_fields(self):
         config = self.root / "config.yml"
-        init_config(config, {"repo": "example/backend", "repo_path": str(self.repo),
-                             "worker": "codex", "github_account": "robert-bot",
-                             "trusted_actor": "maintainer"}, non_interactive=True)
+        init_config(
+            config,
+            {
+                "repo": "example/backend",
+                "repo_path": str(self.repo),
+                "worker": "codex",
+                "github_account": "robert-bot",
+                "trusted_actor": "maintainer",
+            },
+            non_interactive=True,
+        )
         document = yaml.safe_load(config.read_text())
         document["github"]["token"] = "must-not-be-stored"
         config.write_text(yaml.safe_dump(document))
         result = doctor(config, skip_external=True)
         self.assertFalse(result["ok"])
         self.assertIn("github.token", result["safe_error"])
-
 
     def test_doctor_dbos_failure_does_not_echo_database_url(self):
         config = self.root / "config.yml"

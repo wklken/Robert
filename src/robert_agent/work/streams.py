@@ -12,9 +12,8 @@ def resolve_workstream_id(event):
 
 def source_relationship(event):
     metadata = event.get("metadata") or {}
-    if (
-        event.get("source_type") == "pull_request"
-        and (event.get("origin_workstream_id") or metadata.get("dd_workstream"))
+    if event.get("source_type") == "pull_request" and (
+        event.get("origin_workstream_id") or metadata.get("dd_workstream")
     ):
         return "derived_pr"
     return "primary"

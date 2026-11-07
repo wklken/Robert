@@ -17,13 +17,21 @@ from robert_agent.operations.initialize import init_config
 class CliTests(unittest.TestCase):
     def test_web_run_forwards_public_origin(self):
         with mock.patch("robert_agent.cli.main.web.main", return_value=0) as run:
-            code = main([
-                "web", "run", "--db", "/tmp/unused.sqlite3",
-                "--public-origin", "https://robert.example.com",
-            ])
+            code = main(
+                [
+                    "web",
+                    "run",
+                    "--db",
+                    "/tmp/unused.sqlite3",
+                    "--public-origin",
+                    "https://robert.example.com",
+                ]
+            )
         self.assertEqual(code, 0)
         argv = run.call_args.args[0]
-        self.assertEqual(argv[argv.index("--public-origin") + 1], "https://robert.example.com")
+        self.assertEqual(
+            argv[argv.index("--public-origin") + 1], "https://robert.example.com"
+        )
 
     def test_root_help_lists_public_commands(self):
         output = io.StringIO()
@@ -51,7 +59,15 @@ class CliTests(unittest.TestCase):
         from robert_agent.cli import main as cli_main
 
         with mock.patch.object(cli_main.daemon, "main", return_value=0) as daemon_main:
-            main(["daemon", "run", "--config", "/tmp/robert-config.yml", "--wait-for-lease"])
+            main(
+                [
+                    "daemon",
+                    "run",
+                    "--config",
+                    "/tmp/robert-config.yml",
+                    "--wait-for-lease",
+                ]
+            )
 
         self.assertIn("--wait-for-lease", daemon_main.call_args.args[0])
 
@@ -77,11 +93,14 @@ class CliTests(unittest.TestCase):
 
     def test_config_path_prints_environment_override(self):
         output = io.StringIO()
-        with mock.patch.dict(
-            os.environ,
-            {"ROBERT_CONFIG": "/tmp/robert.yml"},
-            clear=True,
-        ), redirect_stdout(output):
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"ROBERT_CONFIG": "/tmp/robert.yml"},
+                clear=True,
+            ),
+            redirect_stdout(output),
+        ):
             code = main(["config", "path"])
         self.assertEqual(code, 0)
         self.assertIn("/tmp/robert.yml", output.getvalue())
@@ -104,9 +123,7 @@ class CliTests(unittest.TestCase):
                 },
                 non_interactive=True,
             )
-            config = yaml.safe_load(
-                config_path.read_text(encoding="utf-8")
-            )
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             config["data_dir"] = str(root / "data")
             config_path.write_text(
                 yaml.safe_dump(config, sort_keys=False),
@@ -149,12 +166,16 @@ class CliTests(unittest.TestCase):
             "status": "missing",
             "safe_error": "OpenClaw CLI is not available on PATH.",
         }
-        with mock.patch(
-            "robert_agent.cli.main.openclaw.preflight_openclaw",
-            return_value=missing,
-        ), mock.patch(
-            "robert_agent.cli.main.openclaw.write_plugin",
-        ) as write_plugin, redirect_stdout(output):
+        with (
+            mock.patch(
+                "robert_agent.cli.main.openclaw.preflight_openclaw",
+                return_value=missing,
+            ),
+            mock.patch(
+                "robert_agent.cli.main.openclaw.write_plugin",
+            ) as write_plugin,
+            redirect_stdout(output),
+        ):
             code = main(["openclaw", "install", "--output", "json"])
 
         self.assertNotEqual(code, 0)
@@ -195,22 +216,29 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             plugin_dir = str(Path(tmp) / "robert-openclaw")
             output = io.StringIO()
-            with mock.patch(
-                "robert_agent.cli.main.openclaw.preflight_openclaw",
-                return_value={"ok": True, "status": "ready"},
-            ), mock.patch(
-                "robert_agent.cli.main.openclaw.write_plugin",
-                return_value={"ok": True, "status": "written"},
-            ), mock.patch(
-                "robert_agent.cli.main.openclaw.install_plugin",
-                return_value={"ok": True, "status": "installed"},
-            ), mock.patch(
-                "robert_agent.cli.main.openclaw.restart_gateway",
-                return_value={"ok": True, "status": "restarted"},
-            ), mock.patch(
-                "robert_agent.cli.main.openclaw.verify_gateway_commands",
-                return_value={"ok": True, "status": "verified"},
-            ) as verify, redirect_stdout(output):
+            with (
+                mock.patch(
+                    "robert_agent.cli.main.openclaw.preflight_openclaw",
+                    return_value={"ok": True, "status": "ready"},
+                ),
+                mock.patch(
+                    "robert_agent.cli.main.openclaw.write_plugin",
+                    return_value={"ok": True, "status": "written"},
+                ),
+                mock.patch(
+                    "robert_agent.cli.main.openclaw.install_plugin",
+                    return_value={"ok": True, "status": "installed"},
+                ),
+                mock.patch(
+                    "robert_agent.cli.main.openclaw.restart_gateway",
+                    return_value={"ok": True, "status": "restarted"},
+                ),
+                mock.patch(
+                    "robert_agent.cli.main.openclaw.verify_gateway_commands",
+                    return_value={"ok": True, "status": "verified"},
+                ) as verify,
+                redirect_stdout(output),
+            ):
                 code = main(
                     [
                         "openclaw",
@@ -261,11 +289,14 @@ class CliTests(unittest.TestCase):
             )
             secret_url = "postgresql://operator:secret@example.invalid/robert"
             output = io.StringIO()
-            with mock.patch.dict(
-                os.environ,
-                {"ROBERT_DBOS_CLI_URL": secret_url},
-                clear=False,
-            ), redirect_stdout(output):
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"ROBERT_DBOS_CLI_URL": secret_url},
+                    clear=False,
+                ),
+                redirect_stdout(output),
+            ):
                 code = main(
                     [
                         "doctor",

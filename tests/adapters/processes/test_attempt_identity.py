@@ -18,9 +18,7 @@ class AttemptIdentityTests(RepositoryCycleFixture):
     def test_dispatch_process_status_treats_zombie_pid_as_not_found(self):
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             status = attempt_process.dispatch_status(
                 {"dispatch": self._recorded_identity(43210)}
             )
@@ -33,10 +31,14 @@ class AttemptIdentityTests(RepositoryCycleFixture):
     def test_terminate_attempt_process_skips_sigterm_for_zombie_pid(self):
         from unittest.mock import patch
 
-        with patch.object(
-            worker_identity, "terminate_recorded_identity",
-            return_value={"status": "already_dead", "pid": 24680},
-        ), patch.object(worker_identity, "live_process_group", return_value=False):
+        with (
+            patch.object(
+                worker_identity,
+                "terminate_recorded_identity",
+                return_value={"status": "already_dead", "pid": 24680},
+            ),
+            patch.object(worker_identity, "live_process_group", return_value=False),
+        ):
             result = attempt_process.terminate_attempt(
                 {"dispatch": self._recorded_identity(24680)}
             )
@@ -47,9 +49,14 @@ class AttemptIdentityTests(RepositoryCycleFixture):
     def test_dispatch_process_status_detects_zombie_pid_without_proc_stat(self):
         from unittest.mock import patch
 
-        with patch.object(
-            worker_identity, "inspect_recorded_identity", return_value="dead",
-        ), patch.object(worker_identity, "live_process_group", return_value=False):
+        with (
+            patch.object(
+                worker_identity,
+                "inspect_recorded_identity",
+                return_value="dead",
+            ),
+            patch.object(worker_identity, "live_process_group", return_value=False),
+        ):
             status = attempt_process.dispatch_status(
                 {"dispatch": self._recorded_identity(13579)}
             )

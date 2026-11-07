@@ -68,7 +68,9 @@ class BoardReadModelTests(BoardReadModelFixture):
                 "SELECT active_task_id FROM workstreams WHERE workstream_id = ?",
                 (item["workstream_id"],),
             ).fetchone()[0]
-            conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?", (task_id,))
+            conn.execute(
+                "UPDATE tasks SET lifecycle = 'completed' WHERE task_id = ?", (task_id,)
+            )
             conn.execute(
                 "UPDATE workstreams SET lifecycle = 'completed', active_task_id = NULL WHERE workstream_id = ?",
                 (item["workstream_id"],),
@@ -147,7 +149,9 @@ class BoardReadModelTests(BoardReadModelFixture):
         self.assertEqual(projected["reason_code"], "unmerged_pr_closed")
         self.assertEqual(projected["pr"]["number"], 3353)
         self.assertEqual(projected["pr"]["state"], "closed")
-        self.assertEqual(projected["pr"]["url"], "https://github.com/example/repo/pull/3353")
+        self.assertEqual(
+            projected["pr"]["url"], "https://github.com/example/repo/pull/3353"
+        )
         self.assertIn("cancel", projected["valid_commands"])
 
         canceled = work_items.execute_command(
@@ -178,14 +182,24 @@ class BoardReadModelTests(BoardReadModelFixture):
             )
 
         detail = board.get_work_item_detail(self.db_path, item["work_item_id"])
-        self.assertEqual(detail["source"], {
-            "type": "issue", "number": 11,
-            "url": "https://github.com/example/repo/issues/11",
-        })
+        self.assertEqual(
+            detail["source"],
+            {
+                "type": "issue",
+                "number": 11,
+                "url": "https://github.com/example/repo/issues/11",
+            },
+        )
         self.assertEqual(detail["pr"]["number"], 12)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'issue-origin'")
-        self.assertIsNone(board.get_work_item_detail(self.db_path, item["work_item_id"])["source"]["url"])
+            conn.execute(
+                "UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'issue-origin'"
+            )
+        self.assertIsNone(
+            board.get_work_item_detail(self.db_path, item["work_item_id"])["source"][
+                "url"
+            ]
+        )
 
     def test_projection_does_not_expose_non_http_pull_request_urls(self):
         from robert_agent.readmodels import board
@@ -218,18 +232,28 @@ class BoardReadModelTests(BoardReadModelFixture):
         )
         first_ids = {item["work_item_id"] for item in first["items"]}
         second_ids = {item["work_item_id"] for item in second["items"]}
-        detail = board.get_work_item_detail(self.db_path, first["items"][0]["work_item_id"])
+        detail = board.get_work_item_detail(
+            self.db_path, first["items"][0]["work_item_id"]
+        )
         timeline = board.list_work_item_events(
             self.db_path,
             first["items"][0]["work_item_id"],
             limit=10,
         )
-        serialized = json.dumps({"first": first, "detail": detail, "timeline": timeline})
+        serialized = json.dumps(
+            {"first": first, "detail": detail, "timeline": timeline}
+        )
 
         self.assertFalse(first_ids & second_ids)
         self.assertTrue(all(item["priority"] == "P1" for item in first["items"]))
         self.assertIn("edit", detail["valid_commands"])
-        for forbidden in ("metadata_json", "payload_json", "failure_json", "error_json", "csrf_token"):
+        for forbidden in (
+            "metadata_json",
+            "payload_json",
+            "failure_json",
+            "error_json",
+            "csrf_token",
+        ):
             self.assertNotIn(forbidden, serialized)
         with self.assertRaises(board.BoardQueryError):
             board.list_board(self.db_path, cursor="not-a-cursor")

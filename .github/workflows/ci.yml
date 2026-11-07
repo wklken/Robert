@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -42,6 +42,7 @@ jobs:
           from robert_agent.workflows.maintenance.repair import _fingerprint_file
           _fingerprint_file(executable)
       - run: python -m ruff check src tests
+      - run: python -m ruff format --check src tests
       - run: lint-imports --config pyproject.toml --no-cache
       - run: >-
           python -m mypy
@@ -62,8 +63,8 @@ jobs:
           import os, sysconfig
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write("site=" + sysconfig.get_paths()["purelib"] + "\n")
-      # filelock's security fixes require Python 3.11+. Keep audit tooling
-      # separate while inspecting the actual packages tested on every version.
+      # Keep audit tooling isolated while inspecting the actual packages
+      # tested on every supported Python version.
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"

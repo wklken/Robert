@@ -26,7 +26,13 @@ class _CommentRunner:
 
     def __call__(self, command, **kwargs):
         self.calls.append({"command": list(command), "kwargs": dict(kwargs)})
-        if command == ["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"]:
+        if command == [
+            "gh",
+            "api",
+            "repos/x/y/issues/1/comments?per_page=100",
+            "--paginate",
+            "--slurp",
+        ]:
             return _Completed(self.lookup_stdout)
         if command[:3] == ["gh", "api", "repos/x/y/issues/1/comments"]:
             return _Completed(self.create_stdout)
@@ -41,6 +47,7 @@ class ProductionWriteCanaryTests(unittest.TestCase):
 
     def test_canary_plan_mode_never_calls_github(self):
         from robert_agent.acceptance import write_canary as production_write_canary
+
         def fail_if_called(command, **kwargs):
             raise AssertionError(f"unexpected command: {command}")
 
@@ -61,6 +68,7 @@ class ProductionWriteCanaryTests(unittest.TestCase):
 
     def test_canary_confirmed_write_publishes_comment_through_publisher(self):
         from robert_agent.acceptance import write_canary as production_write_canary
+
         runner = _CommentRunner(lookup_stdout=json.dumps([[]]))
 
         result = production_write_canary.production_write_canary(
@@ -77,7 +85,16 @@ class ProductionWriteCanaryTests(unittest.TestCase):
         self.assertEqual(result["publish_result"]["published_count"], 1)
         self.assertEqual(result["publish_result"]["deduplicated_count"], 0)
         commands = [call["command"] for call in runner.calls]
-        self.assertEqual(commands[0], ["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"])
+        self.assertEqual(
+            commands[0],
+            [
+                "gh",
+                "api",
+                "repos/x/y/issues/1/comments?per_page=100",
+                "--paginate",
+                "--slurp",
+            ],
+        )
         self.assertEqual(commands[1][:3], ["gh", "api", "repos/x/y/issues/1/comments"])
         with sqlite3.connect(result["db_path"]) as conn:
             row = conn.execute(
@@ -90,6 +107,7 @@ class ProductionWriteCanaryTests(unittest.TestCase):
 
     def test_canary_confirmed_write_dedupes_existing_marker(self):
         from robert_agent.acceptance import write_canary as production_write_canary
+
         body = production_write_canary.comment_body("marker-3")
         runner = _CommentRunner(
             lookup_stdout=json.dumps(
@@ -118,10 +136,22 @@ class ProductionWriteCanaryTests(unittest.TestCase):
         self.assertEqual(result["publish_result"]["published_count"], 1)
         self.assertEqual(result["publish_result"]["deduplicated_count"], 1)
         commands = [call["command"] for call in runner.calls]
-        self.assertEqual(commands, [["gh", "api", "repos/x/y/issues/1/comments?per_page=100", "--paginate", "--slurp"]])
+        self.assertEqual(
+            commands,
+            [
+                [
+                    "gh",
+                    "api",
+                    "repos/x/y/issues/1/comments?per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            ],
+        )
 
     def test_canary_rejects_non_github_issue_or_pr_url(self):
         from robert_agent.acceptance import write_canary as production_write_canary
+
         result = production_write_canary.production_write_canary(
             target_url="https://example.com/x/y/issues/1",
             workspace_dir=self.root / "canary",

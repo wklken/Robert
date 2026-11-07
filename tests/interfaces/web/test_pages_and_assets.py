@@ -20,6 +20,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
 
     def test_web_renders_operator_dashboard_html_shell(self):
         from robert_agent.interfaces.web import server as web
+
         html = web.render_dashboard_html()
 
         self.assertIn('<main id="dashboard-app"', html)
@@ -34,13 +35,17 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn('data-view="timeline"', html)
         self.assertIn('id="view-knowledge"', html)
         self.assertIn('data-view="notifications"', html)
-        self.assertLess(html.index('data-view="notifications"'), html.index('data-view="daemon"'))
+        self.assertLess(
+            html.index('data-view="notifications"'), html.index('data-view="daemon"')
+        )
         self.assertIn("theme-select", html)
         self.assertIn("language-select", html)
         self.assertIn("notification-center", html)
         self.assertIn("detail-drawer", html)
         self.assertIn("work-task-list", html)
-        self.assertLess(html.index('id="work-task-list"'), html.index('id="detail-drawer"'))
+        self.assertLess(
+            html.index('id="work-task-list"'), html.index('id="detail-drawer"')
+        )
         self.assertNotIn('id="command-search"', html)
         self.assertNotIn("searchPlaceholder", html)
         self.assertIn('id="work-search"', html)
@@ -51,7 +56,10 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn("function workItemTitleMatches", html)
         self.assertIn("function taskIdMatchesWorkSearch", html)
         self.assertIn("renderWorkFilters(data)", html)
-        self.assertIn("grid-template-columns: minmax(260px, 340px) minmax(260px, 340px) minmax(0, 1fr)", html)
+        self.assertIn(
+            "grid-template-columns: minmax(260px, 340px) minmax(260px, 340px) minmax(0, 1fr)",
+            html,
+        )
         self.assertIn("timeline-filters", html)
         self.assertIn("timelineHiddenTypes: new Set(['daemon_heartbeat'])", html)
         self.assertIn("function fmtShort(value)", html)
@@ -66,7 +74,9 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn("setLanguage(", html)
         self.assertIn("localStorage.getItem('robertWorkbenchTheme')", html)
         self.assertIn("localStorage.getItem('robertLanguage')", html)
-        self.assertIn("function repoContext(data) { const repos = data.repos || []", html)
+        self.assertIn(
+            "function repoContext(data) { const repos = data.repos || []", html
+        )
         self.assertNotIn("value.match(/github:", html)
         self.assertIn("operator-next-steps", html)
         self.assertIn("daemon-health", html)
@@ -77,7 +87,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn("artifact-preview-drawer", html)
         self.assertIn("preview-scrim", html)
         self.assertIn("data-close-artifact-preview", html)
-        self.assertIn("class=\"artifact-preview placeholder\"", html)
+        self.assertIn('class="artifact-preview placeholder"', html)
         self.assertIn("openArtifactDrawer", html)
         self.assertIn("closeArtifactDrawer", html)
         self.assertIn("renderMarkdown(content)", html)
@@ -87,8 +97,8 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn("/knowledge/propose", html)
         self.assertIn("auto-refresh-toggle", html)
         self.assertIn("refresh-interval", html)
-        self.assertIn("target=\"_blank\"", html)
-        self.assertIn("rel=\"noopener noreferrer\"", html)
+        self.assertIn('target="_blank"', html)
+        self.assertIn('rel="noopener noreferrer"', html)
         self.assertIn("location.hash", html)
         self.assertIn("openTask(", html)
         self.assertIn("previewArtifact", html)
@@ -110,14 +120,21 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn('class="underline-nav"', operations_html)
         self.assertIn('class="underline-nav-item" href="/work"', operations_html)
         self.assertIn('class="underline-nav-item" href="/board"', operations_html)
-        self.assertIn('class="underline-nav-item selected" data-primary-view="operations" href="/operations"', operations_html)
+        self.assertIn(
+            'class="underline-nav-item selected" data-primary-view="operations" href="/operations"',
+            operations_html,
+        )
         self.assertIn('data-i18n="primaryWork"', operations_html)
         self.assertIn('data-i18n="navHistory"', operations_html)
         self.assertIn('data-i18n="navKnowledge"', operations_html)
         self.assertIn("navBoard: 'Board'", operations_html)
         self.assertIn("navBoard: '任务看板'", operations_html)
-        self.assertNotIn('class="nav-button" type="button" data-view="work"', operations_html)
-        self.assertNotIn('class="nav-button" type="button" data-view="knowledge"', operations_html)
+        self.assertNotIn(
+            'class="nav-button" type="button" data-view="work"', operations_html
+        )
+        self.assertNotIn(
+            'class="nav-button" type="button" data-view="knowledge"', operations_html
+        )
         self.assertIn('id="nav-count-command">0</span>', operations_html)
         self.assertIn('id="nav-count-timeline">0</span>', operations_html)
         self.assertIn('id="nav-count-notifications">0</span>', operations_html)
@@ -169,9 +186,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
             "/assets/operations.css", db_path
         )
         self.assertEqual(operations_status, 200)
-        self.assertEqual(
-            operations_headers["content-type"], "text/css; charset=utf-8"
-        )
+        self.assertEqual(operations_headers["content-type"], "text/css; charset=utf-8")
         self.assertIn(b".mission-shell > .global-bar", operations_css)
         self.assertIn(b"var(--bgColor-default)", operations_css)
 
@@ -195,6 +210,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
 
     def test_web_routes_root_to_html_and_data_json_to_payload(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -256,7 +272,9 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn(b"@media", css_body)
         self.assertIn(b"[hidden]", css_body)
         body_rules = css_body.decode("utf-8").split("body {", 1)[1].split("}", 1)[0]
-        self.assertIn("height: 100dvh;", {line.strip() for line in body_rules.splitlines()})
+        self.assertIn(
+            "height: 100dvh;", {line.strip() for line in body_rules.splitlines()}
+        )
         self.assertEqual(js_status, 200)
         self.assertEqual(js_headers["content-type"], "text/javascript; charset=utf-8")
         self.assertIn(b"/api/board", js_body)
@@ -273,6 +291,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
 
     def test_web_serves_github_native_workbench_assets(self):
         from robert_agent.interfaces.web import server as web
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -284,9 +303,9 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn('class="underline-nav"', html)
         self.assertIn('id="work-list"', html)
         self.assertIn('id="detail-panel"', html)
-        self.assertIn('/assets/github-shell.css', html)
-        self.assertIn('/assets/workbench.css', html)
-        self.assertIn('/assets/workbench.js', html)
+        self.assertIn("/assets/github-shell.css", html)
+        self.assertIn("/assets/workbench.css", html)
+        self.assertIn("/assets/workbench.js", html)
         self.assertIn('id="language-select"', html)
         self.assertNotIn('id="global-search"', html)
         self.assertNotIn("bootstrap", html.lower())
@@ -305,9 +324,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertEqual(headers["content-type"], "text/css; charset=utf-8")
         self.assertIn(b"--bgColor-default", body)
 
-        status, headers, body = web.build_http_response(
-            "/assets/workbench.js", db_path
-        )
+        status, headers, body = web.build_http_response("/assets/workbench.js", db_path)
         self.assertEqual(status, 200)
         self.assertEqual(
             headers["content-type"], "application/javascript; charset=utf-8"

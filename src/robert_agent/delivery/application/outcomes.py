@@ -1,4 +1,5 @@
 """application delivery outcomes responsibilities."""
+
 import sqlite3
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
@@ -30,14 +31,27 @@ def insert_workflow_attention_notification(conn, action, reason_code, now):
           status = 'recorded', created_at = excluded.created_at,
           metadata_json = excluded.metadata_json
         """,
-        (notification_id, action.get("task_id"), now, publication_values.encode_json(metadata)),
+        (
+            notification_id,
+            action.get("task_id"),
+            now,
+            publication_values.encode_json(metadata),
+        ),
     )
-
 
 
 def mark_attention(conn, action, intent, scope, reconciliation, now):
     reason_code = reconciliation.get("reason_code", "publication_unknown")
-    record_failure(conn, action, {"status": "publish_failed", "safe_error": f"Publication requires attention: {reason_code}", "retryable": False}, now)
+    record_failure(
+        conn,
+        action,
+        {
+            "status": "publish_failed",
+            "safe_error": f"Publication requires attention: {reason_code}",
+            "retryable": False,
+        },
+        now,
+    )
     if intent and intent["status"] in {"prepared", "executing", "failed"}:
         if intent["status"] == "prepared":
             execution_store.transition_publication_intent(
@@ -61,7 +75,6 @@ def mark_attention(conn, action, intent, scope, reconciliation, now):
     insert_workflow_attention_notification(conn, action, reason_code, now)
 
 
-
 def mark_skipped(conn, action, result, now):
     review_publish.record_outcome(conn, action, result.get("status"), now)
     vote_publish.record_outcome(conn, action, result.get("status"), now)
@@ -69,12 +82,19 @@ def mark_skipped(conn, action, result, now):
         intent = intent_facts.load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
             execution_store.transition_publication_intent(
-                conn, intent["publication_id"], "confirmed_absent", now,
-                remote_evidence={"reason_code": "publication_superseded", "status": "confirmed_absent"})
+                conn,
+                intent["publication_id"],
+                "confirmed_absent",
+                now,
+                remote_evidence={
+                    "reason_code": "publication_superseded",
+                    "status": "confirmed_absent",
+                },
+            )
     metadata = publication_values.decode_json(action["metadata_json"])
     metadata["publish"] = {
         "status": "skipped",
-        "reason_code": result.get('status'),
+        "reason_code": result.get("status"),
         "skipped_at": now,
         "safe_error": result.get("safe_error", ""),
     }
@@ -87,8 +107,9 @@ def mark_skipped(conn, action, result, now):
         """,
         (publication_values.encode_json(metadata), action["action_id"]),
     )
-    publication_notifications.insert_notification(conn, action, "github_publish_skipped", result, now)
-
+    publication_notifications.insert_notification(
+        conn, action, "github_publish_skipped", result, now
+    )
 
 
 def skip_pending_result_actions(
@@ -117,41 +138,77 @@ def skip_pending_result_actions(
     return len(rows)
 
 
-
 def retire_unstarted_actions(conn, task_id, now):
     """Retire only actions whose durable intent proves no unknown external effect."""
     previous_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
-        actions = conn.execute("SELECT * FROM github_actions WHERE task_id=? AND publish_status='not_published'", (task_id,)).fetchall()
+        actions = conn.execute(
+            "SELECT * FROM github_actions WHERE task_id=? AND publish_status='not_published'",
+            (task_id,),
+        ).fetchall()
         for row in actions:
             action = dict(row)
-            intent = intent_facts.load_intent(conn, action['action_id'])
-            if intent and intent['status'] not in {'prepared', 'confirmed_absent', 'failed'}:
+            intent = intent_facts.load_intent(conn, action["action_id"])
+            if intent and intent["status"] not in {
+                "prepared",
+                "confirmed_absent",
+                "failed",
+            }:
                 continue
-            if intent and intent['status'] != 'confirmed_absent':
-                execution_store.transition_publication_intent(conn, intent['publication_id'], 'executing', now)
-                execution_store.transition_publication_intent(conn, intent['publication_id'], 'confirmed_absent', now,
-                    remote_evidence={'reason_code': 'source_closed_before_publication'})
-            mark_skipped(conn, action, {'status': 'source_closed', 'safe_error': 'Source closed before publication began.'}, now)
+            if intent and intent["status"] != "confirmed_absent":
+                execution_store.transition_publication_intent(
+                    conn, intent["publication_id"], "executing", now
+                )
+                execution_store.transition_publication_intent(
+                    conn,
+                    intent["publication_id"],
+                    "confirmed_absent",
+                    now,
+                    remote_evidence={"reason_code": "source_closed_before_publication"},
+                )
+            mark_skipped(
+                conn,
+                action,
+                {
+                    "status": "source_closed",
+                    "safe_error": "Source closed before publication began.",
+                },
+                now,
+            )
     finally:
         conn.row_factory = previous_factory
 
 
-
 def record_failure(conn, action, result, now, *, reconcile_required=False):
-    fresh = conn.execute('SELECT metadata_json FROM github_actions WHERE action_id=?',(action['action_id'],)).fetchone()
-    metadata = publication_values.decode_json(fresh[0] if fresh else action["metadata_json"])
+    fresh = conn.execute(
+        "SELECT metadata_json FROM github_actions WHERE action_id=?",
+        (action["action_id"],),
+    ).fetchone()
+    metadata = publication_values.decode_json(
+        fresh[0] if fresh else action["metadata_json"]
+    )
     prior = dict(metadata.get("publish") or {})
-    if prior.get('attempt_charged'):
-        prior['attempt_count'] = max(0, int(prior.get('attempt_count', 0)) - 1)
-    state = retry_policy.failure_state(prior, result.get("safe_error"), now, retryable=result.get("retryable", True))
+    if prior.get("attempt_charged"):
+        prior["attempt_count"] = max(0, int(prior.get("attempt_count", 0)) - 1)
+    state = retry_policy.failure_state(
+        prior, result.get("safe_error"), now, retryable=result.get("retryable", True)
+    )
     # Authentication, permission, and branch rejections establish failure.
     # Only an ambiguous transport outcome needs a final reconciliation pass.
-    reconcile_required = reconcile_required and state["error_class"] == "transient_failure"
+    reconcile_required = (
+        reconcile_required and state["error_class"] == "transient_failure"
+    )
     from robert_agent.security import redaction
+
     safe = redaction.redact_and_truncate(str(result.get("safe_error", "")), 2000)
-    result = {**result, "safe_error": safe.get("text", "Sensitive diagnostic omitted; inspect the local log."), "command": []}
+    result = {
+        **result,
+        "safe_error": safe.get(
+            "text", "Sensitive diagnostic omitted; inspect the local log."
+        ),
+        "command": [],
+    }
     metadata["publish"] = {
         **state,
         "reconcile_required": bool(reconcile_required),
@@ -168,15 +225,26 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
         """,
         (publication_values.encode_json(metadata), action["action_id"]),
     )
-    publication_notifications.insert_notification(conn, action, "github_publish_failed", {**result, **state}, now)
+    publication_notifications.insert_notification(
+        conn, action, "github_publish_failed", {**result, **state}, now
+    )
     if not state["retryable"] and not reconcile_required:
         intent = intent_facts.load_intent(conn, action["action_id"])
         if intent and intent["status"] == "executing":
-            execution_store.transition_publication_intent(conn, intent["publication_id"], "attention", now,
-                error={"reason_code": state["reason_code"]})
-        execution_operations.mark_publication_attention(conn, action.get("task_id"),
-            publication_scope.trusted_action_scope(conn, action), state["reason_code"], now=now)
-
+            execution_store.transition_publication_intent(
+                conn,
+                intent["publication_id"],
+                "attention",
+                now,
+                error={"reason_code": state["reason_code"]},
+            )
+        execution_operations.mark_publication_attention(
+            conn,
+            action.get("task_id"),
+            publication_scope.trusted_action_scope(conn, action),
+            state["reason_code"],
+            now=now,
+        )
 
 
 def record_remediation_publish_outcome(conn, action, result, now):

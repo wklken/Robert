@@ -14,7 +14,9 @@ class WaitingResultAuditTests(WorkerProtocolFixture):
                 {
                     "type": "comment",
                     "target_url": "https://github.com/x/y/pull/1",
-                    "body": self._dd_comment_body("Blocked on task scope; no changes applied."),
+                    "body": self._dd_comment_body(
+                        "Blocked on task scope; no changes applied."
+                    ),
                 }
             ],
             consumed_event_fingerprints=["comment:1"],

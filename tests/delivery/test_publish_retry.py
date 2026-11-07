@@ -9,6 +9,7 @@ from tests.support.publication import PublicationFixture
 class PublishRetryTests(PublicationFixture):
     def test_publish_ignores_actions_not_accepted_or_already_published(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -29,6 +30,7 @@ class PublishRetryTests(PublicationFixture):
 
     def test_publish_failure_keeps_action_retryable_and_records_notification(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -64,7 +66,13 @@ class PublishRetryTests(PublicationFixture):
                 {
                     "action_id": "action-1",
                     "safe_error": "network unavailable",
-                    "command": ["gh", "api", "repos/x/y/issues/1/comments", "-f", f"body={self._dd_comment_body('ready')}"],
+                    "command": [
+                        "gh",
+                        "api",
+                        "repos/x/y/issues/1/comments",
+                        "-f",
+                        f"body={self._dd_comment_body('ready')}",
+                    ],
                 }
             ],
         )
@@ -101,6 +109,7 @@ class PublishRetryTests(PublicationFixture):
 
     def test_repeated_publish_failure_updates_existing_notification(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -123,14 +132,22 @@ class PublishRetryTests(PublicationFixture):
                 return EmptyComments()
             return Failed(next(errors))
 
-        first = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        first = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(db_path)) as retry_conn:
-            due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
-        retry_clock = mock.patch.object(publication_values, 'now', return_value=due)
+            due = json.loads(
+                retry_conn.execute(
+                    "SELECT metadata_json FROM github_actions WHERE action_id='action-1'"
+                ).fetchone()[0]
+            )["publish"]["next_retry_at"]
+        retry_clock = mock.patch.object(publication_values, "now", return_value=due)
         retry_clock.start()
         self.addCleanup(retry_clock.stop)
-        second = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        second = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertEqual(first["status"], "publish_failed")
         self.assertEqual(second["status"], "publish_failed")
@@ -154,6 +171,7 @@ class PublishRetryTests(PublicationFixture):
 
     def test_publish_success_resolves_previous_failure_notification(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -184,14 +202,22 @@ class PublishRetryTests(PublicationFixture):
                 return EmptyComments()
             return next(create_results)
 
-        failed = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        failed = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
         # Advance to the persisted retry deadline; immediate retry is now forbidden.
         with closing(sqlite3.connect(db_path)) as retry_conn:
-            due = json.loads(retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0])['publish']['next_retry_at']
-        retry_clock = mock.patch.object(publication_values, 'now', return_value=due)
+            due = json.loads(
+                retry_conn.execute(
+                    "SELECT metadata_json FROM github_actions WHERE action_id='action-1'"
+                ).fetchone()[0]
+            )["publish"]["next_retry_at"]
+        retry_clock = mock.patch.object(publication_values, "now", return_value=due)
         retry_clock.start()
         self.addCleanup(retry_clock.stop)
-        published = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        published = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertEqual(failed["status"], "publish_failed")
         self.assertEqual(published["status"], "published")

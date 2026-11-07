@@ -1,6 +1,5 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
-
 from contextlib import closing
 
 from datetime import datetime, timezone, timedelta
@@ -60,7 +59,14 @@ class PublicationBudgetFixture(unittest.TestCase):
             }
             c.execute(
                 "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) VALUES ('r','t','a','new_pr','now',?)",
-                (json.dumps({"result_contract": "compact-v1", "audit": {"status": "accepted", "action_scope": scope}}),),
+                (
+                    json.dumps(
+                        {
+                            "result_contract": "compact-v1",
+                            "audit": {"status": "accepted", "action_scope": scope},
+                        }
+                    ),
+                ),
             )
             c.execute(
                 "INSERT INTO github_actions VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -94,5 +100,7 @@ class PublicationBudgetFixture(unittest.TestCase):
 
     def cycle(self, seconds=0):
         self.now += timedelta(seconds=seconds)
-        with mock.patch.object(publication_values, "now", return_value=self.now.isoformat()):
+        with mock.patch.object(
+            publication_values, "now", return_value=self.now.isoformat()
+        ):
             return publish.publish_ready_actions(self.db, run_command=self.runner)

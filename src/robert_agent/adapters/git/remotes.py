@@ -1,4 +1,5 @@
 """Parse repository identity from an already configured Git remote."""
+
 from urllib.parse import urlparse
 
 

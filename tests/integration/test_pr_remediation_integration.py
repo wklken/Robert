@@ -65,12 +65,10 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
                 "2026-07-26T00:02:00Z",
             )
             counts = (
-                conn.execute(
-                    "SELECT COUNT(*) FROM pr_remediation_episodes"
-                ).fetchone()[0],
-                conn.execute(
-                    "SELECT COUNT(*) FROM github_events"
-                ).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[
+                    0
+                ],
+                conn.execute("SELECT COUNT(*) FROM github_events").fetchone()[0],
             )
 
         self.assertEqual(len(first), 2)
@@ -261,11 +259,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
                 FROM pr_remediation_episodes
                 WHERE episode_id = ?
                 """,
-                (
-                    json.loads(task_row[1])[
-                        "remediation_episode_id"
-                    ],
-                ),
+                (json.loads(task_row[1])["remediation_episode_id"],),
             ).fetchone()[0]
 
         prompt = Path(task["prompt_path"]).read_text(encoding="utf-8")
@@ -305,15 +299,9 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
                 FROM pr_remediation_episodes
                 WHERE episode_id = ?
                 """,
-                (
-                    event["metadata"]["remediation"][
-                        "episode_id"
-                    ],
-                ),
+                (event["metadata"]["remediation"]["episode_id"],),
             ).fetchone()
-            task_count = conn.execute(
-                "SELECT COUNT(*) FROM tasks"
-            ).fetchone()[0]
+            task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
         self.assertTrue(blocked)
         self.assertEqual(episode[0], "exhausted")
@@ -326,7 +314,9 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
     def test_failed_system_task_can_retry_same_guarded_event(self):
         from robert_agent.workflows import routes as route
         from robert_agent.work import streams as workstream
-        from robert_agent.work.application import lifecycle as work_application_lifecycle
+        from robert_agent.work.application import (
+            lifecycle as work_application_lifecycle,
+        )
 
         data_dir = Path(self.tmp.name) / "retry-data"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:

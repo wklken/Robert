@@ -45,7 +45,10 @@ def _tail(path, limit=4000):
 
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _workspace_dir(workspace_dir):
@@ -71,23 +74,50 @@ def _isolated_config(source_config, workspace_dir):
         try:
             base_branch = repo["default_branch"]
             available = subprocess.run(
-                ["git", "-C", source, "show-ref", "--verify", "--quiet", f"refs/heads/{base_branch}"],
-                capture_output=True, timeout=120,
+                [
+                    "git",
+                    "-C",
+                    source,
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    f"refs/heads/{base_branch}",
+                ],
+                capture_output=True,
+                timeout=120,
             )
             if available.returncode:
-                return {"ok": False, "status": "failed_workspace",
-                        "safe_error": f"Isolated acceptance requires local branch {base_branch} "
-                                      f"in {repo['full_name']}; prepare a committed local snapshot first"}
+                return {
+                    "ok": False,
+                    "status": "failed_workspace",
+                    "safe_error": f"Isolated acceptance requires local branch {base_branch} "
+                    f"in {repo['full_name']}; prepare a committed local snapshot first",
+                }
             # Copy committed objects and refs into independent Git metadata.
             # Upstream is the local source, so fetch reads it without changing
             # its remote refs, worktree registrations or checked-out files.
             subprocess.run(
-                ["git", "clone", "--no-local", "--origin", "upstream", "--", source, str(checkout)],
-                check=True, capture_output=True, text=True, timeout=120,
+                [
+                    "git",
+                    "clone",
+                    "--no-local",
+                    "--origin",
+                    "upstream",
+                    "--",
+                    source,
+                    str(checkout),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
         except (OSError, subprocess.SubprocessError):
-            return {"ok": False, "status": "failed_workspace",
-                    "safe_error": f"Could not clone repository {repo['full_name']} for isolated acceptance"}
+            return {
+                "ok": False,
+                "status": "failed_workspace",
+                "safe_error": f"Could not clone repository {repo['full_name']} for isolated acceptance",
+            }
         repo["checkout"] = str(checkout)
         repo["worktrees"] = str(checkout_root / f"{index}-worktrees")
         repo["max_concurrency"] = 1
@@ -194,8 +224,14 @@ def _current_evidence(db_path):
             """,
             (task_id,),
         ).fetchall()
-        accepted_count = sum(count for audit, _publish, count in action_rows if audit == "accepted")
-        not_published_count = sum(count for _audit, publish, count in action_rows if publish == "not_published")
+        accepted_count = sum(
+            count for audit, _publish, count in action_rows if audit == "accepted"
+        )
+        not_published_count = sum(
+            count
+            for _audit, publish, count in action_rows
+            if publish == "not_published"
+        )
     evidence = {
         "db_exists": True,
         "task_id": task_id,
@@ -273,7 +309,9 @@ def live_worker_acceptance(
             "safe_error": first_run.get("safe_error", "live worker dispatch failed"),
         }
 
-    worker_evidence = _wait_for_worker_result(db_path, timeout_seconds, poll_interval_seconds)
+    worker_evidence = _wait_for_worker_result(
+        db_path, timeout_seconds, poll_interval_seconds
+    )
     if not worker_evidence.get("result_id"):
         return {
             "ok": False,
@@ -305,7 +343,9 @@ def live_worker_acceptance(
             "first_run": first_run,
             "second_run": second_run,
             "evidence": final_evidence,
-            "safe_error": second_run.get("safe_error", "dry-run audit or publication failed"),
+            "safe_error": second_run.get(
+                "safe_error", "dry-run audit or publication failed"
+            ),
         }
     if final_evidence["action_counts"]["accepted"] == 0:
         return {

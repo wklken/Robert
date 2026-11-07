@@ -72,7 +72,11 @@ def run_command(argv=None):
         if args.command == "show":
             candidate = runtime_knowledge.show_candidate(conn, args.candidate_id)
             if not candidate:
-                return {"ok": False, "status": "not_found", "safe_error": f"candidate not found: {args.candidate_id}"}
+                return {
+                    "ok": False,
+                    "status": "not_found",
+                    "safe_error": f"candidate not found: {args.candidate_id}",
+                }
             return {"ok": True, "status": "shown", "candidate": candidate}
         if args.command == "approve":
             return runtime_knowledge.approve_candidate(
@@ -91,7 +95,11 @@ def run_command(argv=None):
                 review_note=args.review_note,
                 run_now=now,
             )
-    return {"ok": False, "status": "failed_command", "safe_error": f"unknown command: {args.command}"}
+    return {
+        "ok": False,
+        "status": "failed_command",
+        "safe_error": f"unknown command: {args.command}",
+    }
 
 
 def main(argv=None):

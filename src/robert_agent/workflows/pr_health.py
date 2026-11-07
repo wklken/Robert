@@ -1,4 +1,5 @@
 """Read-only GitHub PR health and CI evidence normalization."""
+
 from robert_agent.adapters.github import client as github_client
 
 import hashlib
@@ -20,9 +21,7 @@ MANUAL_CONCLUSIONS = {
     "timed_out",
 }
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-TIMESTAMP_RE = re.compile(
-    r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b"
-)
+TIMESTAMP_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b")
 WHITESPACE_RE = re.compile(r"[ \t]+")
 
 
@@ -59,7 +58,8 @@ def fetch_pr_snapshot(repo_full_name, number, runner=subprocess.run):
 def _try_run_text(args, runner):
     try:
         completed = run_command(
-            args, runner=runner,
+            args,
+            runner=runner,
             text=True,
             capture_output=True,
             check=True,
@@ -82,10 +82,7 @@ def _normalize_failure_text(text):
     if not redacted_result["ok"]:
         return ""
     normalized = TIMESTAMP_RE.sub("", redacted_result["text"])
-    lines = [
-        WHITESPACE_RE.sub(" ", line).strip()
-        for line in normalized.splitlines()
-    ]
+    lines = [WHITESPACE_RE.sub(" ", line).strip() for line in normalized.splitlines()]
     return "\n".join(line for line in lines if line)
 
 
@@ -203,14 +200,18 @@ def _workflow_observation(
         "freshness_at": workflow.get("updated_at"),
     }
     if evidence:
-        evidence["failure_signature"] = failure_signature(
-            [
-                {
-                    "check_name": check_name,
-                    "failure_summary": evidence.get("failure_summary") or "",
-                }
-            ]
-        ) if evidence.get("failure_summary") else ""
+        evidence["failure_signature"] = (
+            failure_signature(
+                [
+                    {
+                        "check_name": check_name,
+                        "failure_summary": evidence.get("failure_summary") or "",
+                    }
+                ]
+            )
+            if evidence.get("failure_summary")
+            else ""
+        )
         observation.update(evidence)
     return observation
 
@@ -275,14 +276,18 @@ def _check_observation(
         "freshness_at": check.get("completed_at") or check.get("started_at"),
     }
     if evidence:
-        evidence["failure_signature"] = failure_signature(
-            [
-                {
-                    "check_name": check_name,
-                    "failure_summary": evidence.get("failure_summary") or "",
-                }
-            ]
-        ) if evidence.get("failure_summary") else ""
+        evidence["failure_signature"] = (
+            failure_signature(
+                [
+                    {
+                        "check_name": check_name,
+                        "failure_summary": evidence.get("failure_summary") or "",
+                    }
+                ]
+            )
+            if evidence.get("failure_summary")
+            else ""
+        )
         observation.update(evidence)
     return observation
 
@@ -312,8 +317,7 @@ def collect_ci_observations(
             runner=runner,
         )
         for workflow in _items(workflow_payload, "workflow_runs")
-        if workflow.get("head_sha") == head_sha
-        and workflow.get("name") in allowed
+        if workflow.get("head_sha") == head_sha and workflow.get("name") in allowed
     ]
 
     checks_payload = github_client.try_read_json(
@@ -341,9 +345,7 @@ def collect_ci_observations(
 def _observation_freshness(observation):
     raw_time = observation.get("freshness_at") or observation.get("completed_at")
     try:
-        observed_at = datetime.fromisoformat(
-            str(raw_time).replace("Z", "+00:00")
-        )
+        observed_at = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
         if observed_at.tzinfo is None:
             observed_at = observed_at.replace(tzinfo=timezone.utc)
         observed_at = observed_at.astimezone(timezone.utc)
@@ -363,11 +365,9 @@ def summarize_ci(observations, check_allowlist):
         if check_name not in check_allowlist:
             continue
         current = latest.get(check_name)
-        if (
-            current is None
-            or _observation_freshness(observation)
-            > _observation_freshness(current)
-        ):
+        if current is None or _observation_freshness(
+            observation
+        ) > _observation_freshness(current):
             latest[check_name] = observation
 
     missing = [name for name in check_allowlist if name not in latest]
@@ -405,10 +405,7 @@ def summarize_ci(observations, check_allowlist):
         if observation.get("conclusion") == "failure"
     ]
     if failures:
-        if any(
-            failure.get("evidence_status") != "available"
-            for failure in failures
-        ):
+        if any(failure.get("evidence_status") != "available" for failure in failures):
             return {
                 "status": "manual",
                 "reason": "failure_evidence_unavailable",

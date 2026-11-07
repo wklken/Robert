@@ -24,11 +24,25 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             )
             conn.execute(
                 "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES (?, ?, ?, ?, ?, ?)",
-                ("repo:a", "Org/a", "robot", "main", str(self.repo_root), str(self.worktree_root)),
+                (
+                    "repo:a",
+                    "Org/a",
+                    "robot",
+                    "main",
+                    str(self.repo_root),
+                    str(self.worktree_root),
+                ),
             )
             conn.execute(
                 "INSERT INTO repos(repo_id, full_name, github_account, default_base_branch, repo_root, worktree_root) VALUES (?, ?, ?, ?, ?, ?)",
-                ("repo:b", "Org/b", "robot", "main", str(self.repo_root), str(self.worktree_root)),
+                (
+                    "repo:b",
+                    "Org/b",
+                    "robot",
+                    "main",
+                    str(self.repo_root),
+                    str(self.worktree_root),
+                ),
             )
 
             run_journal._insert_repo_run_step(conn, "run-test", "repo:a", "discover")
@@ -47,14 +61,18 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
                 "SELECT repo_id, step_key, status, output_json FROM run_repo_steps ORDER BY repo_id"
             ).fetchall()
 
-        self.assertEqual([(row[0], row[1], row[2]) for row in rows], [
-            ("repo:a", "discover", "succeeded"),
-            ("repo:b", "discover", "pending"),
-        ])
+        self.assertEqual(
+            [(row[0], row[1], row[2]) for row in rows],
+            [
+                ("repo:a", "discover", "succeeded"),
+                ("repo:b", "discover", "pending"),
+            ],
+        )
         self.assertIn("raw_event_count", rows[0][3])
 
     def test_run_once_processes_two_repos_with_repo_specific_trust(self):
         from robert_agent.runtime import cycle as run_once
+
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -74,7 +92,9 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             encoding="utf-8",
         )
 
-        def fake_collect(repo, known_workstreams=None, notification_hints=None, **_kwargs):
+        def fake_collect(
+            repo, known_workstreams=None, notification_hints=None, **_kwargs
+        ):
             if repo["full_name"] == "example/backend":
                 return [
                     {
@@ -116,7 +136,9 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["status"], "completed")
         with closing(sqlite3.connect(result["db_path"])) as conn:
-            repos = conn.execute("SELECT full_name FROM repos ORDER BY full_name").fetchall()
+            repos = conn.execute(
+                "SELECT full_name FROM repos ORDER BY full_name"
+            ).fetchall()
             tasks = conn.execute(
                 """
                 SELECT r.full_name, COUNT(*)
@@ -146,6 +168,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
 
     def test_run_once_continues_after_one_repo_discovery_failure(self):
         from robert_agent.runtime import cycle as run_once
+
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -206,8 +229,11 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
         self.assertEqual(json.loads(run[1])["overall_status"], "partial_failure")
         self.assertEqual(active_leases, 0)
 
-    def test_run_once_multi_repo_top_level_notifications_disable_repo_notification_polling(self):
+    def test_run_once_multi_repo_top_level_notifications_disable_repo_notification_polling(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -239,9 +265,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
                     {
                         "id": "notification-a",
                         "reason": "mention",
-                        "repository": {
-                            "full_name": "example/backend"
-                        },
+                        "repository": {"full_name": "example/backend"},
                     }
                 ]
             }
@@ -302,9 +326,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
                         {
                             "id": "notification-a",
                             "reason": "mention",
-                            "repository": {
-                                "full_name": "example/backend"
-                            },
+                            "repository": {"full_name": "example/backend"},
                         }
                     ],
                     "include_notifications": False,
@@ -318,8 +340,11 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             ],
         )
 
-    def test_run_once_single_repo_empty_top_level_notifications_disable_repo_polling(self):
+    def test_run_once_single_repo_empty_top_level_notifications_disable_repo_polling(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         discovery_calls = []
 
         def fake_collect_account_notifications(repos, runner=None):
@@ -373,8 +398,11 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
             ],
         )
 
-    def test_run_once_multi_repo_notification_collection_failure_falls_back_per_repo(self):
+    def test_run_once_multi_repo_notification_collection_failure_falls_back_per_repo(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         repo_b = self.root / "repo-b"
         repo_b.mkdir()
         (repo_b / ".git").mkdir()
@@ -461,6 +489,7 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
 
     def test_run_once_notification_command_missing_falls_back_per_repo(self):
         from robert_agent.runtime import cycle as run_once
+
         discovery_calls = []
 
         def fake_collect_account_notifications(_repos, runner=None):

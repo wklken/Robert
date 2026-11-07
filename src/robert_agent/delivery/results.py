@@ -1,4 +1,5 @@
 """Read worker results and persist audit and result bookkeeping."""
+
 from robert_agent.foundation import values
 from robert_agent.adapters.sqlite import review_rounds as review_store
 from robert_agent.adapters.sqlite import vote_rounds as vote_store
@@ -118,14 +119,12 @@ def result_actions_all_published(conn, result_id):
     if not rows:
         return True
     if all(
-        audit_status == "accepted"
-        and publish_status == "published"
+        audit_status == "accepted" and publish_status == "published"
         for audit_status, publish_status in rows
     ):
         return True
     if not all(
-        audit_status == "accepted"
-        and publish_status in {"published", "skipped"}
+        audit_status == "accepted" and publish_status in {"published", "skipped"}
         for audit_status, publish_status in rows
     ):
         return False
@@ -145,11 +144,10 @@ def result_actions_all_published(conn, result_id):
     if isinstance(action_scope, dict) and action_scope.get("review_round_id"):
         review = review_store.session(conn, round_id=action_scope["review_round_id"])
         return bool(review and review["status"] == "superseded")
-    return (
-        isinstance(action_scope, dict)
-        and action_scope.get("task_kind")
-        in {"ci_remediation", "merge_conflict_remediation"}
-    )
+    return isinstance(action_scope, dict) and action_scope.get("task_kind") in {
+        "ci_remediation",
+        "merge_conflict_remediation",
+    }
 
 
 def result_audit_accepted(conn, result_id):

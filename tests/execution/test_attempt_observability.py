@@ -49,7 +49,7 @@ class ObservabilityTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     values,
-                    'utc_now',
+                    "utc_now",
                     side_effect=[
                         "2026-10-23T00:00:00+00:00",
                         "2026-10-23T00:01:00+00:00",

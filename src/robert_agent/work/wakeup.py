@@ -32,9 +32,10 @@ def _decode_json(value, default):
 def _logical_reason(reason, metadata):
     # The stored enum remains compatible with older databases. Expose machine
     # wakeups by their actual purpose while preserving their ID and dedupe key.
-    kind = metadata.get('kind') if isinstance(metadata, dict) else None
-    if reason == 'manual_operator_request' and kind in {
-        'github_observation_ready', 'github_context_refresh',
+    kind = metadata.get("kind") if isinstance(metadata, dict) else None
+    if reason == "manual_operator_request" and kind in {
+        "github_observation_ready",
+        "github_context_refresh",
     }:
         return kind
     return reason
@@ -204,9 +205,7 @@ def summarize_wakeups(conn, now=None):
     now = now or utc_now()
     by_status = {
         row[0]: row[1]
-        for row in conn.execute(
-            "SELECT status, COUNT(*) FROM wakeups GROUP BY status"
-        )
+        for row in conn.execute("SELECT status, COUNT(*) FROM wakeups GROUP BY status")
     }
     by_reason = {
         row[0]: row[1]
@@ -281,11 +280,13 @@ def expire_due_wakeups(conn, *, now=None):
 
 
 def has_due_context_refresh(conn, repo_ids, now):
-    placeholders = ','.join('?' for _ in repo_ids)
-    return bool(conn.execute(
-        f"""SELECT 1 FROM wakeups WHERE repo_id IN ({placeholders}) AND status='pending'
+    placeholders = ",".join("?" for _ in repo_ids)
+    return bool(
+        conn.execute(
+            f"""SELECT 1 FROM wakeups WHERE repo_id IN ({placeholders}) AND status='pending'
             AND json_extract(metadata_json,'$.kind')='github_context_refresh'
             AND julianday(not_before_at)<=julianday(?)
             AND (expires_at IS NULL OR julianday(expires_at)>julianday(?)) LIMIT 1""",
-        [*repo_ids, now, now],
-    ).fetchone())
+            [*repo_ids, now, now],
+        ).fetchone()
+    )

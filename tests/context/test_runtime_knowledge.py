@@ -28,7 +28,9 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 repo_id=self.repo_id,
                 run_now=self.now,
             )
-            proposed = runtime_knowledge.propose_candidates(conn, self.repo_id, self.now)
+            proposed = runtime_knowledge.propose_candidates(
+                conn, self.repo_id, self.now
+            )
             candidate = conn.execute(
                 """
                 SELECT status, title, candidate_type, source_memory_ids_json
@@ -130,6 +132,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         from robert_agent.context import project as project_memory
         from robert_agent.context import knowledge as runtime_knowledge
         from robert_agent.context import curation as memory_curator
+
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             project_memory.record_memory_delta(
                 conn,
@@ -199,7 +202,9 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                         "symbols": ["_is_dd_pr_followup_event"],
                         "keywords": ["dd-pr-followup", "update-existing-pr"],
                         "confidence": "medium",
-                        "evidence": [{"type": "test", "value": "python -B -m unittest"}],
+                        "evidence": [
+                            {"type": "test", "value": "python -B -m unittest"}
+                        ],
                     }
                 ],
             },

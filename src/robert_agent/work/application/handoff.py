@@ -1,4 +1,5 @@
 """Durable unfinished event handoffs after an accepted result is completed."""
+
 from robert_agent.adapters.sqlite import execution_control as execution_store
 from robert_agent.delivery import contract as result_contract
 
@@ -6,8 +7,9 @@ from robert_agent.delivery import contract as result_contract
 def ready_rows(conn, repo_ids, now, *, config=None):
     if not repo_ids:
         return []
-    placeholders = ','.join('?' for _ in repo_ids)
-    rows = conn.execute(f"""SELECT t.task_id,t.workstream_id,
+    placeholders = ",".join("?" for _ in repo_ids)
+    rows = conn.execute(
+        f"""SELECT t.task_id,t.workstream_id,
         json_extract(t.metadata_json,'$.pending_handoff.attempt_count') FROM tasks t
         JOIN workstreams w ON w.workstream_id=t.workstream_id
         JOIN attempts a ON a.task_id=t.task_id
@@ -35,8 +37,21 @@ def ready_rows(conn, repo_ids, now, *, config=None):
                                AND owner.subject_type='remediation_episode'
                                AND owner.subject_id=json_extract(t.metadata_json,'$.remediation_episode_id'))))
           AND {execution_store.runnable_sql()}
-        ORDER BY t.created_at,t.task_id""", [*repo_ids, result_contract.CONTRACT_ID, now]).fetchall()
+        ORDER BY t.created_at,t.task_id""",
+        [*repo_ids, result_contract.CONTRACT_ID, now],
+    ).fetchall()
     from robert_agent.supervision import actions as supervision_actions
-    return [(task_id, workstream_id) for task_id, workstream_id, retries in rows
-            if not supervision_actions.blocks_consumer(conn, task_id=task_id, kind='handoff_resume',
-                target_id=task_id, now=now, config=config, native_retry=bool(retries))]
+
+    return [
+        (task_id, workstream_id)
+        for task_id, workstream_id, retries in rows
+        if not supervision_actions.blocks_consumer(
+            conn,
+            task_id=task_id,
+            kind="handoff_resume",
+            target_id=task_id,
+            now=now,
+            config=config,
+            native_retry=bool(retries),
+        )
+    ]

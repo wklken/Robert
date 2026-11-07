@@ -13,25 +13,39 @@ from robert_agent.adapters.processes import identity
 
 class AgentLeaseSafetyTests(unittest.TestCase):
     def test_expired_lease_requires_owner_exit_evidence(self):
-        for state in ('alive_same', 'unknown', 'dead'):
+        for state in ("alive_same", "unknown", "dead"):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
-                db = Path(tmp) / 'robert.sqlite3'
+                db = Path(tmp) / "robert.sqlite3"
                 storage.init_database(db)
                 with closing(sqlite3.connect(db)) as conn, conn:
-                    conn.execute("INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('old','running','2000-01-01',?)",
-                                 (json.dumps({'executor_identity': {'pid': 123}}),))
-                    execution_leases.acquire(conn, 'repo', 'old', '2000-01-01T00:00:00+00:00', 1)
-                    with mock.patch.object(identity, 'inspect_recorded_identity', return_value=state):
-                        result = execution_leases.acquire(conn, 'repo', 'new', '2026-10-29T00:00:00+00:00', 1)
-                    self.assertEqual(result['ok'], state == 'dead')
-                    owners = conn.execute("SELECT owner_id FROM leases WHERE status='active'").fetchall()
-                    self.assertEqual(owners, [('new' if state == 'dead' else 'old',)])
+                    conn.execute(
+                        "INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('old','running','2000-01-01',?)",
+                        (json.dumps({"executor_identity": {"pid": 123}}),),
+                    )
+                    execution_leases.acquire(
+                        conn, "repo", "old", "2000-01-01T00:00:00+00:00", 1
+                    )
+                    with mock.patch.object(
+                        identity, "inspect_recorded_identity", return_value=state
+                    ):
+                        result = execution_leases.acquire(
+                            conn, "repo", "new", "2026-10-29T00:00:00+00:00", 1
+                        )
+                    self.assertEqual(result["ok"], state == "dead")
+                    owners = conn.execute(
+                        "SELECT owner_id FROM leases WHERE status='active'"
+                    ).fetchall()
+                    self.assertEqual(owners, [("new" if state == "dead" else "old",)])
 
     def test_expired_lease_without_owner_identity_stays_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = Path(tmp) / 'robert.sqlite3'
+            db = Path(tmp) / "robert.sqlite3"
             storage.init_database(db)
             with closing(sqlite3.connect(db)) as conn, conn:
-                execution_leases.acquire(conn, 'repo', 'old', '2000-01-01T00:00:00+00:00', 1)
-                result = execution_leases.acquire(conn, 'repo', 'new', '2026-10-29T00:00:00+00:00', 1)
-                self.assertFalse(result['ok'])
+                execution_leases.acquire(
+                    conn, "repo", "old", "2000-01-01T00:00:00+00:00", 1
+                )
+                result = execution_leases.acquire(
+                    conn, "repo", "new", "2026-10-29T00:00:00+00:00", 1
+                )
+                self.assertFalse(result["ok"])

@@ -1,6 +1,5 @@
 """Historical DBOS-format fixture helpers; not part of Robert runtime."""
 
-
 from tests.support import legacy_workflow_store as workflow_store
 
 

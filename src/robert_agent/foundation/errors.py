@@ -1,4 +1,5 @@
 """Safe error payloads for controller runs."""
+
 import json
 import subprocess
 
@@ -60,8 +61,10 @@ def safe_publish_error(exc):
 def safe_route_error(exc):
     if isinstance(exc, subprocess.TimeoutExpired):
         return {
-            'ok': False, 'status': 'failed_route', 'error_type': type(exc).__name__,
-            'safe_error': f'Worktree preparation command timed out after {exc.timeout} seconds.',
+            "ok": False,
+            "status": "failed_route",
+            "error_type": type(exc).__name__,
+            "safe_error": f"Worktree preparation command timed out after {exc.timeout} seconds.",
         }
     if isinstance(exc, subprocess.CalledProcessError):
         cmd = exc.cmd if isinstance(exc.cmd, (list, tuple)) else [exc.cmd]

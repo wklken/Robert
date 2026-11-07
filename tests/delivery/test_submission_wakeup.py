@@ -33,7 +33,18 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
             ).fetchall()
         self.assertEqual(len(rows), 1)
         row = rows[0]
-        self.assertEqual(row[:7], ("repo-1", "worker_result_ready", record["result_id"], "task-1", "attempt-1", record["result_id"], "pending"))
+        self.assertEqual(
+            row[:7],
+            (
+                "repo-1",
+                "worker_result_ready",
+                record["result_id"],
+                "task-1",
+                "attempt-1",
+                record["result_id"],
+                "pending",
+            ),
+        )
         metadata = json.loads(row[7])
         self.assertEqual(metadata["recorded_by"], "robert.worker")
         self.assertEqual(metadata["output_type"], "comment_analysis")
@@ -42,9 +53,13 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
         from robert_agent.adapters.sqlite import execution_control as execution_store
         from robert_agent.delivery.application import submission as result
 
-        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
+        db_path = self._init_attempt_db(
+            output_type="local_result", route_id="local-result"
+        )
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', '2026-08-02T00:00:00+00:00')
+            execution_store.ensure_subject(
+                conn, "task", "task-1", "human_request", "2026-08-02T00:00:00+00:00"
+            )
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
@@ -68,7 +83,9 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
     def test_result_notifies_only_after_transaction_commits(self):
         from robert_agent.delivery.application import submission as result
 
-        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
+        db_path = self._init_attempt_db(
+            output_type="local_result", route_id="local-result"
+        )
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
@@ -85,7 +102,9 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
             with closing(sqlite3.connect(notified_db_path)) as conn:
                 observed.append(
                     (
-                        conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0],
+                        conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[
+                            0
+                        ],
                         conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0],
                         conn.execute(
                             "SELECT status FROM attempts WHERE attempt_id = 'attempt-1'"
@@ -105,7 +124,9 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
     def test_result_stays_successful_when_post_commit_notification_fails(self):
         from robert_agent.delivery.application import submission as result
 
-        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
+        db_path = self._init_attempt_db(
+            output_type="local_result", route_id="local-result"
+        )
         payload = result.build_result(
             task_id="task-1",
             attempt_id="attempt-1",
@@ -124,8 +145,12 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
 
         self.assertTrue(record["ok"], record)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 1
+            )
 
     def test_duplicate_result_does_not_create_extra_wakeup(self):
         from robert_agent.delivery.application import submission as result
@@ -176,6 +201,8 @@ class SubmissionWakeupTests(WorkerProtocolFixture):
         self.assertEqual(record["status"], "rejected_by_supervisor")
         with closing(sqlite3.connect(db_path)) as conn, conn:
             wakeup_count = conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0]
-            result_count = conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0]
+            result_count = conn.execute(
+                "SELECT COUNT(*) FROM worker_results"
+            ).fetchone()[0]
         self.assertEqual(wakeup_count, 0)
         self.assertEqual(result_count, 0)

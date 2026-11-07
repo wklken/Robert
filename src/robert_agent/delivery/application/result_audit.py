@@ -1,4 +1,5 @@
 """Audit saved results with fresh execution and publication evidence."""
+
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.delivery import results
 from robert_agent.delivery.application import scope as result_scope
@@ -37,7 +38,10 @@ def _record_result_usage_status(conn, attempt_id, result_id):
             SET metadata_json = ?
             WHERE attempt_id = ?
             """,
-            (json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True), attempt_id),
+            (
+                json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
+                attempt_id,
+            ),
         )
     result_row = conn.execute(
         "SELECT metadata_json FROM worker_results WHERE result_id = ?",
@@ -58,13 +62,19 @@ def _record_result_usage_status(conn, attempt_id, result_id):
 
 def _revalidate_audit_claim(conn, claim, config, now):
     from robert_agent.supervision import actions as supervision_actions
+
     if not conn.in_transaction:
-        conn.execute('BEGIN IMMEDIATE')
+        conn.execute("BEGIN IMMEDIATE")
     if supervision_actions.current(conn, claim, config=config, now=now):
         return True
     # Git inspection is read-only. A stale claim has not applied an audit.
-    supervision_actions.finish(conn, claim, outcome='rejected', now=now,
-        receipt={'reason_code': 'audit_target_changed_after_inspection'})
+    supervision_actions.finish(
+        conn,
+        claim,
+        outcome="rejected",
+        now=now,
+        receipt={"reason_code": "audit_target_changed_after_inspection"},
+    )
     return False
 
 
@@ -82,6 +92,7 @@ def audit_completed_results(
     config_result=None,
 ):
     from robert_agent.supervision import actions as supervision_actions
+
     rows = conn.execute(
         """
         SELECT
@@ -131,11 +142,14 @@ def audit_completed_results(
         verification_policy = route.verification_policy_for(row[13])
         task_kind = row[14]
         task_metadata = values.json_object(row[15])
-        if values.json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
+        if (
+            values.json_object(result_row[7]).get("result_contract")
+            != result_contract.CONTRACT_ID
+        ):
             # Old results remain audit history or unresolved cutover work. Never
             # consume, publish or terminalize them through the new protocol.
             continue
-        observation = values.json_object(result_row[7]).get('audit_observation', {})
+        observation = values.json_object(result_row[7]).get("audit_observation", {})
         if not evidence.inspection_due(observation, run_now):
             continue
         payload = results.load_result_payload(conn, result_row)
@@ -146,39 +160,87 @@ def audit_completed_results(
         origin_type = origin_row[0] if origin_row else "github"
         recovery_config = None if dry_run else config_result
         if not conn.in_transaction:
-            conn.execute('BEGIN IMMEDIATE')
-        gate = supervision_actions.begin(conn, task_id=payload['task_id'], kind='audit_retry',
-            target_id=payload['result_id'], now=run_now, config=recovery_config,
-            native_retry=bool(observation.get('attempt_count')))
-        if gate['status'] == 'blocked':
+            conn.execute("BEGIN IMMEDIATE")
+        gate = supervision_actions.begin(
+            conn,
+            task_id=payload["task_id"],
+            kind="audit_retry",
+            target_id=payload["result_id"],
+            now=run_now,
+            config=recovery_config,
+            native_retry=bool(observation.get("attempt_count")),
+        )
+        if gate["status"] == "blocked":
             continue
-        claim = gate.get('claim')
+        claim = gate.get("claim")
         _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
         conn.commit()
         try:
-            action_scope = result_scope.for_result(conn, payload['task_id'], payload['attempt_id'], workstream_id, command_runner=control_commands.run_command)
+            action_scope = result_scope.for_result(
+                conn,
+                payload["task_id"],
+                payload["attempt_id"],
+                workstream_id,
+                command_runner=control_commands.run_command,
+            )
         except ControlDeadlineExceeded:
             raise
         except subprocess.TimeoutExpired as exc:
             checked_at = values.utc_now() if claim else run_now
-            if claim and not _revalidate_audit_claim(conn, claim, recovery_config, checked_at):
+            if claim and not _revalidate_audit_claim(
+                conn, claim, recovery_config, checked_at
+            ):
                 continue
-            failure = {**retry_policy.failure_state(observation, 'Audit inspection timed out', run_now),
-                       'status': 'inspection_timeout', 'timeout_seconds': exc.timeout}
-            conn.execute("UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit_observation',json(?)) WHERE result_id=?",
-                         (json.dumps(failure), payload['result_id']))
-            if not failure['retryable']:
-                conn.execute("UPDATE tasks SET metadata_json=json_set(metadata_json,'$.audit_retry_required',?) WHERE task_id=?", (payload['result_id'], payload['task_id']))
+            failure = {
+                **retry_policy.failure_state(
+                    observation, "Audit inspection timed out", run_now
+                ),
+                "status": "inspection_timeout",
+                "timeout_seconds": exc.timeout,
+            }
+            conn.execute(
+                "UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit_observation',json(?)) WHERE result_id=?",
+                (json.dumps(failure), payload["result_id"]),
+            )
+            if not failure["retryable"]:
+                conn.execute(
+                    "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.audit_retry_required',?) WHERE task_id=?",
+                    (payload["result_id"], payload["task_id"]),
+                )
                 item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
                 if item:
-                    work_items.record_system_event(conn, item['work_item_id'], event_type='execution_failed',
-                        idempotency_key='audit:' + payload['result_id'], body='Audit inspection stopped. Retry to inspect this saved result again.',
-                        metadata={'task_id': payload['task_id'], 'result_id': payload['result_id'], 'kind': 'audit_inspection'}, now=run_now)
-                execution_notifications.insert(conn, 'audit_inspection_exhausted', 'recorded', run_now, {'task_id': payload['task_id'], **failure})
+                    work_items.record_system_event(
+                        conn,
+                        item["work_item_id"],
+                        event_type="execution_failed",
+                        idempotency_key="audit:" + payload["result_id"],
+                        body="Audit inspection stopped. Retry to inspect this saved result again.",
+                        metadata={
+                            "task_id": payload["task_id"],
+                            "result_id": payload["result_id"],
+                            "kind": "audit_inspection",
+                        },
+                        now=run_now,
+                    )
+                execution_notifications.insert(
+                    conn,
+                    "audit_inspection_exhausted",
+                    "recorded",
+                    run_now,
+                    {"task_id": payload["task_id"], **failure},
+                )
             if claim:
-                supervision_actions.finish(conn, claim, outcome='failed', now=checked_at,
-                    receipt={'result_id': payload['result_id'], 'reason_code': 'audit_inspection_timeout',
-                             'native_retryable': failure['retryable']})
+                supervision_actions.finish(
+                    conn,
+                    claim,
+                    outcome="failed",
+                    now=checked_at,
+                    receipt={
+                        "result_id": payload["result_id"],
+                        "reason_code": "audit_inspection_timeout",
+                        "native_retryable": failure["retryable"],
+                    },
+                )
             continue
         remediation_context = None
         remediation_attestation = None
@@ -197,17 +259,15 @@ def audit_completed_results(
                 }
             if payload["output_type"] != "waiting_for_user":
                 conn.commit()
-                remediation_attestation = (
-                    remediation.attest_remediation_worktree(
-                        task_kind=task_kind,
-                        action_scope=action_scope,
-                        remediation_evidence=payload.get(
-                            "remediation_evidence"
-                        ),
-                    )
+                remediation_attestation = remediation.attest_remediation_worktree(
+                    task_kind=task_kind,
+                    action_scope=action_scope,
+                    remediation_evidence=payload.get("remediation_evidence"),
                 )
         checked_at = values.utc_now() if claim else run_now
-        if claim and not _revalidate_audit_claim(conn, claim, recovery_config, checked_at):
+        if claim and not _revalidate_audit_claim(
+            conn, claim, recovery_config, checked_at
+        ):
             continue
         if not execution_ownership.claim_task(conn, payload["task_id"], run_now):
             continue
@@ -225,9 +285,16 @@ def audit_completed_results(
             remediation_attestation=remediation_attestation,
             review_input_policy=task_metadata.get("review_input_policy", "required"),
         )
-        if claim and not supervision_actions.finish(conn, claim, now=checked_at,
-                outcome='observing' if audit['status'] == 'accepted' else 'failed',
-                receipt={'result_id': payload['result_id'], 'audit_status': audit['status']}):
+        if claim and not supervision_actions.finish(
+            conn,
+            claim,
+            now=checked_at,
+            outcome="observing" if audit["status"] == "accepted" else "failed",
+            receipt={
+                "result_id": payload["result_id"],
+                "audit_status": audit["status"],
+            },
+        ):
             continue
         results.record_result_audit(conn, payload["result_id"], audit)
         wakeup.consume_wakeups_for_results(
@@ -237,9 +304,15 @@ def audit_completed_results(
             now=run_now,
         )
         if audit["status"] != "accepted":
-            action_status = "policy_violation" if audit["status"] == "policy_violation" else "failed"
+            action_status = (
+                "policy_violation"
+                if audit["status"] == "policy_violation"
+                else "failed"
+            )
             results.set_github_actions_status(conn, payload["result_id"], action_status)
-            work_application_lifecycle.finalize_failed_task(conn, payload["task_id"], workstream_id, run_now, audit)
+            work_application_lifecycle.finalize_failed_task(
+                conn, payload["task_id"], workstream_id, run_now, audit
+            )
             execution_notifications.insert(
                 conn,
                 "worker_result_rejected",
@@ -262,7 +335,9 @@ def audit_completed_results(
             repo_id=repo_id,
             run_now=run_now,
         )
-        results.record_result_project_memory_status(conn, payload["result_id"], memory_status)
+        results.record_result_project_memory_status(
+            conn, payload["result_id"], memory_status
+        )
         if results.result_actions_all_published(conn, payload["result_id"]):
             try:
                 completion.finalize_accepted_result(
@@ -284,6 +359,8 @@ def audit_completed_results(
             except subprocess.TimeoutExpired:
                 continue
         else:
-            work_application_lifecycle.mark_task_waiting_for_publish(conn, payload["task_id"], workstream_id, run_now)
+            work_application_lifecycle.mark_task_waiting_for_publish(
+                conn, payload["task_id"], workstream_id, run_now
+            )
         audited += 1
     return audited

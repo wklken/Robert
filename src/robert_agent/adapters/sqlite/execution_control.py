@@ -107,10 +107,24 @@ def read_controls(conn, subjects=None):
     for table in ("workflow_bindings", "execution_subjects"):
         if table in tables:
             # Keep bounded parameter counts for older supported SQLite builds.
-            batches = [None] if subjects is None else [subjects[i:i + 200] for i in range(0, len(subjects), 200)]
+            batches = (
+                [None]
+                if subjects is None
+                else [subjects[i : i + 200] for i in range(0, len(subjects), 200)]
+            )
             for batch in batches:
-                clause = '' if batch is None else ' WHERE (subject_type,subject_id) IN (' + ','.join('(?,?)' for _ in batch) + ')'
-                params = [] if batch is None else [value for subject in batch for value in subject]
+                clause = (
+                    ""
+                    if batch is None
+                    else " WHERE (subject_type,subject_id) IN ("
+                    + ",".join("(?,?)" for _ in batch)
+                    + ")"
+                )
+                params = (
+                    []
+                    if batch is None
+                    else [value for subject in batch for value in subject]
+                )
                 cursor = conn.execute(f"SELECT * FROM {table}" + clause, params)
                 names = [column[0] for column in cursor.description]
                 for values in cursor.fetchall():

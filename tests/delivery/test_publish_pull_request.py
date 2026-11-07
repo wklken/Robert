@@ -7,6 +7,7 @@ from tests.support.publication import PublicationFixture
 class PublishPullRequestTests(PublicationFixture):
     def test_publish_ready_open_pr_action_creates_pr_and_records_url(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -46,7 +47,9 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed("[]")
             return Completed("https://github.com/x/y/pull/42\n")
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -98,6 +101,7 @@ class PublishPullRequestTests(PublicationFixture):
 
     def test_publish_ready_new_pr_pushes_branch_before_opening_pr(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -168,7 +172,9 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed("https://github.com/x/y/pull/42\n")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 2)
@@ -204,6 +210,7 @@ class PublishPullRequestTests(PublicationFixture):
 
     def test_publish_ready_open_pr_uses_fork_owner_from_published_push_action(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -290,14 +297,18 @@ class PublishPullRequestTests(PublicationFixture):
             calls.append((command, kwargs))
             if command[:4] == ["git", "remote", "get-url", "origin"]:
                 self.assertEqual(kwargs["cwd"], str(worktree))
-                return Completed("https://github.com/robert-bot/blueking-apigateway.git\n")
+                return Completed(
+                    "https://github.com/robert-bot/blueking-apigateway.git\n"
+                )
             if command[:3] == ["gh", "pr", "list"]:
                 return Completed("[]")
             if command[:3] == ["gh", "pr", "create"]:
                 return Completed("https://github.com/example/backend/pull/42\n")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -305,10 +316,13 @@ class PublishPullRequestTests(PublicationFixture):
         self.assertEqual(calls[1][0][:3], ["gh", "pr", "list"])
         self.assertEqual(calls[1][0][calls[1][0].index("--head") + 1], branch)
         self.assertEqual(calls[2][0][:3], ["gh", "pr", "create"])
-        self.assertEqual(calls[2][0][calls[2][0].index("--head") + 1], f"robert-bot:{branch}")
+        self.assertEqual(
+            calls[2][0][calls[2][0].index("--head") + 1], f"robert-bot:{branch}"
+        )
 
     def test_publish_ready_new_pr_stops_open_pr_when_branch_push_fails(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -372,7 +386,9 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed(returncode=1, stderr="push rejected")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["published_count"], 0)
@@ -403,8 +419,11 @@ class PublishPullRequestTests(PublicationFixture):
             ],
         )
 
-    def test_publish_ready_existing_pr_with_audited_head_stops_when_remote_lookup_fails(self):
+    def test_publish_ready_existing_pr_with_audited_head_stops_when_remote_lookup_fails(
+        self,
+    ):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         worktree = self.root / "worktree"
@@ -468,18 +487,26 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed(returncode=128, stderr="network unavailable")
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["published_count"], 0)
         self.assertEqual(result["failed_count"], 1)
-        self.assertEqual([call[0] for call in calls], [
-            ["git", "ls-remote", "--heads", "origin", "codex/dd-123"],
-        ])
-        self.assertIn("remote branch lookup failed", result["failures"][0]["safe_error"])
+        self.assertEqual(
+            [call[0] for call in calls],
+            [
+                ["git", "ls-remote", "--heads", "origin", "codex/dd-123"],
+            ],
+        )
+        self.assertIn(
+            "remote branch lookup failed", result["failures"][0]["safe_error"]
+        )
 
     def test_publish_ready_open_pr_reuses_existing_head_pr(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -543,7 +570,9 @@ class PublishPullRequestTests(PublicationFixture):
                 )
             )
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
@@ -571,11 +600,14 @@ class PublishPullRequestTests(PublicationFixture):
                 WHERE action_id = 'action-1'
                 """
             ).fetchone()
-        self.assertEqual(action[:3], ("published", "42", "https://github.com/x/y/pull/42"))
+        self.assertEqual(
+            action[:3], ("published", "42", "https://github.com/x/y/pull/42")
+        )
         self.assertTrue(json.loads(action[3])["publish"]["deduplicated"])
 
     def test_publish_ready_open_pr_ignores_same_head_pr_without_marker(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -639,12 +671,17 @@ class PublishPullRequestTests(PublicationFixture):
             self.assertEqual(command[:3], ["gh", "pr", "create"])
             return Completed("https://github.com/x/y/pull/43\n")
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(result["deduplicated_count"], 0)
-        self.assertEqual([call[0][:3] for call in calls], [["gh", "pr", "list"], ["gh", "pr", "view"], ["gh", "pr", "create"]])
+        self.assertEqual(
+            [call[0][:3] for call in calls],
+            [["gh", "pr", "list"], ["gh", "pr", "view"], ["gh", "pr", "create"]],
+        )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             action = conn.execute(
                 """
@@ -653,11 +690,16 @@ class PublishPullRequestTests(PublicationFixture):
                 WHERE action_id = 'action-1'
                 """
             ).fetchone()
-        self.assertEqual(action[:3], ("published", "43", "https://github.com/x/y/pull/43"))
+        self.assertEqual(
+            action[:3], ("published", "43", "https://github.com/x/y/pull/43")
+        )
         self.assertFalse(json.loads(action[3])["publish"]["deduplicated"])
 
-    def test_publish_ready_open_pr_reuses_same_owner_head_pr_with_different_marker(self):
+    def test_publish_ready_open_pr_reuses_same_owner_head_pr_with_different_marker(
+        self,
+    ):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -692,9 +734,7 @@ class PublishPullRequestTests(PublicationFixture):
                                 "status": "accepted",
                                 "action_scope": {
                                     "repo": "x/y",
-                                    "sources": [
-                                        {"source_type": "issue", "number": 1}
-                                    ],
+                                    "sources": [{"source_type": "issue", "number": 1}],
                                     "head_owner": "robert-bot",
                                 },
                             }
@@ -736,29 +776,39 @@ class PublishPullRequestTests(PublicationFixture):
                             "baseRefName": "master",
                             "headRefName": "codex/dd-123",
                             "headRepositoryOwner": {"login": "robert-bot"},
-                            "body": self._dd_pr_body("Existing DD PR", task_id="task-old"),
+                            "body": self._dd_pr_body(
+                                "Existing DD PR", task_id="task-old"
+                            ),
                         },
                         sort_keys=True,
                     )
                 )
             raise AssertionError(command)
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(result["deduplicated_count"], 1)
-        self.assertEqual([call[0][:3] for call in calls], [["gh", "pr", "list"], ["gh", "pr", "view"]])
+        self.assertEqual(
+            [call[0][:3] for call in calls],
+            [["gh", "pr", "list"], ["gh", "pr", "view"]],
+        )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             metadata = json.loads(
                 conn.execute(
                     "SELECT metadata_json FROM github_actions WHERE action_id = 'action-1'"
                 ).fetchone()[0]
             )
-        self.assertEqual(metadata["publish"]["response"]["dedupe_reason"], "matching_head")
+        self.assertEqual(
+            metadata["publish"]["response"]["dedupe_reason"], "matching_head"
+        )
 
     def test_publish_ready_open_pr_does_not_reuse_different_owner_head_pr(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -825,16 +875,22 @@ class PublishPullRequestTests(PublicationFixture):
             self.assertEqual(command[:3], ["gh", "pr", "create"])
             return Completed("https://github.com/x/y/pull/43\n")
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(result["deduplicated_count"], 0)
-        self.assertEqual([call[0][:3] for call in calls], [["gh", "pr", "list"], ["gh", "pr", "view"], ["gh", "pr", "create"]])
+        self.assertEqual(
+            [call[0][:3] for call in calls],
+            [["gh", "pr", "list"], ["gh", "pr", "view"], ["gh", "pr", "create"]],
+        )
         self.assertEqual(calls[2][0][calls[2][0].index("--head") + 1], "codex/dd-123")
 
     def test_publish_ready_open_pr_empty_stdout_does_not_crash(self):
         from robert_agent.delivery.application import publish
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -871,7 +927,9 @@ class PublishPullRequestTests(PublicationFixture):
                 return Completed("[]")
             return Completed("")
 
-        result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+        result = publish.publish_ready_actions(
+            db_path, dry_run=False, run_command=fake_run
+        )
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["published_count"], 1)

@@ -22,12 +22,14 @@ class AcceptanceSuiteTests(unittest.TestCase):
 
     def test_acceptance_suite_reports_safe_checks_and_production_write_gap(self):
         from robert_agent.acceptance import suite as acceptance_suite
+
         calls = []
 
         def passing(name):
             def check(**kwargs):
                 calls.append((name, kwargs))
                 return {"ok": True, "status": "completed", "name": name}
+
             return check
 
         result = acceptance_suite.acceptance_suite(
@@ -50,17 +52,25 @@ class AcceptanceSuiteTests(unittest.TestCase):
         self.assertEqual(result["checks"]["live_worker"]["status"], "skipped")
         self.assertEqual(
             [name for name, _kwargs in calls],
-            ["preflight", "live_discovery", "controlled_e2e", "live_worktree", "publish_dedupe"],
+            [
+                "preflight",
+                "live_discovery",
+                "controlled_e2e",
+                "live_worktree",
+                "publish_dedupe",
+            ],
         )
 
     def test_acceptance_suite_can_include_live_worker_check(self):
         from robert_agent.acceptance import suite as acceptance_suite
+
         calls = []
 
         def passing(name):
             def check(**kwargs):
                 calls.append(name)
                 return {"ok": True, "status": "completed", "name": name}
+
             return check
 
         result = acceptance_suite.acceptance_suite(
@@ -83,9 +93,11 @@ class AcceptanceSuiteTests(unittest.TestCase):
 
     def test_acceptance_suite_can_plan_production_write_canary_without_writing(self):
         from robert_agent.acceptance import suite as acceptance_suite
+
         def passing(name):
             def check(**kwargs):
                 return {"ok": True, "status": "completed", "name": name}
+
             return check
 
         result = acceptance_suite.acceptance_suite(
@@ -106,15 +118,19 @@ class AcceptanceSuiteTests(unittest.TestCase):
         self.assertEqual(result["production_write"]["status"], "required")
         self.assertEqual(result["production_write"]["canary_plan"]["status"], "planned")
         self.assertFalse(result["production_write"]["canary_plan"]["write_confirmed"])
-        self.assertIn("--confirm-github-write", result["production_write"]["canary_command"])
+        self.assertIn(
+            "--confirm-github-write", result["production_write"]["canary_command"]
+        )
 
     def test_acceptance_suite_accepts_verified_production_canary_evidence(self):
         from robert_agent.acceptance import suite as acceptance_suite
+
         calls = []
 
         def passing(name):
             def check(**kwargs):
                 return {"ok": True, "status": "completed", "name": name}
+
             return check
 
         def fake_run(command, **kwargs):

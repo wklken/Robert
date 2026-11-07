@@ -73,7 +73,10 @@ class WorkbenchTests(unittest.TestCase):
                     workstream_id,
                     source_id,
                     workstream_lifecycle,
-                    task_id if task_lifecycle in {"detected", "authorized", "classified", "queued", "running"} else None,
+                    task_id
+                    if task_lifecycle
+                    in {"detected", "authorized", "classified", "queued", "running"}
+                    else None,
                     updated_at,
                     updated_at,
                 ),
@@ -85,7 +88,14 @@ class WorkbenchTests(unittest.TestCase):
                   expected_output, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'review-pr', 'review_report', ?, ?)
                 """,
-                (task_id, workstream_id, task_lifecycle, priority, updated_at, updated_at),
+                (
+                    task_id,
+                    workstream_id,
+                    task_lifecycle,
+                    priority,
+                    updated_at,
+                    updated_at,
+                ),
             )
             conn.execute(
                 """
@@ -127,7 +137,9 @@ class WorkbenchTests(unittest.TestCase):
         from robert_agent.readmodels import board
         from robert_agent.readmodels import workbench
 
-        self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
+        self.seed_workstream(
+            task_lifecycle="completed", workstream_lifecycle="completed"
+        )
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("UPDATE github_sources SET state = 'closed'")
             conn.execute("""
@@ -151,7 +163,9 @@ class WorkbenchTests(unittest.TestCase):
     def test_workflow_without_board_item_does_not_invent_delivery(self):
         from robert_agent.readmodels import workbench
 
-        self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
+        self.seed_workstream(
+            task_lifecycle="completed", workstream_lifecycle="completed"
+        )
         item = workbench.list_work_items(self.db_path, bucket="history")["items"][0]
         self.assertIsNone(item["lifecycle"])
         self.assertEqual(item["workstream_lifecycle"], "completed")
@@ -224,7 +238,9 @@ class WorkbenchTests(unittest.TestCase):
     def test_old_notification_does_not_create_attention(self):
         from robert_agent.readmodels import workbench
 
-        self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
+        self.seed_workstream(
+            task_lifecycle="completed", workstream_lifecycle="completed"
+        )
         self.seed_notification("worker_startup_failed")
 
         payload = workbench.list_work_items(self.db_path, bucket="history")
@@ -251,12 +267,16 @@ class WorkbenchTests(unittest.TestCase):
         # A closed source must not hide work that is still running or publishing.
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET status='running'")
-        self.assertEqual(workbench.list_work_items(self.db_path)["counts"]["history"], 0)
+        self.assertEqual(
+            workbench.list_work_items(self.db_path)["counts"]["history"], 0
+        )
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("UPDATE attempts SET status='failed'")
             conn.execute("UPDATE github_actions SET publish_status='not_published'")
-        self.assertEqual(workbench.list_work_items(self.db_path)["counts"]["history"], 0)
+        self.assertEqual(
+            workbench.list_work_items(self.db_path)["counts"]["history"], 0
+        )
 
     def test_legacy_read_only_detail_without_board_table_remains_available(self):
         from robert_agent.readmodels import workbench
@@ -265,8 +285,8 @@ class WorkbenchTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("DROP TABLE work_items")
         detail = workbench.get_work_item(self.db_path, workstream_id)
-        self.assertEqual(detail['id'], workstream_id)
-        self.assertIsNone(detail['work_item_id'])
+        self.assertEqual(detail["id"], workstream_id)
+        self.assertIsNone(detail["work_item_id"])
 
     def test_exhausted_remediation_episode_is_operator_attention(self):
         from robert_agent.readmodels import workbench
@@ -446,6 +466,7 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_web_routes_workbench_list_and_detail(self):
         from robert_agent.interfaces.web import server as web
+
         workstream_id, _task_id = self.seed_workstream()
 
         status, headers, body = web.build_http_response(
@@ -494,6 +515,7 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_web_returns_safe_workbench_errors(self):
         from robert_agent.interfaces.web import server as web
+
         self.seed_workstream()
 
         for path in (
@@ -517,6 +539,7 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_web_returns_safe_error_for_incomplete_schema(self):
         from robert_agent.interfaces.web import server as web
+
         old_db = self.root / "old.sqlite3"
         with closing(sqlite3.connect(old_db)) as conn, conn:
             conn.execute("CREATE TABLE repos(repo_id TEXT PRIMARY KEY)")

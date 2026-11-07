@@ -1,4 +1,5 @@
 """Safe text shared by operator commands and read models."""
+
 from robert_agent.security.redaction import redact_and_truncate
 
 

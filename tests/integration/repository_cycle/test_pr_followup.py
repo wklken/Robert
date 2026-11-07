@@ -11,8 +11,11 @@ from tests.support.repository_cycle import (
 
 
 class PreparedPRFollowupTests(RepositoryCycleFixture):
-    def test_robot_authored_pr_followup_without_hidden_metadata_reuses_existing_branch(self):
+    def test_robot_authored_pr_followup_without_hidden_metadata_reuses_existing_branch(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         fixture_path = self.root / "pr-followup.json"
         fixture_path.write_text(
             json.dumps(
@@ -70,6 +73,7 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
 
     def test_dd_pr_followup_trigger_is_prioritized_over_older_issue_workstream(self):
         from robert_agent.runtime import cycle as run_once
+
         fixture_path = self.root / "priority-followup.json"
         fixture_path.write_text(
             json.dumps(
@@ -161,24 +165,38 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
         )
         self.assertEqual(
             pending,
-            [("trigger", "comment:older-issue-task"), ("trigger", "comment:pr-followup-task")],
+            [
+                ("trigger", "comment:older-issue-task"),
+                ("trigger", "comment:pr-followup-task"),
+            ],
         )
 
     def test_prepared_pr_reroute_preserves_required_skill_gate(self):
         with self.config_path.open("a") as config:
-            config.write("\nroutes:\n  update-existing-pr:\n    required_skills: [missing-reroute-skill]\n")
-        self.test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(blocked=True)
+            config.write(
+                "\nroutes:\n  update-existing-pr:\n    required_skills: [missing-reroute-skill]\n"
+            )
+        self.test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(
+            blocked=True
+        )
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
-            row = conn.execute("SELECT t.lifecycle, a.status, rd.required_skills_json "
+            row = conn.execute(
+                "SELECT t.lifecycle, a.status, rd.required_skills_json "
                 "FROM tasks t JOIN attempts a ON a.task_id=t.task_id "
                 "JOIN route_decisions rd ON rd.task_id=t.task_id "
-                "WHERE t.task_id='task-pr-2886'").fetchone()
+                "WHERE t.task_id='task-pr-2886'"
+            ).fetchone()
             self.assertEqual(row[:2], ("failed", "failed"))
             self.assertIn("missing-reroute-skill", json.loads(row[2]))
-            from robert_agent.execution.application.dispatch import current_dispatch_target
+            from robert_agent.execution.application.dispatch import (
+                current_dispatch_target,
+            )
+
             self.assertIsNone(current_dispatch_target(conn, "attempt-pr-2886"))
 
-    def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(self, blocked=False):
+    def test_active_prepared_pr_task_is_rerouted_when_pr_followup_context_arrives(
+        self, blocked=False
+    ):
         from robert_agent.runtime import cycle as run_once
         from robert_agent.adapters.sqlite import database as storage
 
@@ -312,8 +330,9 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
                 SELECT path
                 FROM artifacts
                 WHERE task_id = ? AND artifact_type = 'prompt'
-                """
-            , (task_id,)).fetchone()[0]
+                """,
+                (task_id,),
+            ).fetchone()[0]
             relationships = conn.execute(
                 """
                 SELECT te.relationship, ge.event_fingerprint
@@ -321,8 +340,9 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
                 JOIN github_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY te.relationship, ge.event_fingerprint
-                """
-            , (task_id,)).fetchall()
+                """,
+                (task_id,),
+            ).fetchall()
         if blocked:
             return
         self.assertEqual(
@@ -338,9 +358,9 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
             "rerouted-head-sha",
         )
         prompt = Path(prompt_path).read_text(encoding="utf-8")
-        self.assertIn('expected_output: update_existing_pr', prompt)
-        self.assertIn('push_existing_pr', prompt)
-        self.assertIn('comment:pr-2886-followup', prompt)
+        self.assertIn("expected_output: update_existing_pr", prompt)
+        self.assertIn("push_existing_pr", prompt)
+        self.assertIn("comment:pr-2886-followup", prompt)
         self.assertEqual(
             relationships,
             [("context", "comment:pr-2886-followup")],
@@ -498,4 +518,6 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
                 """,
                 (attempt_id,),
             ).fetchone()
-        self.assertEqual(attempt, (str(new_worktree_path), "codex/issue-2884-fix-operator"))
+        self.assertEqual(
+            attempt, (str(new_worktree_path), "codex/issue-2884-fix-operator")
+        )

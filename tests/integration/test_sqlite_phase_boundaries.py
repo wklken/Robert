@@ -44,7 +44,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             ).fetchone()
 
     def cycle(self, now):
-        with mock.patch.object(values, 'utc_now', return_value=now):
+        with mock.patch.object(values, "utc_now", return_value=now):
             result = run_once.run_once(
                 self.fixture.config_path,
                 dry_run=True,
@@ -70,7 +70,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             return 1
 
         with mock.patch.object(
-            monitor, 'supervise_running_attempts', side_effect=timeout
+            monitor, "supervise_running_attempts", side_effect=timeout
         ):
             self.cycle(now)
         with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -94,7 +94,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             ),
             mock.patch.object(
                 cycle_evidence,
-                'inspect_attempt_recovery_with_metadata',
+                "inspect_attempt_recovery_with_metadata",
                 return_value=evidence,
             ),
         ):
@@ -123,7 +123,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             ),
             mock.patch.object(
                 cycle_evidence,
-                'inspect_attempt_recovery_with_metadata',
+                "inspect_attempt_recovery_with_metadata",
                 return_value=evidence,
             ),
         ):
@@ -149,7 +149,7 @@ class TimeoutPhaseBoundaryTests(unittest.TestCase):
             ),
             mock.patch.object(
                 cycle_evidence,
-                'inspect_attempt_recovery_with_metadata',
+                "inspect_attempt_recovery_with_metadata",
                 return_value={"status": "no_progress"},
             ),
         ):
@@ -220,41 +220,46 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                 {
                     "data_dir": fixture.tmp.name,
                     "database": fixture.db_path.name,
-                    "version": 2, "github": {"account": fixture.repo["github_account"]},
+                    "version": 2,
+                    "github": {"account": fixture.repo["github_account"]},
                     "default_worker": "default",
-                    "workers": {"default": {"adapter": "cbc", "command": "cbc",
-                                            "model": "default", "effort": "default"}},
-                    "repos": [{"full_name": fixture.repo["full_name"],
-                               "github_account": fixture.repo["github_account"],
-                               "trusted_actors": fixture.repo["trusted_actors"],
-                               "checkout": fixture.repo["repo_root"],
-                               "worktrees": fixture.repo["worktree_root"],
-                               "default_branch": fixture.repo["default_base_branch"],
-                               "pr_automation": fixture.repo["pr_automation"]}],
+                    "workers": {
+                        "default": {
+                            "adapter": "cbc",
+                            "command": "cbc",
+                            "model": "default",
+                            "effort": "default",
+                        }
+                    },
+                    "repos": [
+                        {
+                            "full_name": fixture.repo["full_name"],
+                            "github_account": fixture.repo["github_account"],
+                            "trusted_actors": fixture.repo["trusted_actors"],
+                            "checkout": fixture.repo["repo_root"],
+                            "worktrees": fixture.repo["worktree_root"],
+                            "default_branch": fixture.repo["default_base_branch"],
+                            "pr_automation": fixture.repo["pr_automation"],
+                        }
+                    ],
                     "skills": {"search_paths": [str(skill_root)]},
                 }
             )
         )
-        config = command.validate_config(
-            config_path, skip_external=True
-        )
+        config = command.validate_config(config_path, skip_external=True)
         self.assertTrue(config["ok"], config)
         with (
-            mock.patch.object(
-                command, "validate_config", return_value=config
-            ),
+            mock.patch.object(command, "validate_config", return_value=config),
             mock.patch.object(
                 discovery, "collect_account_notifications", return_value={}
             ),
+            mock.patch.object(discovery, "collect_live_events", return_value=[]),
             mock.patch.object(
-                discovery, "collect_live_events", return_value=[]
-            ),
-            mock.patch.object(
-                source_lifecycle, 'reconcile_remote_source_states', return_value=0
+                source_lifecycle, "reconcile_remote_source_states", return_value=0
             ),
         ):
             for now in ("2026-07-26T00:03:00+00:00", "2026-07-26T00:04:00+00:00"):
-                with mock.patch.object(values, 'utc_now', return_value=now):
+                with mock.patch.object(values, "utc_now", return_value=now):
                     result = run_once.run_once(
                         config_path,
                         dry_run=True,

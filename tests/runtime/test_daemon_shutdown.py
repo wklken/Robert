@@ -10,7 +10,9 @@ class DaemonGracefulStopTests(DaemonFixture):
         import threading
         from robert_agent.runtime import daemon
 
-        timer = threading.Timer(delay, daemon._request_stop, (daemon.signal.SIGTERM, None))
+        timer = threading.Timer(
+            delay, daemon._request_stop, (daemon.signal.SIGTERM, None)
+        )
         timer.start()
         self.addCleanup(timer.cancel)
 
@@ -30,7 +32,9 @@ class DaemonGracefulStopTests(DaemonFixture):
         self._request_stop_later()
         started = time.monotonic()
 
-        result = daemon.run_child_json([sys.executable, "-c", script], timeout_seconds=60)
+        result = daemon.run_child_json(
+            [sys.executable, "-c", script], timeout_seconds=60
+        )
 
         self.assertLess(time.monotonic() - started, 15)
         self.assertFalse(result["ok"], result)
@@ -57,7 +61,11 @@ class DaemonGracefulStopTests(DaemonFixture):
         from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 
         handlers = {}
-        with mock.patch.object(daemon.signal, "signal", side_effect=lambda sig, fn: handlers.setdefault(sig, fn)):
+        with mock.patch.object(
+            daemon.signal,
+            "signal",
+            side_effect=lambda sig, fn: handlers.setdefault(sig, fn),
+        ):
             daemon._install_stop_handlers(self.db_path)
         listener = wakeup_notifier.WakeupListener(self.db_path)
         self.addCleanup(listener.close)
@@ -86,9 +94,15 @@ class DaemonGracefulStopTests(DaemonFixture):
         config_path = self._hold_lease("daemon-run-killed", ttl_seconds=1)
         with (
             mock.patch.object(daemon.signal, "signal"),
-            mock.patch.object(daemon, "_resident_loop",
-                              side_effect=lambda context: {"ok": True, "status": "stopped",
-                                                           "daemon_run_id": context.daemon_run_id}),
+            mock.patch.object(
+                daemon,
+                "_resident_loop",
+                side_effect=lambda context: {
+                    "ok": True,
+                    "status": "stopped",
+                    "daemon_run_id": context.daemon_run_id,
+                },
+            ),
         ):
             result = daemon.run_daemon(config_path, wait_for_lease=True)
 
@@ -139,7 +153,10 @@ class DaemonGracefulStopTests(DaemonFixture):
         config = validate_config.validate_config(config_path, skip_external=True)
         with closing(daemon_state.connect(self.db_path)) as conn, conn:
             lease = daemon_state.acquire_daemon_lease(
-                conn, resource_key=f"database:{Path(config['db_path']).resolve()}",
-                owner_id=owner_id, ttl_seconds=ttl_seconds)
+                conn,
+                resource_key=f"database:{Path(config['db_path']).resolve()}",
+                owner_id=owner_id,
+                ttl_seconds=ttl_seconds,
+            )
         self.assertTrue(lease["ok"], lease)
         return config_path

@@ -12,7 +12,9 @@ class DashboardEventFlowTests(DashboardFixture):
         task = {task["task_id"]: task for task in data["recent_tasks"]}["task-2"]
         self.assertEqual(task["route_decision_id"], "route-2")
         self.assertEqual(task["route_confidence"], "high")
-        self.assertEqual(task["allowed_github_actions"], ["push_existing_pr", "open_pr", "comment"])
+        self.assertEqual(
+            task["allowed_github_actions"], ["push_existing_pr", "open_pr", "comment"]
+        )
         self.assertEqual(
             task["recommended_skills"],
             [
@@ -30,10 +32,9 @@ class DashboardEventFlowTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        event = {
-            event["event_fingerprint"]: event
-            for event in data["recent_events"]
-        }["comment:1"]
+        event = {event["event_fingerprint"]: event for event in data["recent_events"]}[
+            "comment:1"
+        ]
         self.assertEqual(event["event_fingerprint"], "comment:1")
         self.assertEqual(event["source_key"], "github:example/backend#1")
         self.assertEqual(event["source_type"], "issue")
@@ -87,8 +88,14 @@ class DashboardEventFlowTests(DashboardFixture):
             (step["target_kind"], step["target_id"]): step
             for step in data["operator_next_steps"]
         }
-        self.assertEqual(steps[("event", "event-authorized-trigger")]["next_action"], "inspect_recent_events")
-        self.assertEqual(steps[("event", "event-authorized-trigger")]["reason"], "authorized_unattached")
+        self.assertEqual(
+            steps[("event", "event-authorized-trigger")]["next_action"],
+            "inspect_recent_events",
+        )
+        self.assertEqual(
+            steps[("event", "event-authorized-trigger")]["reason"],
+            "authorized_unattached",
+        )
 
     def test_web_surfaces_pending_authorization_events(self):
         db_path = self.root / "dd.sqlite3"
@@ -97,10 +104,7 @@ class DashboardEventFlowTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        alerts = {
-            alert["alert_type"]: alert
-            for alert in data["operator_alerts"]
-        }
+        alerts = {alert["alert_type"]: alert for alert in data["operator_alerts"]}
         self.assertEqual(
             alerts["pending_authorization_events"],
             {
@@ -114,8 +118,14 @@ class DashboardEventFlowTests(DashboardFixture):
             (step["target_kind"], step["target_id"]): step
             for step in data["operator_next_steps"]
         }
-        self.assertEqual(steps[("event", "event-pending-authorization")]["next_action"], "resolve_authorization_lookup")
-        self.assertEqual(steps[("event", "event-pending-authorization")]["reason"], "pending_authorization")
+        self.assertEqual(
+            steps[("event", "event-pending-authorization")]["next_action"],
+            "resolve_authorization_lookup",
+        )
+        self.assertEqual(
+            steps[("event", "event-pending-authorization")]["reason"],
+            "pending_authorization",
+        )
 
     def test_web_builds_operator_alerts_from_risk_counts(self):
         db_path = self.root / "dd.sqlite3"
@@ -123,10 +133,7 @@ class DashboardEventFlowTests(DashboardFixture):
 
         data = dashboard.build_dashboard_data(db_path)
 
-        alerts = {
-            alert["alert_type"]: alert
-            for alert in data["operator_alerts"]
-        }
+        alerts = {alert["alert_type"]: alert for alert in data["operator_alerts"]}
         self.assertEqual(
             alerts["authorized_unattached_events"],
             {
@@ -167,10 +174,7 @@ class DashboardEventFlowTests(DashboardFixture):
             data["recent_events"][0]["event_id"],
             "event-pending-authorization",
         )
-        alerts = {
-            alert["alert_type"]: alert
-            for alert in data["operator_alerts"]
-        }
+        alerts = {alert["alert_type"]: alert for alert in data["operator_alerts"]}
         self.assertEqual(alerts["pending_actor_permission_events"]["count"], 1)
         self.assertEqual(alerts["pending_authorization_events"]["count"], 1)
 

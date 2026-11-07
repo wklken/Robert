@@ -1,4 +1,5 @@
 """Small shared identifier, timestamp and JSON conversions."""
+
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4

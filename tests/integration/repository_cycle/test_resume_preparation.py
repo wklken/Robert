@@ -16,6 +16,7 @@ from tests.support.repository_cycle import (
 class ResumePreparationTests(RepositoryCycleFixture):
     def test_supervise_prepares_resume_attempt_when_pid_is_gone_after_progress(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -80,9 +81,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -112,17 +111,13 @@ class ResumePreparationTests(RepositoryCycleFixture):
         original_inspect = worker_identity.inspect_recorded_identity
         original_recovery = evidence.inspect_attempt_recovery_with_metadata
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
-            evidence.inspect_attempt_recovery_with_metadata = (
-                lambda *_args, **_kwargs: {
-                    "status": "recoverable_progress",
-                    "task_id": task_id,
-                    "previous_attempt_id": resume_attempt_id,
-                    "progress_signals": ["dirty_worktree"],
-                }
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
+            evidence.inspect_attempt_recovery_with_metadata = lambda *_args, **_kwargs: {
+                "status": "recoverable_progress",
+                "task_id": task_id,
+                "previous_attempt_id": resume_attempt_id,
+                "progress_signals": ["dirty_worktree"],
+            }
             third = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -209,25 +204,21 @@ class ResumePreparationTests(RepositoryCycleFixture):
                     attempt_id,
                 ),
             )
-            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', now)
+            execution_store.ensure_subject(conn, "task", task_id, "human_request", now)
             original_group = worker_identity.live_process_group
             worker_identity.live_process_group = lambda _pid: False
             original_inspect = worker_identity.inspect_recorded_identity
             original_recovery = evidence.inspect_attempt_recovery_with_metadata
             original_create = preparation.create_resume_attempt_and_prompt
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
-            evidence.inspect_attempt_recovery_with_metadata = (
-                lambda *_args, **_kwargs: {
-                    "status": "recoverable_progress",
-                    "task_id": task_id,
-                    "previous_attempt_id": attempt_id,
-                    "progress_signals": ["dirty_worktree"],
-                }
-            )
-            preparation.create_resume_attempt_and_prompt = (
-                lambda *_args, **_kwargs: None
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
+            evidence.inspect_attempt_recovery_with_metadata = lambda *_args, **_kwargs: {
+                "status": "recoverable_progress",
+                "task_id": task_id,
+                "previous_attempt_id": attempt_id,
+                "progress_signals": ["dirty_worktree"],
+            }
+            preparation.create_resume_attempt_and_prompt = lambda *_args, **_kwargs: (
+                None
             )
             try:
                 supervised = monitor.supervise_running_attempts(
@@ -276,7 +267,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
         old = "2026-08-01T00:00:00+00:00"
         failure = {"status": "failed_timeout", "terminate": True}
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            execution_store.ensure_subject(conn, 'task', task_id, 'human_request', old)
+            execution_store.ensure_subject(conn, "task", task_id, "human_request", old)
             conn.execute(
                 "UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?",
                 (task_id,),
@@ -300,21 +291,17 @@ class ResumePreparationTests(RepositoryCycleFixture):
             original_group = worker_identity.live_process_group
             original_recovery = evidence.inspect_attempt_recovery_with_metadata
             original_create = preparation.create_resume_attempt_and_prompt
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             # The synthetic PID must not observe an unrelated host process.
             worker_identity.live_process_group = lambda _pid: False
-            evidence.inspect_attempt_recovery_with_metadata = (
-                lambda *_args, **_kwargs: {
-                    "status": "recoverable_progress",
-                    "task_id": task_id,
-                    "previous_attempt_id": attempt_id,
-                    "progress_signals": ["dirty_worktree"],
-                }
-            )
-            preparation.create_resume_attempt_and_prompt = (
-                lambda *_args, **_kwargs: None
+            evidence.inspect_attempt_recovery_with_metadata = lambda *_args, **_kwargs: {
+                "status": "recoverable_progress",
+                "task_id": task_id,
+                "previous_attempt_id": attempt_id,
+                "progress_signals": ["dirty_worktree"],
+            }
+            preparation.create_resume_attempt_and_prompt = lambda *_args, **_kwargs: (
+                None
             )
             try:
                 recovered = monitor.recover_failed_timeout_attempts(
@@ -346,8 +333,11 @@ class ResumePreparationTests(RepositoryCycleFixture):
             "recovery_attempt_creation_failed",
         )
 
-    def test_supervise_prepares_resume_attempt_when_timeout_pid_is_gone_after_progress(self):
+    def test_supervise_prepares_resume_attempt_when_timeout_pid_is_gone_after_progress(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -414,9 +404,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -466,8 +454,11 @@ class ResumePreparationTests(RepositoryCycleFixture):
         self.assertEqual(workstream, ("active", task_id))
         self.assertEqual(notification, ("worker_resume_prepared", "recorded"))
 
-    def test_supervise_recovers_failed_timeout_attempt_when_pid_is_gone_after_progress(self):
+    def test_supervise_recovers_failed_timeout_attempt_when_pid_is_gone_after_progress(
+        self,
+    ):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -481,8 +472,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
         stdout_path = self.data_dir / "artifacts" / "failed-timeout.stdout.log"
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stdout_path.write_text(
-            "The worker had local changes before timing out.\n"
-            "Command exited 0\n",
+            "The worker had local changes before timing out.\nCommand exited 0\n",
             encoding="utf-8",
         )
         missing_pid = 987654
@@ -556,9 +546,7 @@ class ResumePreparationTests(RepositoryCycleFixture):
 
         original_inspect = worker_identity.inspect_recorded_identity
         try:
-            worker_identity.inspect_recorded_identity = (
-                lambda _identity: "dead"
-            )
+            worker_identity.inspect_recorded_identity = lambda _identity: "dead"
             second = run_once.run_once(
                 self.config_path,
                 workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",

@@ -10,6 +10,7 @@ from tests.support.temp_workspace import TemporaryWorkspace
 class SummaryFixture(TemporaryWorkspace):
     def _run_chat_status(self, *args):
         from robert_agent.readmodels import chat as chat_status
+
         output = io.StringIO()
         with redirect_stdout(output):
             code = chat_status.main(list(args))
@@ -17,6 +18,7 @@ class SummaryFixture(TemporaryWorkspace):
 
     def _run_status(self, *args):
         from robert_agent.readmodels import status
+
         output = io.StringIO()
         with redirect_stdout(output):
             code = status.main(list(args))
@@ -47,7 +49,7 @@ class SummaryFixture(TemporaryWorkspace):
                 "prompt_path": str(prompt_path),
                 "stdout_path": str(stdout_path),
                 "stderr_path": str(stderr_path),
-            }
+            },
         }
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
@@ -238,9 +240,7 @@ class SummaryFixture(TemporaryWorkspace):
                                 "status": "accepted",
                                 "action_scope": {
                                     "repo": "x/y",
-                                    "sources": [
-                                        {"source_type": "issue", "number": 1}
-                                    ],
+                                    "sources": [{"source_type": "issue", "number": 1}],
                                     "result_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                 },
                             }
@@ -261,7 +261,12 @@ class SummaryFixture(TemporaryWorkspace):
                   'not_published', ?, ?
                 )
                 """,
-                (now, json.dumps({"body": self._dd_comment_body("ready")}, sort_keys=True)),
+                (
+                    now,
+                    json.dumps(
+                        {"body": self._dd_comment_body("ready")}, sort_keys=True
+                    ),
+                ),
             )
             conn.execute(
                 """
@@ -298,11 +303,32 @@ class SummaryFixture(TemporaryWorkspace):
                 VALUES (?, 'task-1', 'attempt-1', ?, ?, ?, ?)
                 """,
                 [
-                    ("artifact-prompt", "prompt", str(prompt_path), prompt_path.stat().st_size, now),
-                    ("artifact-stdout", "worker_stdout", str(stdout_path), stdout_path.stat().st_size, now),
-                    ("artifact-stderr", "worker_stderr", str(stderr_path), stderr_path.stat().st_size, now),
+                    (
+                        "artifact-prompt",
+                        "prompt",
+                        str(prompt_path),
+                        prompt_path.stat().st_size,
+                        now,
+                    ),
+                    (
+                        "artifact-stdout",
+                        "worker_stdout",
+                        str(stdout_path),
+                        stdout_path.stat().st_size,
+                        now,
+                    ),
+                    (
+                        "artifact-stderr",
+                        "worker_stderr",
+                        str(stderr_path),
+                        stderr_path.stat().st_size,
+                        now,
+                    ),
                 ],
             )
 
     def _dd_comment_body(self, text):
-        return "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n" + text
+        return (
+            "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->\n"
+            + text
+        )

@@ -243,7 +243,9 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     event = next(e for e in choices if e["task_kind"] == kind)
                     routed = route.route_task(event)
                     # Use the supported dry-run worktree preparation; no real Git worker.
-                    tree = assigned_workspace.prepare_worktree(f.repo, event, routed, True)
+                    tree = assigned_workspace.prepare_worktree(
+                        f.repo, event, routed, True
+                    )
                     task = preparation.create_task_attempt_and_prompt(
                         c,
                         Path(f.tmp.name) / "data",
@@ -576,7 +578,9 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     conn.execute(
                         "UPDATE github_actions SET metadata_json=json_remove(metadata_json,'$.publish.next_retry_at')"
                     )
-                    publication_outcomes.retire_unstarted_actions(conn, "task-1", values.utc_now())
+                    publication_outcomes.retire_unstarted_actions(
+                        conn, "task-1", values.utc_now()
+                    )
                     self.assertEqual(
                         conn.execute(
                             "SELECT publish_status FROM github_actions"

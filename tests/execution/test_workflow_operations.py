@@ -102,7 +102,9 @@ class WorkflowOperationsTests(unittest.TestCase):
                 ),
             )
 
-    def test_load_subject_snapshot_returns_authoritative_rows_and_ids_without_secrets(self):
+    def test_load_subject_snapshot_returns_authoritative_rows_and_ids_without_secrets(
+        self,
+    ):
         from robert_agent.execution import operations as execution_operations
 
         snapshot = execution_operations.load_subject_snapshot(
@@ -123,7 +125,9 @@ class WorkflowOperationsTests(unittest.TestCase):
         from robert_agent.execution import operations as execution_operations
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            binding = execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
+            binding = execution_store.ensure_subject(
+                conn, "remediation_episode", "episode-1", "pr_remediation", NOW
+            )
             conn.execute(
                 """
                 UPDATE execution_subjects
@@ -165,8 +169,12 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
             self.assertEqual(first, same)
 
-            execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
-            execution_store.mark_binding_attention(conn,'remediation_episode','episode-1',NOW)
+            execution_store.ensure_subject(
+                conn, "remediation_episode", "episode-1", "pr_remediation", NOW
+            )
+            execution_store.mark_binding_attention(
+                conn, "remediation_episode", "episode-1", NOW
+            )
             self.assertIsNone(
                 execution_operations.claim_subject(
                     conn,
@@ -219,10 +227,18 @@ class WorkflowOperationsTests(unittest.TestCase):
                     "task-remediation",
                     now=NOW,
                 )
-            execution_store.ensure_subject(conn, 'task', 'task-1', 'human_request', NOW)
-            self.assertEqual(execution_operations.claim_subject(conn,'task','task-1',now=NOW)['binding_status'],'active')
-            execution_store.mark_binding_attention(conn,'task','task-1',NOW)
-            self.assertIsNone(execution_operations.claim_subject(conn,'task','task-1',now=NOW))
+            execution_store.ensure_subject(conn, "task", "task-1", "human_request", NOW)
+            self.assertEqual(
+                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)[
+                    "binding_status"
+                ],
+                "active",
+            )
+            execution_store.mark_binding_attention(conn, "task", "task-1", NOW)
+            self.assertIsNone(
+                execution_operations.claim_subject(conn, "task", "task-1", now=NOW)
+            )
+
 
 class MigratedSubjectClaimTests(unittest.TestCase):
     def setUp(self):
@@ -257,7 +273,14 @@ class MigratedSubjectClaimTests(unittest.TestCase):
 
         for row_factory in (None, sqlite3.Row):
             self.conn.row_factory = row_factory
-            for lifecycle in ("queued", "running", "completed", "failed", "canceled", "ignored"):
+            for lifecycle in (
+                "queued",
+                "running",
+                "completed",
+                "failed",
+                "canceled",
+                "ignored",
+            ):
                 with self.subTest(row_factory=row_factory, lifecycle=lifecycle):
                     self.conn.execute("DELETE FROM execution_subjects")
                     self.conn.execute("DELETE FROM tasks")
@@ -272,15 +295,21 @@ class MigratedSubjectClaimTests(unittest.TestCase):
                         self.assertEqual(binding["binding_status"], "active")
                     else:
                         self.assertIsNone(binding)
-                        self.assertIsNone(execution_store.get_binding(self.conn, "task", "task"))
+                        self.assertIsNone(
+                            execution_store.get_binding(self.conn, "task", "task")
+                        )
             for task_kind in ("ci_remediation", "merge_conflict_remediation"):
                 with self.subTest(row_factory=row_factory, task_kind=task_kind):
                     self.conn.execute(
                         "UPDATE tasks SET task_kind = ?, lifecycle = 'queued'",
                         (task_kind,),
                     )
-                    with self.assertRaisesRegex(ValueError, "not an eligible human task"):
-                        execution_operations.claim_subject(self.conn, "task", "task", now=NOW)
+                    with self.assertRaisesRegex(
+                        ValueError, "not an eligible human task"
+                    ):
+                        execution_operations.claim_subject(
+                            self.conn, "task", "task", now=NOW
+                        )
 
     def test_claim_migrated_episode_does_not_reopen_terminal_status(self):
         from robert_agent.execution import operations as execution_operations
@@ -308,7 +337,11 @@ class MigratedSubjectClaimTests(unittest.TestCase):
                         self.assertEqual(binding["binding_status"], "active")
                     else:
                         self.assertIsNone(binding)
-                        self.assertIsNone(execution_store.get_binding(self.conn, "remediation_episode", "episode"))
+                        self.assertIsNone(
+                            execution_store.get_binding(
+                                self.conn, "remediation_episode", "episode"
+                            )
+                        )
 
 
 if __name__ == "__main__":

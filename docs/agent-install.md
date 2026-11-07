@@ -57,7 +57,7 @@ gh --version
 pipx --version
 ```
 
-Python must be 3.10 or newer. Also verify the selected worker command:
+Python must be an upstream-maintained stable release, currently 3.11–3.15. Also verify the selected worker command:
 
 ```bash
 command -v codex

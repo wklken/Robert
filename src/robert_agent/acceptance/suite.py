@@ -31,23 +31,33 @@ def _workspace_dir(workspace_dir):
 
 def _default_checks():
     return {
-        "preflight": lambda **kwargs: acceptance.acceptance_preflight(kwargs["config_path"]),
-        "live_discovery": lambda **kwargs: live_discovery_acceptance.live_discovery_acceptance(
-            kwargs["config_path"],
-            limit=kwargs.get("discovery_limit", 30),
+        "preflight": lambda **kwargs: acceptance.acceptance_preflight(
+            kwargs["config_path"]
         ),
-        "controlled_e2e": lambda **kwargs: controlled_e2e_acceptance.controlled_e2e_acceptance(
-            kwargs["config_path"],
-            workspace_dir=kwargs["workspace_dir"] / "controlled-e2e",
-            timeout_seconds=kwargs.get("timeout_seconds", 30),
-            poll_interval_seconds=kwargs.get("poll_interval_seconds", 0.2),
+        "live_discovery": lambda **kwargs: (
+            live_discovery_acceptance.live_discovery_acceptance(
+                kwargs["config_path"],
+                limit=kwargs.get("discovery_limit", 30),
+            )
         ),
-        "live_worktree": lambda **kwargs: live_worktree_acceptance.live_worktree_acceptance(
-            kwargs["config_path"],
-            workspace_dir=kwargs["workspace_dir"] / "live-worktree",
+        "controlled_e2e": lambda **kwargs: (
+            controlled_e2e_acceptance.controlled_e2e_acceptance(
+                kwargs["config_path"],
+                workspace_dir=kwargs["workspace_dir"] / "controlled-e2e",
+                timeout_seconds=kwargs.get("timeout_seconds", 30),
+                poll_interval_seconds=kwargs.get("poll_interval_seconds", 0.2),
+            )
         ),
-        "publish_dedupe": lambda **kwargs: publish_dedupe_acceptance.publish_dedupe_acceptance(
-            workspace_dir=kwargs["workspace_dir"] / "publish-dedupe",
+        "live_worktree": lambda **kwargs: (
+            live_worktree_acceptance.live_worktree_acceptance(
+                kwargs["config_path"],
+                workspace_dir=kwargs["workspace_dir"] / "live-worktree",
+            )
+        ),
+        "publish_dedupe": lambda **kwargs: (
+            publish_dedupe_acceptance.publish_dedupe_acceptance(
+                workspace_dir=kwargs["workspace_dir"] / "publish-dedupe",
+            )
         ),
         "live_worker": lambda **kwargs: live_worker_acceptance.live_worker_acceptance(
             kwargs["config_path"],
@@ -83,7 +93,9 @@ def _command_failure(completed, fallback):
     return (getattr(completed, "stderr", "") or fallback).strip()
 
 
-def _verify_production_canary_evidence(evidence_url, marker_id, run_command=subprocess.run):
+def _verify_production_canary_evidence(
+    evidence_url, marker_id, run_command=subprocess.run
+):
     parsed = urlparse(evidence_url or "")
     match = COMMENT_URL_RE.match(parsed.path)
     fragment = parsed.fragment or ""
@@ -117,8 +129,11 @@ def _verify_production_canary_evidence(evidence_url, marker_id, run_command=subp
     except ValueError:
         comment = {}
     body = comment.get("body") if isinstance(comment.get("body"), str) else ""
-    marker = (f"attempt_id=attempt-production-canary-{marker_id} action_index=0"
-              if marker_id else "attempt_id=attempt-production-canary-")
+    marker = (
+        f"attempt_id=attempt-production-canary-{marker_id} action_index=0"
+        if marker_id
+        else "attempt_id=attempt-production-canary-"
+    )
     if marker not in body:
         return {
             "ok": False,
@@ -169,7 +184,9 @@ def acceptance_suite(
     for name in ordered:
         results[name] = _run_check(name, checks[name], kwargs)
     if include_live_worker:
-        results["live_worker"] = _run_check("live_worker", checks["live_worker"], kwargs)
+        results["live_worker"] = _run_check(
+            "live_worker", checks["live_worker"], kwargs
+        )
     else:
         results["live_worker"] = {
             "ok": None,
@@ -184,11 +201,7 @@ def acceptance_suite(
 
     required_safe_checks = ordered + (["live_worker"] if include_live_worker else [])
     safe_acceptance_ok = all(results[name]["ok"] for name in required_safe_checks)
-    failed_checks = [
-        name
-        for name in required_safe_checks
-        if not results[name]["ok"]
-    ]
+    failed_checks = [name for name in required_safe_checks if not results[name]["ok"]]
     production_write = {
         "ok": False,
         "status": "required",

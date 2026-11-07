@@ -97,7 +97,11 @@ def decisions(conn, repo_id, now, fresh_system_decisions, repo=None):
             work_policies.is_driving_context_event(event)
             or event.get("authorization_status") == "authorized_trigger"
         )
-        if driving and repo is not None and not work_policies.is_trusted_actor(event, repo):
+        if (
+            driving
+            and repo is not None
+            and not work_policies.is_trusted_actor(event, repo)
+        ):
             execution_store.mark_binding_attention(
                 conn, fact["subject_type"], fact["subject_id"], now
             )

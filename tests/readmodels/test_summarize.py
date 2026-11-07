@@ -4,6 +4,7 @@ from tests.support.dashboard import DashboardFixture
 class SummarizeTests(DashboardFixture):
     def test_summarize_counts_control_plane_rows(self):
         from robert_agent.readmodels import summarize
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
 
@@ -15,6 +16,7 @@ class SummarizeTests(DashboardFixture):
 
     def test_summarize_counts_rejected_results_and_action_backlog(self):
         from robert_agent.readmodels import summarize
+
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
         self._record_rejected_result(db_path)

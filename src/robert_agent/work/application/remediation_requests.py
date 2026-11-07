@@ -1,4 +1,5 @@
 """Translate observed pull request failures into remediation work."""
+
 from robert_agent.work.application import source_events
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.workflows import pr_health
@@ -29,15 +30,11 @@ def _system_event(
     else:
         source_kind = observation.get("source_kind") or "workflow_run"
         event_type = (
-            "ci_check_completed"
-            if source_kind == "check_run"
-            else "ci_run_completed"
+            "ci_check_completed" if source_kind == "check_run" else "ci_run_completed"
         )
         external_id = observation.get("external_id") or episode["episode_id"]
         attempt_no = observation.get("attempt_no") or 1
-        fingerprint = (
-            f"github-system:{source_kind}:{external_id}:{attempt_no}"
-        )
+        fingerprint = f"github-system:{source_kind}:{external_id}:{attempt_no}"
         task_kind = "ci_remediation"
     metadata = {
         "remediation": {
@@ -140,10 +137,7 @@ def collect_pr_remediation_decisions(
         )
         if not snapshot:
             continue
-        if (
-            snapshot.get("author_login", "").lower()
-            != repo["github_account"].lower()
-        ):
+        if snapshot.get("author_login", "").lower() != repo["github_account"].lower():
             continue
         if not snapshot.get("head_sha") or not snapshot.get("base_sha"):
             continue
@@ -165,10 +159,12 @@ def collect_pr_remediation_decisions(
             "repo_id": repo_id,
             "number": number,
         }
-        if conn.execute("""SELECT 1 FROM tasks t JOIN worker_results wr ON wr.task_id=t.task_id
+        if conn.execute(
+            """SELECT 1 FROM tasks t JOIN worker_results wr ON wr.task_id=t.task_id
                 WHERE t.workstream_id=? AND t.task_kind IN ('ci_remediation','merge_conflict_remediation')
                   AND t.lifecycle IN ('queued','running','waiting_for_user') AND wr.output_type='waiting_for_user' LIMIT 1""",
-                (workstream_id,)).fetchone():
+            (workstream_id,),
+        ).fetchone():
             continue  # Deliver and resolve this question before admitting more automatic repair.
         remediation.upsert_health_episodes(
             conn,
@@ -211,11 +207,7 @@ def collect_pr_remediation_decisions(
             snapshot_by_episode[conflict_episode["episode_id"]] = snapshot
         ci_episode = episodes.get("ci")
         if ci_episode:
-            ci_observations = (
-                ci_summary.get("observations", [])
-                if ci_summary
-                else []
-            )
+            ci_observations = ci_summary.get("observations", []) if ci_summary else []
             completed = [
                 observation
                 for observation in ci_observations
@@ -259,9 +251,7 @@ def collect_pr_remediation_decisions(
         if eligibility["status"] != "eligible":
             continue
         policy_key = (
-            "conflict"
-            if decision["episode_kind"] == "merge_conflict"
-            else "ci"
+            "conflict" if decision["episode_kind"] == "merge_conflict" else "ci"
         )
         event["metadata"]["remediation"]["budget"] = {
             "limits": repo["pr_automation"][policy_key],
@@ -279,7 +269,9 @@ def collect_pr_remediation_decisions(
         """,
         (repo_id,),
     ):
-        execution_ownership.close_subject(conn, "remediation_episode", episode_id, run_now)
+        execution_ownership.close_subject(
+            conn, "remediation_episode", episode_id, run_now
+        )
     return [
         event
         for event in events
@@ -307,17 +299,12 @@ def handle_blocked_remediation_worktree(
         True,
     ):
         return False
-    remediation_context = (
-        (event.get("metadata") or {}).get("remediation") or {}
-    )
+    remediation_context = (event.get("metadata") or {}).get("remediation") or {}
     episode_id = remediation_context.get("episode_id")
     if episode_id and not execution_ownership.claim_episode(conn, episode_id, run_now):
         return False
     if episode_id:
-        reason = (
-            worktree_result.get("status")
-            or "remediation_worktree_unavailable"
-        )
+        reason = worktree_result.get("status") or "remediation_worktree_unavailable"
         if reason == "stale_snapshot":
             remediation.supersede_episode(
                 conn,
@@ -332,5 +319,7 @@ def handle_blocked_remediation_worktree(
                 reason=reason,
                 now=run_now,
             )
-        execution_ownership.close_subject(conn, "remediation_episode", episode_id, run_now)
+        execution_ownership.close_subject(
+            conn, "remediation_episode", episode_id, run_now
+        )
     return True

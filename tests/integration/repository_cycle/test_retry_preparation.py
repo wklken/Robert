@@ -10,6 +10,7 @@ from tests.support.repository_cycle import (
 class RetryPreparationTests(RepositoryCycleFixture):
     def test_retry_after_failed_task_includes_original_trigger_as_context(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -89,6 +90,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
 
     def test_retry_after_failed_task_keeps_original_trigger_primary(self):
         from robert_agent.runtime import cycle as run_once
+
         first = run_once.run_once(
             self.config_path,
             workflow_path=PACKAGE_ROOT / "resources" / "workflow.yml",
@@ -201,8 +203,13 @@ class RetryPreparationTests(RepositoryCycleFixture):
                 (workstream_id,),
             )
             # This fixture was only prepared in dry-run; no process was launched.
-            conn.execute("UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.dispatch') WHERE task_id=?", (parent_task_id,))
-            execution_ownership.close_terminal_task(conn, parent_task_id, '2026-10-19T00:01:00+00:00')
+            conn.execute(
+                "UPDATE attempts SET metadata_json=json_remove(metadata_json,'$.dispatch') WHERE task_id=?",
+                (parent_task_id,),
+            )
+            execution_ownership.close_terminal_task(
+                conn, parent_task_id, "2026-10-19T00:01:00+00:00"
+            )
         context = work_items.CommandContext(
             actor_kind="operator",
             actor_identity="owner",
@@ -218,13 +225,37 @@ class RetryPreparationTests(RepositoryCycleFixture):
         )
         self.assertEqual(queued["status"], "queued")
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id))
-            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id='unrelated'))
-            self.assertTrue(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            self.assertTrue(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            conn.execute("UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?", (parent_task_id,))
-            self.assertFalse(execution_ownership.parent_allows_child(conn, parent_task_id, retrigger_wakeup_id=queued['wakeup_id']))
-            conn.execute("UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?", (parent_task_id,))
+            self.assertFalse(
+                execution_ownership.parent_allows_child(conn, parent_task_id)
+            )
+            self.assertFalse(
+                execution_ownership.parent_allows_child(
+                    conn, parent_task_id, retrigger_wakeup_id="unrelated"
+                )
+            )
+            self.assertTrue(
+                execution_ownership.parent_allows_child(
+                    conn, parent_task_id, retrigger_wakeup_id=queued["wakeup_id"]
+                )
+            )
+            self.assertTrue(
+                execution_ownership.parent_allows_child(
+                    conn, parent_task_id, retrigger_wakeup_id=queued["wakeup_id"]
+                )
+            )
+            conn.execute(
+                "UPDATE execution_subjects SET binding_status='attention' WHERE subject_id=?",
+                (parent_task_id,),
+            )
+            self.assertFalse(
+                execution_ownership.parent_allows_child(
+                    conn, parent_task_id, retrigger_wakeup_id=queued["wakeup_id"]
+                )
+            )
+            conn.execute(
+                "UPDATE execution_subjects SET binding_status='terminal' WHERE subject_id=?",
+                (parent_task_id,),
+            )
         followup_fixture = self.root / "retrigger-followup.json"
         followup_fixture.write_text(
             json.dumps(
@@ -293,6 +324,8 @@ class RetryPreparationTests(RepositoryCycleFixture):
             (parent_task_id, "queued", parent_route, parent_output),
         )
         self.assertIn(parent_events[0], child_events)
-        self.assertIn(("context", "event:comment:comment-retrigger-followup"), child_events)
+        self.assertIn(
+            ("context", "event:comment:comment-retrigger-followup"), child_events
+        )
         self.assertEqual(attempt[0], "prepared")
         self.assertEqual(wakeup_status, "consumed")
