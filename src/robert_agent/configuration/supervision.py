@@ -10,6 +10,7 @@ DEFAULTS = {
     "batch_size": 100,
     "stall_seconds": 300,
     "diagnosis": None,
+    "decision": None,
     "recovery": None,
     "repair": None,
     "build_manifest": None,
@@ -151,8 +152,8 @@ def normalize(raw):
     if unknown:
         raise ValueError("unsupported supervision fields: " + ", ".join(sorted(unknown)))
     result = {**DEFAULTS, **raw}
-    if result["mode"] not in ("off", "observe", "recover_known"):
-        raise ValueError("supervision.mode must be off, observe or recover_known")
+    if result["mode"] not in ("off", "observe", "recover_known", "decide"):
+        raise ValueError("supervision.mode must be off, observe, recover_known or decide")
     for key, maximum in (
         ("poll_seconds", 3600),
         ("batch_size", 500),
@@ -161,6 +162,12 @@ def normalize(raw):
         if type(result[key]) is not int or not 1 <= result[key] <= maximum:
             raise ValueError(f"supervision.{key} must be an integer between 1 and {maximum}")
     result["diagnosis"] = normalize_diagnosis(result["diagnosis"])
+    try:
+        result["decision"] = normalize_diagnosis(result["decision"])
+    except ValueError as exc:
+        raise ValueError(str(exc).replace("supervision.diagnosis", "supervision.decision")) from exc
+    if result["mode"] == "decide" and result["decision"] is None:
+        raise ValueError("supervision.mode decide requires supervision.decision")
     recovery = result["recovery"]
     if recovery is not None:
         if not isinstance(recovery, dict) or set(recovery) != {

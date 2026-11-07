@@ -25,7 +25,7 @@ def _connect(db):
 
 def needs_config(config):
     settings = (config or {}).get("supervision") or {}
-    return settings.get("mode") == "recover_known" or bool(settings.get("repair"))
+    return settings.get("mode") in {"recover_known", "decide"} or bool(settings.get("repair"))
 
 
 def fresh_config(config, db=None):

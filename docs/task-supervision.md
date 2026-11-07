@@ -7,6 +7,107 @@ incidents without changing task ownership, cancellation, audit, or publication.
 A live heartbeat is activity, not evidence of delivery. An incident only closes
 when its rule observes positive progress evidence.
 
+## Model decisions for Issue and PR progress
+
+Explicit `mode: decide` gives a dedicated model the choice of the next supported
+action for an Issue/PR and its linked workstreams. It observes goals, source
+events, tasks, attempts, CI/conflict episodes, execution budgets, progress
+observations, results and prior decisions. It also checks work without an
+Incident, so a stalled goal can lead to a question or notice. Calls are bounded
+and share a persisted installation-wide hourly budget and cooldown.
+
+```yaml
+supervision:
+  mode: decide
+  decision:
+    command: [/opt/robert/bin/no-tool-supervisor]
+    environment_allowlist: [MODEL_API_KEY]
+    timeout_seconds: 120
+    cooldown_seconds: 60
+    max_calls_per_hour: 60
+```
+
+The command is an administrator-provided model API wrapper. It reads one JSON
+bundle on stdin and returns the [decision contract](../src/robert_agent/resources/supervision-decision.md)
+on stdout. It must expose no tools. The private working directory and HOME are
+not an OS sandbox. Only explicitly allowed model environment variables reach
+the command; ordinary coding adapters are not this profile. An existing
+`diagnosis` profile remains advisory and does not implicitly enable decisions.
+In `decide` mode the supervisor does not start separate advisory diagnosis calls
+or automatic maintenance proposals; the decision loop owns the next action.
+
+The model can select a supplied CI repair, conflict resolution, eligible Worker
+retry, or known recovery candidate; wait with a recheck time; notify or ask the
+operator. `finish_supervision` is offered only when current domain facts already
+confirm completion. It stops observation of that completed goal without closing
+an Issue or merging a PR. It does not create arbitrary tasks or run arbitrary
+commands. If the goal requires an action outside current capabilities, the model
+must ask or notify the operator.
+
+Existing repository `pr_automation` enablement, CI check allowlists and episode
+budgets still apply. Known recovery candidates require the existing
+`supervision.recovery` repository/action allowlists. Worker retry retains its
+existing process-identity, evidence and one-shot recovery budget. In this mode
+these automatic consumers wait for a matching model choice; they cannot race
+the model's `wait` decision or silently fall back to their old automatic choice.
+Normal result ingestion, initial execution, audit/publication validation,
+cancellation and required cleanup retain their existing lifecycle owners.
+
+Grants bind the complete sampled context, candidate generation and administrator
+policy. Consumers recheck the current context and their own eligibility; new
+requirements, results, PR versions or changed policy invalidate stale grants.
+An unconsumed grant expires after 15 minutes. Candidate freshness is also bounded
+to 15 minutes; scans must refresh candidates before they can be selected again.
+An executed action enters verification, and its real result is included in the
+next decision. Dispatch and a successful push do not prove progress or green CI.
+The model cannot extend budgets by selecting a replacement task.
+
+Questions and notices use the configured messaging transport or notification command and appear in
+`supervisor status`. Work-item details show the current decision, reason,
+message and next check. Active work items expose supervisor questions through
+the existing authenticated Reply flow. A reply updates decision context without
+starting a new task or treating the reply as additional execution authority.
+For any supervised workstream, a local operator can answer the exact question:
+
+```sh
+robert supervisor status --config /path/to/config.yml --output json
+robert supervisor reply --config /path/to/config.yml \
+  --workstream-id WORKSTREAM_ID --decision-id DECISION_ID \
+  --body 'Preserve the existing public API' --output json
+```
+
+The identifiers come from the recorded question/status, not a guessed latest
+task. A stale question ID is rejected. An unanswered question remains pending;
+it is not re-sent each poll. Repeated notices for unchanged evidence are
+deduplicated. Delivery requires a configured messaging transport or `ROBERT_NOTIFICATION_COMMAND`;
+a recorded question is not proof that a person received it. Work-item questions
+retain repository scope and the existing authenticated chat Reply contract.
+
+Malformed model output, timeouts and transport failures cannot grant actions.
+The wrapper may report the same bound `rate_limited` transport envelope as the
+diagnosis wrapper below; the greater of its Retry-After delay and configured
+cooldown applies across targets and restarts. Repeated model failures create an
+operator health notice. An unresolved process identity retains the claim and is
+visible as `decision_runner.claim` in status; service restart does not authorize
+duplicate launches. Stop the supervisor service and its model processes, then
+release that exact stranded claim through the local operator command:
+
+```sh
+robert supervisor resolve-decision --config /path/to/config.yml \
+  --decision-id DECISION_ID --confirm-process-stopped --output json
+```
+
+The command rejects a known live supervisor/model process or model process group,
+fences the unchanged claim and records the operator attestation. Restart the
+supervisor after recovery. Unknown identity is never automatically treated as dead.
+
+Targets use a durable bounded scan cursor, so waiting questions do not block
+other work. Text/row limits and explicit omission markers keep evidence bounded;
+an oversized workstream family is reported for attention without stopping other
+targets. Model input contains short summaries of large text, not complete logs.
+Observations continue even when decisions are unavailable. `check` remains
+read-only and never calls the model.
+
 ## Run and inspect
 
 Use an initialized Robert database:
@@ -148,7 +249,7 @@ HTTP client, not a particular vendor SDK's backoff implementation.
 
 ## Known recovery paths
 
-Recovery requires both `mode: recover_known` and an explicit repository/action
+Known recovery requires `mode: recover_known` or `mode: decide`, plus an explicit repository/action
 allowlist. For example:
 
 ```yaml

@@ -52,7 +52,15 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "actions": ["ack"],
         "status": status,
     }
-    for key in ("reason_code", "error_class", "required_action", "retryable", "incident_id"):
+    for key in (
+        "reason_code",
+        "error_class",
+        "required_action",
+        "retryable",
+        "incident_id",
+        "workstream_id",
+        "decision_id",
+    ):
         if key in metadata:
             payload[key] = metadata[key]
     payload["safe_error"] = str(metadata.get("safe_error", ""))[:2000]

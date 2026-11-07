@@ -1,5 +1,7 @@
 """Observe worker attempts and apply bounded recovery decisions."""
 
+from robert_agent.supervision import decisions as supervision_decisions
+
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
 from robert_agent.persistence import transactions as db_transactions
@@ -281,6 +283,16 @@ def supervise_running_attempts(
                 and db_path is not None
                 and repo is not None
             ):
+                if supervision_decisions.enabled(config_result):
+                    conn.commit()
+                    stopped = native_rounds.terminate_children(conn, task_id) != "attention"
+                    if not _supervision_observation_current(
+                        conn, attempt_id, task_id, snapshot, received_result, run_now
+                    ):
+                        continue
+                    if not stopped:
+                        execution_ownership.mark_attention(conn, task_id, run_now)
+                        continue
                 with _result_transition(conn, attempt_id, task_id, snapshot, received_result, run_now) as current:
                     if not current:
                         continue
@@ -296,6 +308,32 @@ def supervise_running_attempts(
                         "error_class": recovery.get("error_class"),
                     }
                     metadata["supervise"] = status
+                    if not supervision_decisions.permit(
+                        conn,
+                        config_result,
+                        workstream_id=workstream_id,
+                        action="retry_worker",
+                        target_id=attempt_id,
+                        facts={
+                            "task_id": task_id,
+                            "attempt_id": attempt_id,
+                            "recovery_status": recovery["status"],
+                            "identity_status": "dead",
+                            "failure": recovery.get("error_class"),
+                        },
+                        now=run_now,
+                    ):
+                        if supervision_decisions.enabled(config_result):
+                            # Proven stop releases capacity independently of retry authority.
+                            metadata["process_stopped_at"] = run_now
+                            metadata["supervise"] = {**status, "status": "waiting_for_model_decision"}
+                            db_write_attempts.update_for_supervise_running_attempts_2(
+                                conn, run_now, json.dumps(metadata["supervise"]), json.dumps(metadata), attempt_id
+                            )
+                            db_write_tasks.update_for_supervise_running_attempts(conn, run_now, task_id)
+                            db_write_workstreams.update_for_supervise_running_attempts(conn, run_now, workstream_id)
+                            supervised += 1
+                        continue
                     recovery_subject_type, recovery_subject_id = execution_ownership.recovery_subject(conn, task_id)
                     recovery_decision = execution_operations.classify_recovery(
                         conn,
@@ -351,6 +389,7 @@ def supervise_running_attempts(
                         recovery,
                     )
                     if resume:
+                        supervision_decisions.executed(conn, config_result, workstream_id, {"resume": resume}, run_now)
                         supervised += 1
                         metadata["resume"] = resume
                         db_write_attempts.update_for_supervise_running_attempts_2(
@@ -524,7 +563,9 @@ def recover_failed_timeout_attempts(
     repo=None,
     *,
     resume_attempt,
+    config_result=None,
 ):
+    config_result = config_result or {}
     if data_dir is None or db_path is None or repo is None:
         return 0
     rows = db_read_attempts.find_for_recover_failed_timeout_attempts(conn, repo_id, run_now)
@@ -539,7 +580,8 @@ def recover_failed_timeout_attempts(
         heartbeat_at,
     ) in rows:
         failure = values.json_object(failure_json)
-        if failure.get("status") != "failed_timeout":
+        model_wait = failure.get("status") == "waiting_for_model_decision"
+        if failure.get("status") != "failed_timeout" and not model_wait:
             continue
         if not execution_ownership.claim_task(conn, task_id, run_now):
             continue
@@ -587,7 +629,8 @@ def recover_failed_timeout_attempts(
             continue
         if not _supervision_observation_current(conn, attempt_id, task_id, snapshot, None, run_now):
             continue
-        if recovery["status"] not in {"recoverable_progress", "transport_interrupted"}:
+        recoverable = {"recoverable_progress", "transport_interrupted"} | ({"rate_limited"} if model_wait else set())
+        if recovery["status"] not in recoverable:
             _record_recovery_creation_attention(
                 conn,
                 attempt_id=attempt_id,
@@ -608,6 +651,22 @@ def recover_failed_timeout_attempts(
             "recovery": recovery,
         }
         metadata["supervise"] = status
+        if not supervision_decisions.permit(
+            conn,
+            config_result,
+            workstream_id=workstream_id,
+            action="retry_worker",
+            target_id=attempt_id,
+            facts={
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "recovery_status": recovery["status"],
+                "identity_status": "dead",
+                "failure": recovery.get("error_class"),
+            },
+            now=run_now,
+        ):
+            continue
         recovery_subject_type, recovery_subject_id = execution_ownership.recovery_subject(conn, task_id)
         recovery_decision = execution_operations.classify_recovery(
             conn,
@@ -663,6 +722,7 @@ def recover_failed_timeout_attempts(
                 run_now=run_now,
             )
             continue
+        supervision_decisions.executed(conn, config_result, workstream_id, {"resume": resume}, run_now)
         recovered += 1
         metadata["resume"] = resume
         db_write_attempts.update_for_recover_failed_timeout_attempts(

@@ -13,6 +13,7 @@ import time
 from robert_agent.delivery.application import notifications as notify
 from robert_agent.adapters.notifications import messaging as message_transport
 from robert_agent.supervision import diagnosis as supervision_diagnose
+from robert_agent.supervision.application.decision_loop import DecisionLoop
 from robert_agent.configuration import supervision as supervision_config
 
 from robert_agent.supervision.application import checks as supervision_checks
@@ -51,13 +52,16 @@ def run(config, *, once=False, stop=None):
             for sig in (signal.SIGTERM, signal.SIGINT):
                 handlers[sig] = signal.signal(sig, lambda *_: stop.set())
         delivery = None
+        decision_loop = DecisionLoop()
         maintenance = None
         maintenance_started = 0.0
         try:
             while not stop.is_set():
                 result = supervision_checks.check(config, record=True)
                 if result["ok"]:
-                    result["diagnosis"] = supervision_diagnose.poll(config)
+                    if settings["mode"] != "decide":
+                        result["diagnosis"] = supervision_diagnose.poll(config)
+                    result["decision"] = decision_loop.poll(config)
                 if delivery is not None and delivery.poll() is not None:
                     delivery.wait()
                     delivery = None
@@ -104,6 +108,7 @@ def run(config, *, once=False, stop=None):
             return {"ok": True, "status": "stopped"}
         finally:
             supervision_diagnose.shutdown(config)
+            decision_loop.shutdown(config)
             if maintenance is not None:
                 _stop_child(maintenance)
             if delivery is not None:
@@ -144,7 +149,8 @@ def _repair_once(config_path):
     signal.signal(signal.SIGINT, stopped)
     config = validate_config.validate_config(config_path, skip_external=True)
     if config.get("ok"):
-        supervision_repair.poll(config)
+        if (config.get("supervision") or {}).get("mode") != "decide":
+            supervision_repair.poll(config)
         supervision_repair_followup.poll(config, runtime=supervision_health.runtime_status(config))
 
 
