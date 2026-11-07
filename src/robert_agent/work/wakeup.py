@@ -5,9 +5,6 @@ import json
 from uuid import uuid4
 
 
-WAKEUP_STATUSES = ("pending", "consumed", "expired", "canceled")
-
-
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 

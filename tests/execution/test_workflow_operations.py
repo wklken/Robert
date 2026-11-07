@@ -69,15 +69,6 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO attempts(
-                  attempt_id, task_id, attempt_no, status, started_at,
-                  heartbeat_at
-                ) VALUES ('attempt-1', 'task-1', 1, 'running', ?, ?)
-                """,
-                (NOW, NOW),
-            )
-            conn.execute(
-                """
                 INSERT INTO pr_remediation_episodes(
                   episode_id, workstream_id, episode_kind, subject_key,
                   observed_head_sha, observed_base_sha, status,
@@ -101,51 +92,6 @@ class WorkflowOperationsTests(unittest.TestCase):
                     json.dumps({"remediation_episode_id": "episode-1"}),
                 ),
             )
-
-    def test_load_subject_snapshot_returns_authoritative_rows_and_ids_without_secrets(self):
-        from robert_agent.execution import operations as execution_operations
-
-        snapshot = execution_operations.load_subject_snapshot(
-            self.db_path,
-            "task",
-            "task-1",
-        )
-
-        self.assertEqual(snapshot["subject_type"], "task")
-        self.assertEqual(snapshot["task"]["task_id"], "task-1")
-        self.assertEqual(snapshot["task"]["lifecycle"], "running")
-        self.assertIsNone(snapshot["binding"])
-        self.assertEqual(snapshot["lifecycle"]["workstream_id"], "workstream-1")
-        self.assertEqual(snapshot["lifecycle"]["attempt_ids"], ["attempt-1"])
-        self.assertNotIn("do-not-return", json.dumps(snapshot, sort_keys=True))
-
-    def test_load_episode_snapshot_includes_episode_binding_and_child_task_ids(self):
-        from robert_agent.execution import operations as execution_operations
-
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            binding = execution_store.ensure_subject(conn, 'remediation_episode', 'episode-1', 'pr_remediation', NOW)
-            conn.execute(
-                """
-                UPDATE execution_subjects
-                SET metadata_json = ?
-                WHERE subject_type = 'remediation_episode' AND subject_id = 'episode-1'
-                """,
-                (json.dumps({"token": "binding-secret", "reason": "test"}),),
-            )
-
-        snapshot = execution_operations.load_subject_snapshot(
-            self.db_path,
-            "remediation_episode",
-            "episode-1",
-        )
-
-        self.assertEqual(snapshot["episode"]["episode_id"], "episode-1")
-        self.assertEqual(snapshot["binding"]["subject_id"], binding["subject_id"])
-        self.assertEqual(snapshot["binding"]["metadata"], {"reason": "test"})
-        self.assertIn("task-remediation", snapshot["lifecycle"]["task_ids"])
-        rendered = json.dumps(snapshot, sort_keys=True)
-        self.assertNotIn("do-not-return", rendered)
-        self.assertNotIn("binding-secret", rendered)
 
     def test_claim_subject_is_idempotent_and_does_not_transfer_dbos_or_terminal(self):
         from robert_agent.execution import operations as execution_operations

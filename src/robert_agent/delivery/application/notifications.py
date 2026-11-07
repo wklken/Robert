@@ -41,25 +41,6 @@ def record_notification(db_path, notification_type, status, metadata=None, chann
     return {"ok": True, "status": status, "notification_type": notification_type}
 
 
-def send_notification(db_path, notification, command=None, timeout_seconds=5):
-    status = "recorded"
-    if command:
-        proc = subprocess.run(
-            shlex.split(command),
-            input=json.dumps(notification, ensure_ascii=False),
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-        status = "sent" if proc.returncode == 0 else "failed"
-    return record_notification(
-        db_path=db_path,
-        notification_type=notification["type"],
-        status=status,
-        metadata=notification,
-    )
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True)
