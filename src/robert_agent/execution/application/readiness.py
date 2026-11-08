@@ -18,6 +18,7 @@ from robert_agent.persistence.queries import worker_results as db_read_worker_re
 from robert_agent.work import repositories as work_repositories
 from robert_agent.supervision import decisions as supervision_decisions
 from robert_agent.work import wakeup
+from robert_agent.work import dispatch_requests
 from robert_agent.work.application import completion
 from robert_agent.work.application import handoff as pending_handoff
 
@@ -120,6 +121,15 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     recovery_pending = db_records.first(db_read_attempts.has_local_work_filtered(conn, repo_ids, now, now))
     if recovery_pending:
         return True
+    pending_dispatch = dispatch_requests.pending(conn, config_result, repo_ids=scoped_repos)
+    if pending_dispatch:
+        global_limit = config_result.get("max_concurrency", 1)
+        limits = {repo["full_name"]: repo.get("max_concurrency", global_limit) for repo in config_result["repos"]}
+        if capacity.running_attempt_count_for_repos(conn, scoped_repos) < global_limit and any(
+            capacity.running_attempt_count(conn, row["repo_id"]) < limits[row["repo_id"].removeprefix("repo:")]
+            for row in pending_dispatch
+        ):
+            return True
     prepared = db_read_attempts.has_local_work_filtered_2(conn, repo_ids, now)
     if prepared:
         # Only dispatch-only work waits for capacity. Earlier result, wakeup,

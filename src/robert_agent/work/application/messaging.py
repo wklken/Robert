@@ -12,6 +12,7 @@ from robert_agent.persistence.stores import notifications as notification_store
 from robert_agent.delivery import messages
 from robert_agent.security.redaction import redact_text
 from robert_agent.work import messaging
+from robert_agent.work.messaging_identity import authenticate
 from robert_agent.work.application import commands
 from robert_agent.work.errors import WorkItemConflictError, WorkItemValidationError, WorkItemNotFoundError
 from robert_agent.work.inputs import CommandContext, MAX_REPLY, validate_text
@@ -28,28 +29,29 @@ def _connection(config, *, write=False):
         raise WorkItemValidationError("Messaging storage is unavailable; inspect Robert locally.") from exc
 
 
-def _authenticate(config, request):
-    settings = config.get("messaging", {})
-    if not settings.get("enabled") or request.get("protocol") != "robert.message.v1":
-        raise WorkItemValidationError("Messaging is disabled or the protocol is unsupported.")
-    for field in ("provider", "channel", "account", "conversation", "thread"):
-        if request.get(field, "") != settings.get(field, ""):
-            raise WorkItemValidationError("Messaging identity is not authorized.")
-    if request.get("sender_id") not in settings["allowed_senders"]:
-        raise WorkItemValidationError("Messaging identity is not authorized.")
-    return f"{settings['provider']}:{settings['channel']}:{settings['account']}:{request['sender_id']}"
-
-
 def inbox(config, request):
-    _authenticate(config, request)
+    authenticate(config, request)
     with _connection(config) as conn:
-        rows = notifications.find_inbox(conn, messaging_repo_ids=messages.allowed_repo_ids(conn, config))
+        rows = notifications.find_inbox(
+            conn, messaging_repo_ids=messages.allowed_repo_ids(conn, config), messaging_settings=config["messaging"]
+        )
         entries = [messages.envelope(conn, row[0], config=config) for row in rows]
-    return {"ok": True, "messages": [entry for entry in entries if entry]}
+    return {
+        "ok": True,
+        "messages": [entry for entry in entries if entry],
+        **(
+            {
+                "dispatch_help": "/robert-inbox new <owner/repo> <request>",
+                "dispatch_repos": config["messaging"]["repos"],
+            }
+            if config["messaging"].get("dispatch_enabled")
+            else {}
+        ),
+    }
 
 
 def respond(config, request):
-    identity = _authenticate(config, request)
+    identity = authenticate(config, request)
     notification_id = validate_text(request.get("notification_id"), "notification_id", 256, required=True)
     version = request.get("version")
     if type(version) is not int or version < 0:

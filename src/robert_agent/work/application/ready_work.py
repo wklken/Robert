@@ -33,8 +33,8 @@ from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import wakeups as db_write_wakeups
-from robert_agent.security import authorization as authorize
 from robert_agent.supervision import store as supervision_store
+from robert_agent.work import source_policy
 from robert_agent.work import queries as work_queries
 from robert_agent.work import streams as workstream
 from robert_agent.work.application import commands as work_items
@@ -382,7 +382,9 @@ def prepare_github_operator_tasks(
             authorized = [
                 event
                 for event in events
-                if authorize.authorize_event(event, repo, known_workstreams=set())["authorization_status"]
+                if source_policy.reauthorize_saved_request(
+                    event, repo, known_workstreams=set(), conn=conn, config=config_result
+                )["authorization_status"]
                 in {"authorized_trigger", "accepted_context"}
             ]
             parent_row = db_records.first(

@@ -164,6 +164,7 @@ Paths below are relative to `src/robert_agent/`.
   redacted envelopes; adapters own transport only. All messaging queries and
   writes use named operations in `persistence/queries/` and `persistence/stores/`;
   inbox, delivery and readiness share filtering before limits.
+- Issue dispatch binds a durable authenticated request to its confirmed Issue. Reconcile unknown creation effects before retrying; classifier or waiting results are not delivery. Completion requires final publication receipts and the original Issue result comment.
 - Chat ingress checks explicit provider/session/sender/repository configuration
   and delegates to existing versioned work commands. Acknowledgement is a
   receipt, never incident resolution, recovery authority or process release.

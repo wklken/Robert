@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     messaging_parser = subparsers.add_parser("messages", help="Authenticated local messaging bridge.")
-    messaging_parser.add_argument("messages_command", choices=["inbox", "respond"])
+    messaging_parser.add_argument("messages_command", choices=["inbox", "respond", "dispatch"])
     _add_config_argument(messaging_parser)
     _add_output_argument(messaging_parser)
 
@@ -398,7 +398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "messages":
-            from robert_agent.work.application import messaging
+            from robert_agent.work.application import messaging, dispatch_requests
             from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
 
             validated = validate_config.validate_config(args.config, skip_external=True)
@@ -412,7 +412,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError("Message must be an object.")
             try:
                 result = (
-                    messaging.inbox(validated, request)
+                    dispatch_requests.handle(validated, request)
+                    if args.messages_command == "dispatch"
+                    else messaging.inbox(validated, request)
                     if args.messages_command == "inbox"
                     else messaging.respond(validated, request)
                 )

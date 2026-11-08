@@ -3,9 +3,11 @@
 import json
 
 from robert_agent.persistence import records
-from robert_agent.persistence.queries import notifications, repos
+from robert_agent.persistence.queries import notifications, repos, dispatch_requests
 from robert_agent.security.redaction import redact_text
 from robert_agent.work import messaging
+from robert_agent.work.messaging_identity import authenticate
+from robert_agent.work.errors import WorkItemValidationError
 
 
 def _redact_values(value):
@@ -39,6 +41,13 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         return None
     task_id, kind, status, raw = row
     metadata = json.loads(raw or "{}")
+    dispatch = dispatch_requests.for_task(conn, task_id) if task_id and config is not None else None
+    bound_identity = metadata.get("dispatch_identity") or (json.loads(dispatch["identity_json"]) if dispatch else None)
+    if bound_identity and config is not None:
+        try:
+            authenticate(config, bound_identity)
+        except WorkItemValidationError:
+            return None
     repo_id, repository_scoped = messaging.notification_scope(conn, task_id, metadata)
     if config is not None and repository_scoped:
         if repo_id not in allowed_repo_ids(conn, config):
@@ -53,6 +62,11 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "status": status,
     }
     for key in (
+        "request_id",
+        "summary",
+        "issue_url",
+        "pr_url",
+        "result_url",
         "reason_code",
         "error_class",
         "required_action",
@@ -64,6 +78,8 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         if key in metadata:
             payload[key] = metadata[key]
     payload["safe_error"] = str(metadata.get("safe_error", ""))[:2000]
+    if metadata.get("request_id"):
+        payload["actions"] = []
     if metadata.get("attention_event_id"):
         attention = messaging.attention_details(conn, metadata, include_closed=include_closed)
         if attention is None:

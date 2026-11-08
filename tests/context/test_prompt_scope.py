@@ -295,6 +295,24 @@ class PromptScopeTests(unittest.TestCase):
         )
         self.assertIn("Do not modify source or plan a push", prompt)
 
+    def test_issue_dispatch_guidance_follows_current_request_not_older_context(self):
+        task = {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y#1"}
+        dispatch = {"event_fingerprint": "operator-dispatch:one", "dispatch_request_id": "one"}
+        followup = {"event_fingerprint": "comment:2", "event_type": "comment"}
+        for current, expected in (("operator-dispatch:one", True), ("comment:2", False)):
+            with self.subTest(current=current):
+                request = worker_prompt_input(
+                    task,
+                    route.ROUTES["classification-result"],
+                    [dispatch, followup],
+                    runtime_context={"github_context": {"current_event_fingerprint": current}},
+                )
+                prompt = render_prompt.render_prompt(request).text
+                self.assertEqual("Issue dispatch:" in prompt, expected)
+                if expected:
+                    self.assertIn("Never omit recommended_route", prompt)
+                    self.assertIn("result comment on the original Issue", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

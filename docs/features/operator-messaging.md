@@ -5,6 +5,8 @@
 Robert can send worker questions, approval requests and failure notifications to
 OpenClaw and receive explicit responses from an authorized operator. Messaging
 is disabled by default. The existing status/artifact commands remain available.
+Optional [Issue dispatch](issue-dispatch.md) adds `/robert-inbox new/submit/status/retry`
+with a separate `messaging.dispatch_enabled` switch.
 
 ## Design and ownership
 
@@ -42,7 +44,7 @@ committing it. Inbox and delivery apply repository and unresolved-attention filt
 before limiting results, so closed or unauthorized notices cannot starve eligible work.
 Chat reads use an existing database in read-only mode; acknowledgement uses an
 existing writable database and an immediate transaction. Neither path creates a
-missing database. No new database table or runtime dependency is required. Disabling messaging
+missing database. The response transport reuses existing tables; Issue dispatch adds its own durable request table. No new runtime dependency is required. Disabling messaging
 stops the built-in transport and rejects new chat responses; the timeline and
 local controls continue to work.
 

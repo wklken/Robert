@@ -173,6 +173,8 @@ def _create_child_task_for_pending_events(
                 decision := source_policy.reauthorize_saved_request(
                     pending_event,
                     repo,
+                    conn=conn,
+                    config=config_result,
                     known_workstreams=(
                         ()
                         if pending_event.get("event_type") in {"assigned", "review_request", "notification"}
@@ -381,6 +383,8 @@ def _create_child_task_for_recommended_route(
     child_event = source_policy.reauthorize_saved_request(
         child_event,
         repo,
+        conn=conn,
+        config=config_result,
         known_workstreams=[]
         if child_event.get("event_type") in {"assigned", "review_request", "notification"}
         else [workstream_id],

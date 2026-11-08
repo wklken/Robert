@@ -9,7 +9,7 @@ from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.stores import task_events as db_write_task_events
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
 import json
-from robert_agent.work import source_policy
+from robert_agent.work import source_policy, dispatch_requests
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.work import queries as work_queries
 
@@ -37,10 +37,12 @@ def _json_object(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
-def ordinary_dispatch_allowed(conn, task_id, repo):
+def ordinary_dispatch_allowed(conn, task_id, repo, config=None):
     row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     if not row or row[0] != TaskKind.HUMAN_REQUEST.value:
         return True  # System remediation is governed by its Episode policy.
+    if not dispatch_requests.task_allowed(conn, config, task_id):
+        return False
     metadata = _json_object(row[1])
     item = db_records.first(db_read_work_items.find_for_ordinary_dispatch_allowed(conn, task_id))
     if (item and item[0] == "web") or metadata.get("trigger_work_item_event_id"):
@@ -62,6 +64,8 @@ def ordinary_dispatch_allowed(conn, task_id, repo):
         source_policy.reauthorize_saved_request(
             event,
             repo,
+            conn=conn,
+            config=config,
             known_workstreams=[]
             if event.get("event_type") in {"assigned", "review_request", "notification"}
             else [event["workstream_id"]],

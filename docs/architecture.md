@@ -643,6 +643,12 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 `work/messaging.py` 维护问题关联规则，`delivery/messages.py` 构建脱敏信封，
 `adapters/notifications/messaging.py` 发送消息。`work/application/messaging.py`
 校验发送者、会话和仓库授权后调用既有命令；OpenClaw 插件只做协议转换。
+[Issue 派单](features/issue-dispatch.md) 由 `work/application/dispatch_requests.py`
+保存受认证草稿和提交，独立发布通道通过 `application/publication_cycle.py` 创建或对账 Issue。
+`dispatch_admission.py` 接入已有分类器，`dispatch_delivery.py` 核对最终发布回执。
+`work/dispatch_requests.py` 持有请求绑定和当前授权规则，`models/work.py` 映射持久请求，
+所有查询与条件状态转换仍由 `persistence/queries/dispatch_requests.py` 和
+`persistence/stores/dispatch_requests.py` 执行。
 持久化统一调用 `persistence/queries/notifications.py`、`persistence/queries/work_item_events.py`
 和 `persistence/stores/notifications.py`；问题和通知使用调用方事务原子提交，
 收件箱、发送队列和就绪检测在限额前应用相同的未解决问题和仓库筛选。

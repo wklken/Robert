@@ -11,6 +11,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [生命周期看板](web-lifecycle-board.md) | 状态含义、日常操作、异常恢复与交付证据 |
+| [OpenClaw Issue 派单](issue-dispatch.md) | 两步提交、自动分类、Issue/PR 交付与建单恢复 |
 | [操作员消息](operator-messaging.md) | OpenClaw 通知、提问、受认证回复与渠道接入边界 |
 | [多模型 PR 评审](multi-model-review.md) | 作者白名单、并发、文件交接、审查与恢复 |
 | [项目记忆与证据阶段](project-memory.md) | 技术提示、审计、发布回执与部署证明 |
