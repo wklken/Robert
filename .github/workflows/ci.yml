@@ -134,6 +134,7 @@ jobs:
       LYCHEE_ARGS: >-
         --no-progress
         --host-concurrency 2
+        --cache
         README.md
         README_EN.md
         COMMUNITY.md
@@ -144,6 +145,9 @@ jobs:
         docs
     steps:
       - uses: actions/checkout@v7
+      - name: Start with a fresh link-check cache
+        # Share successful checks only between attempts in this job.
+        run: rm -f .lycheecache
       - name: Check documentation links
         id: links
         # Retry transient download/HTTP failures once; repeated failure stays fatal.
