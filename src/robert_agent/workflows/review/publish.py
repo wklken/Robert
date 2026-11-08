@@ -1,5 +1,7 @@
 """Audited, revision-bound GitHub PR Review COMMENT publication."""
 
+from robert_agent.foundation.commands import ControlDeadlineExceeded
+
 from robert_agent.foundation.contracts.delivery import GitHubActionType
 
 from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
@@ -164,6 +166,8 @@ def reconcile(action, scope, run_command):
             ):
                 raise ValueError("malformed PR review record")
         matches = [review for review in reviews if isinstance(review.get("body"), str) and marker in review["body"]]
+    except ControlDeadlineExceeded:
+        raise
     except Exception as exc:
         return _result("unknown", "review_query_failed", error_type=type(exc).__name__)
     if not matches:
@@ -228,6 +232,8 @@ def publish(action, scope, run_command, scope_guard=None):
             or not isinstance(current.get("base"), dict)
         ):
             raise ValueError("invalid PR snapshot")
+    except ControlDeadlineExceeded:
+        raise
     except Exception:
         return {
             "ok": False,

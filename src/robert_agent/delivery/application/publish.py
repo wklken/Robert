@@ -1,5 +1,6 @@
 """application delivery publish responsibilities."""
 
+from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus, PublishStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
@@ -643,6 +644,8 @@ def publish_ready_actions(
                         "command": result.get("command", []),
                     }
                 )
+            except ControlDeadlineExceeded:
+                raise
             except subprocess.TimeoutExpired:
                 result = {
                     "ok": False,

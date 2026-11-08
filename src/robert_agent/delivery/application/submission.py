@@ -21,6 +21,7 @@ from robert_agent.persistence.stores import worker_results as db_write_worker_re
 #!/usr/bin/env python3
 from contextlib import closing
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -267,7 +268,7 @@ def record_result(db_path, payload, *, notifier=None):
         }
     try:
         return result_spool.submit(db_path, payload, _record_result_db, notifier, prepare=_prepare, lookup=_lookup)
-    except (db_errors.Error, OSError):
+    except (db_errors.Error, OSError, subprocess.TimeoutExpired):
         return _unavailable()
     except (ValueError, TypeError):
         return {

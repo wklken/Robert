@@ -55,6 +55,8 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
         if observe:
             try:
                 head, status = supervision_git.observe(action_scope, runner=command_runner)
+            except subprocess.TimeoutExpired:
+                raise
             except (OSError, subprocess.SubprocessError):
                 action_scope["worktree_status"] = "unavailable"
             else:
@@ -156,18 +158,17 @@ def observe_worktree_status(scope, *, command_runner=None):
     if scope.get("supervision_repair"):
         try:
             return supervision_git.observe(scope, runner=command_runner)[1]
+        except subprocess.TimeoutExpired:
+            raise
         except subprocess.SubprocessError as exc:
             raise OSError("Cannot inspect maintenance submission worktree") from exc
-    try:
-        inspected = command_runner(
-            ["git", "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=normal"],
-            cwd=scope["worktree_path"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise OSError("Cannot inspect submission worktree") from exc
+    inspected = command_runner(
+        ["git", "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=normal"],
+        cwd=scope["worktree_path"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
     if inspected.returncode != 0:
         raise OSError("Cannot inspect submission worktree")
     return "dirty" if inspected.stdout.strip() else "clean"

@@ -1,5 +1,6 @@
 """application delivery effects responsibilities."""
 
+from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.foundation.contracts.delivery import GitHubActionType
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
@@ -330,6 +331,8 @@ def trusted_head_owner_for_intent(conn, action, action_scope, run_command):
     if push_metadata:
         try:
             return head_owner_from_push_metadata(push_metadata, head, run_command)
+        except ControlDeadlineExceeded:
+            raise
         except Exception:
             return ""
     repo = action_scope.get("repo") if isinstance(action_scope, dict) else ""
@@ -477,6 +480,8 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
 
         try:
             completed = supervision_git.push(action_scope, result_head_sha, before_push=before_push, runner=run_command)
+        except ControlDeadlineExceeded:
+            raise
         except (OSError, subprocess.SubprocessError):
             return {"ok": False, "status": "publish_failed", "safe_error": "Maintenance Git push unavailable"}
         if blocked:
