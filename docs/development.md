@@ -118,7 +118,7 @@ Supervisor daemon target also includes Web. See [service setup](guides.md#daemon
 ### Read-only integrations
 
 The web UI and OpenClaw queries are read-only by default. Explicitly configured
-[operator messaging](operator-messaging.md) enables scoped chat responses.
+[operator messaging](features/operator-messaging.md) enables scoped chat responses.
 Writable local controls require explicit startup flags and CSRF protection.
 
 ## Releasing

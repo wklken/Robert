@@ -82,4 +82,4 @@ exchange prepared-request.json, ballot.json and synthesis.json via isolated,
 sealed file handoffs. A normal final `multi_agent_vote_report` proposes exactly
 one audited `comment`, bound to its round, snapshot and triggering Issue/PR.
 Missing decision input uses the existing `waiting_for_user` protocol. See
-`docs/multi-agent-vote.md` for equal single-choice tally and recovery semantics.
+`docs/features/multi-agent-vote.md` for equal single-choice tally and recovery semantics.

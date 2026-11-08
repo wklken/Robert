@@ -157,7 +157,7 @@ flowchart TB
 ```
 
 `robert daemon run` 使用三条链路；`robert daemon run --once` 和 `robert run once`
-保留同步诊断路径。[轮询机制](github-polling.md)说明缓存、API 配额、观察批次和恢复。
+保留同步诊断路径。[轮询机制](features/github-polling.md)说明缓存、API 配额、观察批次和恢复。
 
 Git worktree 负责工作目录与分支隔离。模型 CLI 以 Robert 服务账户的权限直接运行，
 worktree 和文件 hash 校验不提供操作系统沙箱。Worker 按协议只提交计划动作，
@@ -288,7 +288,7 @@ PR workstream。任务执行完成、动作发布成功、远端 PR 合并是三
 [结果入口](../src/robert_agent/delivery/application/submission.py)、[结果审计](../src/robert_agent/delivery/application/result_audit.py)（`audit_completed_results`）、
 [最终完成与派生 PR](../src/robert_agent/work/application/completion.py)
 （`finalize_accepted_result`、`_materialize_open_pr_workstream`）。
-看板定义见 [web-lifecycle-board.md](web-lifecycle-board.md)。
+看板定义见 [web-lifecycle-board.md](features/web-lifecycle-board.md)。
 
 ## 结果提交、唤醒与内部推进
 
@@ -476,7 +476,7 @@ flowchart TD
 源码：[观察用例](../src/robert_agent/supervision/application/observation.py)、
 [规则](../src/robert_agent/supervision/rules.py)、[恢复事实](../src/robert_agent/supervision/store.py)、
 [维护工作流](../src/robert_agent/workflows/maintenance/repair.py)。
-配置、命令与限制见 [持续任务监督](task-supervision.md)。
+配置、命令与限制见 [持续任务监督](features/task-supervision.md)。
 
 ## 多模型评审与投票
 
@@ -535,7 +535,7 @@ Worker 的运行超时，父任务期限仍有效。未知启动保留额度。�
 源码：[workflows/review/coordinator.py](../src/robert_agent/workflows/review/coordinator.py)、
 [workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[StageCoordinator](../src/robert_agent/execution/stages.py)、
 [persistence/rounds/pool.py](../src/robert_agent/persistence/rounds/pool.py)、[workflows/vote/tally.py](../src/robert_agent/workflows/vote/tally.py)。
-配置与恢复见 [multi-model-review.md](multi-model-review.md) 和 [multi-agent-vote.md](multi-agent-vote.md)。
+配置与恢复见 [multi-model-review.md](features/multi-model-review.md) 和 [multi-agent-vote.md](features/multi-agent-vote.md)。
 
 ## PR 自修复
 
@@ -617,7 +617,7 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 
 ## 操作员消息边界
 
-[双向消息方案](operator-messaging.md)复用工作项事件、通知 outbox 和现有操作命令。
+[双向消息方案](features/operator-messaging.md)复用工作项事件、通知 outbox 和现有操作命令。
 `work/messaging.py` 维护问题关联规则，`delivery/messages.py` 构建脱敏信封，
 `adapters/notifications/messaging.py` 发送消息。`work/application/messaging.py`
 校验发送者、会话和仓库授权后调用既有命令；OpenClaw 插件只做协议转换。

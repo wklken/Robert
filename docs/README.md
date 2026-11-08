@@ -7,10 +7,12 @@
 
 - **第一次认识 Robert**：先读 [README](../README.md) 的使用场景，再看[第一个任务](first-task.md)。
 - **准备部署**：[手工安装](human-install.md)或 [Agent 安装（English）](agent-install.md)，先选定代码与文档版本。
-- **已经在运行**：[故障排查](troubleshooting.md)、[看板操作](web-lifecycle-board.md)，再查具体配置。
+- **已经在运行**：[故障排查](troubleshooting.md)、[看板操作](features/web-lifecycle-board.md)，再查具体配置。
 - **参与开源**：[贡献指南](../CONTRIBUTING.md)、[安全策略](../SECURITY.md)、[支持渠道](../SUPPORT.md)。
 
 入门指南以中文为主；Agent 安装、操作与命令参考包含英文，命令和配置以同版本源码为准。
+根目录保留安装、通用使用、架构和开发入口；具体功能的配置与实现机制集中在
+[功能专题](features/README.md)，需要深入了解时再阅读。
 
 ## 安装与使用
 
@@ -22,19 +24,18 @@
 | [故障排查](troubleshooting.md) | 安装、认证、远端、服务、排队与发布问题 |
 | [操作指引](guides.md) | 多仓库、Worker、Skills、服务、Web 与 OpenClaw |
 | [配置与命令参考](reference.md) | 完整最小配置、默认值、CLI、环境变量、数据保留与恢复 |
-| [生命周期看板](web-lifecycle-board.md) | 状态含义、日常操作、异常恢复与交付证据 |
-| [操作员消息](operator-messaging.md) | OpenClaw 通知、提问、受认证回复与渠道接入边界 |
 
-## 运行机制
+## 概念与架构
 
 | 文档 | 内容 |
 | --- | --- |
 | [核心概念](concepts.md) | 信任边界、workstream、路由和 Worker 协议 |
 | [架构与运行机制](architecture.md) | 源码分层、组件图、时序图、状态与数据关系 |
-| [GitHub 轮询与本地推进](github-polling.md) | 扫描、缓存、持久观察、内部唤醒和受控发布 |
-| [持续任务监督](task-supervision.md) | 独立观察、诊断、已知恢复、工程修复和验证 |
-| [多模型 PR 评审](multi-model-review.md) | 作者白名单、并发、文件交接、审查与恢复 |
-| [多 Agent 投票](multi-agent-vote.md) | 显式触发、澄清、独立选票、汇总与发布 |
+
+## 功能专题
+
+需要配置某项功能或理解其内部机制时，进入 [features/](features/README.md)：
+轮询与本地推进、持续任务监督、多模型评审、多 Agent 投票、生命周期看板和操作员消息。
 
 ## 开发与协议
 
@@ -59,7 +60,8 @@
 
 ## 文档维护
 
-修改行为时，同时校验对应配置、命令、源码链接和图示。新增公开文档必须加入本目录。
+修改行为时，同时校验对应配置、命令、源码链接和图示。通用入口文档加入本目录；
+功能配置、实现机制与专项恢复说明放在 `features/`，加入[专题索引](features/README.md)。
 实施计划、审查报告和修复记录保存在被 Git 忽略的 `docs/superpowers/`、`docs/reviews/`、
 `docs/remediation/`。公开文档不保留历史实现对比、迁移步骤或一次性验证日志。
 发布版本记录单独保存在 [CHANGELOG.md](../CHANGELOG.md)。

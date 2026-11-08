@@ -42,7 +42,7 @@ flowchart LR
     D -->|否| F[查看原因并处理]
 ```
 
-这是一条简化路径；完整状态见[生命周期看板](web-lifecycle-board.md)。
+这是一条简化路径；完整状态见[生命周期看板](features/web-lifecycle-board.md)。
 需要命令行检查时：
 
 ```bash
@@ -100,4 +100,4 @@ Issue 和其创建的 PR 是相互关联、但不同的协作记录；PR 修改�
 ## 接下来
 
 先保持单仓库、单 Worker 运行，再按需要增加[其他 Worker 或多仓库](guides.md)、
-[多模型评审](multi-model-review.md)、[持续监督](task-supervision.md)和[消息通知](operator-messaging.md)。
+[多模型评审](features/multi-model-review.md)、[持续监督](features/task-supervision.md)和[消息通知](features/operator-messaging.md)。

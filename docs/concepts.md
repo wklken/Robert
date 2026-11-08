@@ -81,7 +81,7 @@ mode uses an operator identity and CSRF token. Remote binding requires explicit
 acknowledgement and an authenticated reverse proxy. Service templates can pass
 different flags; inspect the [Supervisor setup](guides.md#daemon-service).
 
-The [lifecycle board](web-lifecycle-board.md) projects durable tasks, attempts,
+The [lifecycle board](features/web-lifecycle-board.md) projects durable tasks, attempts,
 phases, heartbeats, and publication receipts. Writable controls submit guarded
 requests; the daemon must be running to schedule work. Historical worker
 completion, successful publication, and observed PR merge are separate facts.

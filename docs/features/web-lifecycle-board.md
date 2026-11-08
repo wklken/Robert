@@ -1,6 +1,6 @@
 # Web 任务生命周期看板
 
-[文档目录](README.md)
+[文档目录](../README.md) · [功能专题](README.md)
 
 首页 `/` 和 `/board` 提供任务看板；GitHub 工作列表在 `/work`，
 运行与后台服务信息在 `/operations`。Web 默认只读；写入受开关、仓库权限、

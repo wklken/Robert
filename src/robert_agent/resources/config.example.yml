@@ -36,7 +36,7 @@ supervision:
   batch_size: 100
   stall_seconds: 300
   diagnosis: null
-  # mode: decide requires a dedicated no-tool decision command; see task-supervision.md.
+  # mode: decide requires a dedicated no-tool decision command; see docs/features/task-supervision.md.
   decision: null
   recovery: null
   repair: null
@@ -108,6 +108,6 @@ routes:
 repos: []
 
 # Optional operator chat; disabled unless explicitly configured.
-# See docs/operator-messaging.md for exact identity and repository scoping.
+# See docs/features/operator-messaging.md for exact identity and repository scoping.
 messaging:
   enabled: false

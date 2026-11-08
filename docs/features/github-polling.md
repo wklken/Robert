@@ -1,6 +1,6 @@
 # GitHub polling and local progress
 
-[文档目录](README.md)
+[文档目录](../README.md) · [功能专题](README.md)
 
 The resident daemon runs three independently supervised lanes:
 
