@@ -2,9 +2,9 @@
 
 from robert_agent.foundation.contracts.execution import AttemptStatus
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 
 from robert_agent.persistence import statements
 from robert_agent.persistence.catalog import tables
@@ -22,9 +22,23 @@ def _for_ids(conn, query, key, ids):
     ]
 
 
-def tasks_for_workstreams(conn, workstream_ids, *, chronological=False):
+def tasks_for_workstreams(conn, workstream_ids, *, chronological=False, compact_metadata=False):
     task = tables["tasks"].c
     order = (task.created_at, task.task_id) if chronological else (task.updated_at.desc(), task.task_id.desc())
+    metadata = task.metadata_json
+    if compact_metadata:
+        metadata = case(
+            (
+                func.json_valid(metadata),
+                func.json_object(
+                    "execution_attention",
+                    func.json_extract(valid_json_or_empty(metadata), "$.execution_attention"),
+                    "remediation_episode_id",
+                    func.json_extract(valid_json_or_empty(metadata), "$.remediation_episode_id"),
+                ),
+            ),
+            else_=sql_constant('{"execution_attention":{"reason_code":"invalid_task_metadata"}}'),
+        ).label("metadata_json")
     query = select(
         task.task_id,
         task.workstream_id,
@@ -35,7 +49,7 @@ def tasks_for_workstreams(conn, workstream_ids, *, chronological=False):
         task.expected_output,
         task.created_at,
         task.updated_at,
-        task.metadata_json,
+        metadata,
         task.routing_mode,
         task.requested_worker,
     ).order_by(*order)
@@ -47,7 +61,7 @@ def tasks_for_workstreams(conn, workstream_ids, *, chronological=False):
     return _for_ids(conn, query, task.workstream_id, workstream_ids)
 
 
-def attempts_for_tasks(conn, task_ids):
+def attempts_for_tasks(conn, task_ids, *, latest_only=False):
     attempt = tables["attempts"].c
     query = select(
         attempt.attempt_id,
@@ -61,6 +75,17 @@ def attempts_for_tasks(conn, task_ids):
         attempt.finished_at,
         attempt.failure_json,
     ).order_by(attempt.attempt_no.desc(), attempt.started_at.desc(), attempt.attempt_id.desc())
+    if latest_only:
+        latest = tables["attempts"].alias("latest")
+        query = query.where(
+            tables["attempts"].c.attempt_id
+            == select(latest.c.attempt_id)
+            .where(latest.c.task_id == tables["attempts"].c.task_id)
+            .order_by(latest.c.attempt_no.desc(), latest.c.started_at.desc(), latest.c.attempt_id.desc())
+            .limit(1)
+            .correlate(tables["attempts"])
+            .scalar_subquery()
+        )
     return _for_ids(conn, query, attempt.task_id, task_ids)
 
 
@@ -80,7 +105,7 @@ def attempt_timing_for_task(conn, task_id):
     return statements.read(conn, query)
 
 
-def phases_for_attempts(conn, attempt_ids):
+def phases_for_attempts(conn, attempt_ids, *, latest_only=False):
     phase = tables["worker_phases"].c
     query = select(
         phase.phase_id,
@@ -91,10 +116,21 @@ def phases_for_attempts(conn, attempt_ids):
         phase.next_step,
         phase.created_at,
     ).order_by(phase.created_at, phase.phase_id)
+    if latest_only:
+        latest = tables["worker_phases"].alias("latest")
+        query = query.where(
+            tables["worker_phases"].c.phase_id
+            == select(latest.c.phase_id)
+            .where(latest.c.attempt_id == tables["worker_phases"].c.attempt_id)
+            .order_by(latest.c.created_at.desc(), latest.c.phase_id.desc())
+            .limit(1)
+            .correlate(tables["worker_phases"])
+            .scalar_subquery()
+        )
     return _for_ids(conn, query, phase.attempt_id, attempt_ids)
 
 
-def results_for_tasks(conn, task_ids):
+def results_for_tasks(conn, task_ids, *, latest_only=False):
     result = tables["worker_results"].c
     query = select(
         result.result_id,
@@ -106,6 +142,17 @@ def results_for_tasks(conn, task_ids):
         result.created_at,
         result.metadata_json,
     ).order_by(result.created_at.desc(), result.result_id.desc())
+    if latest_only:
+        latest = tables["worker_results"].alias("latest")
+        query = query.where(
+            tables["worker_results"].c.result_id
+            == select(latest.c.result_id)
+            .where(latest.c.task_id == tables["worker_results"].c.task_id)
+            .order_by(latest.c.created_at.desc(), latest.c.result_id.desc())
+            .limit(1)
+            .correlate(tables["worker_results"])
+            .scalar_subquery()
+        )
     return _for_ids(conn, query, result.task_id, task_ids)
 
 
@@ -267,3 +314,23 @@ def primary_sources_for_tasks(conn, task_ids):
 def metadata_for_tasks(conn, task_ids):
     task = tables["tasks"].c
     return _for_ids(conn, select(task.task_id, task.metadata_json), task.task_id, task_ids)
+
+
+def pending_actions_for_workstreams(conn, workstream_ids):
+    action, task = tables["github_actions"], tables["tasks"]
+    query = (
+        select(action.c.task_id, action.c.action_id, action.c.audit_status, action.c.publish_status)
+        .select_from(action.join(task, task.c.task_id == action.c.task_id))
+        .where(action.c.audit_status.in_(("pending", "accepted")), action.c.publish_status == "not_published")
+    )
+    return _for_ids(conn, query, task.c.workstream_id, workstream_ids)
+
+
+def resume_counts_for_tasks(conn, task_ids):
+    notice = tables["notifications"].c
+    query = (
+        select(notice.task_id, func.count().label("count"))
+        .where(notice.notification_type == "worker_resume_prepared")
+        .group_by(notice.task_id)
+    )
+    return {row[0]: row[1] for row in _for_ids(conn, query, notice.task_id, task_ids)}

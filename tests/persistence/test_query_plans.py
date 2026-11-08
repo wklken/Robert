@@ -85,3 +85,26 @@ class NotificationQueryPlanTests(unittest.TestCase):
                 self.assertIn("idx_notifications_delivery_pending", plans[0])
                 self.assertIn("idx_notifications_delivery_pending", plans[1])
                 self.assertIn("idx_notifications_delivery_state", plans[2])
+
+    def test_recent_dashboard_queries_use_ordered_indexes(self):
+        from robert_agent.persistence.queries import github_actions, github_events, worker_results
+
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "state.db"
+            init_database(db)
+            with closing(sqlite3.connect(db)) as conn:
+                original = statements.read
+                plans = []
+
+                def inspect(connection, statement, parameters=()):
+                    compiled = statement.compile(dialect=dialect(paramstyle="qmark"))
+                    expanded = compiled.construct_expanded_state(dict(parameters))
+                    args = tuple(expanded.parameters[name] for name in expanded.positiontup)
+                    plans.append(connection.execute("EXPLAIN QUERY PLAN " + expanded.statement, args).fetchall())
+                    return original(connection, statement, parameters)
+
+                with patch.object(statements, "read", side_effect=inspect):
+                    for query in (tasks, github_actions, notifications, worker_results, github_events):
+                        query.find_for_build_dashboard_data(conn, 20)
+                for plan in plans:
+                    self.assertNotIn("USE TEMP B-TREE", str(plan))

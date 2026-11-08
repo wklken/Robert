@@ -70,6 +70,8 @@ def _try_run_text(args, runner):
 
 
 def _items(payload, key):
+    if isinstance(payload, list):
+        return [item for page in payload for item in _items(page, key)]
     if not isinstance(payload, dict):
         return []
     value = payload.get(key)
@@ -314,6 +316,8 @@ def collect_ci_observations(
             "gh",
             "api",
             f"repos/{repo_full_name}/actions/runs?head_sha={head_sha}&per_page=100",
+            "--paginate",
+            "--slurp",
         ],
         runner=runner,
     )
@@ -333,6 +337,8 @@ def collect_ci_observations(
             "gh",
             "api",
             f"repos/{repo_full_name}/commits/{head_sha}/check-runs?per_page=100",
+            "--paginate",
+            "--slurp",
         ],
         runner=runner,
     )

@@ -644,6 +644,9 @@ function setOptions(select, values, label, first) {
       }),
     ),
   );
+  if (previous && !options.some((el) => el.value === previous)) {
+    options.push(Object.assign(node("option", "", previous), { value: previous }));
+  }
   select.replaceChildren(...options);
   if (options.some((el) => el.value === previous)) select.value = previous;
 }

@@ -120,6 +120,8 @@ class PrHealthTests(unittest.TestCase):
                 "gh",
                 "api",
                 "repos/example/backend/actions/runs?head_sha=head-1&per_page=100",
+                "--paginate",
+                "--slurp",
             ): {
                 "workflow_runs": [
                     {
@@ -167,6 +169,8 @@ class PrHealthTests(unittest.TestCase):
                 "gh",
                 "api",
                 "repos/example/backend/commits/head-1/check-runs?per_page=100",
+                "--paginate",
+                "--slurp",
             ): {"check_runs": []},
         }
         runner = FixtureRunner(responses)
@@ -211,6 +215,8 @@ class PrHealthTests(unittest.TestCase):
                 "gh",
                 "api",
                 "repos/example/backend/actions/runs?head_sha=head-1&per_page=100",
+                "--paginate",
+                "--slurp",
             ): {
                 "workflow_runs": [
                     {
@@ -259,6 +265,8 @@ class PrHealthTests(unittest.TestCase):
                 "gh",
                 "api",
                 "repos/example/backend/commits/head-1/check-runs?per_page=100",
+                "--paginate",
+                "--slurp",
             ): {"check_runs": []},
         }
 
@@ -283,11 +291,15 @@ class PrHealthTests(unittest.TestCase):
                     "gh",
                     "api",
                     "repos/example/backend/actions/runs?head_sha=head-1&per_page=100",
+                    "--paginate",
+                    "--slurp",
                 ): {"workflow_runs": []},
                 (
                     "gh",
                     "api",
                     "repos/example/backend/commits/head-1/check-runs?per_page=100",
+                    "--paginate",
+                    "--slurp",
                 ): {
                     "check_runs": [
                         {
@@ -491,6 +503,49 @@ class PrHealthTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertNotEqual(first, changed)
+
+    def test_ci_observations_include_later_pages(self):
+        from robert_agent.workflows import pr_health
+
+        def runner(args, **kwargs):
+            self.assertIn("--paginate", args)
+            self.assertIn("--slurp", args)
+            if "/actions/runs?" in args[2]:
+                payload = [
+                    {"workflow_runs": []},
+                    {
+                        "workflow_runs": [
+                            {
+                                "id": 2,
+                                "head_sha": "sha",
+                                "name": "required",
+                                "status": "completed",
+                                "conclusion": "success",
+                            }
+                        ]
+                    },
+                ]
+            else:
+                payload = [
+                    {"check_runs": []},
+                    {
+                        "check_runs": [
+                            {
+                                "id": 3,
+                                "name": "external",
+                                "status": "completed",
+                                "conclusion": "success",
+                                "app": {"slug": "checks"},
+                            }
+                        ]
+                    },
+                ]
+            return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+        observations = pr_health.collect_ci_observations(
+            "x/y", "sha", check_allowlist=["required", "external"], max_summary_chars=100, runner=runner
+        )
+        self.assertEqual({row["external_id"] for row in observations}, {"2", "3"})
 
 
 if __name__ == "__main__":

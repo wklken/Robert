@@ -508,13 +508,13 @@ def find_for_delivery(conn, result_id):
         .where(
             and_(
                 table1.c["result_id"] == bindparam("p0"),
+                table1.c["action_type"].in_(("push_existing_pr", "open_pr")),
                 table1.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
                 table1.c["publish_status"] == sql_constant(PublishStatus.PUBLISHED.value),
                 table2.c["status"] == sql_constant(PublicationStatus.PUBLISHED.value),
             )
         )
         .order_by(table1.c["created_at"].asc(), table1.c["action_id"].asc())
-        .limit(sql_constant(4))
         .correlate_except(table1, table2)
         .set_label_style(LABEL_STYLE_NONE)
     )

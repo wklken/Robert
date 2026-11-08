@@ -50,6 +50,8 @@ def _workers(config):
 def _normalize(config, path, skip_external):
     schema = json.loads(resource("schemas/config.schema.json").read_text(encoding="utf-8"))
     config = apply_schema(config, schema, schema, "config")
+    if any(not path.strip() for path in config["skills"]["search_paths"]):
+        raise ValueError("skills.search_paths must contain non-empty paths")
     data_dir = Path(config["data_dir"]).expanduser()
     database = config["database"].strip()
     if Path(database).name != database or database in {".", ".."}:

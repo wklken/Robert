@@ -70,7 +70,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
             "config_result": config,
         }
         with (
-            patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value={}),
+            patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=lambda *args: args[-1]),
             patch.object(dispatch, "dispatch_worker", side_effect=SystemExit("crash")) as spawn,
         ):
             with self.assertRaises(SystemExit):
@@ -78,7 +78,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
             self.assertEqual(spawn.call_count, 1)
 
         with (
-            patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value={}),
+            patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=lambda *args: args[-1]),
             patch.object(dispatch, "dispatch_worker") as spawn,
         ):
             dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue, False, 3, **kwargs)
@@ -127,7 +127,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
         previous = signal.signal(signal.SIGTERM, observe_stop)
         try:
             with (
-                patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value={}),
+                patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=lambda *args: args[-1]),
                 patch.object(worker, "dispatch_worker", side_effect=launch),
             ):
                 dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue, False, 3, **kwargs)
@@ -163,7 +163,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
             return {"ok": True, "status": "running", **recorded}
 
         with (
-            patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value={}),
+            patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=lambda *args: args[-1]),
             patch.object(worker, "dispatch_worker", side_effect=launch),
         ):
             dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue, False, 3, **kwargs)
@@ -226,7 +226,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
             if not entered:
                 entered = True
                 dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue[1:], False, 1, **kwargs)
-            return {}
+            return _args[-1]
 
         with (
             patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=competing_dispatch),
@@ -336,7 +336,7 @@ class SQLiteRuntimeTests(unittest.TestCase):
             if not entered:
                 entered = True
                 dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue, False, 3, **kwargs)
-            return {}
+            return args[-1]
 
         with (
             patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=ensure),

@@ -8,7 +8,7 @@ from robert_agent.foundation.contracts.delivery import PublishStatus
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.work import TERMINAL_TASK_LIFECYCLES, TaskLifecycle
 
-import json
+from robert_agent.foundation.values import json_object
 import math
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -38,7 +38,7 @@ def task_timing(conn, task_id):
     attempts = [dict(row) for row in task_history.attempt_timing_for_task(conn, task_id)]
     results = [dict(row) for row in task_history.result_timing_for_task(conn, task_id)]
     for attempt in attempts:
-        metadata = json.loads(attempt["metadata_json"] or "{}")
+        metadata = json_object(attempt["metadata_json"] or "{}")
         dispatch = metadata.get("dispatch") or {}
         attempt["worker_started_at"] = metadata.get("worker_started_at") or (
             attempt["started_at"]
@@ -49,7 +49,7 @@ def task_timing(conn, task_id):
     worker, ingestion, audit = [], [], []
     for attempt in attempts:
         result = result_by_attempt.get(attempt["attempt_id"], {})
-        metadata = json.loads(result.get("metadata_json") or "{}")
+        metadata = json_object(result.get("metadata_json") or "{}")
         elapsed = _seconds(attempt["worker_started_at"], metadata.get("result_saved_at") or attempt["finished_at"])
         if elapsed is not None:
             worker.append(elapsed)
@@ -63,10 +63,10 @@ def task_timing(conn, task_id):
         if elapsed is not None:
             audit.append(elapsed)
     actions = task_history.actions_for_tasks(conn, (task_id,))
-    publication = [json.loads(row["metadata_json"]).get("publish", {}) for row in actions]
+    publication = [json_object(row["metadata_json"]).get("publish", {}) for row in actions]
     published = [row.get("published_at") for row in publication if _time(row.get("published_at"))]
     next_retry = [row["next_retry_at"] for row in publication if row.get("next_retry_at")]
-    wait = json.loads(task["metadata_json"] or "{}").get("wait_state", {})
+    wait = json_object(task["metadata_json"] or "{}").get("wait_state", {})
     reason = "unknown"
     if task["lifecycle"] in TERMINAL_TASK_LIFECYCLES:
         reason = "terminal"

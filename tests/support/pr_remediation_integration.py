@@ -124,6 +124,8 @@ class PrRemediationIntegrationFixture(unittest.TestCase):
                     "gh",
                     "api",
                     "repos/example/backend/actions/runs?head_sha=head-1&per_page=100",
+                    "--paginate",
+                    "--slurp",
                 ): {
                     "workflow_runs": [
                         {
@@ -159,6 +161,8 @@ class PrRemediationIntegrationFixture(unittest.TestCase):
                     "gh",
                     "api",
                     "repos/example/backend/commits/head-1/check-runs?per_page=100",
+                    "--paginate",
+                    "--slurp",
                 ): {"check_runs": []},
             }
         )

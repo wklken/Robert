@@ -115,3 +115,28 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         Path(manifest["worktree_path"], "untracked").write_text("unexpected")
         with self.assertRaises(ValueError):
             review_workspace.verify_snapshot(manifest)
+
+    def test_prompt_written_before_manifest_can_be_recovered(self):
+        from unittest.mock import patch
+
+        manifest = self.prepare("interrupted-freeze")
+        with patch.object(review_workspace.review_files, "atomic_json", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.freeze(manifest)
+        prompt = Path(manifest["artifact_root"]) / "reviewer-prompt.md"
+        before = prompt.read_bytes()
+        frozen = review_workspace.freeze_context(manifest)
+        self.assertTrue(frozen["frozen"])
+        self.assertEqual(prompt.read_bytes(), before)
+
+    def test_unregistered_different_prompt_is_not_adopted(self):
+        from unittest.mock import patch
+
+        manifest = self.prepare("changed-prompt")
+        with patch.object(review_workspace.review_files, "atomic_json", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.freeze(manifest)
+        prompt = Path(manifest["artifact_root"]) / "reviewer-prompt.md"
+        prompt.write_text("changed")
+        with self.assertRaises(ValueError):
+            review_workspace.freeze_context(manifest)

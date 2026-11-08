@@ -171,3 +171,41 @@ class ControlLaneRecoveryTests(unittest.TestCase):
                 {"execution_context": OLD_BOOT}, {**NEW_BOOT, "boot_source": "unknown_boot_format"}
             )
         )
+
+    def test_control_result_over_one_megabyte_is_not_truncated(self):
+        import time
+
+        lane = control_lane.ControlLane(self.db, "scan", "owner")
+        self.addCleanup(lane.stop)
+        lane.start(
+            [sys.executable, "-c", 'import json; print(json.dumps({"ok": True, "items": "x" * (1024 * 1024)}))'],
+            timeout_seconds=10,
+        )
+        deadline = time.monotonic() + 5
+        result = None
+        while time.monotonic() < deadline and result is None:
+            result = lane.poll()
+            if result is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(result["items"]), 1024 * 1024)
+
+    def test_control_result_over_sixteen_megabytes_fails_closed(self):
+        import time
+
+        lane = control_lane.ControlLane(self.db, "scan", "owner")
+        self.addCleanup(lane.stop)
+        lane.start(
+            [sys.executable, "-c", 'import json; print(json.dumps({"ok": True, "items": "x" * (17 * 1024 * 1024)}))'],
+            timeout_seconds=10,
+        )
+        deadline = time.monotonic() + 5
+        result = None
+        while time.monotonic() < deadline and result is None:
+            result = lane.poll()
+            if result is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(result)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status"], "child_failed")

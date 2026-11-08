@@ -175,9 +175,12 @@ class CliTests(unittest.TestCase):
     def test_openclaw_install_dry_run_does_not_rewrite_plugin_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin_dir = Path(tmp) / "robert-openclaw"
-            plugin_dir.mkdir()
+            from robert_agent.integrations.openclaw import write_plugin
+
+            self.assertTrue(write_plugin(plugin_dir)["ok"])
             sentinel = plugin_dir / "sentinel"
             sentinel.write_text("keep\n", encoding="utf-8")
+            before = {file.name: file.read_bytes() for file in plugin_dir.iterdir()}
             output = io.StringIO()
 
             with redirect_stdout(output):
@@ -200,7 +203,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result["status"], "planned")
             self.assertEqual(result["steps"][1]["status"], "planned")
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
-            self.assertEqual(list(plugin_dir.iterdir()), [sentinel])
+            self.assertEqual({file.name: file.read_bytes() for file in plugin_dir.iterdir()}, before)
 
     def test_openclaw_install_verifies_live_gateway_commands(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -139,7 +139,7 @@ class BoardHistoryPagingTests(BoardReadModelFixture):
         second = board.list_board(self.db_path, **filters, include_history=True, limit=2, cursor=first["next_cursor"])
         self.assertEqual(self.item_ids(second), ["item-30", "item-10"])
         self.assertIsNone(second["next_cursor"])
-        self.assertEqual(second["filters"]["agents"], ["Auto", "deep-worker"])
+        self.assertEqual(second["filters"]["agents"], first["filters"]["agents"])
         counts = {"backlog": 0, "todo": 0, "doing": 0, "waiting": 0, "review": 0, "done": 3, "history": 1}
         self.assertEqual(first["counts"], counts)
         self.assertEqual(second["counts"], counts)
@@ -147,7 +147,7 @@ class BoardHistoryPagingTests(BoardReadModelFixture):
         done = board.list_board(self.db_path, **filters, include_history=True, column="done", limit=1)
         self.assertEqual(self.item_ids(done), ["item-60"])
         self.assertEqual(done["counts"], counts)
-        self.assertEqual(done["filters"]["agents"], ["Auto", "deep-worker", "latest-worker"])
+        self.assertEqual(done["filters"]["agents"], first["filters"]["agents"])
         archived = board.list_board(self.db_path, **filters, include_history=True, column="history")
         self.assertEqual(self.item_ids(archived), ["item-20"])
         visible = board.list_board(self.db_path, **filters)

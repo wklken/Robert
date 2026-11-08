@@ -238,6 +238,64 @@ class CompactResultTests(CompactResultFixture):
             with self.subTest(output=output):
                 self.assertIsNotNone(audit_result._audit_expected_actions(output, types))
 
+    def test_completed_attempt_cannot_prepare_a_new_spooled_submission(self):
+        db, task, attempt, _, _ = self.prepare("comment")
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("UPDATE attempts SET status='completed' WHERE attempt_id=?", (attempt,))
+        with patch.object(result_contract, "normalize", wraps=result_contract.normalize) as normalize:
+            receipt = result.record_result(db, self.envelope(task, attempt))
+        self.assertEqual(receipt["status"], "rejected_by_supervisor")
+        normalize.assert_not_called()
+        self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
+
+    def test_memory_validation_blocks_secret_and_oversized_payload_before_spooling(self):
+        for value in ("password=private-test-value", "x" * 70000):
+            envelope = self.envelope("t", "a")
+            envelope["submission"]["memory_delta"] = {
+                "status": "has_memory",
+                "entries": [{"title": value, "short_summary": "Context"}],
+            }
+            with self.subTest(kind=value[:20]), self.assertRaises(result_contract.InvalidSubmission):
+                result_contract.normalize(envelope, self.settings())
+
+    def test_redactable_memory_does_not_block_result_or_mutate_submission(self):
+        db, task, attempt, _, _ = self.prepare("comment")
+        envelope = self.envelope(task, attempt)
+        envelope["submission"]["memory_delta"] = {
+            "status": "has_memory",
+            "entries": [
+                {
+                    "title": "Test setup",
+                    "short_summary": "Use /tmp/robert-cache with 10.1.2.3",
+                    "evidence": [{"path": "/Users/sample/project", "nested": ["service.corp"]}],
+                }
+            ],
+        }
+        normalized = result_contract.normalize(envelope, self.settings())
+        entry = normalized["memory_delta"]["entries"][0]
+        self.assertEqual(entry["short_summary"], "Use <local-path> with <internal-ip>")
+        self.assertEqual(entry["evidence"], [{"path": "<local-path>", "nested": ["<internal-domain>"]}])
+        self.assertIn("/tmp/robert-cache", envelope["submission"]["memory_delta"]["entries"][0]["short_summary"])
+        receipt = result.record_result(db, envelope)
+        self.assertTrue(receipt["ok"], receipt)
+        replay = result.record_result(db, envelope)
+        self.assertTrue(replay["ok"], replay)
+        self.assertEqual(replay["result_id"], receipt["result_id"])
+
+    def test_redaction_expansion_omits_optional_memory_without_blocking_result(self):
+        db, task, attempt, _, _ = self.prepare("comment")
+        envelope = self.envelope(task, attempt)
+        envelope["submission"]["memory_delta"] = {
+            "status": "has_memory",
+            "entries": [{"title": "Endpoints", "short_summary": "10.0.0.1 " * 7000}],
+        }
+        normalized = result_contract.normalize(envelope, self.settings())
+        self.assertEqual(normalized["memory_delta"]["status"], "none")
+        self.assertIn("redacted", normalized["memory_delta"]["reason"])
+        self.assertNotIn("entries", normalized["memory_delta"])
+        receipt = result.record_result(db, envelope)
+        self.assertTrue(receipt["ok"], receipt)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,7 +140,10 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
     metadata = publication_values.decode_json(fresh[0] if fresh else action["metadata_json"])
     prior = dict(metadata.get("publish") or {})
     if prior.get("attempt_charged"):
-        prior["attempt_count"] = max(0, int(prior.get("attempt_count", 0)) - 1)
+        try:
+            prior["attempt_count"] = max(0, int(prior.get("attempt_count", 0)) - 1)
+        except (ValueError, TypeError, OverflowError):
+            prior["attempt_count"] = retry_policy.MAX_ATTEMPTS
     state = retry_policy.failure_state(prior, result.get("safe_error"), now, retryable=result.get("retryable", True))
     # Authentication, permission, and branch rejections establish failure.
     # Only an ambiguous transport outcome needs a final reconciliation pass.

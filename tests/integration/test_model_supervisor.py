@@ -84,9 +84,15 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
             initial = decisions.snapshot(conn, "github:example/backend#1", config, "2026-07-26T00:01:00+00:00")
             self.assertEqual({c["action"] for c in initial["candidates"]}, {"resolve_conflict", "repair_ci"})
             runner = self.runner(mergeable=True)
-            runner.responses[("gh", "api", "repos/example/backend/actions/runs?head_sha=head-1&per_page=100")][
-                "workflow_runs"
-            ][0]["conclusion"] = "success"
+            runner.responses[
+                (
+                    "gh",
+                    "api",
+                    "repos/example/backend/actions/runs?head_sha=head-1&per_page=100",
+                    "--paginate",
+                    "--slurp",
+                )
+            ]["workflow_runs"][0]["conclusion"] = "success"
             events = remediation_requests.collect_pr_remediation_decisions(
                 conn, "repo:example/backend", self.repo, runner, "2026-07-26T00:02:00+00:00", config=config
             )
@@ -97,9 +103,9 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
     def test_first_healthy_pr_scan_does_not_require_an_episode_write(self):
         config = {"repos": [self.repo], "supervision": {"mode": "decide"}}
         runner = self.runner(mergeable=True)
-        runner.responses[("gh", "api", "repos/example/backend/actions/runs?head_sha=head-1&per_page=100")][
-            "workflow_runs"
-        ][0]["conclusion"] = "success"
+        runner.responses[
+            ("gh", "api", "repos/example/backend/actions/runs?head_sha=head-1&per_page=100", "--paginate", "--slurp")
+        ]["workflow_runs"][0]["conclusion"] = "success"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             self.assertEqual(
                 remediation_requests.collect_pr_remediation_decisions(

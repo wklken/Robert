@@ -180,7 +180,12 @@ function node(tag, options = {}, children = []) {
   if (options.className) element.className = options.className;
   if (options.text !== undefined) element.textContent = options.text;
   if (options.type) element.type = options.type;
-  if (options.href) element.href = options.href;
+  if (options.href && (/^https?:\/\//i.test(options.href) || (/^\/(?!\/)/.test(options.href) && !options.href.includes("\\")))) {
+    try {
+      const target = new URL(options.href, window.location.href);
+      if (["http:", "https:"].includes(target.protocol)) element.href = options.href;
+    } catch (_) { /* Invalid stored links remain plain text. */ }
+  }
   if (options.target) element.target = options.target;
   if (options.rel) element.rel = options.rel;
   if (options.title) element.title = options.title;
@@ -195,6 +200,8 @@ function node(tag, options = {}, children = []) {
 function readUrlState() {
   const params = new URLSearchParams(window.location.search);
   const hash = window.location.hash.match(/^#work\/(.+)$/);
+  let selectedId = null;
+  try { selectedId = hash ? decodeURIComponent(hash[1]) : null; } catch (_) { /* Ignore invalid fragments. */ }
   return {
     bucket: params.get("bucket") || "",
     repo: params.get("repo") || "",
@@ -202,7 +209,7 @@ function readUrlState() {
     q: params.get("q") || "",
     sort: params.get("sort") || "priority",
     cursor: params.get("cursor") || "",
-    selectedId: hash ? decodeURIComponent(hash[1]) : null,
+    selectedId,
   };
 }
 
@@ -413,17 +420,7 @@ async function retriggerTask(taskId, button) {
   button.disabled = true;
   button.textContent = t("retriggeringTask");
   try {
-    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/retrigger`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-robert-csrf-token": state.session.csrf_token || "",
-        "x-idempotency-key": `workbench-retrigger-${taskId}`,
-      },
-      body: "{}",
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.safe_error || payload.status || `HTTP ${response.status}`);
+    await BoardClient.post(`/api/tasks/${encodeURIComponent(taskId)}/retrigger`, {}, state.session.csrf_token);
     await loadWorkItems();
   } catch (error) {
     button.disabled = false;
@@ -571,6 +568,10 @@ function renderWorkItemDetail(detail) {
 
 async function loadWorkItems({ append = false, reason = "manual" } = {}) {
   if (reason === "auto" && document.hidden) return;
+  if (!append && state.hasLoaded && state.filters.cursor) {
+    state.filters.cursor = "";
+    writeUrlState();
+  }
   if (!state.hasLoaded) showSkeleton();
   if (state.listController) state.listController.abort();
   const controller = new AbortController();

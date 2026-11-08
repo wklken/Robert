@@ -192,7 +192,9 @@ supervision:
 ```
 
 Only explicitly named model environment variables reach the wrapper. Business
-credentials and runtime configuration variables are prohibited. Its private HOME
+credentials and runtime configuration variables are prohibited. Model wrappers
+using Google application default credentials may explicitly allow
+`GOOGLE_APPLICATION_CREDENTIALS`; it is not inherited by default. Its private HOME
 and working directory reduce accidental configuration reuse; they are not an OS
 sandbox. The configured executable is trusted administration code, responsible
 for its model API and the no-tool contract.

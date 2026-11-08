@@ -18,6 +18,7 @@ from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.supervision import store as supervision_store
 from contextlib import closing
 from pathlib import Path
+from robert_agent.adapters.git import workspace as git_workspace
 from robert_agent.adapters.processes import worker as dispatch
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution.application import cutover as result_cutover
@@ -227,6 +228,7 @@ def current_dispatch_target(conn, attempt_id):
         prompt_path,
         routing_mode,
         requested_worker,
+        branch_name,
     ) = row
     if not execution_ownership.claim_task(conn, task_id):
         return None
@@ -239,7 +241,7 @@ def current_dispatch_target(conn, attempt_id):
         "routing_mode": routing_mode,
         "requested_worker": requested_worker,
     }
-    worktree_result = {"worktree_path": worktree_path} if worktree_path else None
+    worktree_result = {"worktree_path": worktree_path, "branch_name": branch_name} if worktree_path else None
     return task_info, worktree_result
 
 
@@ -282,10 +284,28 @@ def can_materialize_worktree(repo):
 
 def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
     worktree_path = (worktree_result or {}).get("worktree_path")
-    if not worktree_path or Path(worktree_path).exists():
+    if not worktree_path:
         return worktree_result
     if not can_materialize_worktree(repo):
         return worktree_result
+    if Path(worktree_path).exists():
+        allow_dirty = False
+        branch_name = worktree_result.get("branch_name")
+        if db_path and task_info.get("attempt_id") and task_info.get("task_id"):
+            with closing(db_database.connect(db_path)) as conn:
+                ownership = db_records.first(
+                    db_read_attempts.find_dispatch_workspace_ownership(
+                        conn, task_info["attempt_id"], task_info["task_id"]
+                    )
+                )
+            if not ownership or ownership[0] != worktree_path:
+                return {**worktree_result, "ok": False, "status": "blocked_changed_worktree"}
+            branch_name = ownership[1]
+            allow_dirty = bool(branch_name and ownership[2])
+        error = git_workspace.check_worktree_reuse(
+            repo["repo_root"], repo["worktree_root"], worktree_path, branch_name=branch_name, allow_dirty=allow_dirty
+        )
+        return {**worktree_result, "ok": False, "status": error} if error else worktree_result
 
     with closing(db_database.connect(db_path)) as conn:
         db_sqlite.configure(conn, foreign_keys=True)
@@ -594,7 +614,12 @@ def dispatch_queued_locked(
                 target = current_dispatch_target(conn, task_info["attempt_id"])
                 if target is None:
                     continue
-                task_info, worktree_result = target
+                task_info, current_workspace = target
+                if any(
+                    (current_workspace or {}).get(key) != (worktree_result or {}).get(key)
+                    for key in ("worktree_path", "branch_name")
+                ):
+                    worktree_result = {"ok": False, "status": "workspace_changed_before_dispatch"}
                 if not execution_ownership.claim_task(conn, task_info["task_id"]):
                     continue
                 subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])

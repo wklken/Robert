@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from robert_agent.context.memory_policy import memory_delta_error
+
 from robert_agent.foundation.contracts.delivery import (
     AuditStatus,
     GitHubActionType,
@@ -503,8 +505,14 @@ def _audit_verification_entry(entry, allow_skipped):
         return "skipped verification entry requires skipped_reason"
     if entry.get("required") is True and status == VerificationStatus.SKIPPED.value and not allow_skipped:
         return "required verification cannot be skipped for this route"
-    if "exit_code" in entry and not isinstance(entry.get("exit_code"), int):
-        return "verification entry exit_code must be an integer"
+    if status == VerificationStatus.SKIPPED.value:
+        if "exit_code" in entry:
+            return "skipped verification cannot claim an execution exit code"
+    else:
+        if type(entry.get("exit_code")) is not int:
+            return "executed verification requires an integer exit code"
+        if (status == VerificationStatus.PASSED.value) != (entry["exit_code"] == 0):
+            return "verification status and exit code disagree"
     if "required" in entry and not isinstance(entry.get("required"), bool):
         return "verification entry required must be a boolean"
     return None
@@ -705,6 +713,16 @@ def audit_result(
                 "ok": False,
                 "status": AuditStatus.FAILED.value,
                 "safe_error": "GitHub waiting_for_user requires a public comment action",
+            }
+
+    if "memory_delta" in result:
+        memory_error = memory_delta_error(result["memory_delta"])
+        if memory_error:
+            return {
+                "ok": False,
+                "status": AuditStatus.POLICY_VIOLATION.value,
+                "violations": ["invalid_memory_delta"],
+                "safe_error": memory_error,
             }
 
     redaction_violation = _audit_public_text(actions)

@@ -24,3 +24,13 @@ class SkillTests(unittest.TestCase):
         self.assertEqual(result["missing_required"], ["missing-required"])
         self.assertEqual(result["missing_recommended"], ["missing-recommended"])
         self.assertFalse(result["runnable"])
+
+    def test_bad_manifest_does_not_hide_healthy_skills(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("good", "bad"):
+                (root / name).mkdir()
+            (root / "good" / "SKILL.md").write_text("name: healthy")
+            (root / "bad" / "SKILL.md").write_bytes(b"\xff")
+            with self.assertWarnsRegex(RuntimeWarning, "Cannot read skill manifest"):
+                self.assertEqual(discover_skill_names([root]), {"healthy"})

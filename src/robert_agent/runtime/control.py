@@ -190,7 +190,14 @@ class ControlLane:
             return self._attention("Control child descendants still active")
         self.output.seek(0)
         try:
-            payload = json.loads(self.output.read(1024 * 1024))
+            # Control JSON can exceed the former 1 MiB truncation, but a child
+            # still cannot force an unbounded allocation in the daemon.
+            if os.fstat(self.output.fileno()).st_size > 16 * 1024 * 1024:
+                raise ValueError("control result exceeds 16 MiB")
+            encoded = self.output.read(16 * 1024 * 1024 + 1)
+            if len(encoded) > 16 * 1024 * 1024:
+                raise ValueError("control result exceeds 16 MiB")
+            payload = json.loads(encoded)
             if not isinstance(payload, dict):
                 raise ValueError("expected object")
         except ValueError:
