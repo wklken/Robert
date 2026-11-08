@@ -47,8 +47,8 @@ def main():
         failures = capture()
         if transition is None or outcome != "PASS":
             abort_barriers()
-        if failures and outcome == "PASS":
-            raise HarnessError(f"fixture failures: {failures}")
+        if failures:
+            raise HarnessError(f"fixture or evidence failures: {failures}")
     except Exception:
         detail = (detail or "") + traceback.format_exc()
         outcome = "HARNESS_FAILURE"

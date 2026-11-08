@@ -230,3 +230,18 @@ class World:
         path = "/api/work-items/" + quote(item["work_item_id"], safe="") + "/commands"
         key = kwargs.pop("key", None)
         return self.post(path, {"command": command, "expected_version": item["version"], **kwargs}, key=key)
+
+    def cancel_item(self, item, *, key=None):
+        key = key or uuid4().hex
+
+        def request_when_unlocked():
+            status, result = self.item_command(item, "cancel", key=key)
+            if (
+                status == 409
+                and result.get("safe_error")
+                == "A publication is in progress for this task. Retry cancellation after it finishes."
+            ):
+                return None
+            return status, result
+
+        return self.wait("cancel acquires the task publication lock", request_when_unlocked, timeout=10)

@@ -38,7 +38,10 @@ def waiting(w, *, outsider=False, replay=False):
     next_tasks = w.wait(
         "a child consumed the trusted reply",
         lambda: w.sql(
-            "SELECT * FROM tasks WHERE parent_task_id=? AND lifecycle=?",
+            "SELECT t.* FROM tasks t LEFT JOIN tasks route ON t.parent_task_id=route.task_id "
+            "WHERE (t.parent_task_id=? OR (route.parent_task_id=? AND route.route_id='classification-result')) "
+            "AND t.lifecycle=? AND t.route_id!='classification-result'",
+            parent,
             parent,
             "waiting_for_user" if replay else "completed",
         ),

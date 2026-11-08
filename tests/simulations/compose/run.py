@@ -8,6 +8,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+import time
 from uuid import uuid4
 import xml.etree.ElementTree as ET
 
@@ -51,8 +52,16 @@ def run_case(args, image, case, artifact):
     artifact.mkdir(parents=True)
     run = project_command(args, image, project)
     outcome = {"case_id": case.id, "outcome": "HARNESS_FAILURE", "project": project}
+    deadline = time.monotonic() + case.timeout
+
+    def remaining():
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise subprocess.TimeoutExpired(case.id, case.timeout)
+        return budget
+
     try:
-        run("up", "-d", "--no-build", timeout=90)
+        run("up", "-d", "--no-build", timeout=min(90, remaining()))
         child = run(
             "exec",
             "-T",
@@ -60,7 +69,7 @@ def run_case(args, image, case, artifact):
             "python",
             "/harness/execute.py",
             case.id,
-            timeout=case.timeout,
+            timeout=remaining(),
             check=False,
             capture_output=True,
         )
@@ -111,7 +120,7 @@ def run_case(args, image, case, artifact):
                     "/harness/execute.py",
                     case.id,
                     "--resume",
-                    timeout=case.timeout,
+                    timeout=remaining(),
                     check=False,
                     capture_output=True,
                 )
@@ -121,8 +130,8 @@ def run_case(args, image, case, artifact):
                     outcome["outcome"] = "HARNESS_FAILURE"
         elif child.returncode != 0 and outcome["outcome"] == "PASS":
             outcome["outcome"] = "HARNESS_FAILURE"
-    except subprocess.TimeoutExpired as exc:
-        outcome["detail"] = f"execution exceeded {exc.timeout}s"
+    except subprocess.TimeoutExpired:
+        outcome.update(outcome="HARNESS_FAILURE", detail=f"execution exceeded its {case.timeout}s deadline")
     except (OSError, ValueError, IndexError, RuntimeError, subprocess.CalledProcessError) as exc:
         outcome["outcome"] = "HARNESS_FAILURE"
         outcome["detail"] = str(exc)
@@ -198,6 +207,8 @@ def main():
     image = args.image or "robert-compose:" + uuid4().hex[:16]
     root = (args.artifacts or Path(tempfile.mkdtemp(prefix="robert-compose-"))).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        parser.error(f"artifact directory must be empty: {root}")
     print(f"Artifacts: {root}", flush=True)
     bootstrap = project_command(args, image, "robert-compose-build")
     try:

@@ -138,13 +138,7 @@ def cancel(w, *, descendant=False):
     assert group(actor["pgid"])
     item = w.wait("workbench item for this GitHub workstream", lambda: w.item(actor["workstream_id"]))
 
-    def cancel_when_unlocked():
-        status, result = w.item_command(item, "cancel")
-        if status == 409 and "publication is in progress" in result.get("safe_error", ""):
-            return None
-        return status, result
-
-    status, result = w.wait("cancel acquires the real publication lock", cancel_when_unlocked, timeout=10)
+    status, result = w.cancel_item(item)
     assert status == 200, result
     w.wait("canceled worker stopped", lambda: not group(actor["pgid"]))
     assert w.sql("SELECT * FROM tasks WHERE task_id=? AND lifecycle='canceled'", actor["task_id"])

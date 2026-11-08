@@ -128,7 +128,7 @@ def cancel_replay(w):
     cp = w.checkpoint(rule)
     item = w.item(cp["entity"]["workstream_id"])
     key = uuid4().hex
-    status, result = w.item_command(item, "cancel", key=key)
+    status, result = w.cancel_item(item, key=key)
     assert status == 200, result
     assert w.item_command(item, "cancel", key=key)[0] == 200
     assert w.item(cp["entity"]["workstream_id"])["canceled_at"]
@@ -158,9 +158,15 @@ def retry_replay(w):
     status, result = w.item_command(item, "retry", key=key)
     assert status == 200, result
     assert w.item_command(item, "retry", key=key)[0] == 200
-    w.wait(
-        "completed retry", lambda: w.sql("SELECT * FROM tasks WHERE lifecycle='completed' AND route_id='local-result'")
+    retry = w.wait(
+        "one completed successor with a recorded local result",
+        lambda: w.sql(
+            "SELECT t.task_id FROM tasks t JOIN worker_results r ON r.task_id=t.task_id "
+            "WHERE t.parent_task_id=? AND t.lifecycle='completed' AND r.output_type='local_result'",
+            prior["task_id"],
+        ),
     )
+    assert len(retry) == 1
     assert len(w.sql("SELECT * FROM attempts WHERE task_id=?", prior["task_id"])) == 1
     assert len(w.sql("SELECT * FROM worker_results WHERE output_type='local_result'")) == 1
 
