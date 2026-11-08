@@ -10,7 +10,7 @@ import json
 import re
 
 CONTRACT_ID = "compact-v1"
-NORMALIZER_VERSION = 1
+NORMALIZER_VERSION = 2
 OUTPUTS = frozenset(output.value for output in OutputType)
 FIELDS = {
     "planned_github_actions",
@@ -419,6 +419,10 @@ def normalize(envelope, settings):
     result.update({key: envelope[key] for key in ("task_id", "attempt_id", "output_type")})
     result.setdefault("consumed_event_fingerprints", [])
     result.setdefault("consumed_work_item_event_ids", [])
+    if output_type == OutputType.CLASSIFICATION_RESULT and not result.get("recommended_route", "").strip():
+        # Persist the safe follow-up before spooling so replay preserves the decision.
+        result["recommended_route"] = "waiting-for-user"
+        result["classification_route_defaulted"] = True
     for index, action in enumerate(result["planned_github_actions"]):
         field = f"planned_github_actions[{index}]"
         kind = action["type"]

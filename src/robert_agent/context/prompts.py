@@ -487,9 +487,9 @@ def render_prompt(
     if remediation:
         result["remediation_evidence"] = remediation
     if expected_output == OutputType.CLASSIFICATION_RESULT:
-        result.update(recommended_route="", branch_slug="")
+        result.update(recommended_route="waiting-for-user", branch_slug="")
         sections.append("""Classification result:
-Set recommended_route to new-pr, update-existing-pr, review-comment, review-pr, comment-analysis, vote or waiting-for-user when follow-up work is needed; leave it empty only when no follow-up is needed.
+Set recommended_route to new-pr, update-existing-pr, review-comment, review-pr, comment-analysis, vote or waiting-for-user. If the route or requested outcome remains unclear, choose waiting-for-user and explain the missing decision in handoff. A missing or blank route defaults to waiting-for-user; it never means the request is complete.
 For new-pr, set branch_slug to meaningful lowercase English kebab-case, at most 60 characters; otherwise leave it empty. Put the routing evidence in handoff.""")
     if expected_output == OutputType.WAITING_FOR_USER:
         result["operator_question"] = {

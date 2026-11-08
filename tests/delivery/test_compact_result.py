@@ -15,6 +15,28 @@ from tests.support.compact_result import CompactResultFixture
 
 
 class CompactResultTests(CompactResultFixture):
+    def test_classification_without_route_normalizes_to_waiting(self):
+        for origin in ("github", "web"):
+            for route in (None, "", " \n\t"):
+                with self.subTest(origin=origin, route=route):
+                    envelope = self.envelope("t", "a")
+                    envelope["output_type"] = "classification_result"
+                    submission = envelope["submission"]
+                    submission.update(
+                        planned_github_actions=[],
+                        consumed_work_item_event_ids=["wie-1"],
+                        handoff="Recommend route new-pr",
+                    )
+                    if route is not None:
+                        submission["recommended_route"] = route
+                    normalized = result_contract.normalize(envelope, {**self.settings(), "origin_type": origin})
+
+                    self.assertEqual(normalized["recommended_route"], "waiting-for-user")
+                    self.assertEqual(normalized["output_type"], "classification_result")
+                    self.assertEqual(normalized["planned_github_actions"], [])
+                    self.assertEqual(normalized["handoff"], "Recommend route new-pr")
+                    self.assertEqual(submission.get("recommended_route"), route)
+
     def test_compact_comments_get_distinct_program_markers(self):
         db, task, attempt, _, _ = self.prepare("comment")
         receipt = result.record_result(
