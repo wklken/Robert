@@ -228,6 +228,26 @@ class SubmissionHeadTests(unittest.TestCase):
             run_once.run_once(self.config_path, dry_run=True, skip_external=True)
         self.assertEqual(self.metadata(db)["audit"]["violations"], ["worktree_status_unavailable"])
 
+    def test_final_audit_status_timeout_remains_retryable(self):
+        db, task, _, envelope = self.fixture()
+        self.assertTrue(result.record_result(db, envelope)["ok"])
+        original = control_commands.run_command
+
+        def timeout_status(command, **kwargs):
+            if "status" in command[:3]:
+                raise subprocess.TimeoutExpired(command, 5)
+            return original(command, **kwargs)
+
+        with patch.object(control_commands, "run_command", side_effect=timeout_status):
+            run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        metadata = self.metadata(db)
+        self.assertNotIn("audit", metadata)
+        self.assertEqual(metadata["audit_observation"]["status"], "inspection_timeout")
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertNotEqual(
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task,)).fetchone()[0], "failed"
+            )
+
     def test_status_timeout_is_validation_unavailable(self):
         db, _, _, envelope = self.fixture()
         original = action_scope.subprocess.run

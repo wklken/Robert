@@ -1,6 +1,7 @@
 from robert_agent.adapters.processes import identity as worker_identity
 from contextlib import closing
 import os
+import json
 from pathlib import Path
 import signal
 import sqlite3
@@ -129,26 +130,22 @@ class DeadlineRemediationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "[]", ""))
+        with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
+            conn.execute("""INSERT INTO github_actions
+                (action_id,result_id,task_id,action_type,target_url,audit_status,publish_status,created_at,metadata_json)
+                SELECT 'action-2', result_id, task_id, action_type, target_url,
+                    audit_status, publish_status, created_at, metadata_json
+                FROM github_actions WHERE action_id='action-1'""")
         with mock.patch.dict(os.environ, {"_ROBERT_CONTROL_DEADLINE": str(time.monotonic() - 1)}):
-            result = publish.publish_ready_actions(fixture.db_path, run_command=runner)
-        self.assertEqual(result["failed_count"], 1, result)
-        self.assertEqual(result["published_count"], 0)
+            with self.assertRaises(common.ControlDeadlineExceeded):
+                publish.publish_ready_actions(fixture.db_path, run_command=runner)
         runner.assert_not_called()
         with closing(sqlite3.connect(fixture.db_path)) as conn:
-            self.assertEqual(
-                conn.execute("SELECT status FROM publication_intents").fetchone()[0],
-                "executing",
-            )
-            self.assertEqual(
-                conn.execute("SELECT publish_status FROM github_actions").fetchone()[0],
-                "not_published",
-            )
-            self.assertEqual(
-                conn.execute("SELECT json_extract(metadata_json, '$.publish.status') FROM github_actions").fetchone()[
-                    0
-                ],
-                "publish_failed",
-            )
+            self.assertEqual(conn.execute("SELECT status FROM publication_intents").fetchall(), [("executing",)])
+            actions = conn.execute("SELECT metadata_json FROM github_actions ORDER BY action_id").fetchall()
+            self.assertEqual(json.loads(actions[0][0])["publish"]["attempt_count"], 1)
+            self.assertNotIn("status", json.loads(actions[0][0])["publish"])
+            self.assertNotIn("publish", json.loads(actions[1][0]))
 
     def test_publication_caps_injected_commands_by_deadline_and_default(self):
         for remaining in (None, 2):

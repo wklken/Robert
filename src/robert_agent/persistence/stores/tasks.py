@@ -576,3 +576,17 @@ def cancel_execution_filtered(conn, items, value_1):
         )
     )
     return statements.write(conn, stmt, {"p0": value_1, "items": items})
+
+
+def record_local_preparation_retry(conn, task_id, failure_json):
+    task = tables["tasks"]
+    return statements.write(
+        conn,
+        update(task)
+        .where(task.c.task_id == task_id)
+        .values(
+            metadata_json=func.json_set(
+                task.c.metadata_json, sql_constant("$.preparation_retry"), func.json(failure_json)
+            )
+        ),
+    )

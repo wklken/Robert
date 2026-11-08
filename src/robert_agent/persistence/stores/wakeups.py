@@ -403,3 +403,16 @@ def consume_wakeups_for_results_filtered(conn, items, value_1, value_2):
         )
     )
     return statements.write(conn, stmt, {"p0": value_1, "p1": value_2, "items": items})
+
+
+def defer_local_preparation(conn, task_id, next_retry_at, now):
+    wakeup = tables["wakeups"]
+    return statements.write(
+        conn,
+        update(wakeup)
+        .where(
+            wakeup.c.task_id == task_id,
+            wakeup.c.status == sql_constant(WakeupStatus.PENDING.value),
+        )
+        .values(not_before_at=next_retry_at, updated_at=now),
+    )

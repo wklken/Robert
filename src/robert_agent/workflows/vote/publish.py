@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from subprocess import SubprocessError
+from robert_agent.foundation.commands import ControlDeadlineExceeded
 
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import files as vote_files
@@ -158,6 +159,8 @@ def publish(action, scope, run_command, scope_guard=None):
                 and vote_workspace.api(manifest["repo"], "commits/HEAD", run_command=run_command).get("sha")
                 == manifest["head_sha"]
             )
+    except ControlDeadlineExceeded:
+        raise
     except (ValueError, OSError, TypeError, KeyError, SubprocessError):
         return {
             "ok": False,

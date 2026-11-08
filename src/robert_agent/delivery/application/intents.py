@@ -1,5 +1,6 @@
 """application delivery intents responsibilities."""
 
+from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublicationStatus, PublishStatus
 
 from robert_agent.persistence import records as db_records
@@ -39,6 +40,8 @@ def derive_push_source_sha(action, action_scope, run_command):
     command = ["git", "rev-parse", source_ref]
     try:
         completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
+    except ControlDeadlineExceeded:
+        raise
     except Exception:
         return scope, None
     if publication_effects.command_failure(completed, "git rev-parse failed"):
