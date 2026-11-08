@@ -12,14 +12,25 @@ def configured(config=None):
 
 def render_message(payload):
     lines = ["Robert: " + payload["type"]]
-    for key in ("title", "summary", "reason_code", "safe_error", "required_action"):
+    for key in (
+        "title",
+        "summary",
+        "issue_url",
+        "pr_url",
+        "result_url",
+        "reason_code",
+        "safe_error",
+        "required_action",
+    ):
         if payload.get(key):
             lines.append(str(payload[key]))
     for choice in payload.get("choices", []):
         lines.append(f"{choice['id']}: {choice['label']}")
     if payload.get("task_id"):
         lines.append("Task: " + payload["task_id"])
-    if payload.get("notification_id"):
+    if payload.get("request_id"):
+        lines.append("/robert-inbox status " + payload["request_id"])
+    if payload.get("notification_id") and payload.get("actions", ["ack"]):
         lines.append("Response commands:")
         for action in payload.get("actions", ["ack"]):
             suffix = " <answer>" if action == "reply" else ""

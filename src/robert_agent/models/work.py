@@ -14,6 +14,31 @@ from sqlalchemy.orm import Mapped, mapped_column
 from robert_agent.models.base import Base
 
 
+class DispatchRequest(Base):
+    __tablename__ = "dispatch_requests"
+
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id"))
+    identity_json: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="draft")
+    issue_json: Mapped[str] = mapped_column(Text, server_default="{}")
+    workstream_id: Mapped[str | None] = mapped_column(Text, unique=True)
+    task_id: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str] = mapped_column(Text, server_default="")
+    result_json: Mapped[str] = mapped_column(Text, server_default="{}")
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'accepted', 'creating', 'issue_created', 'admitted', 'delivered', 'failed', 'attention')"
+        ),
+        Index("idx_dispatch_requests_pending", "status", "created_at"),
+    )
+
+
 class Repository(Base):
     __tablename__ = "repos"
 

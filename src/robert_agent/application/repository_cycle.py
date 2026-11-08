@@ -6,7 +6,7 @@ from robert_agent.execution import journal as run_journal
 from robert_agent.delivery.application import publish
 from robert_agent.delivery.application import result_audit
 from robert_agent.execution.application import monitor
-from robert_agent.work.application import completion
+from robert_agent.work.application import completion, dispatch_delivery
 from robert_agent.work.application import discovery
 from robert_agent.work.application import intake
 from robert_agent.work.application import remediation_requests
@@ -389,6 +389,7 @@ def run_repo_pipeline(
                 dispatch_budget,
                 config_result=config_result,
             )
+        dispatch_delivery.complete(conn, [repo_id], run_now)
         summary["publish_pending_count"] = publish_result.get("pending_count", 0)
         summary["published_count"] = publish_result.get("published_count", 0)
         summary["publish_skipped_count"] = publish_result.get("skipped_count", 0)

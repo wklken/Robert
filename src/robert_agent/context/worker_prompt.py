@@ -314,6 +314,14 @@ def worker_prompt_input(
         )
 
     guidance = ["worker-boundaries"]
+    current = (context.get("github_context") or {}).get("current_event_fingerprint")
+    request = (
+        next((event for event in events if event.get("event_fingerprint") == current), None)
+        if current
+        else next(iter(events), None)
+    )
+    if request and request.get("dispatch_request_id"):
+        guidance.append("issue-dispatch")
     values = {}
     command = ()
     if not restricted:

@@ -678,3 +678,20 @@ CREATE INDEX IF NOT EXISTS idx_supervision_recovery_due
 ON supervision_recovery_actions(status, next_check_at);
 CREATE INDEX IF NOT EXISTS idx_supervision_recovery_budget
 ON supervision_recovery_actions(lineage_key, stage_family);
+
+CREATE TABLE IF NOT EXISTS dispatch_requests (
+    request_id TEXT PRIMARY KEY NOT NULL,
+    repo_id TEXT NOT NULL REFERENCES repos(repo_id),
+    identity_json TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'accepted', 'creating', 'issue_created', 'admitted', 'delivered', 'failed', 'attention')),
+    issue_json TEXT NOT NULL DEFAULT '{}',
+    workstream_id TEXT UNIQUE,
+    task_id TEXT,
+    error TEXT NOT NULL DEFAULT '',
+    result_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dispatch_requests_pending ON dispatch_requests(status, created_at);

@@ -719,6 +719,7 @@
           "type": "boolean",
           "default": false
         },
+        "dispatch_enabled": {"type": "boolean", "default": false},
         "provider": {
           "type": "string",
           "enum": [

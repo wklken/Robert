@@ -575,7 +575,30 @@ def audit_result(
     remediation_attestation=None,
     review_input_policy="required",
     final=True,
+    dispatch_issue_url=None,
 ):
+    if dispatch_issue_url:
+        kind = result.get("output_type")
+        if kind == "classification_result" and result.get("recommended_route") not in {
+            "comment-analysis",
+            "new-pr",
+            "waiting-for-user",
+        }:
+            return {
+                "ok": False,
+                "status": AuditStatus.FAILED.value,
+                "safe_error": "Issue dispatch classification requires an analysis, implementation or clarification route.",
+            }
+        if kind == "new_pr" and not any(
+            action.get("type") == "comment" and action.get("target_url") == dispatch_issue_url
+            for action in result.get("planned_github_actions", [])
+            if isinstance(action, dict)
+        ):
+            return {
+                "ok": False,
+                "status": AuditStatus.FAILED.value,
+                "safe_error": "Issue dispatch implementation requires an Issue result comment as well as a PR.",
+            }
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):
             return {

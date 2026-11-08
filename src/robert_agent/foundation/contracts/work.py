@@ -4,6 +4,18 @@ from enum import StrEnum, unique
 
 
 @unique
+class DispatchRequestStatus(StrEnum):
+    DRAFT = "draft"
+    ACCEPTED = "accepted"
+    CREATING = "creating"
+    ISSUE_CREATED = "issue_created"
+    ADMITTED = "admitted"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    ATTENTION = "attention"
+
+
+@unique
 class TaskLifecycle(StrEnum):
     DETECTED = "detected"
     AUTHORIZED = "authorized"

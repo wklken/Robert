@@ -40,6 +40,7 @@ STAGES = {
 GUIDANCE = {
     name: (resource, section)
     for resource, section, names in (
+        ("issue-dispatch", "Work", ("issue-dispatch",)),
         ("worker", "Boundaries", ("worker-boundaries",)),
         ("worker", "Work", ("collaboration", "resume", "skills", "memory", "knowledge")),
         ("worker", "Verification", ("unit-tests", "verification")),

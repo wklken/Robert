@@ -148,11 +148,20 @@ export default definePluginEntry({
     });
     api.registerCommand({
       name: "robert-inbox",
-      description: "Show Robert questions and failures awaiting your response.",
-      acceptsArgs: false, requireAuth: true,
-      handler: async (ctx) => ctx.isAuthorizedSender
-        ? runConfigured(["messages", "inbox", "--output", "json"], identity(ctx))
-        : { text: "Unauthorized sender.", isError: true },
+      description: "Show pending messages or draft and submit an Issue request.",
+      acceptsArgs: true, requireAuth: true,
+      handler: async (ctx) => {
+        if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
+        const args = String(ctx.args ?? "").trim();
+        if (!args) return runConfigured(["messages", "inbox", "--output", "json"], identity(ctx));
+        const draft = args.match(/^new\\s+(\\S+)\\s+([\\s\\S]+)$/);
+        const command = args.match(/^(submit|status|retry)\\s+(dispatch-[a-f0-9]{32})$/);
+        if (draft) return runConfigured(["messages", "dispatch", "--output", "json"],
+          { ...identity(ctx), action: "new", repo: draft[1], body: draft[2] });
+        if (command) return runConfigured(["messages", "dispatch", "--output", "json"],
+          { ...identity(ctx), action: command[1], request_id: command[2] });
+        return { text: "Usage: /robert-inbox new <owner/repo> <request>, or /robert-inbox <submit|status|retry> <request-id>", isError: true };
+      },
     });
     api.registerCommand({
       name: "robert-respond",

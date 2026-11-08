@@ -133,7 +133,7 @@ def recover_pending_handoffs(
     return recovered
 
 
-def _pending_driving_request(pending_events, repo, workstream_id):
+def _pending_driving_request(pending_events, repo, workstream_id, *, conn, config_result):
     # Saved discussion is data; only a current trusted request may drive its child.
     return next(
         (
@@ -143,6 +143,8 @@ def _pending_driving_request(pending_events, repo, workstream_id):
                 decision := source_policy.reauthorize_saved_request(
                     pending_event,
                     repo,
+                    conn=conn,
+                    config=config_result,
                     known_workstreams=(
                         ()
                         if pending_event.get("event_type") in {"assigned", "review_request", "notification"}
@@ -186,7 +188,7 @@ def _create_child_task_for_pending_events(
         db_write_workstreams.update_for_execute_command(conn, run_now, workstream_id)
         return None
 
-    child_event = _pending_driving_request(pending_events, repo, workstream_id)
+    child_event = _pending_driving_request(pending_events, repo, workstream_id, conn=conn, config_result=config_result)
     if child_event is None:
         _save_pending_handoff(conn, parent_task_id, {"status": "completed", "retryable": False})
         db_write_workstreams.update_for_execute_command(conn, run_now, workstream_id)
@@ -385,6 +387,8 @@ def _create_child_task_for_recommended_route(
     child_event = source_policy.reauthorize_saved_request(
         child_event,
         repo,
+        conn=conn,
+        config=config_result,
         known_workstreams=[]
         if child_event.get("event_type") in {"assigned", "review_request", "notification"}
         else [workstream_id],
@@ -583,7 +587,8 @@ def finalize_accepted_result(
         db_write_work_items.update_for_finalize_accepted_result(conn, run_now, run_now, work_item_row[0])
     if payload["output_type"] == OutputType.CLASSIFICATION_RESULT and not (
         payload.get("classification_route_defaulted")
-        and _pending_driving_request(pending_events, repo, workstream_id) is not None
+        and _pending_driving_request(pending_events, repo, workstream_id, conn=conn, config_result=config_result)
+        is not None
     ):
         child_task = _create_child_task_for_recommended_route(
             conn,

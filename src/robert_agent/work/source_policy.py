@@ -1,6 +1,7 @@
 """Stable identity and current-authority policy for preserved source events."""
 
 from robert_agent.security import authorization as authorize
+from robert_agent.work import dispatch_requests
 from robert_agent.adapters.github import discovery as discover
 
 
@@ -47,7 +48,16 @@ def refresh_pending_events(events, pending, covered, repo):
     return list(merged.values())
 
 
-def reauthorize_saved_request(event, repo, *, known_workstreams=()):
+def reauthorize_saved_request(event, repo, *, known_workstreams=(), conn=None, config=None):
+    if event.get("dispatch_request_id"):
+        if conn is None:
+            return {
+                **event,
+                "authorization_status": "ignored_untrusted_trigger",
+                "drives_execution": False,
+                "creates_task": False,
+            }
+        return dispatch_requests.reauthorize(conn, config, event)
     candidate = {
         **event,
         "mentions_dd": bool(discover.bot_requests(event.get("body"), repo["github_account"])),

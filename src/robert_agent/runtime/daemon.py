@@ -1,3 +1,4 @@
+from robert_agent.work import dispatch_requests as issue_dispatch
 from robert_agent.persistence import errors as db_errors
 from robert_agent.supervision import health as supervision_health
 
@@ -1005,6 +1006,9 @@ def _background_decision(context, *, now, child_runner=run_child_json):
             include_publication=False,
         )
         pending_publish = any(delivery_queries.ready_actions(conn, 1, repo_id=repo_id) for repo_id in repo_ids)
+        pending_publish = pending_publish or bool(
+            issue_dispatch.pending(conn, context.runtime_config, remote=True, repo_ids=repo_ids)
+        )
         pending_delivery = bool(
             message_transport.configured(context.runtime_config)
             and execution_notifications.has_pending_local_delivery(conn, repo_ids, now, config=context.runtime_config)

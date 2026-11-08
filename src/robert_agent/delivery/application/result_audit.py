@@ -8,6 +8,7 @@ from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import dispatch_requests as dispatch_queries
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.stores import attempts as db_write_attempts
@@ -206,6 +207,7 @@ def audit_completed_results(
             continue
         if not execution_ownership.claim_task(conn, payload["task_id"], run_now):
             continue
+        dispatch_request = dispatch_queries.for_task(conn, payload["task_id"])
         audit = audit_result.audit_result(
             payload,
             allowed_actions,
@@ -215,6 +217,7 @@ def audit_completed_results(
             verification_policy=verification_policy,
             origin_type=origin_type,
             action_scope=action_scope,
+            dispatch_issue_url=json.loads(dispatch_request["issue_json"])["html_url"] if dispatch_request else None,
             task_kind=task_kind,
             remediation_context=remediation_context,
             remediation_attestation=remediation_attestation,
