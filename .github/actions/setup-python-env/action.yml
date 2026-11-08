@@ -1,0 +1,69 @@
+name: Set up the CI Python environment
+description: Reuse installed dependencies while always installing the current checkout
+inputs:
+  python-version:
+    description: Python version passed to setup-python
+    required: true
+  cache-environment:
+    description: Reuse dependencies for ordinary CI; release validation starts fresh
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Identify the environment
+      id: identity
+      shell: python
+      run: |
+        import hashlib, json, os, platform, sys
+        # Virtualenv scripts and editable installs contain absolute paths.
+        identity = [sys.version, sys.executable, os.getcwd(), platform.machine(), os.environ.get("ImageOS")]
+        digest = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"key={digest}\n")
+    - name: Restore installed dependencies
+      id: environment
+      if: inputs.cache-environment == 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: .ci-venv
+        # Exact matches only: never retain removed or incompatible dependencies.
+        key: python-env-${{ runner.os }}-${{ steps.identity.outputs.key }}-${{ hashFiles('pyproject.toml', '.github/actions/setup-python-env/action.yml') }}
+    - name: Install dependencies on a cache miss
+      if: steps.environment.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        python -m venv --clear .ci-venv
+        .ci-venv/bin/python -m pip install --upgrade pip setuptools certifi
+        .ci-venv/bin/python - <<'PYTHON'
+        import subprocess, sys, tomllib
+        from pathlib import Path
+        project = tomllib.loads(Path("pyproject.toml").read_text())
+        requirements = (
+            project["build-system"]["requires"]
+            + project["project"]["dependencies"]
+            + project["project"]["optional-dependencies"]["dev"]
+        )
+        subprocess.run([sys.executable, "-m", "pip", "install", *requirements], check=True)
+        # Backends can declare extra requirements specifically for editable builds.
+        from build import ProjectBuilder
+        editable = sorted(ProjectBuilder(".").get_requires_for_build("editable"))
+        if editable:
+            subprocess.run([sys.executable, "-m", "pip", "install", *editable], check=True)
+        PYTHON
+        .ci-venv/bin/python -m pip check
+    # Save before installing Robert or running tests, even if a later test fails.
+    - name: Save installed dependencies
+      if: inputs.cache-environment == 'true' && steps.environment.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: .ci-venv
+        key: ${{ steps.environment.outputs.cache-primary-key }}
+    - name: Install the current checkout and activate the environment
+      shell: bash
+      run: |
+        .ci-venv/bin/python -m pip install --no-deps --no-build-isolation -e .
+        .ci-venv/bin/python -m pip check
+        echo "$GITHUB_WORKSPACE/.ci-venv/bin" >> "$GITHUB_PATH"
