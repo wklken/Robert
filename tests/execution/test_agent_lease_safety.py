@@ -23,11 +23,37 @@ class AgentLeaseSafetyTests(unittest.TestCase):
                         (json.dumps({"executor_identity": {"pid": 123}}),),
                     )
                     execution_leases.acquire(conn, "repo", "old", "2000-01-01T00:00:00+00:00", 1)
+                    conn.commit()
                     with mock.patch.object(identity, "inspect_recorded_identity", return_value=state):
                         result = execution_leases.acquire(conn, "repo", "new", "2026-10-29T00:00:00+00:00", 1)
                     self.assertEqual(result["ok"], state == "dead")
                     owners = conn.execute("SELECT owner_id FROM leases WHERE status='active'").fetchall()
                     self.assertEqual(owners, [("new" if state == "dead" else "old",)])
+
+    def test_owner_observation_does_not_hold_the_sqlite_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "robert.sqlite3"
+            storage.init_database(db)
+            with closing(sqlite3.connect(db)) as conn:
+                conn.execute(
+                    "INSERT INTO agent_runs(run_id,status,started_at,summary_json) VALUES ('old','running','2000-01-01',?)",
+                    (json.dumps({"executor_identity": {"pid": 123}}),),
+                )
+                execution_leases.acquire(conn, "repo", "old", "2000-01-01T00:00:00+00:00", 1)
+                conn.commit()
+
+                def observe(_identity):
+                    with closing(sqlite3.connect(db, timeout=0.1)) as other, other:
+                        other.execute("UPDATE agent_runs SET status='completed' WHERE run_id='old'")
+                    return "dead"
+
+                with mock.patch.object(identity, "inspect_recorded_identity", side_effect=observe):
+                    result = execution_leases.acquire(conn, "repo", "new", "2026-10-29T00:00:00+00:00", 1)
+                self.assertTrue(result["ok"], result)
+                conn.rollback()
+                self.assertEqual(
+                    conn.execute("SELECT owner_id FROM leases WHERE status='active'").fetchall(), [("old",)]
+                )
 
     def test_expired_lease_without_owner_identity_stays_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:

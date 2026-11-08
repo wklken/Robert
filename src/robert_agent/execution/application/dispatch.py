@@ -175,9 +175,9 @@ def queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
             capacity,
             max(0, int(repo["max_concurrency"]) - attempt_capacity.running_attempt_count(conn, repo_id) - reserved),
         )
-    if capacity <= 0:
-        return 0
-    rows = db_read_attempts.find_for_queue_prepared_attempts(conn, repo_id, capacity)
+    reserved_rows = db_read_attempts.find_for_queue_prepared_attempts(conn, repo_id, 0, reserved_only=True)
+    reserved_ids = {row[0] for row in reserved_rows}
+    rows = reserved_rows + db_read_attempts.find_for_queue_prepared_attempts(conn, repo_id, max(0, capacity))
     queued = 0
     for (
         attempt_id,
@@ -189,6 +189,8 @@ def queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
         routing_mode,
         requested_worker,
     ) in rows:
+        if any(item["task_info"]["attempt_id"] == attempt_id for item in dispatch_queue):
+            continue
         if not execution_ownership.claim_task(conn, task_id):
             continue
         task_info = {
@@ -208,7 +210,7 @@ def queue_prepared_attempts(conn, repo_id, repo, dispatch_queue, capacity):
             repo_id=repo_id,
             repo=repo,
         ):
-            queued += 1
+            queued += int(attempt_id not in reserved_ids)
     return queued
 
 
@@ -382,9 +384,10 @@ def dispatch_queued_locked(
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_sqlite.configure(conn, foreign_keys=True)
                 db_sqlite.configure(conn, busy_timeout_ms=5000)
-                if attempt_capacity.running_attempt_count_for_repos(conn, repo_ids) >= max_concurrency:
+                slot_credit = int(attempt_capacity.can_resume_native_slot(conn, task_info["attempt_id"]))
+                if attempt_capacity.running_attempt_count_for_repos(conn, repo_ids) - slot_credit >= max_concurrency:
                     continue
-                if attempt_capacity.running_attempt_count(conn, repo_id) >= int(
+                if attempt_capacity.running_attempt_count(conn, repo_id) - slot_credit >= int(
                     (repo or {}).get("max_concurrency", max_concurrency)
                 ):
                     continue

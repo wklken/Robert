@@ -65,6 +65,11 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
         self.deliver("retry")
         self.assertEqual(len(self.tasks()), 2)
 
+    def test_trusted_login_case_does_not_change_terminal_followup_authority(self):
+        self.finish()
+        self.deliver("case-followup", actor="OwNeR")
+        self.assertEqual(len(self.tasks()), 2)
+
     def test_untrusted_and_bot_mentions_do_not_reopen_terminal_task(self):
         self.finish()
         self.deliver("untrusted", actor="outsider")
@@ -159,7 +164,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
             mock.patch.object(session, "collect_events", side_effect=collect),
             mock.patch.object(github_sources, "read_source_state", return_value={"state": "open"}),
             mock.patch(
-                "robert_agent.adapters.github.discovery._source_metadata",
+                "robert_agent.adapters.github.discovery.refresh_source_metadata",
                 return_value=(
                     {"number": 123, "source_type": "issue", "event_type": "notification", "state": "open"},
                     "open",
@@ -262,7 +267,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
                 with (
                     mock.patch.object(session, "collect_events", return_value=[]) as collect,
                     mock.patch(
-                        "robert_agent.adapters.github.discovery._source_metadata",
+                        "robert_agent.adapters.github.discovery.refresh_source_metadata",
                         side_effect=AssertionError("recovered blocked source"),
                     ),
                 ):
@@ -302,7 +307,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
         with (
             mock.patch.object(session, "collect_events", return_value=[]),
             mock.patch.object(github_sources, "read_source_state", return_value={"state": "open"}),
-            mock.patch.object(discover, "_source_metadata", return_value=(metadata, "open")),
+            mock.patch.object(discover, "refresh_source_metadata", return_value=(metadata, "open")),
             mock.patch.object(
                 discover,
                 "_enrich_pull_request_metadata",

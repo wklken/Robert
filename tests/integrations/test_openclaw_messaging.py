@@ -44,7 +44,14 @@ const response = await commands['robert-respond'].handler(context);
 const status = await commands['robert-status'].handler(context);
 const denied = await commands['robert-respond'].handler({ ...context, isAuthorizedSender: false });
 const malformed = await commands['robert-respond'].handler({ ...context, args: 'notice reply yes' });
-console.log(JSON.stringify({ response, status, denied, malformed, auth: commands['robert-respond'].requireAuth }));
+const reads = [];
+for (const name of ['robert-status', 'robert-task', 'robert-run', 'robert-artifact']) {
+  const readContext = { isAuthorizedSender: true, args: 'some-id report' };
+  reads.push({ name, auth: commands[name].requireAuth,
+    allowed: await commands[name].handler(readContext),
+    denied: await commands[name].handler({ ...readContext, isAuthorizedSender: false }) });
+}
+console.log(JSON.stringify({ response, status, denied, malformed, reads, auth: commands['robert-respond'].requireAuth }));
 """)
             result = subprocess.run(
                 ["node", str(script)],
@@ -79,6 +86,12 @@ console.log(JSON.stringify({ response, status, denied, malformed, auth: commands
                 json.loads(value["status"]["text"])["args"],
                 ["status", "--output", "json", "--config", "/configuration with spaces.yml"],
             )
+            for read in value["reads"]:
+                self.assertTrue(read["auth"])
+                self.assertTrue(read["denied"].get("isError"), read)
+                # No Robert operator binding is supplied: channel-authorized
+                # readers may query this entire instance, including artifacts.
+                self.assertEqual(json.loads(read["allowed"]["text"])["request"], {})
             self.assertTrue(value["auth"])
             self.assertTrue(value["denied"]["isError"])
             self.assertTrue(value["malformed"]["isError"])

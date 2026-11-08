@@ -378,7 +378,29 @@ def _create_child_task_for_recommended_route(
         (event for event in related_events if event.get("event_fingerprint") in consumed_fingerprints),
         related_events[0],
     )
-    related_events = [child_event] + [event for event in related_events if event is not child_event]
+    child_event = source_policy.reauthorize_saved_request(
+        child_event,
+        repo,
+        known_workstreams=[]
+        if child_event.get("event_type") in {"assigned", "review_request", "notification"}
+        else [workstream_id],
+    )
+    if not child_event.get("drives_execution"):
+        execution_notifications.insert(
+            conn,
+            "classification_authorization_rejected",
+            "recorded",
+            run_now,
+            {
+                "task_id": parent_task_id,
+                "reason_code": "classification_request_not_authorized",
+                "event_fingerprint": child_event.get("event_fingerprint"),
+            },
+        )
+        return None
+    related_events = [child_event] + [
+        event for event in related_events if event.get("event_fingerprint") != child_event.get("event_fingerprint")
+    ]
     stream = {
         "workstream_id": workstream_id,
         "source_relationship": workstream.source_relationship(child_event),

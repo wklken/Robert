@@ -117,7 +117,7 @@ def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
         or not work_policies.is_driving_context_event(event)
         or not work_policies.is_trusted_actor(event, repo)
         or event.get("actor_kind") == "github_system"
-        or event.get("actor_login") == repo["github_account"]
+        or (event.get("actor_login") or "").casefold() == repo["github_account"].casefold()
     ):
         return False
     if db_records.first(

@@ -170,3 +170,18 @@ Hermes SDK, dynamic plugin registry, alternate task state machine or bypass of
 Robert's command authority is introduced in this change. The existing command
 transport can forward envelopes to other systems today; inbound providers remain
 explicitly supported and fail closed until their adapter is implemented.
+
+### Query visibility in OpenClaw
+
+`robert-status`, `robert-task`, `robert-run`, and `robert-artifact` require
+OpenClaw authorization (`requireAuth` and the authenticated command context's
+`isAuthorizedSender`). An authorized channel reader can query the entire Robert
+instance, including registered artifacts; these four read-only commands do not
+apply Robert's operator sender, session, or repository bindings. Configure the
+OpenClaw channel's readers accordingly. This does not make queries anonymous.
+
+`robert-inbox` and `robert-respond` still require Robert's configured provider,
+sender, session, repository scope, and versioned command checks. Message text
+never supplies authentication. Validate the installed OpenClaw version's command
+context and channel authorization during deployment; generated-plugin tests do
+not establish that a running gateway is configured correctly.

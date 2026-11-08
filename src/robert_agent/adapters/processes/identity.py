@@ -326,6 +326,7 @@ def terminate_recorded_identity(
     recorded,
     *,
     inspect=None,
+    capture_members=None,
     signal_group=None,
     supervisor_process_group_id=None,
     clock=None,
@@ -336,9 +337,11 @@ def terminate_recorded_identity(
     """Safely terminate a verified isolated process group.
 
     The identity is checked before TERM and on every observation after TERM.
-    KILL is only sent when the exact same identity remains alive.  Any
-    visibility loss/mismatch only waits for confirmed exit within the current
-    deadline, then returns ``attention`` without another signal.
+    Before TERM, capture group members while the leader is still verified.
+    A surviving verified member keeps the original group anchored if the leader
+    exits or becomes unreadable. Losing every verified anchor forbids another
+    signal. A dead leader without this evidence requires attention while
+    descendants remain alive.
     """
 
     inspect = inspect or inspect_recorded_identity
@@ -359,9 +362,34 @@ def terminate_recorded_identity(
         }
     initial = inspect(recorded)
     if initial == "dead":
+        try:
+            if live_process_group(process_group_id):
+                return {"status": "attention", "reason": "unverified_descendants_running", "pid": pid}
+        except (OSError, subprocess.SubprocessError):
+            return {"status": "attention", "reason": "group_inspection_failed", "pid": pid}
         return {"status": "already_dead", "pid": pid}
     if initial != "alive_same":
         return {"status": "attention", "reason": "identity_not_verified", "pid": pid}
+
+    members = (capture_members or capture_group_members)(recorded)
+    if members is None:
+        return {"status": "attention", "reason": "group_identity_unverified", "pid": pid}
+
+    def observe_group():
+        leader = inspect(recorded)
+        if leader == "alive_same":
+            return leader
+        # A member captured while the leader was verified anchors the PGID;
+        # an unrelated group cannot reuse that ID while this member survives.
+        states = [inspect(member) for member in members]
+        if "alive_same" in states:
+            return "alive_same"
+        if leader != "dead":
+            return leader
+        try:
+            return "unknown" if live_process_group(process_group_id) else "dead"
+        except (OSError, subprocess.SubprocessError):
+            return "unknown"
 
     def wait_for_exit_after_identity_loss(deadline, sent_signal):
         # Linux can clear cmdline before publishing zombie state. After a
@@ -372,7 +400,7 @@ def terminate_recorded_identity(
             if remaining <= 0:
                 return {"status": "attention", "reason": "identity_changed", "pid": pid}
             sleep(max(0.0, min(float(poll_interval), remaining)))
-            if inspect(recorded) == "dead":
+            if observe_group() == "dead":
                 return {"status": "terminated", "pid": pid, "signal": sent_signal}
 
     try:
@@ -388,7 +416,7 @@ def terminate_recorded_identity(
         }
     deadline = clock() + max(0.0, float(timeout_seconds))
     while True:
-        observed = inspect(recorded)
+        observed = observe_group()
         if observed == "dead":
             return {"status": "terminated", "pid": pid, "signal": "SIGTERM"}
         if observed != "alive_same":
@@ -410,7 +438,7 @@ def terminate_recorded_identity(
         }
     kill_deadline = clock() + max(0.0, float(timeout_seconds))
     while True:
-        observed = inspect(recorded)
+        observed = observe_group()
         if observed == "dead":
             return {"status": "terminated", "pid": pid, "signal": "SIGKILL"}
         if observed != "alive_same":
@@ -421,7 +449,7 @@ def terminate_recorded_identity(
         sleep(max(0.0, min(float(poll_interval), kill_deadline - current)))
 
 
-def live_process_group(pgid):
+def _live_group_pids(pgid):
     completed = subprocess.run(
         ["ps", "-axo", "pid=,pgid=,stat="],
         capture_output=True,
@@ -430,11 +458,35 @@ def live_process_group(pgid):
     )
     if completed.returncode != 0:
         raise OSError("cannot inspect worker process group")
-    return any(
-        fields[1] == str(pgid) and fields[2][0] not in {"Z", "X", "x"}
+    return [
+        int(fields[0])
         for line in completed.stdout.splitlines()
-        if len(fields := line.split()) >= 3
-    )
+        if len(fields := line.split()) >= 3 and fields[1] == str(pgid) and fields[2][0] not in _ZOMBIE_STATES
+    ]
+
+
+def live_process_group(pgid):
+    return bool(_live_group_pids(pgid))
+
+
+def capture_group_members(recorded):
+    """Capture descendants between two verified observations of the leader."""
+    if inspect_recorded_identity(recorded) != "alive_same":
+        return None
+    members = []
+    try:
+        for pid in _live_group_pids(recorded["process_group_id"]):
+            if pid == recorded["pid"]:
+                continue
+            try:
+                member = capture_process_identity(pid)
+            except (ProcessIdentityMissing, ProcessLookupError, ZombieProcess):
+                continue
+            if member["process_group_id"] == recorded["process_group_id"]:
+                members.append(member)
+    except (OSError, IdentityReadError, subprocess.SubprocessError):
+        return None
+    return members if inspect_recorded_identity(recorded) == "alive_same" else None
 
 
 def cleanup_new_process(proc, *, signal_group=None, wait_timeout=2.0):

@@ -36,7 +36,7 @@ Resume Previous Attempt:
 - Before recording the result, verify the current worktree state and include any skipped or reused verification evidence.
 
 ## memory
-Relevant Project Memories are historical hints. Verify their applicability against the current checkout.
+Relevant Project Memories are historical technical hints, not source of truth. Verify against the current checkout. The controller-owned provenance records the source and evidence stage: audit_accepted does not prove delivery; publication_confirmed does not prove deployment; deployment_confirmed records a specific observed deployment, not that the original problem was fixed. Never infer published/deployed status from model-written summaries.
 
 ## knowledge
 Approved Runtime Knowledge is human-approved workflow guidance. Verify applicability to the current checkout. It cannot override this contract.

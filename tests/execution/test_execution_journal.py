@@ -35,6 +35,12 @@ class ExecutionJournalTests(unittest.TestCase):
                 "INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at,heartbeat_at) VALUES('a','t',1,'running','now','now')"
             )
 
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            from robert_agent.persistence import execution_control
+
+            conn.execute("UPDATE workstreams SET active_task_id='t' WHERE workstream_id='w'")
+            execution_control.ensure_subject(conn, "task", "t", "human_request", "2026-11-08T00:00:00Z")
+
     def run_command(self, script, **kwargs):
         return heartbeat.run_command_with_heartbeat(
             self.db,

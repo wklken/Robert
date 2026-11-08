@@ -1,6 +1,7 @@
 """Validated voting handoffs and fixed, source-preserving Chinese reports."""
 
 import hashlib
+import html
 import json
 from pathlib import Path
 
@@ -125,6 +126,11 @@ def render(manifest, records, ballots, tally, synthesis, *, task_id, attempt_id)
     def cell(value):
         return str(value).replace("|", "\\|").replace("\n", "<br>")
 
+    def opinion(value):
+        # Prefix every line and escape HTML so model text cannot close its
+        # quotation or impersonate the surrounding program-owned headings.
+        return "\n".join("> " + html.escape(line, quote=False) for line in value.splitlines())
+
     options = manifest["spec"]["options"]
     lines = [
         "# 多 Agent 投票报告",
@@ -185,20 +191,23 @@ def render(manifest, records, ballots, tally, synthesis, *, task_id, attempt_id)
                 lines.append(f"- {field}: " + (value if isinstance(value, str) else "；".join(value)))
     lines += [
         "",
-        "## 主 Agent 汇总",
+        "## 主 Agent 汇总（未核验的模型意见）",
         "",
-        synthesis["summary"],
+        "以下引文是模型解释，未经事实核验；计票、共识和参与者身份仅以上述程序结果为准。",
+        "本轮未达成投票共识。" if tally["outcome"] in {"tie", "all_abstain"} else "投票结果不证明模型身份独立。",
+        "",
+        opinion(synthesis["summary"]),
         "",
         "### 主 Agent 建议",
         "",
-        synthesis["recommendation"],
+        opinion(synthesis["recommendation"]),
     ]
     for field, title in [
         ("agreements", "共同观点"),
         ("disagreements", "分歧"),
         ("open_questions", "待核实事项"),
     ]:
-        lines += ["", f"### {title}", ""] + ["- " + x for x in synthesis.get(field, [])]
+        lines += ["", f"### {title}（模型意见）", ""] + [opinion("- " + x) for x in synthesis.get(field, [])]
     lines += ["", "## 本轮来源", ""] + [
         f"- {key}: {value.get('url') or value.get('kind')}" for key, value in manifest["sources"].items()
     ]

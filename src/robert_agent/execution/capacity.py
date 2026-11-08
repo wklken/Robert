@@ -25,3 +25,7 @@ def capacity_full_for_repos(conn, repo_ids, max_concurrency):
 
 def has_occupied_runnable_attempt(conn, repo_ids):
     return bool(db_records.first(db_read_attempts.has_occupied_runnable_attempt_filtered(conn, repo_ids)))
+
+
+def can_resume_native_slot(conn, attempt_id):
+    return bool(db_records.first(db_read_attempts.can_resume_native_slot(conn, attempt_id)))

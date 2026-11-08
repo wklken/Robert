@@ -297,7 +297,7 @@ def update_for_refresh_prepared_task_locked(conn, route_id, expected_output, run
     )
 
 
-def update_for_refresh_prepared_task_locked_2(conn, input_policy, task_id):
+def update_for_refresh_prepared_task_locked_2(conn, input_policy, task_id, request_event_fingerprint):
     stmt = (
         update(tables["tasks"])
         .values(
@@ -306,12 +306,16 @@ def update_for_refresh_prepared_task_locked_2(conn, input_policy, task_id):
                     tables["tasks"].c["metadata_json"],
                     sql_constant("$.review_input_policy"),
                     bindparam("p0"),
+                    sql_constant("$.request_event_fingerprint"),
+                    bindparam("request_event_fingerprint"),
                 )
             }
         )
         .where((tables["tasks"].c["task_id"] == bindparam("p1")))
     )
-    return statements.write(conn, stmt, {"p0": input_policy, "p1": task_id})
+    return statements.write(
+        conn, stmt, {"p0": input_policy, "p1": task_id, "request_event_fingerprint": request_event_fingerprint}
+    )
 
 
 def update_for_create_task_attempt_and_prompt(

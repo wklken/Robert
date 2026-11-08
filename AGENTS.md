@@ -194,8 +194,10 @@ Paths below are relative to `src/robert_agent/`.
   Controlled subprocess tests use the intended interpreter (`sys.executable`),
   not an unrelated `python3` selected by PATH.
 - Packaging/resources require clean installed-wheel smoke outside the source tree,
-  including executable entrypoints and resources. CI covers Linux/macOS and the
-  supported Python matrix, lint/types/tests/build, dependency/secret scans and links.
+  including executable entrypoints and resources. PR/main CI runs Linux tests on
+  the minimum/maximum supported Python versions, lint/types and secret scans.
+  Release tags add the full Linux/macOS Python matrix, dependency audits, build,
+  installed-wheel smoke tests and links; publishing waits for these checks.
 - Update AGENTS and current architecture docs with the actual final structure.
   Keep source links, executable examples and diagrams aligned with their current
   owners. Do not suppress documentation or architecture checks to hide stale references.

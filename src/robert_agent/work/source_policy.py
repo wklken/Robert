@@ -19,20 +19,28 @@ def refresh_pending_events(events, pending, covered, repo):
     the old configuration into the new context.
     """
     merged = {event_identity(raw): raw for raw in events}
-    trusted = set(repo.get("trusted_actors", []))
-    account = repo["github_account"]
+    trusted = {login.casefold() for login in repo.get("trusted_actors", [])}
+    account = repo["github_account"].casefold()
     for raw in pending:
         if (raw.get("source_type", "issue"), raw["number"]) not in covered:
             continue
         refreshed = dict(raw)
-        refreshed["mentions_dd"] = f"@{account}" in (raw.get("body") or "")
+        if raw.get("event_type") == "comment" and raw.get("body_authorization_complete") is not True:
+            refreshed["body_authorization_complete"] = False
+        refreshed["mentions_dd"] = bool(discover.bot_requests(raw.get("body"), account))
         if raw.get("event_type") == "notification":
             refreshed["trusted_trigger_found"] = bool(
                 raw.get("authorization_lookup_complete") is not False
                 and (
-                    (raw.get("assigned_to") == account and raw.get("assignment_actor_login") in trusted)
-                    or (raw.get("requested_reviewer") == account and raw.get("requester_login") in trusted)
-                    or (refreshed["mentions_dd"] and raw.get("actor_login") in trusted)
+                    (
+                        (raw.get("assigned_to") or "").casefold() == account
+                        and (raw.get("assignment_actor_login") or "").casefold() in trusted
+                    )
+                    or (
+                        (raw.get("requested_reviewer") or "").casefold() == account
+                        and (raw.get("requester_login") or "").casefold() in trusted
+                    )
+                    or (refreshed["mentions_dd"] and (raw.get("actor_login") or "").casefold() in trusted)
                 )
             )
         merged.setdefault(event_identity(raw), refreshed)
@@ -44,20 +52,26 @@ def reauthorize_saved_request(event, repo, *, known_workstreams=()):
         **event,
         "mentions_dd": bool(discover.bot_requests(event.get("body"), repo["github_account"])),
     }
+    if (
+        candidate.get("event_type") == "comment"
+        and candidate.get("source_context_version") != discover.SOURCE_CONTEXT_VERSION
+        and candidate.get("body_authorization_complete") is not True
+    ):
+        candidate["body_authorization_complete"] = False
     if candidate.get("event_type") == "notification":
-        trusted = set(repo.get("trusted_actors", []))
+        trusted = {login.casefold() for login in repo.get("trusted_actors", [])}
         candidate["trusted_trigger_found"] = bool(
             candidate.get("authorization_lookup_complete") is not False
             and (
                 (
-                    candidate.get("assigned_to") == repo["github_account"]
-                    and candidate.get("assignment_actor_login") in trusted
+                    (candidate.get("assigned_to") or "").casefold() == repo["github_account"].casefold()
+                    and (candidate.get("assignment_actor_login") or "").casefold() in trusted
                 )
                 or (
-                    candidate.get("requested_reviewer") == repo["github_account"]
-                    and candidate.get("requester_login") in trusted
+                    (candidate.get("requested_reviewer") or "").casefold() == repo["github_account"].casefold()
+                    and (candidate.get("requester_login") or "").casefold() in trusted
                 )
-                or (candidate["mentions_dd"] and candidate.get("actor_login") in trusted)
+                or (candidate["mentions_dd"] and (candidate.get("actor_login") or "").casefold() in trusted)
             )
         )
     return authorize.authorize_event(candidate, repo, known_workstreams=set(known_workstreams))

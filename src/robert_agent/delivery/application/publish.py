@@ -310,6 +310,14 @@ def publish_ready_actions(
                         reconcile_scope["result_head_sha"] = evidence["source_sha"]
                     if evidence.get("head_owner"):
                         reconcile_scope["head_owner"] = evidence["head_owner"]
+                    if action["action_type"] in {
+                        GitHubActionType.COMMENT,
+                        GitHubActionType.PUSH_EXISTING_PR,
+                    } and not reconcile_scope.get("github_account"):
+                        with closing(db_database.connect(db_path)) as reader:
+                            reconcile_scope["github_account"] = publication_scope.comment_publisher(
+                                reader, action, reconcile_scope
+                            )
                     reconciliation = publication_reconcile.classify_remote_state(
                         action,
                         reconcile_scope if scope is not None else None,
@@ -527,7 +535,7 @@ def publish_ready_actions(
                 with closing(db_database.connect(db_path)) as conn:
                     remote_effect_started = True
                     guard_kwargs = {}
-                    if supervision.get("guard_required") or supervision.get("reconcile_only"):
+                    if config is not None or supervision.get("guard_required") or supervision.get("reconcile_only"):
                         guard_kwargs["recovery_guard"] = lambda: supervision_publication.guard(
                             db_path, action, supervision, config, publication_values.now()
                         )
@@ -564,6 +572,13 @@ def publish_ready_actions(
                             action_id=action["action_id"],
                             now=now,
                             reason="supervision_fence_rejected",
+                        )
+                    if config is not None:
+                        with closing(db_database.connect(db_path)) as conn, conn:
+                            publication_outcomes.record_failure(conn, action, {**result, "retryable": False}, now)
+                        failed_count += 1
+                        failures.append(
+                            {"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []}
                         )
                     if result_id:
                         failed_result_ids.add(result_id)

@@ -9,7 +9,12 @@ from functools import cache
 
 from robert_agent.persistence.expressions import sql_constant
 
-from robert_agent.persistence.predicates import occupied_attempt, runnable_task
+from robert_agent.persistence.predicates import (
+    occupied_attempt,
+    runnable_task,
+    native_slot_owned,
+    resumable_native_slot,
+)
 
 from sqlalchemy import (
     select,
@@ -497,19 +502,50 @@ def find_status_by_attempt_id(conn, attempt_id):
 
 
 def find_for_run_command_with_heartbeat(conn, attempt_id, task_id):
-    query1 = (
-        select(sql_constant(1))
-        .select_from(tables["attempts"])
-        .where(
+    attempt, task, stream = tables["attempts"], tables["tasks"], tables["workstreams"]
+    control = tables["execution_subjects"].alias("command_control")
+    later = attempt.alias("newer_command_attempt")
+    binding = select(control.c.subject_id).where(
+        control.c.binding_status == BindingStatus.ACTIVE.value,
+        or_(
+            and_(control.c.subject_type == "task", control.c.subject_id == task.c.task_id),
             and_(
-                (tables["attempts"].c["attempt_id"] == bindparam("p0")),
-                (tables["attempts"].c["task_id"] == bindparam("p1")),
+                control.c.subject_type == "remediation_episode",
+                control.c.subject_id == func.json_extract(task.c.metadata_json, "$.remediation_episode_id"),
+            ),
+        ),
+    )
+    running = or_(
+        attempt.c.status == AttemptStatus.RUNNING.value,
+        and_(
+            attempt.c.status == AttemptStatus.PREPARED.value,
+            binding.where(
+                func.json_extract(control.c.metadata_json, "$.dispatch_inflight") == attempt.c.attempt_id
+            ).exists(),
+        ),
+    )
+    query = (
+        select(attempt.c.attempt_id)
+        .select_from(
+            attempt.join(task, task.c.task_id == attempt.c.task_id).join(
+                stream, stream.c.workstream_id == task.c.workstream_id
             )
         )
-        .correlate_except(tables["attempts"])
-        .set_label_style(LABEL_STYLE_NONE)
+        .where(
+            attempt.c.attempt_id == attempt_id,
+            task.c.task_id == task_id,
+            task.c.lifecycle.in_([TaskLifecycle.QUEUED.value, TaskLifecycle.RUNNING.value]),
+            stream.c.lifecycle == "active",
+            stream.c.active_task_id == task_id,
+            running,
+            runnable_task(task),
+            binding.exists(),
+            ~select(later.c.attempt_id)
+            .where(later.c.task_id == task_id, later.c.attempt_no > attempt.c.attempt_no)
+            .exists(),
+        )
     )
-    return statements.read(conn, query1, {"p0": attempt_id, "p1": task_id})
+    return statements.read(conn, query, {})
 
 
 def find_task_id_and_status_and_metadata_json_by_attempt_id(conn, attempt_id):
@@ -1090,7 +1126,16 @@ def find_for_running_attempt_count(conn, repo_id):
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
     query4 = (
-        select(func.count(literal_column("*")))
+        select(
+            func.count(
+                func.distinct(
+                    case(
+                        (native_slot_owned(table2), sql_constant("round:") + table2.c.task_id),
+                        else_=sql_constant("attempt:") + table1.c.attempt_id,
+                    )
+                )
+            )
+        )
         .select_from(
             table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=False).join(
                 table3,
@@ -1101,7 +1146,7 @@ def find_for_running_attempt_count(conn, repo_id):
         .where(
             and_(
                 table3.c["repo_id"] == bindparam("p0"),
-                occupied_attempt(table1),
+                or_(occupied_attempt(table1), native_slot_owned(table2)),
                 table2.c["lifecycle"].in_(
                     [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
                 ),
@@ -1347,7 +1392,7 @@ def _has_local_work_filtered_2_statement(scoped):
     table3 = tables["workstreams"].alias("w")
     table4 = tables["repos"].alias("r")
     query5 = (
-        select(table3.c["repo_id"], table4.c["full_name"])
+        select(table3.c["repo_id"], table4.c["full_name"], resumable_native_slot(table2, table1))
         .distinct()
         .select_from(
             table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=False)
@@ -1428,7 +1473,16 @@ def running_attempt_count_for_repos_filtered(conn, items):
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
     query4 = (
-        select(func.count(literal_column("*")))
+        select(
+            func.count(
+                func.distinct(
+                    case(
+                        (native_slot_owned(table2), sql_constant("round:") + table2.c.task_id),
+                        else_=sql_constant("attempt:") + table1.c.attempt_id,
+                    )
+                )
+            )
+        )
         .select_from(
             table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=False).join(
                 table3,
@@ -1439,7 +1493,7 @@ def running_attempt_count_for_repos_filtered(conn, items):
         .where(
             and_(
                 table3.c["repo_id"].in_(bindparam("items", expanding=True)),
-                occupied_attempt(table1),
+                or_(occupied_attempt(table1), native_slot_owned(table2)),
                 table2.c["lifecycle"].in_(
                     [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
                 ),
@@ -1494,7 +1548,7 @@ def lifecycle_facts_filtered(conn, items):
     return statements.read(conn, _lifecycle_facts_filtered_statement(), {"items": items})
 
 
-def find_for_queue_prepared_attempts(conn, repo_id, capacity):
+def find_for_queue_prepared_attempts(conn, repo_id, capacity, *, reserved_only=False):
     table1 = tables["attempts"].alias("a")
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
@@ -1551,6 +1605,7 @@ def find_for_queue_prepared_attempts(conn, repo_id, capacity):
                 table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value),
                 func.json_extract(table2.c["metadata_json"], sql_constant("$.dispatch_wait")).is_(null()),
                 runnable_task(table2),
+                resumable_native_slot(table2, table1) if reserved_only else ~resumable_native_slot(table2, table1),
                 table2.c["lifecycle"].in_(
                     [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
                 ),
@@ -1606,8 +1661,25 @@ def find_for_queue_prepared_attempts(conn, repo_id, capacity):
             table1.c["started_at"].asc(),
             table1.c["attempt_id"].asc(),
         )
-        .limit(bindparam("p1"))
+        .limit(None if reserved_only else bindparam("p1"))
         .correlate_except(table1, table2, table3, table4)
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query7, {"p0": repo_id, "p1": capacity})
+
+
+def can_resume_native_slot(conn, attempt_id):
+    attempt = tables["attempts"]
+    task = tables["tasks"]
+    return statements.read(
+        conn,
+        select(1)
+        .select_from(attempt.join(task, task.c.task_id == attempt.c.task_id))
+        .where(
+            attempt.c.attempt_id == attempt_id,
+            resumable_native_slot(task, attempt),
+            runnable_task(task),
+            task.c.lifecycle.in_(("queued", "running")),
+        ),
+        {},
+    )

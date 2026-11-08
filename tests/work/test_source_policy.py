@@ -33,6 +33,7 @@ class SourcePolicyTests(unittest.TestCase):
                 "event_type": "comment",
                 "actor_login": "maintainer",
                 "body": "@previous-bot investigate",
+                "body_authorization_complete": True,
                 "mentions_dd": True,
                 "workstream_id": "work-1",
             },

@@ -370,6 +370,19 @@ class WorkItemCommandTests(WorkItemCommandFixture):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM work_item_events").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone()[0], 0)
 
+    def test_creation_key_is_bound_to_original_request_and_repository(self):
+        from dataclasses import replace
+        from robert_agent.work.application.commands import WorkItemConflictError
+
+        first = self._create()
+        self.assertEqual(self._create(), first)
+        for changes in ({"title": "different"}, {"start": True}, {"description": "different"}):
+            with self.subTest(changes=changes), self.assertRaises(WorkItemConflictError):
+                self._create(**changes)
+        narrowed = replace(self.context, allowed_repo_ids=frozenset({"repo-2"}))
+        with self.assertRaises(WorkItemConflictError):
+            self._create(repo_id="repo-2", context=narrowed)
+
     def test_create_backlog_without_runnable_work_does_not_notify(self):
         notifications = []
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from robert_agent.adapters.github import client as github_client
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -10,7 +11,7 @@ from pathlib import Path
 from robert_agent.foundation.commands import emit
 
 
-SOURCE_CONTEXT_VERSION = 3
+SOURCE_CONTEXT_VERSION = 4
 
 
 def _body_context(raw, *, legacy_empty_unknown=False):
@@ -87,7 +88,8 @@ def normalize_events(raw_events, repo_config):
         workstream_id = raw.get("workstream_id") or normalized_source_key
         origin_workstream_id = raw.get("origin_workstream_id")
         has_open_dd_pr = raw.get("has_open_dd_pr")
-        if source_type == "pull_request" and dd_workstream:
+        robot_author = (raw.get("pr_author_login") or "").casefold() == github_account.casefold()
+        if source_type == "pull_request" and dd_workstream and robot_author:
             metadata["dd_workstream"] = dd_workstream
             origin_workstream_id = (
                 dd_workstream.get("origin_workstream_id") or dd_workstream.get("workstream_id") or origin_workstream_id
@@ -98,6 +100,7 @@ def normalize_events(raw_events, repo_config):
             {
                 **raw,
                 "repo": repo,
+                "source_context_version": SOURCE_CONTEXT_VERSION,
                 "source_type": source_type,
                 "number": number,
                 "source_key": normalized_source_key,
@@ -185,10 +188,31 @@ def infer_dd_workstream_from_pr_body(body, repo_full_name):
     return {}
 
 
+def _inline_code_closes(text, delimiter):
+    """Recognize a code span only inside one uninterrupted prose block."""
+    closing = re.compile(r"(?<!`)" + re.escape(delimiter) + r"(?!`)")
+    block = re.compile(r" {0,3}(?:>|`{3,}|~{3,}|#{1,6}(?:\s|$)|[-+*]\s|[0-9]{1,9}[.)]\s|<[/!?A-Za-z]|[-=*]{3,}\s*$)")
+    for index, line in enumerate(text.splitlines()):
+        # Block parsing precedes inline parsing. An unmatched opener cannot
+        # borrow a closing tick from a later HTML comment, quote or code block.
+        if index and (not line.strip() or block.match(line)):
+            return False
+        if closing.search(line):
+            return True
+    return False
+
+
 def _unquoted_text(body):
     lines = []
     fence = None
-    for line in (body or "").splitlines():
+    comment = False
+    inline = None
+    body = body or ""
+    offset = 0
+    for raw_line in body.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        line_offset = offset
+        offset += len(raw_line)
         stripped = line.lstrip()
         marker = (
             re.match(r"(`{3,}|~{3,})", stripped)
@@ -204,14 +228,50 @@ def _unquoted_text(body):
             ):
                 fence = None
             continue
-        if marker:
+        if marker and not comment and not inline:
             fence = marker[1]
             continue
-        if stripped.startswith(">") or line.startswith(("    ", "\t")):
+        if not comment and not inline and (stripped.startswith(">") or line.startswith(("    ", "\t"))):
             continue
-        lines.append(line)
-    text = "\n".join(lines)
-    return re.sub(r"(`+)[\s\S]*?\1", "", text)
+        visible = []
+        index = 0
+        while index < len(line):
+            if inline:
+                run = re.match(r"`+", line[index:])
+                if run:
+                    if run[0] == inline:
+                        inline = None
+                    index += len(run[0])
+                else:
+                    index += 1
+            elif comment:
+                end = line.find("-->", index)
+                if end < 0:
+                    break
+                comment = False
+                index = end + 3
+            elif line.startswith("<!--", index):
+                comment = True
+                visible.append(" ")
+                index += 4
+            elif line[index] == "\\" and index + 1 < len(line) and line[index + 1] in {"`", "\\"}:
+                visible.append(line[index : index + 2])
+                index += 2
+            elif line[index] == "`":
+                run = re.match(r"`+", line[index:])[0]
+                rest = body[line_offset + index + len(run) :]
+                if _inline_code_closes(rest, run):
+                    visible.append(" ")
+                    inline = run
+                    index += len(run)
+                else:
+                    visible.append(run)
+                    index += len(run)
+            else:
+                visible.append(line[index])
+                index += 1
+        lines.append("".join(visible))
+    return "\n".join(lines)
 
 
 def bot_requests(body, github_account):
@@ -343,7 +403,12 @@ def _issue_search_to_raw(item, event_type, github_account=None):
         "event_at": item.get("updatedAt"),
         "intent": _infer_intent(item.get("title", ""), body, event_type, github_account),
     }
-    if item.get("id"):
+    # Issue activity timestamps also advance for comments and label changes.
+    # Bind a body request to its content, independently of unrelated activity.
+    if event_type == "mention":
+        version = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        raw["event_fingerprint"] = event_fingerprint(event_type, f"{item.get('url') or item['number']}:body:{version}")
+    elif item.get("id"):
         raw["id"] = item.get("id")
     else:
         raw["event_fingerprint"] = event_fingerprint(
@@ -363,7 +428,7 @@ def _enrich_pull_request_metadata(raw, repo_config, runner):
     body = details.get("body") or raw.get("body") or ""
     dd_workstream = parse_dd_workstream_metadata(body)
     pr_author = _login(details, "user") or raw.get("pr_author_login")
-    is_dd_authored_pr = pr_author == github_account
+    is_dd_authored_pr = (pr_author or "").casefold() == github_account.casefold()
     if not dd_workstream and is_dd_authored_pr:
         dd_workstream = infer_dd_workstream_from_pr_body(body, repo)
     base = details.get("base") if isinstance(details.get("base"), dict) else {}
@@ -372,8 +437,8 @@ def _enrich_pull_request_metadata(raw, repo_config, runner):
     head_ref = head.get("ref") or raw.get("headRefName") or raw.get("head_ref")
     head_sha = head.get("sha") or raw.get("headRefOid") or raw.get("head_sha")
 
-    if not dd_workstream and not is_dd_authored_pr:
-        enriched = {**raw}
+    if not is_dd_authored_pr:
+        enriched = {**raw, "has_open_dd_pr": False, "origin_workstream_id": None}
         if base_ref:
             enriched["base_branch"] = base_ref
         if pr_author:
@@ -469,7 +534,8 @@ def collect_account_notifications(repo_configs, runner=subprocess.run, read_sess
     return {repo: hints for repo, hints in buckets.items() if hints}
 
 
-def _source_metadata(raw, repo_config, runner):
+def refresh_source_metadata(raw, repo_config, runner):
+    """Refresh source facts through GitHub without assigning execution authority."""
     repo = repo_config["full_name"]
     payload = github_client.try_read_json(["gh", "api", f"repos/{repo}/issues/{raw['number']}"], runner=runner)
     if not isinstance(payload, dict):
@@ -515,7 +581,9 @@ def _timeline_assignment(raw, repo_config, runner):
             "authorization_lookup_complete": False,
         }
     matches = [
-        item for item in timeline if item.get("event") == "assigned" and _login(item, "assignee") == github_account
+        item
+        for item in timeline
+        if item.get("event") == "assigned" and (_login(item, "assignee") or "").casefold() == github_account.casefold()
     ]
     if matches:
         item = max(matches, key=_timeline_sort_key)
@@ -566,10 +634,10 @@ def _timeline_review_request(raw, repo_config, runner):
         if isinstance(requested_team, dict):
             requested_team_name = requested_team.get("name")
             requested_team_slug = requested_team.get("slug")
-        if github_account not in {
-            requested_reviewer,
-            requested_team_name,
-            requested_team_slug,
+        if github_account.casefold() not in {
+            (requested_reviewer or "").casefold(),
+            (requested_team_name or "").casefold(),
+            (requested_team_slug or "").casefold(),
         }:
             continue
         matches.append(
@@ -615,11 +683,38 @@ def _comment_to_raw(raw, comment, event_type="comment", repo_config=None, runner
     permission = comment.get("actor_permission")
     if repo_config and runner and actor_login and association in {None, "", "UNKNOWN"} and not permission:
         permission = _actor_permission(repo_config, actor_login, runner)
+    provenance = {}
+    if event_type == "comment":
+        # REST preserves the original author after another collaborator edits it.
+        # GraphQL returns body and its editor in one observation.
+        created = comment.get("created_at")
+        updated = comment.get("updated_at")
+        provenance["body_authorization_complete"] = not (updated and created and updated != created)
+        node_id = comment.get("node_id")
+        if node_id and runner:
+            query = "query($id:ID!){node(id:$id){... on IssueComment{id body author{login} editor{login} lastEditedAt updatedAt}}}"
+            response = github_client.try_read_json(
+                ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={node_id}"], runner=runner
+            )
+            node = ((response or {}).get("data") or {}).get("node") if isinstance(response, dict) else None
+            provenance["body_authorization_complete"] = False
+            if isinstance(node, dict) and node.get("id") == node_id and isinstance(node.get("body"), str):
+                author = _login(node, "author")
+                editor = _login(node, "editor")
+                actor_login = editor if node.get("lastEditedAt") else author
+                comment = {**comment, "body": node["body"], "updated_at": node.get("updatedAt")}
+                provenance.update(
+                    body_authorization_complete=bool(actor_login),
+                    body_author_login=author,
+                    body_editor_login=editor,
+                    body_edited_at=node.get("lastEditedAt"),
+                )
     event_id = comment.get("id") or raw.get("id")
     enriched = {
         **raw,
         "id": event_id,
         "event_type": event_type,
+        **provenance,
         "actor_login": actor_login,
         "author_association": association,
         "actor_permission": permission,
@@ -695,10 +790,10 @@ def _discussion_events(raw, repo_config, runner, predicate):
 
 def _enrich_mentions(raw, repo_config, runner):
     github_account = repo_config["github_account"]
-    trusted = set(repo_config.get("trusted_actors", []))
+    trusted = {login.casefold() for login in repo_config.get("trusted_actors", [])}
     body_mentions_dd = _mentions_dd(raw.get("body"), github_account)
     matches = []
-    if body_mentions_dd and raw.get("actor_login") in trusted:
+    if body_mentions_dd and (raw.get("actor_login") or "").casefold() in trusted:
         matches.append(
             {
                 **raw,
@@ -711,7 +806,8 @@ def _enrich_mentions(raw, repo_config, runner):
         repo_config,
         runner,
         lambda item, _event_type: (
-            _mentions_dd(item.get("body"), github_account) and (item.get("user") or {}).get("login") in trusted
+            _mentions_dd(item.get("body"), github_account)
+            and ((item.get("user") or {}).get("login") or "").casefold() in trusted
         ),
     )
     matches.extend(
@@ -749,7 +845,7 @@ def _enrich_known_workstream_contexts(raw, repo_config, runner):
         repo_config,
         runner,
         lambda item, _event_type: (
-            (item.get("user") or {}).get("login") != github_account
+            ((item.get("user") or {}).get("login") or "").casefold() != github_account.casefold()
             and _mentions_dd(item.get("body"), github_account)
             and bool((item.get("body") or "").strip())
         ),
@@ -784,7 +880,7 @@ def _trusted_triggers_from_source(
     known_workstreams=None,
     review_author_allowlist=None,
 ):
-    trusted = set(repo_config.get("trusted_actors", []))
+    trusted = {login.casefold() for login in repo_config.get("trusted_actors", [])}
     github_account = repo_config["github_account"]
     raw = _enrich_pull_request_metadata(raw, repo_config, runner)
     known_workstreams = set(known_workstreams or [])
@@ -802,7 +898,7 @@ def _trusted_triggers_from_source(
             {
                 **requested,
                 "actor_login": requested.get("requester_login") or requested.get("actor_login"),
-                "trusted_trigger_found": requested.get("requester_login") in trusted,
+                "trusted_trigger_found": (requested.get("requester_login") or "").casefold() in trusted,
             }
         ]
 
@@ -825,7 +921,10 @@ def _trusted_triggers_from_source(
                 "trusted_trigger_found": False,
                 "authorization_lookup_complete": False,
             }
-        if _mentions_dd(mention.get("body"), github_account) and mention.get("actor_login") in trusted:
+        if (
+            _mentions_dd(mention.get("body"), github_account)
+            and (mention.get("actor_login") or "").casefold() in trusted
+        ):
             return {
                 **mention,
                 "trusted_trigger_found": True,
@@ -843,7 +942,7 @@ def _trusted_triggers_from_source(
                 "authorization_lookup_complete": False,
             }
         ]
-    if assigned.get("assignment_actor_login") in trusted:
+    if (assigned.get("assignment_actor_login") or "").casefold() in trusted:
         return [
             {
                 **assigned,
@@ -861,7 +960,7 @@ def _trusted_triggers_from_source(
                 "authorization_lookup_complete": False,
             }
         ]
-    if review_request.get("requester_login") in trusted:
+    if (review_request.get("requester_login") or "").casefold() in trusted:
         return [
             {
                 **review_request,
@@ -996,7 +1095,7 @@ def collect_live_events(
             continue
 
         def load_notification(raw=raw):
-            enriched, source_state = _source_metadata(raw, repo_config, runner)
+            enriched, source_state = refresh_source_metadata(raw, repo_config, runner)
             if source_state and source_state.lower() != "open":
                 return []
             return _trusted_triggers_from_source(
@@ -1031,7 +1130,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--fixture")
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--dd-account", required=True)
+    parser.add_argument("--dd-account", dest="github_account", required=True)
     parser.add_argument("--trusted-actor", action="append", default=[])
     parser.add_argument("--skip-external", action="store_true")
     args = parser.parse_args(argv)

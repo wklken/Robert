@@ -87,12 +87,18 @@ def targets(conn, repositories, limit=100, after=""):
     )
 
 
-def checkpoints(conn, scope_type, scope_id, limit=100):
+def checkpoints(conn, scope_type, scope_id, limit=100, *, now=None, policy_version=None):
     cp = tables["supervision_checkpoints"]
-    return _rows(
-        conn,
-        select(cp).where(cp.c.scope_type == scope_type, cp.c.scope_id == scope_id).order_by(cp.c.rule_id).limit(limit),
-    )
+    query = select(cp).where(cp.c.scope_type == scope_type, cp.c.scope_id == scope_id)
+    if now is not None and policy_version is not None:
+        observed = func.julianday(func.json_extract(cp.c.metadata_json, "$.observed_at"))
+        query = query.where(
+            observed <= func.julianday(now),
+            observed >= func.julianday(now) - 900.0 / 86400,
+            func.coalesce(func.json_extract(cp.c.metadata_json, "$.withdrawn"), 0) == 0,
+            func.json_extract(cp.c.metadata_json, "$.policy_version") == policy_version,
+        )
+    return _rows(conn, query.order_by(cp.c.rule_id).limit(limit))
 
 
 def decision_states(conn, repositories):
@@ -325,3 +331,22 @@ def context(conn, root_id):
         "execution_controls": control_rows,
         "observations": observations,
     }
+
+
+def approved_worker_retries(conn, repo_ids, now, policy_version):
+    cp, stream = tables["supervision_checkpoints"], tables["workstreams"]
+    query = (
+        select(cp.c.scope_id, cp.c.metadata_json)
+        .select_from(cp.join(stream, stream.c.workstream_id == cp.c.scope_id))
+        .where(
+            cp.c.scope_type == "decision",
+            cp.c.rule_id == "current",
+            func.json_extract(cp.c.metadata_json, "$.status") == "approved",
+            func.json_extract(cp.c.metadata_json, "$.candidate.action") == "retry_worker",
+            func.json_extract(cp.c.metadata_json, "$.policy_version") == policy_version,
+            func.julianday(func.json_extract(cp.c.metadata_json, "$.expires_at")) > func.julianday(now),
+        )
+    )
+    if repo_ids:
+        query = query.where(stream.c.repo_id.in_(repo_ids))
+    return _rows(conn, query.order_by(cp.c.updated_at, cp.c.scope_id))

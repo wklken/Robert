@@ -45,6 +45,7 @@ def _memory_context(project_memories):
                 "short_summary": memory.get("short_summary"),
                 "long_summary": memory.get("long_summary") if index < 3 else "",
                 "confidence": memory.get("confidence"),
+                "provenance": memory.get("provenance", {"stage": "unknown"}),
                 "paths": memory.get("paths", []),
                 "symbols": memory.get("symbols", []),
                 "keywords": memory.get("keywords", []),

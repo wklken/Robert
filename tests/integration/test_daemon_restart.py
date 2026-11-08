@@ -23,6 +23,7 @@ class IsolatedDaemonTests(unittest.TestCase):
         import time
         from tests.support.publication_budget import PublicationBudgetFixture
         from robert_agent.persistence import execution_control as execution_store
+        from robert_agent.work.application import source_events
 
         fixture = PublicationBudgetFixture()
         fixture.setUp()
@@ -54,6 +55,24 @@ class IsolatedDaemonTests(unittest.TestCase):
             conn.execute("UPDATE repos SET repo_id='repo:x/y' WHERE repo_id='repo'")
             conn.execute("UPDATE workstreams SET repo_id='repo:x/y',active_task_id='t'")
             execution_store.ensure_subject(conn, "task", "t", "human_request", fixture.now.isoformat())
+            # This publication has a persisted, independently trusted request.
+            # The daemon's configured publisher now reauthorizes that trigger.
+            event = {
+                "event_type": "comment",
+                "event_fingerprint": "comment:restart-request",
+                "source_key": "github:x/y#1",
+                "source_type": "issue",
+                "number": 1,
+                "workstream_id": "ws",
+                "actor_login": "maintainer",
+                "body": "@isolated implement this",
+                "body_authorization_complete": True,
+            }
+            _, event_id = source_events.insert_source_and_event(conn, "repo:x/y", event, fixture.now.isoformat())
+            conn.execute(
+                "INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES('t',?,'trigger',?)",
+                (event_id, fixture.now.isoformat()),
+            )
             conn.execute(
                 "INSERT INTO notifications(notification_id,task_id,notification_type,channel,status,created_at) VALUES ('notice','t','isolated','local','recorded',?)",
                 (fixture.now.isoformat(),),
@@ -79,7 +98,7 @@ repos:
 - full_name: x/y
   github_account: isolated
   trusted_actors:
-  - isolated
+  - maintainer
   checkout: {root}
   worktrees: {root}/worktrees
   default_branch: main
