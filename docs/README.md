@@ -3,12 +3,23 @@
 这里记录当前代码提供的行为、配置和操作方式。文档中的命令与默认值以本仓库源码、
 配置 schema 和 CLI 为依据；线上运行是否成功需要部署现场的证据。
 
+## 从这里开始
+
+- **第一次认识 Robert**：先读 [README](../README.md) 的使用场景，再看[第一个任务](first-task.md)。
+- **准备部署**：[手工安装](human-install.md)或 [Agent 安装（English）](agent-install.md)，先选定代码与文档版本。
+- **已经在运行**：[故障排查](troubleshooting.md)、[看板操作](web-lifecycle-board.md)，再查具体配置。
+- **参与开源**：[贡献指南](../CONTRIBUTING.md)、[安全策略](../SECURITY.md)、[支持渠道](../SUPPORT.md)。
+
+入门指南以中文为主；Agent 安装、操作与命令参考包含英文，命令和配置以同版本源码为准。
+
 ## 安装与使用
 
 | 文档 | 内容 |
 | --- | --- |
 | [人工安装](human-install.md) | 环境要求、初始化、检查与首次启动 |
 | [让编码 Agent 安装](agent-install.md) | 安装时需要的输入、权限与验证步骤 |
+| [第一个任务](first-task.md) | 触发分析、验证发布、创建 PR 与继续反馈 |
+| [故障排查](troubleshooting.md) | 安装、认证、远端、服务、排队与发布问题 |
 | [操作指引](guides.md) | 多仓库、Worker、Skills、服务、Web 与 OpenClaw |
 | [配置与命令参考](reference.md) | 完整最小配置、默认值、CLI、环境变量、数据保留与恢复 |
 | [生命周期看板](web-lifecycle-board.md) | 状态含义、日常操作、异常恢复与交付证据 |
@@ -30,7 +41,10 @@
 | 文档或代码 | 内容 |
 | --- | --- |
 | [开发指南](development.md) | 开发环境、测试、架构门禁和打包发布流程 |
-| [贡献与治理](../COMMUNITY.md) | 贡献、安全反馈和社区规则 |
+| [贡献指南](../CONTRIBUTING.md) | 开发入口、验证要求与 PR 提交 |
+| [安全策略](../SECURITY.md) | 私密漏洞报告、支持版本与运行边界 |
+| [支持渠道](../SUPPORT.md) | 求助、缺陷与文档反馈需要的信息 |
+| [行为准则](../CODE_OF_CONDUCT.md) / [社区目录](../COMMUNITY.md) | 社区规则与治理入口 |
 | [仓库约定](../AGENTS.md) | 源码职责、依赖、状态与验证边界 |
 | [配置示例](../src/robert_agent/resources/config.example.yml) / [schema](../src/robert_agent/resources/schemas/config.schema.json) | 可配置字段、类型和默认值 |
 | [固定路由](../src/robert_agent/resources/routes.yml) | 输出、动作权限、验证及 workspace 策略 |

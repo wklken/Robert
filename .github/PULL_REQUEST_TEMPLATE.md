@@ -1,7 +1,8 @@
 ## Summary
 
 Describe the problem and the smallest change that solves it.
-Read [COMMUNITY.md](../COMMUNITY.md) before contributing.
+Read [CONTRIBUTING.md](../CONTRIBUTING.md) before contributing.
+Mark checks that do not apply as N/A and explain skipped verification.
 
 ## Verification
 

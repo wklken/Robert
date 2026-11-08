@@ -10,224 +10,112 @@
 
 An AI teammate that takes care of your GitHub work.
 
-Robert is a self-hosted GitHub teammate that turns trusted issues, mentions,
-assignments, reviews, and follow-up comments into controlled coding-agent work.
-It coordinates local workers, isolates repository work in Git worktrees,
-audits proposed GitHub actions, and stores durable workstream state in SQLite.
+**Give your coding agent work on GitHub: investigate issues, open PRs, and follow up on reviews.**
 
-## What Robert Is
+Robert runs on your own Linux or macOS machine. It watches configured repositories,
+turns trusted requests into work for local agents such as Codex and Claude Code,
+and records progress, verification, and publication. Continue the conversation on
+GitHub or use the local board to see what needs attention.
 
-Robert is a local control plane for trusted GitHub collaboration. It discovers
-authorized work, routes it to a configured worker, supervises execution, audits
-the proposed GitHub actions, and publishes only actions allowed by the route.
+[Manual installation (中文)](docs/human-install.md) · [Agent-led installation](docs/agent-install.md) ·
+[First task (中文)](docs/first-task.md) · [Troubleshooting (中文)](docs/troubleshooting.md)
 
-## Why Robert Exists
+> Robert is in beta. This branch's documentation may describe capabilities newer
+> than the PyPI package. [Match code and documentation](docs/human-install.md#choose-version)
+> when installing; see [Releases](https://github.com/wklken/Robert/releases) and [CHANGELOG](CHANGELOG.md).
 
-Coding agents are useful, but unattended GitHub automation needs durable state,
-clear trust boundaries, isolated workspaces, deduplication, and evidence.
-Robert provides those controls without requiring a GitHub App or hosted service.
+## What you can delegate
 
-## Key Capabilities
+Mention your configured bot account from a trusted account in a configured repository:
 
-- **GitHub collaboration:** handle trusted issues, pull requests, reviews,
-  assignments, mentions, and follow-up comments, from analysis and PR creation
-  through review updates, with one active task per workstream.
-- **Multiple repositories and isolated work:** configure each repository's
-  checkout, worktree root, trusted actors, concurrency, and route overrides.
-  Analysis, implementation, and source review use isolated Git worktrees.
-- **Multiple coding agents:** built-in `codex`, `tcodex`, `claude`, `tclaude`,
-  `opencode`, `cbc`, and generic `command` adapters, with route-specific workers,
-  models, effort, and skills. Missing required skills block before execution.
-- **Execution supervision and recovery:** retain phases, heartbeats, logs, and
-  attempt history; supervise startup, timeouts, and process cleanup; optionally
-  select a fallback model after consecutive timeouts.
-- **Multi-model review and voting:** opt-in author-gated PR review and explicit
-  trusted voting requests use frozen inputs, separate rounds and shared model capacity.
-- **Independent task supervision:** observe stalls and delivery evidence; enable
-  diagnosis, known recovery and engineering repairs through explicit policy.
-- **Opt-in PR self-healing:** repair allowlisted CI failures and merge exact base
-  snapshots into conflicting PRs within configured attempt and budget limits.
-  Publication rechecks the PR head/base before an ordinary non-force push.
-- **Lifecycle task board:** show intake, queueing, execution, attention, review,
-  completion, and cancellation, with artifacts and publication history. Explicit
-  writable mode enables local tasks, replies, execution/publication retries,
-  and cancellation under permission, state, and idempotency checks.
-- **Unattended operation:** recommended Supervisor management for both daemon
-  and web processes, with restart, status, and logs; native systemd user services
-  and macOS LaunchAgents are also supported.
-- **Durable, auditable state:** SQLite task, attempt, audit, and deduplication
-  records, diagnostic retention, redacted support exports, and optional read-only
-  OpenClaw commands.
+| Your request | Robert's role |
+| --- | --- |
+| “Investigate this error; do not change code yet.” | Read code and discussion, then publish an analysis comment. |
+| “Fix this issue, add tests, and open a PR.” | Run the agent in a separate worktree, verify and audit its result, then open a PR. |
+| “Review this PR for compatibility problems.” | Inspect the PR source and publish review feedback. |
+| “Address this review comment.” | Continue the corresponding PR task and update its branch. |
+| Coordinate work across repositories. | Configure trust, workers, concurrency, and directories per repository; inspect one board. |
 
-## How It Works
+See the [first-task walkthrough (中文)](docs/first-task.md) for triggers and evidence of success.
+An arbitrary issue does not automatically start work: repository, actor, and trigger must match.
+
+Additional capabilities are opt-in:
+
+- [Multi-model PR review](docs/multi-model-review.md), gated by PR author.
+- [Multi-agent voting](docs/multi-agent-vote.md), explicitly requested by a trusted user.
+- [CI and conflict repair](docs/reference.md#configuration), with repository-level limits; disabled by default.
+- [Independent task supervision](docs/task-supervision.md), with policy-controlled diagnosis and recovery.
+- [OpenClaw messaging](docs/operator-messaging.md), for questions, notices, and authenticated responses.
+
+## How it works
 
 ```mermaid
 flowchart LR
-    A[Poll GitHub with gh] --> B[Normalize and authorize]
-    B --> C[Create or resume workstream]
-    C --> D[Resolve route and skills]
-    D --> E[Prepare isolated workspace]
-    E --> F[Run configured worker]
-    F --> G[Audit structured result]
-    G -->|Accepted| H[Deduplicate and publish]
-    G -->|Blocked| I[Persist failure evidence]
-    H --> J[(SQLite state)]
-    I --> J
+    A[GitHub request] --> B[Authorize]
+    B --> C[Agent executes]
+    C --> D{Result audit}
+    D -->|Accepted| E[Comment or PR]
+    D -->|Blocked| F[Reason and recovery]
+    E --> G[Human review]
+    G --> B
 ```
 
-Robert polls GitHub through the authenticated `gh` CLI, normalizes events,
-checks repository-specific trust rules, creates or resumes a workstream, selects
-a route, prepares a task workspace, launches a local worker, audits its
-structured result, and deduplicates approved GitHub actions before publication.
+Robert handles intake, scheduling, supervision, and publication. **Your coding
+agent does the coding.** Robert polls GitHub using an authenticated `gh` CLI;
+no GitHub App or webhook receiver is required. SQLite holds local task history,
+and Git worktrees separate code changes. See [concepts](docs/concepts.md) and
+[architecture diagrams (中文)](docs/architecture.md) for details.
 
-See the [architecture and mechanism diagrams (Chinese)](docs/architecture.md)
-for component relationships, control flows, and sequences for complex mechanisms.
+## See progress and results
 
-## Security and Trust
+![Robert Web UI task board](docs/imgs/webui-task-board.png)
 
-GitHub text is untrusted input. Only configured actors can trigger work.
-Repository overrides cannot change immutable route permissions or workspace
-policy. Worker environments use an allowlist, credentials are never stored in
-Robert configuration, and GitHub-facing text passes the redaction and audit
-gates. The web UI binds to `127.0.0.1` by default.
+*The screenshot uses isolated demonstration data to show queued, running,
+attention, and review states.*
 
-## Requirements
+Web is read-only on `127.0.0.1:8765` by default. Explicit writable mode enables
+local tasks, replies, retries, and cancellation under state and authority checks.
+See the [board guide (中文)](docs/web-lifecycle-board.md).
+**A running web server needs a running daemon to execute tasks.**
 
-- Linux or macOS. Windows is supported through WSL.
-- An upstream-maintained stable Python release, currently 3.11–3.15.
-- Git and GitHub CLI (`gh`) with an authenticated session.
-- At least one local worker command such as Codex.
-- `pipx` is recommended for installation.
+## Get started
 
-## Quick Start
+You need Linux or macOS (WSL on Windows), Python 3.11–3.15, Git, authenticated
+GitHub CLI, and an installed, authenticated coding agent. Model access and usage
+come from your own provider account; Robert does not supply a model service.
 
-```bash
-pipx install robert-github-agent --include-deps
-gh auth login
-robert init
-robert config validate
-robert doctor
-```
+For manual setup, follow the [installation guide (中文)](docs/human-install.md):
+select a version, prepare the repository and accounts, validate configuration,
+then start daemon and Web with [Supervisor](docs/guides.md#daemon-service).
 
-The configuration is written to `~/.config/robert/config.yml`. Runtime data is
-stored under `~/.local/share/robert/`. Then follow the
-[Supervisor setup](docs/guides.md#daemon-service) to run both daemon and web.
-
-## Install with a Coding Agent
-
-Copy this prompt into Codex, Claude Code, or another terminal coding agent:
+For agent-led setup, copy this prompt into a terminal coding agent:
 
 ```text
 Install and fully configure Robert on this machine by following:
 https://github.com/wklken/Robert/blob/main/docs/agent-install.md
 
-Read the entire guide before executing. Ask me for required values and for
-confirmation wherever the guide requires it.
+Read the entire guide before executing. Match the installed code to the guide's
+revision. Ask me for missing deployment values. Prepare and validate first;
+obtain explicit confirmation before starting unattended operation or live tests.
+Report what was verified and what still needs a real task.
 ```
 
-## Configuration
+## Scope and limits
 
-PR self-healing is disabled by default. Enable `pr_automation` on an individual
-repository; CI automation also requires a non-empty `check_allowlist`.
+- For individuals and teams who want self-hosted GitHub automation and can operate local agents.
+- Polling, GitHub quotas, and model execution affect response time; replies are not instantaneous.
+- Git worktrees separate directories; **they are not OS sandboxes**. Use a dedicated account or controlled environment.
+- Trusted actors may trigger work; publication still requires route permissions, audit, and deduplication.
+- Web has no public-facing user login system. Remote access needs an authenticated reverse proxy.
+- Review generated work. Agent completion, publication, and PR merge are separate events.
 
-Robert accepts only `version: 2` YAML at `~/.config/robert/config.yml`.
-Named workers and an explicit default_worker define execution; routes select
-workers and ordinary model/effort overrides. GitHub scanning, scheduling,
-supervision and maintenance have separate sections. SQLite is the only engine.
-See the [reference](docs/reference.md#configuration)
-for defaults and [guides](docs/guides.md) for setup.
-Workers may define `fallback_model`. After two consecutive `failed_timeout`
-attempts in the same workstream, the third run uses that model without changing
-the reasoning effort. The default hard timeout is 45 minutes.
+See [SECURITY.md](SECURITY.md) for credentials and trust boundaries.
 
-## Worker Adapters
+## Documentation and community
 
-Built-in adapters support `codex`, `tcodex`, `claude`, `tclaude`, `opencode`,
-`cbc`, and a generic `command` adapter. A worker definition chooses its
-adapter, executable, default and fallback models, effort, timeout, and
-environment-variable allowlist. Prompts use standard input.
+- [Documentation index](docs/README.md), [operations](docs/guides.md), and [configuration reference](docs/reference.md).
+- [Support](SUPPORT.md) for usage questions and reproducible defects.
+- [Contributing](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md).
+- [Private vulnerability reporting](SECURITY.md#reporting-a-vulnerability).
 
-## Route Skills
-
-Each route can declare required and recommended skills. Missing required skills
-block that task before a worktree or worker is created. Missing recommended
-skills appear in doctor output but do not block execution.
-
-## Multiple Repositories
-
-Each repository has its own checkout, worktree root, trusted actors, concurrency
-limit, and optional route overrides. A failure in one repository does not stop
-other repository pipelines in the same cycle.
-
-## Daemon Service
-
-Use [Supervisor to manage both daemon and web](docs/guides.md#daemon-service).
-After preparing the configuration and checking readiness:
-
-```bash
-supervisord -c ~/.config/robert/supervisord.conf
-supervisorctl -c ~/.config/robert/supervisord.conf status
-```
-
-Both processes must report `RUNNING` and use the same Robert configuration.
-The web process displays state and submits requests; the daemon schedules work.
-For foreground debugging, use `robert daemon run` and `robert web run`.
-`robert service install` installs daemon and independent task supervision by
-default, using systemd, launchd, or the Linux Supervisor fallback. Only the
-Supervisor backend includes Web; see the guide for backend differences.
-
-## Local Web UI
-
-![Robert Web UI task board](docs/imgs/webui-task-board.png)
-
-Read-only board from the current code, showing isolated demonstration data.
-
-```bash
-robert web run
-```
-
-The default server is local and read-only. Writable mode requires:
-
-```bash
-robert web run --writable --operator "$USER"
-```
-
-Non-loopback binding also requires `--allow-remote` and an authenticated reverse
-proxy. See the [lifecycle board guide](docs/web-lifecycle-board.md) for progress,
-execution history, cancellation, and recovery controls.
-
-## OpenClaw
-
-```bash
-robert openclaw install
-robert openclaw status
-```
-
-The optional plugin exposes read-only Robert status, task, run, and artifact
-commands. It never schedules or starts Robert.
-
-## Troubleshooting
-
-Run `robert doctor --output json` and check both programs with
-`supervisorctl -c ~/.config/robert/supervisord.conf status` (or
-`robert service status` for native services). Export a redacted support archive with:
-
-```bash
-robert diagnostics export --output robert-diagnostics.zip
-```
-
-Do not attach private repository content or credentials to public issues.
-
-## Contributing
-
-Read [COMMUNITY.md](COMMUNITY.md) and run the documented verification commands.
-Robert does not require DCO sign-off or a CLA for the first beta.
-
-## Project Status
-
-Robert `0.1.0b2` is a public beta. Polling is the only GitHub event transport in
-this release. Interfaces may evolve before the first stable release.
-
-## License
-
-Apache License 2.0. See `LICENSE`.
+Licensed under [Apache License 2.0](LICENSE).
