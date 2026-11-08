@@ -26,3 +26,5 @@
 | [持续任务监督](task-supervision.md) | 独立观察、诊断、已知恢复、工程修复和验证 |
 
 通用部署操作见[操作指引](../guides.md)，完整配置字段和命令见[配置与命令参考](../reference.md)。
+
+- [Offline Compose lifecycle tests](compose-integration-tests.md)

@@ -1,0 +1,38 @@
+name: Compose lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        type: choice
+        description: Offline lifecycle suite
+        options: [core, extended, slow]
+        default: core
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.suite == 'slow' && '[0,1]' || '[0,1,2,3]') }}
+    env:
+      ROBERT_SUITE: ${{ inputs.suite }}
+      ROBERT_SHARD: ${{ matrix.shard }}
+      ROBERT_SHARD_COUNT: ${{ inputs.suite == 'slow' && 2 || 4 }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          python3 -B tests/simulations/compose/run.py \
+            --suite "$ROBERT_SUITE" --shard-index "$ROBERT_SHARD" --shard-count "$ROBERT_SHARD_COUNT" \
+            --artifacts "${{ runner.temp }}/robert-compose"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: compose-${{ inputs.suite }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/robert-compose
+          retention-days: 7

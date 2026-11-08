@@ -91,6 +91,10 @@ Plans, reviews and remediation records under `docs/superpowers/`, `docs/reviews/
 and `docs/remediation/` are local archives ignored by Git; durable usage and
 architecture rules belong in the published guides.
 
+To exercise the installed wheel against offline GitHub and scripted Worker
+fixtures, run the [Compose lifecycle suite](features/compose-integration-tests.md).
+The standard unittest discovery stays Docker-free.
+
 ## CI checks
 
 Pull requests and pushes to `main` run four jobs:
