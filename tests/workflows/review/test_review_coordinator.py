@@ -46,6 +46,11 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.assertIn(b'Configured Robert GitHub account: "robert-bot"', reviewer_calls[0][2])
         self.assertNotEqual(reviewer_calls[0][4], reviewer_calls[1][4])
         self.assertIn("Code Review 汇总报告", report1.read_text())
+        phases = {"prepare": "review.prepare", "review": "review.evaluate", "synthesis": "review.synthesize"}
+        for phase, _, prompt, *_ in self.calls:
+            self.assertIn(f"Stage: {phases[phase]}".encode(), prompt)
+            self.assertIn(b"## Context", prompt)
+            self.assertIn(b"## Delivery", prompt)
         self.cycle([self.event("second"), self.event("second")])
         with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
@@ -500,11 +505,16 @@ else:
 
     def test_assignment_then_comment_runs_two_binaries_and_publishes_each_revision_once(self):
         binary = self.root / "file_reviewer.py"
-        binary.write_text("""import hashlib,json,os,re,sys
+        binary.write_text("""import hashlib,json,os,sys
 from pathlib import Path
 prompt=sys.stdin.buffer.read()
 text=prompt.decode()
-manifest_path=Path(re.search(r'Read the registered context at (.*?) and source worktree ',text).group(1))
+stage_id=next(line.removeprefix('Stage: ') for line in text.splitlines() if line.startswith('Stage: '))
+def required_path(item):
+    section=text.split('\\n- '+item+' (required, file, complete):',1)[1].split('\\n- ',1)[0]
+    line=next(line for line in section.splitlines() if line.startswith('  Read '))
+    return Path(line.removeprefix('  Read ').removesuffix(' before acting.'))
+manifest_path=required_path('manifest.json')
 manifest=json.loads(manifest_path.read_text())
 context=manifest_path.parent
 source=Path(manifest['worktree_path'],'source.py').read_text()
@@ -517,19 +527,20 @@ def save(name,value):
     path.write_text(json.dumps(value))
     path.replace(output/name)
 selected=[]
-if 'Prepare shared context without findings' in text:
+if stage_id=='review.prepare':
     stage='prepare'
     (output/'context-summary.md').write_text(source)
     save('source-index.json',{'files':[{'path':'source.py','reason':'changed source'}],'reading_notes':source})
-elif 'Perform an independent code review.' in text:
+elif stage_id=='review.evaluate':
     stage='review'
     assert (context/'context-summary.md').read_text()==source
     assert json.loads((context/'source-index.json').read_text())['reading_notes']==source
     save('result.json',dict(identity,schema_version=1,findings=[],dismissed_findings=[],
         coverage={'reviewed_paths':['source.py'],'unreviewed_paths':[],'notes':source},merge_recommendation='ready to merge'))
 else:
+    assert stage_id=='review.synthesize'
     stage='synthesis'
-    inputs=Path(re.search(r'Read the frozen selected artifact list (.*?)\\. Read each',text).group(1))
+    inputs=required_path('selected-reviewer-results')
     records=json.loads(inputs.read_text())['records']
     assert len(records)==2
     for record in records:

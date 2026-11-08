@@ -30,6 +30,7 @@ from robert_agent.configuration import command as validate_config
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.delivery.application import submission as result
 from robert_agent.execution import progress as snapshot
+from robert_agent.resource_files import resource
 
 
 MAX_OUTPUT = 128 * 1024
@@ -155,11 +156,9 @@ def run(config, task_id, attempt_id, prompt):
             packet = {
                 "prompt": prompt,
                 "result_transport": "stdout_compact_submission",
-                "instructions": "Use only the prepared workspace. Do not access Robert DB or runtime commands. "
-                "Return exactly one compact-v1 new_pr submission JSON object on stdout. "
-                "The trusted broker binds task/attempt/output identity and submits it for ordinary audit. "
-                "Do not push, open PRs, merge, deploy or change the original task. "
-                "Describe failed verification honestly; do not claim a deployed fix.",
+                "instructions": resource("prompts", "protocols", "restricted-repair.md")
+                .read_text(encoding="utf-8")
+                .strip(),
             }
             with tempfile.TemporaryFile(mode="w+b") as stdin:
                 stdin.write(json.dumps(packet).encode())

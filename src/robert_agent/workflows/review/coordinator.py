@@ -13,6 +13,8 @@ import shutil
 import signal
 
 from robert_agent.security import redaction
+from robert_agent.context.native_prompts import review_prepare_input, review_synthesize_input
+from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery.application import validation as result_validation
 from robert_agent.workflows.review import files as review_files
 from robert_agent.workflows.review import workspace as review_workspace
@@ -103,7 +105,7 @@ class Coordinator(StageCoordinator):
             self.save_manifest()
         review_workspace.verify_snapshot(self.manifest)
         if not self.manifest.get("frozen"):
-            prompt = self.prompt("prepare-prompt.md", review_files.build_prepare_prompt(self.manifest))
+            prompt = self.prompt("prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text)
 
             def validate(output, model):
                 summary = review_files.safe_path(output / "context-summary.md", output)
@@ -181,9 +183,16 @@ class Coordinator(StageCoordinator):
     def synthesize(self, records):
         self.phase(RoundStatus.SYNTHESIZING.value)
         inputs = review_files.write_synthesis_inputs(self.manifest, records)
+        prompt_input = review_synthesize_input(
+            self.manifest,
+            inputs,
+            severities=review_files.SEVERITIES,
+            recommendations=review_files.RECOMMENDATIONS,
+            dispositions=review_files.DISPOSITIONS,
+        )
         prompt = self.prompt(
             f"synthesis-prompt-{inputs['sha256']}.md",
-            review_files.build_synthesis_prompt(self.manifest, inputs["path"]),
+            render_prompt(prompt_input).text,
         )
 
         def validate(output, model):

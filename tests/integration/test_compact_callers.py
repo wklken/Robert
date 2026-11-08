@@ -1,5 +1,6 @@
 """Production producers submit only semantic compact fields."""
 
+from robert_agent.context.worker_prompt import worker_prompt_input
 from tests.support import TEST_ROOT
 from robert_agent.delivery.application import lane as delivery_lane
 from robert_agent.adapters.github import budget as github_budget
@@ -21,13 +22,15 @@ class CompactCallerTests(unittest.TestCase):
         for sample in samples:
             with self.subTest(route=sample["name"]):
                 prompt = render_prompt.render_prompt(
-                    sample["task"],
-                    sample["route_result"],
-                    sample["events"],
-                    sample.get("runtime_context"),
-                    sample.get("project_memories"),
-                    sample.get("runtime_knowledge"),
-                )
+                    worker_prompt_input(
+                        sample["task"],
+                        sample["route_result"],
+                        sample["events"],
+                        sample.get("runtime_context"),
+                        sample.get("project_memories"),
+                        sample.get("runtime_knowledge"),
+                    )
+                ).text
                 submission = json.loads(re.search(r"<<'JSON'\n(.*?)\nJSON", prompt, re.S)[1])
                 if submission.get("review_input_kind", "").startswith("<"):
                     submission["review_input_kind"] = "request"

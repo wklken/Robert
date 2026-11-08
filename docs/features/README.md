@@ -14,6 +14,7 @@
 | [操作员消息](operator-messaging.md) | OpenClaw 通知、提问、受认证回复与渠道接入边界 |
 | [多模型 PR 评审](multi-model-review.md) | 作者白名单、并发、文件交接、审查与恢复 |
 | [多 Agent 投票](multi-agent-vote.md) | 显式触发、澄清、独立选票、汇总与发布 |
+| [Agent 输入与阶段契约](agent-prompts.md) | 公共结构、阶段差异、上下文入口与交付协议 |
 
 ## 调度与监督机制
 

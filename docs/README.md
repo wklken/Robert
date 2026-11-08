@@ -35,7 +35,7 @@
 ## 功能专题
 
 需要配置某项功能或理解其内部机制时，进入 [features/](features/README.md)：
-轮询与本地推进、持续任务监督、多模型评审、多 Agent 投票、生命周期看板和操作员消息。
+轮询与本地推进、持续任务监督、多模型评审、多 Agent 投票、Agent 输入与阶段契约、生命周期看板和操作员消息。
 
 ## 开发与协议
 
@@ -54,8 +54,8 @@
 | [看板控制 API](../src/robert_agent/resources/kanban-control.md) | 本地操作的版本、权限与幂等约束 |
 | [事件模型](../src/robert_agent/resources/github-events.md) / [workstream](../src/robert_agent/resources/workstream-model.md) / [分类](../src/robert_agent/resources/classifier.md) | 外部输入与任务路由 |
 | [信任模型](../src/robert_agent/resources/trust-model.md) / [脱敏](../src/robert_agent/resources/redaction.md) | 执行授权与公开文本边界 |
-| [Worker 提示词契约](../src/robert_agent/resources/worker-prompt.md) / [审查原则](../src/robert_agent/resources/review-policy.md) | Worker 上下文与审查行为 |
-| [失败模式](../src/robert_agent/resources/failure-modes.md) / [监督诊断契约](../src/robert_agent/resources/supervision-diagnosis.md) | 执行故障与诊断输入输出 |
+| [Agent 输入与阶段契约](features/agent-prompts.md) / [审查原则](../src/robert_agent/resources/prompts/guidance/review-policy.md) | 统一输入结构、阶段上下文与审查行为 |
+| [失败模式](../src/robert_agent/resources/failure-modes.md) / [监督诊断指令](../src/robert_agent/resources/prompts/stages/supervision-diagnose.md) | 执行故障与诊断输入输出 |
 | [验收矩阵](../src/robert_agent/resources/acceptance-matrix.md) | 行为测试与受控验收工具的范围 |
 
 ## 文档维护

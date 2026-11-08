@@ -1,5 +1,6 @@
 """Attempt input snapshots and deterministic prompt context contracts."""
 
+from robert_agent.context.worker_prompt import worker_prompt_input
 import json
 from pathlib import Path
 import sqlite3
@@ -183,17 +184,19 @@ class AttemptContextTests(AttemptContextFixture):
 class InlineContextTests(unittest.TestCase):
     def render(self, events, **runtime):
         return render_prompt.render_prompt(
-            {"task_id": "task", "attempt_id": "attempt", "workstream_id": "stream"},
-            route.ROUTES["update-existing-pr"],
-            events,
-            runtime_context={
-                "github_context": {
-                    "md_path": "/input/context.md",
-                    "json_path": "/input/context.json",
+            worker_prompt_input(
+                {"task_id": "task", "attempt_id": "attempt", "workstream_id": "stream"},
+                route.ROUTES["update-existing-pr"],
+                events,
+                runtime_context={
+                    "github_context": {
+                        "md_path": "/input/context.md",
+                        "json_path": "/input/context.json",
+                    },
+                    **runtime,
                 },
-                **runtime,
-            },
-        )
+            )
+        ).text
 
     def test_short_request_and_original_requirements_are_inline(self):
         prompt = self.render(
@@ -217,7 +220,8 @@ class InlineContextTests(unittest.TestCase):
         self.assertIn("Accept empty UTF-8 input and keep whitespace.", prompt)
         self.assertIn("Operator reply: preserve existing output format.", prompt)
         self.assertIn("untrusted", prompt)
-        self.assertIn("No additional context read is required", prompt)
+        self.assertIn("event-1 (required, inline, complete)", prompt)
+        self.assertNotIn("(required, file,", prompt)
 
     def test_long_body_has_explicit_markdown_entry_without_fake_summary(self):
         body = "must preserve every requirement\n" * 1000
@@ -250,11 +254,13 @@ class InlineContextTests(unittest.TestCase):
 
     def test_comment_only_guidance_omits_open_pr_and_push_schema(self):
         prompt = render_prompt.render_prompt(
-            {"task_id": "task", "attempt_id": "attempt", "workstream_id": "stream"},
-            route.ROUTES["comment-analysis"],
-            [],
-            runtime_context={},
-        )
+            worker_prompt_input(
+                {"task_id": "task", "attempt_id": "attempt", "workstream_id": "stream"},
+                route.ROUTES["comment-analysis"],
+                [],
+                runtime_context={},
+            )
+        ).text
         self.assertNotIn("push_existing_pr has only type", prompt)
         self.assertNotIn("For open_pr supply", prompt)
 

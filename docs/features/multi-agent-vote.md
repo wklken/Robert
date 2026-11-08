@@ -57,6 +57,9 @@ Issue 纯讨论使用独立 context 目录，不要求源码 worktree。准备�
 
 准备完成后冻结问题、选项、标准、参与者、上下文和 `voter-prompt.md`。所有 voter 读取字节相同的 prompt，使用独立模型会话，按 prompt 约定写入自己的 `ROBERT_VOTE_OUTPUT_DIR`；不同 CLI 内置系统提示不属于字节一致保证。
 
+准备与投票阶段的 prompt 禁止读取其他 run。汇总阶段则要求读取本次 inputs
+清单选中的全部封存选票和程序计票，同时禁止读取未选中的 run 或其他轮次。
+
 每个 voter 原子写入 `ballot.json`，包含 round、snapshot、spec hash、`choice_id`、非空 `reason_summary`、主要取舍、证据引用和未知项。`choice_id: null` 是弃权，必须说明 `abstain_reason`；该字段只要出现，都必须是有长度上限的非空文本。输出必须通过身份、选项、来源和文件校验，stdout/stderr 仅作诊断。已登记的进程组退出后，Robert 把普通交接文件复制到独立的封存目录，汇总读取封存副本并核对 hash；该交接校验不限制同账户进程访问封存目录。
 
 采用单选、等权、一参与者一票。重试和 fallback 不增加票数，准备和汇总本身也不产生选票。所有参与者都必须返回有效选票，包括明确弃权；技术失败不算弃权，缺票时不能发布完整结论。

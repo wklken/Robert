@@ -1,0 +1,1 @@
+Preserve all still-applicable user constraints. A later reply does not implicitly discard earlier ones. Read required files before acting. Do not infer requirements from event IDs or summaries. For equivalent archive representations, prefer the primary Markdown entry and use JSON when structured fields are needed. Do not read both formats by default.

@@ -32,10 +32,12 @@ from robert_agent.work.application import participants
 from robert_agent.work.application import source_events
 from robert_agent.context import attempt as attempt_context
 from robert_agent.context import prompts as render_prompt
+from robert_agent.context.worker_prompt import worker_prompt_input
 from robert_agent.delivery import contract as result_contract
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
+from robert_agent.execution import rounds as native_rounds
 from robert_agent.foundation import values
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import queries as work_queries
@@ -216,7 +218,7 @@ def _refresh_prepared_task_locked(
             "sources": work_queries.sources_for_workstream(conn, event["workstream_id"]),
         }
     )
-    prompt_text = render_prompt.render_prompt(
+    prompt_input = worker_prompt_input(
         {
             "task_id": state["task_id"],
             "attempt_id": state["attempt_id"],
@@ -236,7 +238,8 @@ def _refresh_prepared_task_locked(
             runtime_knowledge_items,
         ),
     )
-    attempt_context.atomic_replace_files({prompt_path: prompt_text.encode("utf-8")})
+    rendered = render_prompt.render_prompt(prompt_input)
+    attempt_context.atomic_replace_files({prompt_path: rendered.text.encode("utf-8")})
     for artifact_type, path in [
         ("prompt", str(prompt_path)),
         ("github_context_json", github_context["json_path"]),
@@ -256,6 +259,7 @@ def _refresh_prepared_task_locked(
         db_read_attempts.find_metadata_json_by_attempt_id(conn, state["attempt_id"])
     )
     attempt_metadata = values.json_object(attempt_metadata_row[0] if attempt_metadata_row else None)
+    attempt_metadata["prompt_contract"] = rendered.metadata
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     if existing_pr_head_sha:
         attempt_metadata["existing_pr_head_sha"] = existing_pr_head_sha
@@ -381,7 +385,8 @@ def create_task_attempt_and_prompt(
     task_lifecycle = TaskLifecycle.FAILED.value if blocked else TaskLifecycle.QUEUED.value
     attempt_status = AttemptStatus.FAILED.value if blocked else AttemptStatus.PREPARED.value
     related_events = list(related_events or [event])
-    if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
+    is_native = bool(route_result.get("native_review_workers") or route_result.get("native_vote_workers"))
+    if is_native:
         related_events = [event]
     refreshed_context = None
     if retrigger_wakeup_id:
@@ -451,17 +456,20 @@ def create_task_attempt_and_prompt(
             "sources": work_queries.sources_for_workstream(conn, workstream_id),
         }
     )
-    prompt_path.write_text(
-        render_prompt.render_prompt(
+    rendered = None
+    if not is_native:
+        prompt_input = worker_prompt_input(
             task,
             route_result,
             related_events,
             runtime_context=runtime_context,
             runtime_knowledge=runtime_knowledge_items,
             project_memories=project_memories,
-        ),
-        encoding="utf-8",
-    )
+        )
+        rendered = render_prompt.render_prompt(prompt_input)
+    # Native coordinators require a launcher stdin file, but render model
+    # prompts after preparing and freezing their own round inputs.
+    prompt_path.write_text(rendered.text if rendered else "", encoding="utf-8")
     task_metadata = {
         **(values.json_object(existing[0]) if existing else {}),
         **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
@@ -563,6 +571,8 @@ def create_task_attempt_and_prompt(
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     attempt_metadata = {"existing_pr_head_sha": existing_pr_head_sha} if existing_pr_head_sha else {}
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
+    if rendered:
+        attempt_metadata["prompt_contract"] = rendered.metadata
     db_write_attempts.insert_for_create_task_attempt_and_prompt(
         conn,
         attempt_id,
@@ -690,10 +700,12 @@ def create_resume_attempt_and_prompt(
         encoding="utf-8",
     )
 
+    task_row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     task = {
         "task_id": task_id,
         "attempt_id": attempt_id,
         "workstream_id": workstream_id,
+        "task_kind": task_row[0] if task_row else TaskKind.HUMAN_REQUEST.value,
         "review_input_policy": source_events.task_review_input_policy(conn, task_id),
     }
     worktree_result = {
@@ -727,17 +739,18 @@ def create_resume_attempt_and_prompt(
             "sources": work_queries.sources_for_workstream(conn, workstream_id),
         }
     )
-    prompt_path.write_text(
-        render_prompt.render_prompt(
+    rendered = None
+    if not native_rounds.session(conn, task_id=task_id):
+        prompt_input = worker_prompt_input(
             task,
             route_result,
             events,
             runtime_context=runtime_context,
             runtime_knowledge=runtime_knowledge_items,
             project_memories=project_memories,
-        ),
-        encoding="utf-8",
-    )
+        )
+        rendered = render_prompt.render_prompt(prompt_input)
+    prompt_path.write_text(rendered.text if rendered else "", encoding="utf-8")
 
     attempt_metadata = {
         "resume": {
@@ -746,6 +759,8 @@ def create_resume_attempt_and_prompt(
             "recovery_artifact_path": str(recovery_path),
         }
     }
+    if rendered:
+        attempt_metadata["prompt_contract"] = rendered.metadata
     previous_resume = values.json_object(previous_metadata_json).get("resume") or {}
     model_fallback = recovery_context.get("model_fallback") or previous_resume.get("model_fallback")
     if model_fallback:

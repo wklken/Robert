@@ -48,12 +48,16 @@ def _mock_new_pr_worker(workspace_dir):
     worker.write_text(
         f"""#!/usr/bin/env python3
 import json
+import shlex
 import sys
 
 sys.path.insert(0, {str(PACKAGE_ROOT.parent)!r})
 from robert_agent.delivery.application import submission as result
 
 prompt = sys.stdin.read()
+helper = next(line.removesuffix(" <<'JSON'") for line in prompt.splitlines() if line.endswith(" <<'JSON'"))
+command = shlex.split(helper)
+db_path = command[command.index("--db") + 1]
 fields = {{}}
 for line in prompt.splitlines():
     if ": " in line:
@@ -88,7 +92,7 @@ submission = {{
 }}
 payload = {{"task_id": fields["task_id"], "attempt_id": fields["attempt_id"],
            "output_type": "new_pr", "submission": submission}}
-record = result.record_result(fields["db_path"], payload)
+record = result.record_result(db_path, payload)
 print(json.dumps(record, sort_keys=True))
 raise SystemExit(0 if record["ok"] else 1)
 """,
