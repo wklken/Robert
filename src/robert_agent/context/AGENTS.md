@@ -13,3 +13,7 @@ These rules apply to this directory and its descendants. Follow the
   Keep context preparation independent of executable CLI imports.
 - Test generated context, path validity and skill or knowledge selection without
   running a model.
+- Keep runtime instruction text in `resources/prompts/` and use the shared
+  `prompts` renderer with fixed stage profiles. Stage input builders supply
+  facts, references and existing output contracts, not free-form instruction tails.
+  Preserve helper, atomic-file and stdout completion semantics separately.

@@ -16,6 +16,7 @@ Mermaid 图可直接在 GitHub 阅读。箭头的含义在各图前说明；省�
 - [Worker 监督与失败恢复](#worker-监督与失败恢复)
 - [独立任务监督](#独立任务监督)
 - [多模型评审与投票](#多模型评审与投票)
+- [Agent 输入生成](#agent-输入生成)
 - [PR 自修复](#pr-自修复)
 - [核心数据关系](#核心数据关系)
 
@@ -34,7 +35,7 @@ robert_agent/
     application/              # 结果提交、审计、作用域、外部效果、对账、发布和通知
   supervision/                # 规则、lineage、恢复记录、回执证明、健康事实
     application/              # 观察、诊断协调、发布恢复
-  context/                    # prompt/skills/review guidance/项目和运行知识
+  context/                    # 统一 prompt 合同/renderer/阶段输入、skills、项目和运行知识
     application/              # 知识人工审核事务
   workflows/                  # review、vote、PR remediation、maintenance
   configuration/              # 严格 v2、schema、路由、监督配置
@@ -536,6 +537,27 @@ Worker 的运行超时，父任务期限仍有效。未知启动保留额度。�
 [workflows/vote/coordinator.py](../src/robert_agent/workflows/vote/coordinator.py)、[StageCoordinator](../src/robert_agent/execution/stages.py)、
 [persistence/rounds/pool.py](../src/robert_agent/persistence/rounds/pool.py)、[workflows/vote/tally.py](../src/robert_agent/workflows/vote/tally.py)。
 配置与恢复见 [multi-model-review.md](features/multi-model-review.md) 和 [multi-agent-vote.md](features/multi-agent-vote.md)。
+
+## Agent 输入生成
+
+[`context.prompts`](../src/robert_agent/context/prompts.py) 统一生成普通 Worker、原生
+review/vote、监督和受限维护的阶段指令。调用方提供结构化事实，公共原则、阶段要求和
+交付协议来自 [`resources/prompts/`](../src/robert_agent/resources/prompts/)。
+[`prompt_contract`](../src/robert_agent/context/prompt_contract.py) 定义输入和输出值；
+[`prompt_profiles`](../src/robert_agent/context/prompt_profiles.py) 限定阶段及适用组合。
+
+```mermaid
+flowchart LR
+    Facts["领域事实、授权范围、上下文引用"] --> Renderer["context.prompts"]
+    Resources["公共约定 + 阶段要求 + 交付协议"] --> Renderer
+    Renderer --> Text["八段结构的 Agent 输入"]
+    Text --> Existing["既有 Worker / 原生阶段 / JSON 包"]
+    Existing --> Result["原领域校验结果与外部效果"]
+```
+
+阶段选择和权限仍由流程 owner 决定；context 不导入具体 workflow 或监督执行用例。
+helper、原子文件、stdout JSON 保持各自结果格式和完成条件。阶段、上下文和恢复
+边界见 [Agent 输入与阶段契约](features/agent-prompts.md)。
 
 ## PR 自修复
 

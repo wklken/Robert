@@ -85,6 +85,15 @@ class DecisionTests(unittest.TestCase):
             self.offer(conn)
             self.assertFalse(decisions.permit(conn, self.config, **self.candidate_args))
             request = self.request(conn)
+            instructions = request["instructions"]
+            self.assertIn("supervision.decide", instructions)
+            self.assertIn("$.evidence", instructions)
+            self.assertIn("$.candidates", instructions)
+            self.assertIn("$.allowed_actions", instructions)
+            self.assertNotIn("Keep the original requirements", instructions)
+            self.assertEqual(
+                request["bundle_sha256"], decisions.digest({k: v for k, v in request.items() if k != "bundle_sha256"})
+            )
             result = decisions.validate(json.dumps(self.output(request)), request)
             self.assertTrue(decisions.approve(conn, self.config, request, result, self.now))
             self.assertTrue(decisions.permit(conn, self.config, **self.candidate_args))
@@ -286,6 +295,27 @@ recheck_seconds=300, message=''), sys.stdout)
             packet = self.request(conn)
             self.assertLess(len(decisions.encode(packet).encode()), 49152)
             self.assertIn("requirement detail", decisions.encode(packet))
+
+    def test_packet_discloses_compaction_and_preserves_offered_candidate_identity(self):
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            offered = []
+            for index in range(6):
+                candidate = decisions.offer(
+                    conn,
+                    self.config,
+                    **{
+                        **self.candidate_args,
+                        "target_id": f"attempt-{index}",
+                        "facts": {"observation": "failure evidence " * 620},
+                    },
+                )
+                offered.append((candidate["id"], candidate["generation"]))
+            packet = self.request(conn)
+            self.assertLess(len(decisions.encode(packet).encode()), 49152)
+            self.assertCountEqual([(c["id"], c["generation"]) for c in packet["candidates"]], offered)
+            self.assertTrue(all("[truncated]" in c["facts"]["observation"] for c in packet["candidates"]))
+            self.assertIn("shortened for the bundle byte budget", packet["instructions"])
 
     def test_skipped_oldest_root_does_not_starve_later_targets(self):
         self.config["supervision"]["batch_size"] = 1

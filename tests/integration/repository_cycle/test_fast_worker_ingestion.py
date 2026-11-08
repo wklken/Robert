@@ -241,12 +241,16 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
         worker_command.write_text(
             f"""#!/usr/bin/env python3
 import json
+import shlex
 import sys
 
 sys.path.insert(0, {str(PACKAGE_ROOT.parent)!r})
 from robert_agent.delivery.application import submission as result
 
 prompt = sys.stdin.read()
+helper = next(line.removesuffix(" <<'JSON'") for line in prompt.splitlines() if line.endswith(" <<'JSON'"))
+command = shlex.split(helper)
+db_path = command[command.index("--db") + 1]
 fields = {{}}
 for line in prompt.splitlines():
     if ": " in line:
@@ -272,7 +276,7 @@ payload = {{
     "used_skills": [],
     }},
 }}
-record = result.record_result(fields["db_path"], payload)
+record = result.record_result(db_path, payload)
 print(json.dumps(record, sort_keys=True))
 raise SystemExit(0 if record["ok"] else 1)
 """,

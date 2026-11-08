@@ -4,7 +4,6 @@ from tests.support import database as fixture_database
 from robert_agent.adapters.processes import identity as worker_identity
 import json
 import os
-import re
 from pathlib import Path
 import signal
 import sys
@@ -140,10 +139,13 @@ class ReviewCoordinatorFixture(unittest.TestCase):
                     payload["round_id"] = "previous-round"
                 review_files.atomic_json(output / "result.json", payload)
         else:
-            inputs_path = re.search(
-                r"Read the frozen selected artifact list (.*?)\. Read each", prompt.read_text()
-            ).group(1)
-            inputs = json.loads(Path(inputs_path).read_text())
+            inputs_path = next(
+                path
+                for path in (prompt.parent / "synthesis").glob("inputs*.json")
+                if review_files.sha256_file(path) in prompt.name
+            )
+            self.assertIn(str(inputs_path), prompt.read_text())
+            inputs = json.loads(inputs_path.read_text())
             for record in inputs["records"]:
                 self.assertTrue(Path(record["result_path"]).is_file())
             payload = {key: manifest[key] for key in ("round_id", "snapshot_id", "head_sha")}

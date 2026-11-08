@@ -141,6 +141,11 @@ class DiagnosisTests(unittest.TestCase):
             self.assertEqual(self.diagnose.poll(self.config, now=self.when)["status"], "launched")
             self.poll("succeeded")
         recorded = self.metadata()
+        instructions = recorded["bundle"]["instructions"]
+        self.assertIn("supervision.diagnose", instructions)
+        self.assertIn("$.evidence", instructions)
+        self.assertIn("$.missing", instructions)
+        self.assertNotIn("Check the original target", instructions)
         self.assertEqual(recorded["diagnosis"]["recommended_action"], "reconcile")
         self.assertEqual(recorded["diagnosis"]["expected_progress"], "Observe a matching receipt")
         with closing(sqlite3.connect(self.db)) as conn:
@@ -149,6 +154,22 @@ class DiagnosisTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(status, "open")
         self.assertEqual(json.loads(evidence), {"action_id": "action-1"})
+
+    def test_truncated_observations_are_marked_as_limited_evidence(self):
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute(
+                "UPDATE supervision_incidents SET evidence_json=? WHERE incident_id=?",
+                (json.dumps({"note": "Observation prefix " + "x" * 2000 + " hidden tail"}), self.incident_id),
+            )
+        self.set_wrapper(VALID_WRAPPER)
+        with mock.patch.dict(os.environ, {"MODEL_FIXTURE": "allowed-for-test"}):
+            self.poll("succeeded")
+        bundle = self.metadata()["bundle"]
+        evidence = json.dumps(bundle["evidence"])
+        self.assertIn("Observation prefix", evidence)
+        self.assertNotIn("hidden tail", evidence)
+        self.assertIn("evidence (required, inline, truncated)", bundle["instructions"])
+        self.assertIn("source selection, redaction and size limits", bundle["instructions"])
 
     def test_rejects_unbound_or_unrecognized_recommendations(self):
         variants = (
