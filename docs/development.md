@@ -12,6 +12,9 @@ See the [official Python version status](https://devguide.python.org/versions/).
 When a branch reaches EOL, raise `project.requires-python` in `pyproject.toml`
 and update its classifiers, Ruff target, CI matrix and installation guides
 together. Add new stable Python releases to the matrix before claiming support.
+Also update `main`'s required status checks in GitHub branch protection to match
+the matrix job names. Removed matrix entries otherwise remain required and
+leave pull requests waiting for checks that will never run.
 
 ```bash
 git clone https://github.com/wklken/Robert.git

@@ -134,8 +134,10 @@ jobs:
       - uses: lycheeverse/lychee-action@v2
         with:
           failIfEmpty: false
+          # Keep requests to the same host conservative during link checks.
           args: >-
             --no-progress
+            --host-concurrency 2
             README.md
             README_EN.md
             COMMUNITY.md
