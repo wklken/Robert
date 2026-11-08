@@ -40,7 +40,7 @@ Paths below are relative to `src/robert_agent/`.
 | `work/` | Input validation, event/trust policy, workstream and operator queries, source batches, repository/task facts | `work/application/`: commands, admission, preparation, input refresh, handoff, completion and source lifecycle |
 | `execution/` | Identity/ownership, capacity, leases, progress/command journals, result spool, shared model stages and round mechanics | `execution/application/`: dispatch, monitoring, recovery evidence and readiness |
 | `delivery/` | Submission contract, pure policies, locks, result/intent facts, selection and notification persistence | `delivery/application/`: audit, submission, trusted scope, guarded effects, intents, receipts, notifications, reconciliation and publication |
-| `supervision/` | Rules, lineage, durable recovery records, receipt proof and health projections | `supervision/application/`: observation, checks and publication recovery coordination |
+| `supervision/` | Rules, lineage, model decision grants, durable recovery records, receipt proof and health projections | `supervision/application/`: observation, checks, decision calls and replies, publication recovery coordination |
 | `context/` | Prompt/skill rendering, review guidance, project memory and runtime knowledge | `context/application/`: transactional human knowledge review |
 | `workflows/` | Concrete review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
 | `configuration/` | v2 loading, normalization, schema validation and route/supervision settings | Boundary parsing only; no execution or workflow imports |

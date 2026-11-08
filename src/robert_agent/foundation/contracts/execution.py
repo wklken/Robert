@@ -66,3 +66,18 @@ RUNNING_ATTEMPT_STATUSES = frozenset(
         AttemptStatus.STALE.value,
     }
 )
+
+
+@unique
+class ModelCommandStatus(StrEnum):
+    READ = "read"
+    EXITED = "exited"
+    TIMED_OUT = "timed_out"
+    STOPPED = "stopped"
+    INVALID_OUTPUT = "invalid_output"
+    LAUNCH_FAILED = "launch_failed"
+    PROCESS_ATTENTION = "process_attention"
+
+
+# Recovery metadata for a stopped attempt; the attempt itself remains FAILED.
+MODEL_DECISION_WAIT_STATUS = "waiting_for_model_decision"

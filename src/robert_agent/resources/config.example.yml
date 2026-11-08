@@ -36,6 +36,8 @@ supervision:
   batch_size: 100
   stall_seconds: 300
   diagnosis: null
+  # mode: decide requires a dedicated no-tool decision command; see task-supervision.md.
+  decision: null
   recovery: null
   repair: null
   build_manifest: null

@@ -1,5 +1,8 @@
 """Run a bounded, advisory diagnosis outside the business worker queue."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+from robert_agent.foundation.contracts.execution import ModelCommandStatus
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import origins as db_read_origins
 
@@ -22,7 +25,6 @@ import json
 import os
 from pathlib import Path
 import re
-import selectors
 import subprocess
 import tempfile
 import threading
@@ -33,6 +35,7 @@ from robert_agent.security import redaction
 from robert_agent.supervision import rules as supervision_rules
 from robert_agent.supervision import store as supervision_store
 from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.adapters.processes import model_command
 from robert_agent.configuration.supervision import normalize_diagnosis
 from robert_agent.worker_adapters import build_worker_launch
 
@@ -58,7 +61,6 @@ _OUTPUT_FIELDS = {
     "recommended_action",
     "expected_progress",
 }
-_MAX_STDOUT = 8192
 _MAX_BUNDLE = 49152
 _RUNNER = ("diagnostic", "installation", "runner")
 _IN_PROGRESS = ("open", "needs_attention", "diagnosing")
@@ -312,61 +314,14 @@ def _validate_output(raw, claim):
     return {**output, "expected_progress": safe["text"]}
 
 
-def _output(proc, deadline, stop):
-    output = bytearray()
-    eof = False
-    with selectors.DefaultSelector() as selector:
-        descriptor = proc.stdout.fileno()
-        os.set_blocking(descriptor, False)
-        selector.register(descriptor, selectors.EVENT_READ)
-        while not stop.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return "timed_out", b""
-            if eof:
-                if proc.poll() is not None:
-                    return ("exited" if proc.returncode else "read"), bytes(output)
-                stop.wait(min(remaining, 0.05))
-            elif selector.select(min(remaining, 0.05)):
-                chunk = os.read(descriptor, min(4096, _MAX_STDOUT + 1 - len(output)))
-                if chunk:
-                    output.extend(chunk)
-                    if len(output) > _MAX_STDOUT:
-                        return "invalid_output", b""
-                else:
-                    eof = True
-    return "stopped", b""
-
-
-def _stable_identity(proc, stop):
-    # On macOS `ps` can observe the exec transition before argv stabilizes.
-    # Never persist that transient command as proof for restart or cleanup.
-    previous = None
-    for _ in range(5):
-        if proc.poll() is not None:
-            return None
-        try:
-            observed = worker_identity.capture_process_identity(proc.pid)
-        except (OSError, worker_identity.IdentityReadError):
-            observed = None
-        if observed and previous and worker_identity.compare_recorded_identity(previous, observed) == "alive_same":
-            return observed
-        previous = observed
-        if stop.wait(0.025):
-            return None
-    if proc.poll() is None:
-        raise ValueError("diagnosis process identity did not stabilize")
-    return None
-
-
 def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
     started = time.monotonic()
-    status, diagnosis, proc, stopped = "stopped", None, None, True
+    status, diagnosis, proc, stopped = ModelCommandStatus.STOPPED.value, None, None, True
     provider_error = None
     try:
         directory = tempfile.TemporaryDirectory(prefix="robert-diagnosis-", ignore_cleanup_errors=True)
     except OSError:
-        return _PendingCompletion(db_path, claim, now, "launch_failed", None, True)
+        return _PendingCompletion(db_path, claim, now, ModelCommandStatus.LAUNCH_FAILED.value, None, True)
     with directory as root:
         try:
             cwd = Path(root).resolve()
@@ -383,7 +338,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                 },
             )
         except (OSError, ValueError):
-            return _PendingCompletion(db_path, claim, now, "launch_failed", None, True)
+            return _PendingCompletion(db_path, claim, now, ModelCommandStatus.LAUNCH_FAILED.value, None, True)
         environment = {name: os.environ[name] for name in launch.environment_allowlist if name in os.environ}
         environment.update(HOME=str(cwd), TMPDIR=str(cwd), PATH=os.defpath)
         if not stop.is_set():
@@ -398,26 +353,30 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                         stderr=subprocess.DEVNULL,
                         start_new_session=True,
                     )
-                if identity := _stable_identity(proc, stop):
+                if identity := model_command.stable_identity(proc, stop):
                     if identity["process_group_id"] != proc.pid:
                         raise ValueError("diagnosis process group is not isolated")
                     claim = {**claim, "process_identity": identity, "status": "running"}
                     if not _set_claim(db_path, claim, now):
                         raise ValueError("diagnosis claim changed during spawn")
-                status, output = _output(proc, started + launch.timeout_seconds, stop)
-                if status in {"read", "exited"} and output:
+                status, output = model_command.read_output(proc, started + launch.timeout_seconds, stop)
+                if status in {ModelCommandStatus.READ.value, ModelCommandStatus.EXITED.value} and output:
                     try:
                         validated = _validate_output(output, claim)
                         if "error" in validated:
                             status, provider_error = "provider_rate_limited", validated["error"]
-                        elif status == "read":
+                        elif status == ModelCommandStatus.READ.value:
                             status, diagnosis = "succeeded", validated
                     except (ValueError, RecursionError):
-                        status = "invalid_output"
-                elif status == "read":
-                    status = "invalid_output"
+                        status = ModelCommandStatus.INVALID_OUTPUT.value
+                elif status == ModelCommandStatus.READ.value:
+                    status = ModelCommandStatus.INVALID_OUTPUT.value
             except (OSError, db_errors.Error, ValueError, worker_identity.IdentityReadError):
-                status = "launch_failed" if proc is None else "process_attention"
+                status = (
+                    ModelCommandStatus.LAUNCH_FAILED.value
+                    if proc is None
+                    else ModelCommandStatus.PROCESS_ATTENTION.value
+                )
             finally:
                 if proc is not None:
                     proc.stdout.close()
@@ -428,7 +387,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                     if not stopped:
                         stopped = worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
             if not stopped:
-                status, diagnosis, provider_error = "process_attention", None, None
+                status, diagnosis, provider_error = ModelCommandStatus.PROCESS_ATTENTION.value, None, None
     finished = now + timedelta(seconds=time.monotonic() - observed_monotonic)
     return _PendingCompletion(db_path, claim, finished, status, diagnosis, stopped, provider_error=provider_error)
 
@@ -569,7 +528,7 @@ def poll(config, *, now=None):
     """Start or inspect one diagnosis without waiting on model or process I/O."""
     settings = config.get("supervision", {})
     profile = normalize_diagnosis(settings.get("diagnosis"))
-    if settings.get("mode") == "off" or profile is None:
+    if settings.get("mode") == SupervisionMode.OFF.value or profile is None:
         return _status("disabled")
     observed_monotonic = time.monotonic()
     current = supervision_rules.timestamp(now) if now is not None else datetime.now(timezone.utc)

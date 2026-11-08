@@ -63,6 +63,7 @@ robert_agent/
 [`foundation/contracts/`](../src/robert_agent/foundation/contracts/) 的领域模块中。
 这些模块只包含 `StrEnum` 与不可变值集合，不依赖数据库、配置或业务实现。
 任务、工作流、Attempt、模型轮次、发布意图与监督恢复分别持有自己的状态枚举；
+监督模式、决策动作、决策状态、调用状态和模型命令结果也各自使用对应的值合同；
 同名的 `running` 或 `failed` 不代表同一个状态机。调用方直接导入对应领域的值合同，
 数据库写入和 JSON/YAML 等序列化边界使用 `.value`，保留原有字符串编码。
 数据库 CHECK、模型映射与协议 Schema 继续声明各自边界约束，合同测试校验共享值的一致性。
@@ -428,6 +429,25 @@ effort 保持不变；恢复路径也可能使用已保存的模型恢复信息�
 
 `runtime/supervisor.py` 是独立于业务 daemon 的服务入口。默认 `observe` 只记录观察与
 事件；心跳、进程存活或一次恢复函数返回都不能证明业务已取得进展。
+
+显式 `decide` 模式以 Issue/PR 的根 workstream 聚合关联事实与历史，由模型选择下一步。
+CI/冲突消费者和 Worker 恢复消费者先上报候选，再检查 `supervision.decisions` 的精确授权；
+执行仍由原领域负责。`supervision/application/decision_loop.py` 调度无工具模型命令，
+`adapters/processes/model_command.py` 管理有界输出和进程清理。事件变化和到期复查驱动后续决策。
+决策、问题、回复及执行回执保存在命名 supervision checkpoint 中，历史决策单独留档。
+`work/questions.py` 记录系统问题；已认证 Reply 更新监督上下文而不创建新执行。
+
+```mermaid
+flowchart LR
+    Facts["目标、事件、当前状态、历史结果"] --> ModelDecision["模型选择下一步"]
+    ModelDecision --> Guard["版本、权限、预算、幂等校验"]
+    Guard --> Domain["原领域执行修复或恢复"]
+    Domain --> Facts
+    ModelDecision --> User["询问、通知或等待"]
+    User --> Facts
+```
+
+`observe` / `recover_known` 保持原模式；以下图描述它们的观察、诊断与已知恢复流程。
 
 ```mermaid
 flowchart TD

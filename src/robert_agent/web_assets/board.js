@@ -1164,7 +1164,16 @@ function renderSupervision(detail) {
   panel.id = "detail-supervision";
   const incidents = detail.supervision_incidents || [];
   panel.append(node("summary", "", `${t("supervision")} (${incidents.length})`));
-  if (!incidents.length) panel.append(node("p", "", t("noIncidents")));
+  const supervision = detail.supervision_decision;
+  if (supervision) {
+    const entry = node("section", "execution-history-task");
+    const decision = supervision.decision || {};
+    entry.append(node("p", "", `${supervision.status} · ${decision.action || ""}`));
+    [decision.reason, decision.message, decision.expected_progress, supervision.next_check_at]
+      .filter(Boolean).forEach(text => entry.append(node("p", "", text)));
+    panel.append(entry);
+  }
+  if (!incidents.length && !supervision) panel.append(node("p", "", t("noIncidents")));
   incidents.forEach(incident => {
     const entry = node("section", "execution-history-task");
     entry.append(node("p", "", `${incident.status} · ${incident.reason_code}`));

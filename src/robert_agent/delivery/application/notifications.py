@@ -93,7 +93,14 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
             metadata = json.loads(row[3] or "{}")
             state = {
                 key: metadata[key]
-                for key in ("reason_code", "error_class", "required_action", "retryable")
+                for key in (
+                    "reason_code",
+                    "error_class",
+                    "required_action",
+                    "retryable",
+                    "workstream_id",
+                    "decision_id",
+                )
                 if key in metadata
             }
             digest = hashlib.sha256(json.dumps([row[1], state], sort_keys=True).encode()).hexdigest()[:16]

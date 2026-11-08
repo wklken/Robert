@@ -95,3 +95,46 @@ class DomainContractTests(unittest.TestCase):
         self.assertEqual(work.TERMINAL_TASK_LIFECYCLES, {"completed", "failed", "canceled", "ignored"})
         self.assertFalse(work.LIVE_TASK_LIFECYCLES & work.TERMINAL_TASK_LIFECYCLES)
         self.assertEqual(work.LIVE_TASK_LIFECYCLES | work.TERMINAL_TASK_LIFECYCLES, set(work.TaskLifecycle))
+
+    def test_supervision_modes_match_configuration_schema(self):
+        schema = json.loads(resource("schemas", "config.schema.json").read_text())
+        modes = schema["properties"]["supervision"]["properties"]["mode"]["enum"]
+        self.assertEqual({m.value for m in supervision.SupervisionMode}, set(modes))
+
+    def test_model_decision_actions_preserve_wire_values_and_recovery_scope(self):
+        self.assertEqual(
+            supervision.AUTOMATIC_DECISION_ACTIONS,
+            {
+                "repair_ci",
+                "resolve_conflict",
+                "retry_worker",
+                "spool_replay",
+                "audit_retry",
+                "handoff_resume",
+                "publication_retry",
+                "publication_reconcile",
+            },
+        )
+        self.assertEqual(
+            supervision.NONEXECUTING_DECISION_ACTIONS,
+            {
+                "wait",
+                "notify_user",
+                "ask_user",
+                "finish_supervision",
+            },
+        )
+        self.assertFalse(supervision.AUTOMATIC_DECISION_ACTIONS & supervision.NONEXECUTING_DECISION_ACTIONS)
+        self.assertEqual(
+            {m.value for m in supervision.DecisionAction},
+            supervision.AUTOMATIC_DECISION_ACTIONS | supervision.NONEXECUTING_DECISION_ACTIONS,
+        )
+        self.assertLessEqual({m.value for m in supervision.RecoveryActionKind}, supervision.AUTOMATIC_DECISION_ACTIONS)
+
+    def test_model_failures_and_nonexecuting_choices_keep_separate_status_contracts(self):
+        outcomes = {m.value for m in execution.ModelCommandStatus} - {"read"}
+        self.assertLessEqual(outcomes, {m.value for m in supervision.DecisionStatus})
+        self.assertLessEqual(outcomes, {m.value for m in supervision.DecisionRunStatus})
+        self.assertLessEqual(supervision.NONEXECUTING_DECISION_ACTIONS, {m.value for m in supervision.DecisionStatus})
+        self.assertNotIn("decided", {m.value for m in supervision.DecisionStatus})
+        self.assertNotIn("approved", {m.value for m in supervision.DecisionRunStatus})
