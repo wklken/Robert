@@ -32,6 +32,7 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
     action_scope = {
         "workstream_id": workstream_id,
         "repo": row[0],
+        "github_account": row[7],
         "base_branch": row[1],
         "worktree_path": row[2] or "",
         "branch_name": row[3] or "",
@@ -189,3 +190,14 @@ def trusted_action_scope(conn, action):
             return {**scope, "supervision_repair": True, "repair_git": None}
         return {**scope, "supervision_repair": True}
     return scope
+
+
+def comment_publisher(conn, action, scope):
+    """Resolve the configured publisher without rewriting a historical audit scope."""
+    if scope.get("github_account"):
+        return scope["github_account"]
+    if conn is not None:
+        actor = db_records.first(db_read_tasks.publication_actor(conn, action.get("task_id")))
+        if actor:
+            return actor[0]
+    return None

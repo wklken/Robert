@@ -527,12 +527,10 @@ def _audit_verification_contract(result, verification_policy, actual_types):
     if not _verification_required(verification_policy, actual_types):
         return None
     required_statuses = set(verification_policy.get("required_statuses") or ["passed"])
-    has_required_pass = any(
-        entry.get("required") is True and entry.get("status") in required_statuses for entry in verification
-    )
-    if not has_required_pass:
+    required_entries = [entry for entry in verification if entry.get("required") is True]
+    if not required_entries or any(entry.get("status") not in required_statuses for entry in required_entries):
         return _verification_policy_error(
-            f"route requires a required verification entry with status in {sorted(required_statuses)}"
+            f"route requires every required verification entry to have status in {sorted(required_statuses)}"
         )
     return None
 

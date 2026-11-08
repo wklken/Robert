@@ -36,7 +36,7 @@ class NativeCutoverOperatorTests(unittest.TestCase):
         )
         with mock.patch.object(
             discover,
-            "_source_metadata",
+            "refresh_source_metadata",
             side_effect=lambda event, *args: ({**event, "body": "@robert-bot review this PR"}, "open"),
         ):
             requested = work_items.retrigger_failed_github_task(
@@ -74,7 +74,7 @@ class NativeCutoverOperatorTests(unittest.TestCase):
         context = work_items.CommandContext(
             "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"codex", "claude"})
         )
-        with mock.patch.object(discover, "_source_metadata", side_effect=lambda event, *args: (event, "open")):
+        with mock.patch.object(discover, "refresh_source_metadata", side_effect=lambda event, *args: (event, "open")):
             work_items.retrigger_failed_github_task(
                 fixture.db, task, context=context, idempotency_key="recover-vote", notifier=lambda _: None
             )

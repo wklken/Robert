@@ -15,6 +15,166 @@ class _Completed:
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_notification_review_request_uses_case_insensitive_actor(self):
+        import json
+        from types import SimpleNamespace
+        from robert_agent.adapters.github import discovery
+        from robert_agent.security.authorization import authorize_event
+
+        repo = {"full_name": "example/backend", "github_account": "robert-bot", "trusted_actors": ["WKLKEN"]}
+        raw = {
+            "id": "n1",
+            "number": 42,
+            "source_type": "pull_request",
+            "event_type": "notification",
+            "notification_reason": "review_requested",
+            "repo_full_name": "example/backend",
+        }
+        for actor in ("wklken", "WKLKEN"):
+            with self.subTest(actor=actor):
+
+                def runner(command, **kwargs):
+                    if command[:3] == ["gh", "search", "issues"]:
+                        payload = []
+                    elif command[2].endswith("/timeline"):
+                        payload = [
+                            [
+                                {
+                                    "id": 99,
+                                    "event": "review_requested",
+                                    "actor": {"login": actor},
+                                    "requested_reviewer": {"login": "ROBERT-BOT"},
+                                }
+                            ]
+                        ]
+                    elif command[2].endswith("/pulls/42") or command[2].endswith("/issues/42"):
+                        payload = {"user": {"login": "outsider"}, "state": "open"}
+                    elif command[2].endswith("/comments") or command[2].endswith("/reviews"):
+                        payload = []
+                    else:
+                        raise AssertionError(command)
+                    return SimpleNamespace(stdout=json.dumps(payload), stderr="", returncode=0)
+
+                events = discovery.collect_live_events(
+                    repo, runner=runner, notification_hints=[raw], include_notifications=False
+                )
+                result = authorize_event(discovery.normalize_events(events, repo)[0], repo)
+                self.assertEqual(result["event_type"], "review_request")
+                self.assertTrue(result["drives_execution"])
+
+    def test_literal_comment_delimiters_in_code_do_not_hide_later_requests(self):
+        from robert_agent.adapters.github.discovery import bot_requests
+
+        for prefix in (
+            "```html\n<!-- literal\n```",
+            "`<!--`",
+            "Prose `literal <!--\nexample`.",
+            "> <!-- literal",
+            "    <!-- literal",
+        ):
+            with self.subTest(prefix=prefix):
+                self.assertTrue(bot_requests(prefix + "\n\n@robert-bot analyze this", "robert-bot"))
+        self.assertEqual(bot_requests("<!-- hidden\n```\n@robert-bot analyze\n```\n-->", "robert-bot"), [])
+
+    def test_unmatched_or_escaped_backticks_cannot_expose_hidden_mentions(self):
+        from robert_agent.adapters.github.discovery import bot_requests
+
+        for text in (
+            "Literal ` unmatched\n\n<!-- close ` @robert-bot analyze this -->",
+            "Literal ` unmatched\n<!-- close ` @robert-bot analyze this -->",
+            r"Literal \` unmatched <!-- close ` @robert-bot analyze this -->",
+            "Literal ` unmatched\n```html\n<!-- close ` @robert-bot analyze this -->\n```",
+            "Literal ` unmatched\n> close ` <!-- @robert-bot analyze this -->",
+            "Literal ` unmatched\n- close ` <!-- @robert-bot analyze this -->",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(bot_requests(text, "robert-bot"), [])
+
+    def test_canonical_cli_normalizes_offline_fixture(self):
+        import json
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "events.json"
+            fixture.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "cli-1",
+                            "number": 123,
+                            "event_type": "comment",
+                            "body": "@robert-bot help",
+                            "actor_login": "wklken",
+                        }
+                    ]
+                )
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "robert_agent.adapters.github.discovery",
+                    "--repo",
+                    "example/backend",
+                    "--dd-account",
+                    "robert-bot",
+                    "--fixture",
+                    str(fixture),
+                    "--skip-external",
+                ],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["events"][0]["mentions_dd"])
+
+    def test_comment_editor_authority_is_bound_to_graphql_body(self):
+        import json
+        from robert_agent.adapters.github import discovery
+        from robert_agent.security.authorization import authorize_event
+
+        comment = {
+            "id": 77,
+            "node_id": "IC_77",
+            "user": {"login": "wklken"},
+            "author_association": "OWNER",
+            "body": "old",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+        }
+        for editor, expected in (("outsider", False), ("WKLKEN", True), (None, False)):
+            with self.subTest(editor=editor):
+
+                def runner(args, **kwargs):
+                    self.assertEqual(args[:3], ["gh", "api", "graphql"])
+                    return _Completed(
+                        args,
+                        json.dumps(
+                            {
+                                "data": {
+                                    "node": {
+                                        "id": "IC_77",
+                                        "body": "@robert-bot fix current text",
+                                        "author": {"login": "wklken"},
+                                        "editor": {"login": editor} if editor else None,
+                                        "lastEditedAt": "2026-01-02T00:00:00Z",
+                                        "updatedAt": "2026-01-02T00:00:00Z",
+                                    }
+                                }
+                            }
+                        ),
+                    )
+
+                raw = discovery._comment_to_raw({"number": 1}, comment, repo_config=REPO_CONFIG, runner=runner)
+                event = discovery.normalize_events([raw], REPO_CONFIG)[0]
+                self.assertEqual(event["body"], "@robert-bot fix current text")
+                self.assertEqual(authorize_event(event, REPO_CONFIG)["drives_execution"], expected)
+
     def normalize_and_authorize(self, raw_events, existing_workstreams=None):
         from robert_agent.security import authorization as authorize
         from robert_agent.adapters.github import discovery as discover
@@ -311,6 +471,7 @@ class DiscoveryTests(unittest.TestCase):
                     args,
                     """{
                       "body": "<!-- robert-workstream\\nworkstream_id: github:example/backend#123\\ntask_id: task-parent\\ncreated_by: robert\\n-->",
+                      "user": {"login": "robert-bot"},
                       "head": {
                         "ref": "codex/dd-123-fix-timeout",
                         "sha": "head-sha-123"

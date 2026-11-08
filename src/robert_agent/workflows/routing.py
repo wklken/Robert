@@ -15,7 +15,8 @@ def effective_route(config_result, repo, event, route_id=None):
         and not route_id
         and event.get("source_type") == "pull_request"
         and event.get("authorization_status") == "accepted_context"
-        and event.get("actor_login") in repo.get("trusted_actors", [])
+        and (event.get("actor_login") or "").casefold()
+        in {login.casefold() for login in repo.get("trusted_actors", [])}
         and event.get("intent") == "review_request"
     ):
         candidate = route_config.resolve_route_config(config_result, repo, route_config.ROUTE_POLICIES["review-pr"])
@@ -57,7 +58,8 @@ def effective_route(config_result, repo, event, route_id=None):
             not settings.get("enabled")
             or not event.get("mentions_dd")
             or not discover.bot_requests(event.get("body"), repo["github_account"])
-            or event.get("actor_login") not in repo.get("trusted_actors", [])
+            or (event.get("actor_login") or "").casefold()
+            not in {login.casefold() for login in repo.get("trusted_actors", [])}
             or not (route_id == "vote" or discover.is_vote_request(event.get("body"), repo["github_account"]))
         ):
             # Preserve the request as a visible explanation, never substitute a single-model vote.

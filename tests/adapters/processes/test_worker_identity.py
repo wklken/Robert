@@ -187,6 +187,7 @@ class WorkerIdentityTests(unittest.TestCase):
         signals = []
         result = worker_identity.terminate_recorded_identity(
             recorded,
+            capture_members=lambda _: [],
             inspect=lambda _identity: next(states),
             signal_group=lambda pgid, sig: signals.append((pgid, sig)),
             supervisor_process_group_id=99,
@@ -213,6 +214,7 @@ class WorkerIdentityTests(unittest.TestCase):
         signals = []
         result = worker_identity.terminate_recorded_identity(
             recorded,
+            capture_members=lambda _: [],
             inspect=lambda _: next(states),
             signal_group=lambda *args: signals.append(args),
             supervisor_process_group_id=99,
@@ -240,6 +242,7 @@ class WorkerIdentityTests(unittest.TestCase):
 
         result = worker_identity.terminate_recorded_identity(
             recorded,
+            capture_members=lambda _: [],
             inspect=lambda _: next(states, "alive_same"),
             signal_group=lambda *args: signals.append(args),
             supervisor_process_group_id=99,

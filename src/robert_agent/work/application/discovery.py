@@ -11,6 +11,7 @@ from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.security import authorization as authorize
 from robert_agent.work import queries as work_queries
+from robert_agent.persistence.queries import github_events as event_queries
 import json
 import subprocess
 
@@ -138,6 +139,13 @@ def discover_requests(
     run_journal.mark_repo_run_step(conn, run_id, repo_id, "authorize", "running", run_now)
     try:
         normalized = discover.normalize_events(raw_events, repo)
+        for event in normalized:
+            if event["event_type"] == "mention" and ":body:" in event["event_fingerprint"]:
+                previous = event_queries.legacy_body_request(
+                    conn, repo_id, event["source_key"], event.get("actor_login") or "", event["body"]
+                )
+                if previous:
+                    event["event_fingerprint"] = previous[0][0]
         normalized = participants.attach_review_participants(normalized, review_participants)
     except (KeyError, TypeError, ValueError) as exc:
         error = run_errors.safe_discovery_error(exc)

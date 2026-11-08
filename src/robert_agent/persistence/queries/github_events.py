@@ -264,8 +264,8 @@ def scan_repo_filtered(conn, items, value_1, value_2):
             and_(
                 table1.c["repo_id"] == bindparam("p0"),
                 table1.c["authorization_status"] == sql_constant("accepted_context"),
-                table1.c["actor_login"].in_(bindparam("items", expanding=True)),
-                table1.c["actor_login"] != bindparam("p1"),
+                func.lower(table1.c["actor_login"]).in_(bindparam("items", expanding=True)),
+                func.lower(table1.c["actor_login"]) != bindparam("p1"),
                 table1.c["actor_kind"] != sql_constant("github_system"),
                 func.lower(table2.c["state"]) == sql_constant("open"),
                 table3.c["lifecycle"].in_(
@@ -279,4 +279,25 @@ def scan_repo_filtered(conn, items, value_1, value_2):
         .correlate_except(table1, table2, table3)
         .set_label_style(LABEL_STYLE_NONE)
     )
-    return statements.read(conn, query4, {"p0": value_1, "p1": value_2, "items": items})
+    return statements.read(
+        conn, query4, {"p0": value_1, "p1": value_2.casefold(), "items": [login.casefold() for login in items]}
+    )
+
+
+def legacy_body_request(conn, repo_id, source_key, actor, body):
+    """Keep an already observed body request's identity across collector upgrades."""
+    event = tables["github_events"]
+    query = (
+        select(event.c.event_fingerprint)
+        .where(
+            event.c.repo_id == repo_id,
+            event.c.event_type == "mention",
+            event.c.event_fingerprint.not_like("%:body:%"),
+            func.json_extract(event.c.payload_json, "$.source_key") == source_key,
+            func.lower(event.c.actor_login) == actor.casefold(),
+            func.json_extract(event.c.payload_json, "$.body") == body,
+        )
+        .order_by(event.c.event_at, event.c.event_id)
+        .limit(1)
+    )
+    return statements.read(conn, query, {})

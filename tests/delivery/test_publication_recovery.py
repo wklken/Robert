@@ -128,6 +128,21 @@ class PublicationRecoveryTests(unittest.TestCase):
             pushes = []
 
             def runner(command, **kwargs):
+                if command == ["gh", "api", "repos/x/y/pulls/1"]:
+                    return completed(
+                        json.dumps(
+                            {
+                                "state": "open",
+                                "merged": False,
+                                "user": {"login": "bot"},
+                                "head": {"repo": {"full_name": "x/y"}, "ref": "codex/fix"},
+                            }
+                        )
+                    )
+                if command[:3] == ["git", "ls-remote", "--get-url"]:
+                    return completed(command[-1] + "\n")
+                if command[:3] == ["git", "remote", "get-url"]:
+                    return completed("https://github.com/x/y.git\n")
                 if command[:2] == ["git", "ls-remote"]:
                     return completed(remote[0] + "\trefs/heads/codex/fix\n")
                 if command[:2] == ["git", "push"]:

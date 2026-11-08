@@ -166,6 +166,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
                     "event_fingerprint": task,
                     "actor_login": "wklken",
                     "body": "@robert-bot analyze this",
+                    "body_authorization_complete": True,
                     "workstream_id": stream,
                     "source_key": stream,
                     "source_type": "issue",

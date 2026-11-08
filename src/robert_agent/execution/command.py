@@ -1,5 +1,6 @@
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -217,7 +218,7 @@ def run_command_with_heartbeat(
     snapshot.build_snapshot(task_id, attempt_id, phase, "running", "Starting command")
     with closing(db_database.connect(db_path)) as conn:
         if not db_records.first(db_read_attempts.find_for_run_command_with_heartbeat(conn, attempt_id, task_id)):
-            raise ValueError("attempt_id does not belong to task_id")
+            raise ValueError("attempt has no current execution authority for this task")
     output_dir = Path(output_dir).expanduser() if output_dir else default_output_dir(db_path, task_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_prefix = f"{safe_filename_part(attempt_id)}.{safe_filename_part(phase)}.{time.time_ns()}"
@@ -266,9 +267,21 @@ def run_command_with_heartbeat(
         stdout_path.open("rb") as stdout_reader,
         stderr_path.open("rb") as stderr_reader,
     ):
+        proc = None
         try:
-            proc = subprocess.Popen(command, cwd=command_cwd, stdout=stdout_file, stderr=stderr_file)
-        except OSError as exc:
+            # Serialize the last authority check and spawn with cancellation and
+            # attempt replacement. No process wait occurs inside this transaction.
+            with closing(db_database.connect(db_path)) as admission, admission:
+                db_transactions.begin(admission, immediate=True)
+                if not db_records.first(
+                    db_read_attempts.find_for_run_command_with_heartbeat(admission, attempt_id, task_id)
+                ):
+                    raise ValueError("attempt has no current execution authority for this task")
+                proc = subprocess.Popen(command, cwd=command_cwd, stdout=stdout_file, stderr=stderr_file)
+        except (OSError, ValueError, db_errors.Error) as exc:
+            if proc is not None:
+                _kill_command(proc)
+                proc.wait()
             record.update(
                 status="failed",
                 returncode=None,

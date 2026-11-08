@@ -9,4 +9,6 @@ def is_driving_context_event(event):
 
 
 def is_trusted_actor(event, repo):
-    return event.get("actor_login") in set(repo.get("trusted_actors") or [])
+    return (event.get("actor_login") or "").casefold() in {
+        login.casefold() for login in repo.get("trusted_actors") or []
+    }

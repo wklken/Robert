@@ -351,11 +351,13 @@ unmanaged workspace blocks execution instead of discarding files. Commit or
 preserve those changes before retrying. Repeated analysis uses the refreshed
 upstream base rather than the first analysis snapshot.
 
-Worker timeout and remote Issue/PR closure terminate the worker process group,
-including descendants whose leader has exited. Cleanup escalates from SIGTERM
-to SIGKILL. If cleanup cannot be confirmed, Robert retains task ownership and
-capacity for another supervision pass and records a `worker_cleanup_pending`
-notification. Missing or invalid worker PIDs require operator investigation.
+Worker timeout and remote Issue/PR closure terminate a verified worker process
+group. Before SIGTERM, Robert captures member identities while the leader is
+still verified. A surviving verified member permits escalation to SIGKILL even
+when the leader exits first. If the leader was already gone before that capture,
+a PGID alone does not authorize signals to remaining descendants. Unknown identity
+or unconfirmed cleanup retains ownership and capacity and requires operator
+investigation; it is never treated as successful process cleanup.
 
 Publication records the controller-observed result commit and fork owner in the
 audit scope. A retry recognizes an existing-PR push that already reached that
@@ -438,6 +440,13 @@ These are diagnostics, not automatic deletion of potentially live work. Existing
 retention and offline compaction instructions above still apply. Run-step times
 use actual boundary timestamps and monotonic durations; Codex
 `turn.completed` usage is recognized.
+
+A configured remediation cost or token budget requires complete measurements for
+that dimension across its attempts. Token-only usage cannot establish remaining
+dollar budget; cost-only usage cannot establish remaining token budget. Missing
+or invalid measurements stop automatic continuation with `usage_unavailable`.
+CI checks with the same display name remain distinct across workflows and apps;
+a newer success clears only the matching producer’s earlier failure.
 
 ### Multi-Agent voting
 

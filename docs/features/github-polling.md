@@ -59,6 +59,25 @@ Unstarted native review/vote rounds are reauthorized against current trusted act
 and route enablement both when materializing a task and before dispatching a prepared
 attempt. A saved request is audit evidence, not a permanent execution grant.
 
+Issue-body mentions use the body content as their request identity. Comments or
+labels that only change the Issue activity timestamp do not repeat a consumed
+body request. Previously recorded body requests retain their identity when the
+body and author still match. Mentions inside HTML comments are ignored. Trusted
+GitHub login comparisons are case-insensitive throughout admission and replay.
+For edited Issue comments, discovery reads the current body and editor from the
+same GraphQL node response; unavailable editor evidence cannot inherit the
+original author's authority. Older cached enrichment is refreshed. Preserved old
+comments without editor evidence remain non-authoritative until a fresh matching
+observation is available; unrelated discussion cannot authorize an older task.
+
+Before each new publication write, the publisher rechecks loaded trust and route
+policy. Revocation blocks that write and leaves an operator-visible reason.
+Unknown prior effects can still be reconciled through reads; confirmed absence
+does not permit resending under revoked authority. Comment deduplication requires
+the configured publisher and exact body, in addition to its marker. Existing-PR
+pushes also verify the actual PR author, head branch and head repository against
+the configured push destination; a copied marker cannot establish ownership.
+
 ## Inspecting and recovering attention
 
 List batch state without printing event bodies; after resolving the underlying access, configuration, or local failure, explicitly retry a batch:

@@ -14,7 +14,17 @@ from robert_agent.models.execution import ExecutionSubject
 
 def occupied_attempt(attempt):
     """A result does not establish that its recorded process has exited."""
+    control = ExecutionSubject.__table__.alias("launch_reservation")
+    launching = (
+        select(1)
+        .where(
+            func.json_extract(control.c.metadata_json, sql_constant("$.dispatch_inflight")) == attempt.c.attempt_id,
+        )
+        .correlate_except(control)
+        .exists()
+    )
     return or_(
+        launching,
         attempt.c.status.in_((sql_constant(AttemptStatus.RUNNING.value), sql_constant(AttemptStatus.STALE.value))),
         and_(
             attempt.c.status == sql_constant(AttemptStatus.COMPLETED.value),
@@ -22,6 +32,40 @@ def occupied_attempt(attempt):
             func.json_extract(attempt.c.metadata_json, sql_constant("$.process_stopped_at")).is_(None),
         ),
     )
+
+
+def native_slot_owned(task):
+    """One ordinary slot belongs to a round until all model slots are released."""
+    reservations = []
+    for kind in ("review", "vote"):
+        session = tables[f"{kind}_sessions"].alias(f"{kind}_capacity_session")
+        run = tables[f"{kind}_runs"].alias(f"{kind}_capacity_run")
+        reservations.append(
+            select(1)
+            .select_from(session.join(run, run.c.round_id == session.c.round_id))
+            .where(
+                session.c.task_id == task.c.task_id,
+                run.c.slot_reserved == 1,
+            )
+            .correlate_except(session, run)
+            .exists()
+        )
+    return or_(*reservations)
+
+
+def resumable_native_slot(task, attempt):
+    """A replacement coordinator may reuse its round's slot, never a live owner's."""
+    other = tables["attempts"].alias("other_coordinator")
+    occupied = (
+        select(1)
+        .where(
+            other.c.task_id == task.c.task_id,
+            occupied_attempt(other),
+        )
+        .correlate_except(other)
+        .exists()
+    )
+    return and_(native_slot_owned(task), attempt.c.status == sql_constant("prepared"), ~occupied)
 
 
 def execution_attention_free(task):

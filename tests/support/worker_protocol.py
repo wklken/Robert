@@ -51,6 +51,10 @@ class WorkerProtocolFixture(unittest.TestCase):
                 """,
                 (now, now),
             )
+            conn.execute("UPDATE workstreams SET active_task_id='task-1'")
+            from robert_agent.persistence import execution_control
+
+            execution_control.ensure_subject(conn, "task", "task-1", "human_request", now)
             conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.result_contract','compact-v1')")
             conn.execute("UPDATE repos SET full_name='x/y'")
             conn.execute(
