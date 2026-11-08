@@ -45,6 +45,7 @@ def spool_recovery(w, *, authorized=True):
     hold = w.fault("worker", {"expected_output": "comment_analysis"}, "before_submit")
     w.start()
     cp = w.checkpoint(hold)
+    w.registered_worker(cp)
     attempt = cp["entity"]["attempt_id"]
     defer = w.fault("worker", {"attempt_id": attempt}, "after_submit")
     key = sha256(attempt.encode()).hexdigest()
@@ -85,6 +86,7 @@ def spool_recovery(w, *, authorized=True):
             lambda: w.sql(
                 "SELECT * FROM supervision_recovery_actions WHERE action_id=? AND status='succeeded'", action
             ),
+            timeout=75,
         )
         receipt = json.loads(verified[0]["receipt_json"])
         assert receipt == {

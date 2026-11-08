@@ -47,6 +47,7 @@ def deferred(w, *, restart=False):
     before = w.fault("worker", {"expected_output": "comment_analysis"}, "before_submit")
     w.start()
     cp = w.checkpoint(before)
+    w.registered_worker(cp)
     attempt = cp["entity"]["attempt_id"]
     after = w.fault("worker", {"attempt_id": attempt}, "after_submit")
     with w.suspend_daemon() if restart else nullcontext() as daemon, closing(sqlite3.connect(DB, timeout=5)) as lock:
@@ -320,6 +321,8 @@ def corrupt_spool(w):
     waiting = w.wait(
         "two distinct active attempts", lambda: checkpoints(before) if len(checkpoints(before)) == 2 else None
     )
+    for cp in waiting:
+        w.registered_worker(cp)
     daemon_pid = w.pid("daemon")
     original = process(daemon_pid)
     os.kill(daemon_pid, signal.SIGSTOP)

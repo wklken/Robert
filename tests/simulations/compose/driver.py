@@ -191,6 +191,24 @@ class World:
             raise HarnessError(f"held request is no longer owned by the registered publisher: {checkpoint}")
         self.kill(actor, whole_group=True)
 
+    def registered_worker(self, checkpoint):
+        actor = checkpoint["entity"]
+        current = process(actor["pid"])
+        if not current or current["pgid"] != actor["pgid"]:
+            raise HarnessError(f"Worker stopped before identity was recorded: {actor}")
+        return self.wait(
+            "Worker identity durably registered",
+            lambda: self.sql(
+                "SELECT attempt_id FROM attempts WHERE attempt_id=? "
+                "AND json_extract(metadata_json,'$.dispatch.process_start_token')=? "
+                "AND json_extract(metadata_json,'$.dispatch.process_group_id')=?",
+                actor["attempt_id"],
+                current["start_token"],
+                current["pgid"],
+            ),
+            error=HarnessError,
+        )
+
     def config(self, edit):
         config = json.loads(CONFIG.read_text())
         edit(config)
