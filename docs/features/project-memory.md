@@ -31,5 +31,10 @@ knowledge or expand an operator's permissions.
 Worker memory proposals are limited to 32 entries and 64 KiB of UTF-8 JSON.
 Submission, audit and storage share the pure policy in
 [`context/memory_policy.py`](../../src/robert_agent/context/memory_policy.py).
-Secrets and text requiring redaction are rejected, including nested evidence;
-rejected content is not copied into diagnostics or project memory.
+Secrets and oversized proposals are rejected. Local paths, private IP addresses
+and internal hostnames are redacted, including nested evidence, before new
+results are normalized and memory is stored. This optional context does not
+reject an otherwise valid result merely because it needs redaction. The
+submitted object remains unchanged for idempotent receipt lookup. If redaction
+expands an otherwise valid proposal beyond the size limit, only the optional
+memory is omitted with an explicit reason.

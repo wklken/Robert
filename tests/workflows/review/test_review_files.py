@@ -326,11 +326,46 @@ class ReviewFilesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             review_files.read_result(self.path, self.manifest)
 
-    def test_source_locations_cannot_inject_markdown_or_control_lines(self):
-        for path in ("src/a`b.py", "src/a\nb.py", "src/a\x00b.py", "src/a\rb.py"):
+    def test_source_locations_cannot_inject_control_lines(self):
+        for path in ("src/a\nb.py", "src/a\x00b.py", "src/a\rb.py"):
             with self.subTest(path=path):
                 result = copy.deepcopy(self.result)
                 result["findings"][0]["location"]["path"] = path
                 review_files.atomic_json(self.path, result)
                 with self.assertRaises(ValueError):
                     review_files.read_result(self.path, self.manifest)
+
+    def test_existing_individual_reports_remain_byte_compatible_for_resume(self):
+        # Digests captured from the pre-correction renderer; resumes verify bytes.
+        for notes, digest in (
+            ("read callers", "6b23de4b668f900f24d555a30edb47c3dccc21388fd695e1dad0aadc4642f465"),
+            ("read `callers`", "4261dda92fc6f6739dc41f359d4bcb27c8eeabe1de6ec0e4786ddb864348c875"),
+        ):
+            with self.subTest(notes=notes):
+                self.result["coverage"]["notes"] = notes
+                report = review_files.render_individual(self.result, "codex", "default")
+                self.assertEqual(hashlib.sha256(report.encode()).hexdigest(), digest)
+
+    def test_backtick_file_names_remain_valid_and_render_as_one_code_span(self):
+        for path, displayed in (
+            ("src/a`b.py", "`` src/a`b.py:10 ``"),
+            ("`leading.py", "`` `leading.py:10 ``"),
+            ("src/a``b.py", "``` src/a``b.py:10 ```"),
+        ):
+            with self.subTest(path=path):
+                source = Path(self.manifest["worktree_path"]) / path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("value = 1")
+                self.result["findings"][0]["location"]["path"] = path
+                self.result["coverage"]["reviewed_paths"] = [path]
+                review_files.atomic_json(self.path, self.result)
+                accepted = review_files.read_result(self.path, self.manifest)
+                self.assertEqual(accepted["findings"][0]["location"]["path"], path)
+                self.assertIn(displayed, review_files.render_individual(accepted, "codex", "default"))
+                record = self.record()
+                evaluation = self.evaluation()
+                merged = review_files.render_merged(self.manifest, [record], evaluation)
+                self.assertIn(displayed, merged)
+                self.assertIn("已审查：" + displayed.replace(":10", ""), merged)
+                evaluation["items"][0]["disposition"] = "dismissed"
+                self.assertIn(displayed, review_files.render_merged(self.manifest, [record], evaluation))

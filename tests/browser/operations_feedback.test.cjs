@@ -90,3 +90,42 @@ test('repeated dashboard errors share one visible status',async()=>{
   assert.equal((nodes.get('dashboard-app')?.innerHTML.match(/class="error"/g)||[]).length,0);
   assert.match(nodes.get('dashboard-load-error').textContent,/offline/);
 });
+
+test('artifact previews preserve backticks and literal Markdown inside code spans',()=>{
+  const {context,nodes}=dashboard();
+  for (const [markdown, expected] of [
+    ['`` src/a`b.py:10 ``', 'src/a`b.py:10'],
+    ['``` src/a``b.py:10 ```', 'src/a``b.py:10'],
+    ['`` `leading.py:10 ``', '`leading.py:10'],
+    ['`` src/a`[label](https://example.com) **bold**.py:10 ``', 'src/a`[label](https://example.com) **bold**.py:10'],
+    ['`src/main.py:10`', 'src/main.py:10'],
+    ['`` <script>alert(1)</script>` ``', '&lt;script&gt;alert(1)&lt;/script&gt;`'],
+  ]) {
+    context.previewText='path=report.md\n\n- '+markdown;
+    vm.runInContext('renderArtifactPreview(previewText,"report")',context);
+    const html=nodes.get('artifact-preview').innerHTML;
+    assert.ok(html.includes('<code>'+expected+'</code>'),html);
+    assert.doesNotMatch(html, /<a |<strong>|<script>/);
+  }
+  context.markdown='**bold** [safe](https://example.com) `literal`';
+  assert.match(vm.runInContext('inlineMarkdown(markdown)',context), /<strong>bold<\/strong>.*<a .*<code>literal<\/code>/);
+});
+test('code spans retain surrounding emphasis and links without entering attributes',()=>{
+  const {context}=dashboard();
+  for (const [markdown, pattern] of [
+    ['**Run `robert status` now**', /<strong>Run <code>robert status<\/code> now<\/strong>/],
+    ['[Run `robert`](https://example.com)', /<a [^>]+>Run <code>robert<\/code><\/a>/],
+  ]) {
+    context.markdown=markdown;
+    assert.match(vm.runInContext('inlineMarkdown(markdown)',context),pattern);
+  }
+  context.markdown='[text](https://example.com/`"onmouseover="alert(1)`)';
+  const html=vm.runInContext('inlineMarkdown(markdown)',context);
+  assert.doesNotMatch(html, /<a |onmouseover=/);
+});
+test('artifact code spans handle a bounded preview containing NUL characters',()=>{
+  const {context}=dashboard();
+  context.markdown='\0'.repeat(32768)+' `safe`';
+  const html=vm.runInContext('inlineMarkdown(markdown)',context);
+  assert.equal(html,'\uFFFD'.repeat(32768)+' <code>safe</code>');
+});

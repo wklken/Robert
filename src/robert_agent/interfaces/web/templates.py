@@ -850,7 +850,26 @@ def render_dashboard_html():
     function parseArtifactPreview(text) { const parts = String(text || '').split(/\n\n/); const headerText = parts.length > 1 ? parts.shift() : ''; const fields = {}; headerText.split(/\n/).forEach((line) => { const match = line.match(/^([^=]+)=(.*)$/); if (match) fields[match[1]] = match[2]; }); return { fields, content: parts.join('\n\n') }; }
     function artifactPreviewHeader(fields) { const rows = ['task_id', 'artifact_type', 'path', 'truncated'].filter((key) => fields[key]).map((key) => `<span>${esc(key)}=${esc(fields[key])}</span>`).join(''); return rows ? `<div class="artifact-preview-header">${rows}</div>` : ''; }
     function safeMarkdownHref(url) { const value = String(url || '').trim(); return /^(https?:\/\/|mailto:|#)/i.test(value) ? value : ''; }
-    function inlineMarkdown(text) { let html = esc(text); html = html.replace(/`([^`]+)`/g, '<code>$1</code>'); html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_match, label, url) => { const href = safeMarkdownHref(url); return href ? `<a class="external-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label; }); return html; }
+    function inlineMarkdown(text) {
+      const source = String(text || '').replace(/\u0000/g, '\uFFFD');
+      const marker = '\u0000';
+      const codes = [];
+      // Keep code opaque while surrounding emphasis and link labels are parsed.
+      const textWithCodes = source.replace(/(?<!`)(`+)(?!`)([\s\S]*?)(?<!`)\1(?!`)/g, (_match, _fence, value) => {
+        let code = value.replace(/\n/g, ' ');
+        if (code.startsWith(' ') && code.endsWith(' ') && /[^ ]/.test(code)) code = code.slice(1, -1);
+        const token = `${marker}${codes.length}${marker}`;
+        codes.push(`<code>${esc(code)}</code>`);
+        return token;
+      });
+      let html = esc(textWithCodes).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_match, label, url) => {
+        // Code placeholders may occur in labels, never in an HTML attribute.
+        const href = url.includes(marker) ? '' : safeMarkdownHref(url);
+        return href ? `<a class="external-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label;
+      });
+      return html.replace(/\u0000(\d+)\u0000/g, (_match, index) => codes[Number(index)]);
+    }
     function renderCodeBlock(code, language = '') { const text = String(code || ''); const lang = String(language || '').trim().toLowerCase(); if (lang === 'json') return `<pre class="gh-code"><code>${highlightJson(text) || esc(text)}</code></pre>`; return `<pre class="gh-code"><code>${esc(text)}</code></pre>`; }
     function renderMarkdown(content) { const lines = String(content || '').replace(/\r\n/g, '\n').split('\n'); const html = []; let paragraph = []; let list = []; const flushParagraph = () => { if (paragraph.length) { html.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`); paragraph = []; } }; const flushList = () => { if (list.length) { html.push(`<ul>${list.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ul>`); list = []; } }; for (let index = 0; index < lines.length; index += 1) { const line = lines[index]; const fence = line.match(/^```([A-Za-z0-9_-]*)\s*$/); if (fence) { flushParagraph(); flushList(); const code = []; index += 1; while (index < lines.length && !lines[index].match(/^```\s*$/)) { code.push(lines[index]); index += 1; } html.push(renderCodeBlock(code.join('\n'), fence[1])); continue; } const heading = line.match(/^(#{1,3})\s+(.+)$/); if (heading) { flushParagraph(); flushList(); const level = heading[1].length; html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`); continue; } const item = line.match(/^\s*[-*]\s+(.+)$/); if (item) { flushParagraph(); list.push(item[1]); continue; } if (line.startsWith('> ')) { flushParagraph(); flushList(); html.push(`<blockquote>${inlineMarkdown(line.slice(2))}</blockquote>`); continue; } if (!line.trim()) { flushParagraph(); flushList(); continue; } paragraph.push(line.trim()); } flushParagraph(); flushList(); return html.join('') || renderPlainText(content); }
     function highlightJson(content) { try { const pretty = JSON.stringify(JSON.parse(content), null, 2); return pretty.replace(/("(?:\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g, (token) => { let cls = 'json-number'; if (token.endsWith(':')) cls = 'json-key'; else if (token.startsWith('"')) cls = 'json-string'; else if (/true|false|null/.test(token)) cls = 'json-literal'; return `<span class="${cls}">${esc(token)}</span>`; }); } catch (_error) { return ''; } }

@@ -13,8 +13,13 @@ consume later arrivals implicitly. `used_skills` describes skills actually used.
 `handoff` describes completed scope, limitations and recovery evidence. Optional
 `used_memory_ids` and `memory_delta` retain their project-memory meaning.
 `memory_delta` is limited to 32 entries and 64 KiB of UTF-8 JSON. All text,
-including nested evidence, must be free of secrets and already redacted before
-submission; invalid memory is rejected before result spooling and again at audit.
+including nested evidence, must be free of secrets. Local paths, private IPs
+and internal hostnames are redacted during normalization and memory storage;
+redactable context does not reject the main result. Secrets and oversized memory
+are rejected before result spooling and again at audit. If redaction alone makes
+valid memory exceed the size limit, it becomes a `status: none` memory delta
+with an explicit reason; the main result continues. Saved results replay their
+original normalization instead of being normalized again.
 
 Actions contain only semantic fields:
 

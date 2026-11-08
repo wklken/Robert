@@ -36,6 +36,25 @@ def memory_delta_error(delta):
             checked = redact_text(value)
             if not checked["ok"]:
                 return "memory_delta contains a high-risk secret pattern"
-            if checked["text"] != value:
-                return "memory_delta requires redaction before submission"
     return None
+
+
+def redact_memory_delta(delta):
+    """Return a safe copy without turning redactable context into a failed task."""
+    error = memory_delta_error(delta)
+    if error:
+        raise ValueError(error)
+
+    def redact(value):
+        if isinstance(value, dict):
+            return {redact(key): redact(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [redact(item) for item in value]
+        if isinstance(value, str):
+            return redact_text(value)["text"]
+        return value
+
+    redacted = redact(delta)
+    if len(json.dumps(redacted, ensure_ascii=False).encode("utf-8")) > MAX_MEMORY_BYTES:
+        return {"status": "none", "reason": "Memory omitted because redacted content exceeds the 64 KiB limit."}
+    return redacted

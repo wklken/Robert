@@ -1,6 +1,6 @@
 """The sole worker submission contract and deterministic result normalization."""
 
-from robert_agent.context.memory_policy import memory_delta_error
+from robert_agent.context.memory_policy import memory_delta_error, redact_memory_delta
 
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType, ReviewAction, VerificationStatus
 from robert_agent.foundation.contracts.work import TaskKind
@@ -12,7 +12,7 @@ import json
 import re
 
 CONTRACT_ID = "compact-v1"
-NORMALIZER_VERSION = 2
+NORMALIZER_VERSION = 3
 OUTPUTS = frozenset(output.value for output in OutputType)
 FIELDS = {
     "planned_github_actions",
@@ -420,6 +420,8 @@ def normalize(envelope, settings):
     output_type = envelope["output_type"]
     scope = settings["action_scope"]
     result = deepcopy(submission)
+    if "memory_delta" in result:
+        result["memory_delta"] = redact_memory_delta(result["memory_delta"])
     result.update({key: envelope[key] for key in ("task_id", "attempt_id", "output_type")})
     result.setdefault("consumed_event_fingerprints", [])
     result.setdefault("consumed_work_item_event_ids", [])

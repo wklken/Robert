@@ -339,6 +339,19 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
             ["OPENAI_API_KEY"],
         )
 
+    def test_google_model_authentication_is_an_explicit_profile_allowlist_choice(self):
+        from robert_agent.configuration.supervision import normalize
+
+        for field in ("diagnosis", "decision"):
+            with self.subTest(field=field):
+                profile = {"command": ["/usr/bin/model"], "environment_allowlist": ["GOOGLE_APPLICATION_CREDENTIALS"]}
+                self.assertEqual(
+                    normalize({field: profile})[field]["environment_allowlist"], ["GOOGLE_APPLICATION_CREDENTIALS"]
+                )
+                self.assertEqual(
+                    normalize({field: {"command": ["/usr/bin/model"]}})[field]["environment_allowlist"], []
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
