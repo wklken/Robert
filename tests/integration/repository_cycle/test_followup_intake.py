@@ -544,7 +544,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
                     """[
                       {
                         "id": "review-comment-456",
-                        "body": "@robert-bot The compatibility path is still wrong; please update this branch.",
+                        "body": "@robert-bot please fix the compatibility path on this branch.",
                         "created_at": "2026-06-22T13:00:01Z",
                         "author_association": "MEMBER",
                         "user": {"login": "wklken"}

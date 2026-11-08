@@ -32,9 +32,14 @@ review reports keep their specialized domain contracts.
 
 Route requirements:
 
-- Classification and local results use an empty action list. Classification may
-  recommend an existing route; `new-pr` requires a lowercase ASCII kebab-case
+- Classification and local results use an empty action list. Classification
+  recommends an existing route; `new-pr` requires a lowercase ASCII kebab-case
   `branch_slug` of at most 60 characters. Classification cannot modify source.
+  A missing or blank `recommended_route` is normalized to `waiting-for-user`
+  before persistence and replay. Pending trusted input takes precedence over
+  this automatic default. Otherwise a GitHub follow-up submits the question
+  through the normal waiting result contract; local Web work records a question
+  and waits directly. No public action is fabricated.
 - New PRs plan push then open. Updates always include an outcome comment after
   any push. All actions must belong to the route's allowed action set.
   Before submitting a push result, commit all task-owned changes locally,

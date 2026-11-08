@@ -3,10 +3,47 @@ from contextlib import closing
 import json
 import sqlite3
 from datetime import datetime, timezone
+from unittest.mock import patch
 from tests.support.worker_protocol import WorkerProtocolFixture
 
 
 class SubmissionTests(WorkerProtocolFixture):
+    def test_classification_fallback_survives_spool_replay_and_duplicate_submission(self):
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.delivery import contract as result_contract
+        from robert_agent.execution import spool as result_spool
+
+        db_path = self._init_attempt_db(output_type="classification_result", route_id="classification-result")
+        payload = result.build_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="classification_result",
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            handoff="The requested outcome is unclear.",
+            recommended_route="",
+        )
+        with patch.object(result, "_record_result_db", side_effect=sqlite3.OperationalError("database is locked")):
+            record = result.record_result(db_path, payload)
+        self.assertEqual(record["status"], "deferred", record)
+        pending = list(result_spool.directory(db_path).glob("*.json"))
+        self.assertEqual(len(pending), 1)
+        saved = json.loads(pending[0].read_text())
+        self.assertEqual(saved["payload"]["recommended_route"], "waiting-for-user")
+
+        with patch.object(result_contract, "normalize", side_effect=AssertionError("must reuse saved normalization")):
+            self.assertEqual(result.replay_pending_results(db_path)["recorded"], 1)
+            self.assertTrue(result.record_result(db_path, payload)["deduplicated"])
+        with closing(sqlite3.connect(db_path)) as conn:
+            rows = conn.execute("SELECT metadata_json FROM worker_results").fetchall()
+            self.assertEqual(len(rows), 1)
+            metadata = json.loads(rows[0][0])
+            self.assertEqual(metadata["recommended_route"], "waiting-for-user")
+            self.assertEqual(
+                metadata["normalized_payload"],
+                {key: value for key, value in saved["payload"].items() if not key.startswith("_")},
+            )
+
     def test_result_recording_allows_no_external_skills(self):
         from robert_agent.delivery.application import submission as result
 

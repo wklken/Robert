@@ -10,7 +10,62 @@ from tests.support.repository_cycle import (
 
 
 class ClassificationHandoffTests(RepositoryCycleFixture):
-    def test_classification_handoff_text_does_not_create_child_task(self):
+    def test_default_waiting_route_preserves_new_trusted_request(self):
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.runtime import cycle
+
+        assignment = {
+            "id": "assign-pending",
+            "number": 2904,
+            "source_type": "issue",
+            "event_type": "assigned",
+            "actor_login": "wklken",
+            "body": "@robert-bot please take a look",
+            "intent": "unclear",
+            "url": "https://github.com/example/backend/issues/2904",
+            "state": "open",
+        }
+        self.fixture_path.write_text(json.dumps({"events": [assignment]}), encoding="utf-8")
+        first = cycle.run_once(self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True)
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn:
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
+        reply = {
+            **assignment,
+            "id": "clarify-pending",
+            "event_type": "comment",
+            "body": "@robert-bot please analyze the current behavior",
+            "intent": "analysis",
+        }
+        self.fixture_path.write_text(json.dumps({"events": [reply]}), encoding="utf-8")
+        appended = cycle.run_once(self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True)
+        self.assertTrue(appended["ok"], appended)
+        receipt = result.record_result(
+            db_path,
+            result.build_result(
+                task_id=task_id,
+                attempt_id=attempt_id,
+                output_type="classification_result",
+                consumed_event_fingerprints=["assigned:assign-pending"],
+                verification=[],
+                handoff="The requested outcome is unclear.",
+            ),
+        )
+        self.assertTrue(receipt["ok"], receipt)
+        finalized = cycle.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertTrue(finalized["ok"], finalized)
+        with closing(sqlite3.connect(db_path)) as conn:
+            child = conn.execute("SELECT task_id, route_id FROM tasks WHERE parent_task_id = ?", (task_id,)).fetchone()
+            self.assertEqual(child[1], "comment-analysis")
+            self.assertEqual(
+                conn.execute(
+                    "SELECT event_id FROM task_events WHERE task_id = ? AND relationship = 'trigger'", (child[0],)
+                ).fetchone()[0],
+                "event:comment:clarify-pending",
+            )
+
+    def test_classification_without_route_creates_one_question_task(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle as run_once
 
@@ -71,10 +126,86 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         )
 
         self.assertTrue(finalized["ok"], finalized)
-        self.assertEqual(finalized["dispatch_count"], 0)
         with closing(sqlite3.connect(db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "completed")
+            child = conn.execute(
+                "SELECT task_id, route_id, expected_output FROM tasks WHERE parent_task_id = ?", (task_id,)
+            ).fetchone()
+            self.assertIsNotNone(child)
+            self.assertEqual(child[1:], ("waiting-for-user", "waiting_for_user"))
+            self.assertEqual(
+                json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["recommended_route"],
+                "waiting-for-user",
+            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+            self.assertIsNone(
+                conn.execute("SELECT worktree_path FROM attempts WHERE task_id = ?", (child[0],)).fetchone()[0]
+            )
+
+        repeated = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertTrue(repeated["ok"], repeated)
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
+            child_attempt = conn.execute("SELECT attempt_id FROM attempts WHERE task_id = ?", (child[0],)).fetchone()[0]
+
+        question = result.record_result(
+            db_path,
+            result.build_result(
+                task_id=child[0],
+                attempt_id=child_attempt,
+                output_type="waiting_for_user",
+                consumed_event_fingerprints=["assigned:assign-2904"],
+                verification=[],
+                handoff="Waiting for the requested outcome.",
+                planned_github_actions=[{"type": "comment", "body": "Do you want analysis or implementation?"}],
+                operator_question={"kind": "clarification", "summary": "Do you want analysis or implementation?"},
+            ),
+        )
+        self.assertTrue(question["ok"], question)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            # Supply the remote publication observation without posting a real comment.
+            conn.execute(
+                "UPDATE github_actions SET publish_status = 'published' WHERE result_id = ?", (question["result_id"],)
+            )
+        waiting = run_once.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertTrue(waiting["ok"], waiting)
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone(),
+                ("waiting_for_user", child[0]),
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type = 'operator_question'").fetchone()[
+                    0
+                ],
+                1,
+            )
+
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "clarify-2904",
+                            "number": 2904,
+                            "source_type": "issue",
+                            "event_type": "comment",
+                            "actor_login": "wklken",
+                            "body": "@robert-bot please analyze the current behavior",
+                            "intent": "analysis",
+                            "url": "https://github.com/example/backend/issues/2904",
+                            "state": "open",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        resumed = run_once.run_once(self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True)
+        self.assertTrue(resumed["ok"], resumed)
+        with closing(sqlite3.connect(db_path)) as conn:
+            successor = conn.execute("SELECT route_id FROM tasks WHERE parent_task_id = ?", (child[0],)).fetchone()
+            self.assertEqual(successor, ("comment-analysis",))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 3)
 
     def test_classification_result_child_keeps_canonical_trigger_payload(self):
         from robert_agent.delivery.application import submission as result

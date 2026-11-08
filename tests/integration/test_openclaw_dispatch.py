@@ -109,6 +109,63 @@ class OpenClawDispatchTests(DispatchFixture):
         with closing(database.connect(self.db_path)) as conn:
             self.assertTrue(admission.ordinary_dispatch_allowed(conn, child[0], self.config["repos"][0], self.config))
 
+    def test_default_classification_preserves_unconsumed_dispatch_request(self):
+        self.create_issue()
+        self._run_local_cycle()
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
+        self.empty_fixture.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "dispatch-context",
+                            "number": 1,
+                            "source_type": "issue",
+                            "event_type": "comment",
+                            "actor_login": "owner",
+                            "body": "@robot analyze the startup logs too",
+                            "url": "https://github.com/example/repo/issues/1",
+                            "state": "open",
+                        }
+                    ]
+                }
+            )
+        )
+        self._run_local_cycle()
+        # A continuation can retain the original dispatch as unconsumed context.
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE task_events SET relationship='context' WHERE task_id=?", (task_id,))
+            conn.execute(
+                "UPDATE task_events SET relationship='trigger' WHERE task_id=? AND event_id=?",
+                (task_id, "event:comment:dispatch-context"),
+            )
+        result = submission.record_result(
+            self.db_path,
+            {
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "output_type": "classification_result",
+                "submission": {
+                    "planned_github_actions": [],
+                    "consumed_event_fingerprints": ["comment:dispatch-context"],
+                    "verification": [],
+                    "handoff": "The original request still needs classification.",
+                    "used_skills": [],
+                },
+            },
+        )
+        self.assertTrue(result["ok"], result)
+        self._run_local_cycle()
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            child = conn.execute(
+                "SELECT task_id, route_id, workstream_id FROM tasks WHERE parent_task_id=?", (task_id,)
+            ).fetchone()
+            self.assertIsNotNone(child)
+            self.assertEqual(child[1:], ("classification-result", "github:example/repo#1"))
+        with closing(database.connect(self.db_path)) as conn:
+            self.assertTrue(admission.ordinary_dispatch_allowed(conn, child[0], self.config["repos"][0], self.config))
+
     def complete_analysis(self):
         request_id = self.create_issue()
         task_id, attempt_id = self.classify(request_id)

@@ -649,7 +649,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(decisions[0]["authorization_status"], "context_only")
         self.assertFalse(decisions[0]["drives_execution"])
 
-    def test_live_robot_authored_pr_without_hidden_metadata_still_routes_to_existing_pr_update(
+    def test_live_robot_authored_pr_without_hidden_metadata_preserves_branch_for_classification(
         self,
     ):
         from robert_agent.adapters.github import discovery as discover
@@ -702,9 +702,8 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(events[0]["origin_workstream_id"], "github:example/backend#2878")
         self.assertEqual(events[0]["existing_pr_head_branch"], "codex/issue-2878-mcp-proxy")
         self.assertEqual(events[0]["pr_author_login"], "robert-bot")
-        self.assertEqual(route_result["expected_output"], "update_existing_pr")
-        self.assertIn("push_existing_pr", route_result["allowed_github_actions"])
-        self.assertNotIn("open_pr", route_result["allowed_github_actions"])
+        self.assertEqual(route_result["expected_output"], "classification_result")
+        self.assertEqual(route_result["allowed_github_actions"], [])
 
     def test_discover_cli_config_accepts_trusted_actors(self):
         from robert_agent.adapters.github import discovery as discover

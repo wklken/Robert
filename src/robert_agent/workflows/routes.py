@@ -89,7 +89,9 @@ def route_task(task):
             "review_request",
         }:
             return dict(ROUTES["review-comment"])
-        return dict(ROUTES["update-existing-pr"])
+        if intent in {"bug_fix", "small_change", "add_tests", "pr_followup_fix"}:
+            return dict(ROUTES["update-existing-pr"])
+        return dict(ROUTES["classification-result"])
     if (
         task.get("source_type") == "pull_request"
         and not task.get("has_open_dd_pr")

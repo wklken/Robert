@@ -4,6 +4,18 @@ import unittest
 
 
 class RoutingTests(unittest.TestCase):
+    def test_classifier_cannot_open_another_pr_for_existing_robert_pr(self):
+        from robert_agent.workflows import routing
+
+        result = routing.effective_route(
+            None,
+            {},
+            {"source_type": "pull_request", "has_open_dd_pr": True, "intent": "unclear"},
+            route_id="new-pr",
+        )
+        self.assertEqual(result["route_id"], "update-existing-pr")
+        self.assertNotIn("open_pr", result["allowed_github_actions"])
+
     def test_routes_do_not_advertise_internal_worker_as_skill(self):
         from robert_agent.workflows import routes as route
 
@@ -270,20 +282,22 @@ class RoutingTests(unittest.TestCase):
                 self.assertEqual(result["workspace_mode"], "review_pr")
                 self.assertEqual(result["allowed_github_actions"], ["comment"])
 
-    def test_dd_pr_unclear_followup_defaults_to_existing_pr_update(self):
+    def test_dd_pr_unclear_followup_requires_classification(self):
         from robert_agent.workflows import routes as route
 
-        result = route.route_task(
-            {
-                "source_type": "pull_request",
-                "has_open_dd_pr": True,
-                "intent": "unclear",
-            }
-        )
+        for intent in (None, "unclear", "unknown"):
+            with self.subTest(intent=intent):
+                result = route.route_task(
+                    {
+                        "source_type": "pull_request",
+                        "has_open_dd_pr": True,
+                        "intent": intent,
+                    }
+                )
 
-        self.assertEqual(result["expected_output"], "update_existing_pr")
-        self.assertIn("push_existing_pr", result["allowed_github_actions"])
-        self.assertNotIn("open_pr", result["allowed_github_actions"])
+                self.assertEqual(result["expected_output"], "classification_result")
+                self.assertEqual(result["allowed_github_actions"], [])
+                self.assertEqual(result["workspace_mode"], "none")
 
     def test_prompt_includes_metadata_and_allowed_actions(self):
         from robert_agent.context import prompts as render_prompt
@@ -642,6 +656,8 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("changed-file or module list", prompt)
         self.assertIn("Avoid broad repo exploration", prompt)
         self.assertIn("--output-type classification_result", prompt)
+        self.assertIn('"recommended_route": "waiting-for-user"', prompt)
+        self.assertIn("A missing or blank route defaults to waiting-for-user", prompt)
         self.assertIn('"branch_slug": ""', prompt)
         self.assertIn("meaningful lowercase English kebab-case", prompt)
 
