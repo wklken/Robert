@@ -39,13 +39,18 @@ Mention your configured bot account from a trusted account in a configured repos
 See the [first-task walkthrough (中文)](docs/first-task.md) for triggers and evidence of success.
 An arbitrary issue does not automatically start work: repository, actor, and trigger must match.
 
-Additional capabilities are opt-in:
+## Features
 
-- [Multi-model PR review](docs/multi-model-review.md), gated by PR author.
-- [Multi-agent voting](docs/multi-agent-vote.md), explicitly requested by a trusted user.
-- [CI and conflict repair](docs/reference.md#configuration), with repository-level limits; disabled by default.
-- [Independent task supervision](docs/task-supervision.md), with policy-controlled diagnosis and recovery.
-- [OpenClaw messaging](docs/operator-messaging.md), for questions, notices, and authenticated responses.
+- **GitHub collaboration:** follow issues through analysis, implementation, PR creation, review, and revisions in the existing discussion.
+- **Multiple coding agents:** use Codex, Claude Code, OpenCode, `tcodex`, `tclaude`, `cbc`, or a custom command; select agents, models, and skills by task type. See [worker configuration](docs/guides.md#worker-adapters).
+- **Multiple repositories and separate workspaces:** configure trust, concurrency, and directories per repository; use Git worktrees for edits and serialize work on each issue or PR.
+- **Task board:** inspect queues, progress, attention states, logs, and artifacts; enable writable mode for local tasks, replies, retries, and cancellation. See the [board guide (中文)](docs/web-lifecycle-board.md).
+- **Execution supervision and recovery:** track phases, heartbeats, and attempts; handle startup failures, timeouts, and process cleanup, with optional fallback models and visible recovery options.
+- **Multi-model review and voting:** opt into [PR-author-gated reviews](docs/multi-model-review.md) or explicit [voting requests](docs/multi-agent-vote.md) from trusted users.
+- **Independent task supervision:** observe stalls and delivery evidence, with policy-controlled model diagnosis, recovery decisions, and engineering repairs. See [supervision](docs/task-supervision.md).
+- **PR self-healing:** opt into repository-specific CI failure and conflict repair with check allowlists, attempt limits, and budgets; disabled by default. See [configuration](docs/reference.md#configuration).
+- **Unattended operation:** manage daemon and Web with Supervisor, or use systemd and macOS LaunchAgents; persist tasks, audit records, and publication deduplication in local SQLite. See [service setup](docs/guides.md#daemon-service).
+- **OpenClaw integration:** query task and runtime status; explicitly enable messaging for questions, failure notices, and authenticated responses. See [messaging](docs/operator-messaging.md).
 
 ## How it works
 
