@@ -339,8 +339,9 @@ def terminate_recorded_identity(
     The identity is checked before TERM and on every observation after TERM.
     Before TERM, capture group members while the leader is still verified.
     A surviving verified member keeps the original group anchored if the leader
-    exits first. Unknown identity never authorizes another signal. A dead leader
-    without this evidence requires attention while descendants remain alive.
+    exits or becomes unreadable. Losing every verified anchor forbids another
+    signal. A dead leader without this evidence requires attention while
+    descendants remain alive.
     """
 
     inspect = inspect or inspect_recorded_identity
@@ -376,13 +377,15 @@ def terminate_recorded_identity(
 
     def observe_group():
         leader = inspect(recorded)
-        if leader != "dead":
+        if leader == "alive_same":
             return leader
         # A member captured while the leader was verified anchors the PGID;
         # an unrelated group cannot reuse that ID while this member survives.
         states = [inspect(member) for member in members]
         if "alive_same" in states:
             return "alive_same"
+        if leader != "dead":
+            return leader
         try:
             return "unknown" if live_process_group(process_group_id) else "dead"
         except (OSError, subprocess.SubprocessError):

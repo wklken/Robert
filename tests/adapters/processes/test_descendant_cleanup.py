@@ -30,6 +30,6 @@ class DescendantCleanupTests(unittest.TestCase):
         child_identity = identity.capture_process_identity(int(ready.read_text()))
         result = identity.terminate_recorded_identity(recorded, timeout_seconds=0.2)
         proc.wait(timeout=3)
-        self.assertEqual(result["status"], "terminated")
+        self.assertEqual(result["status"], "terminated", result)
         self.assertFalse(identity.live_process_group(proc.pid), result)
         self.assertEqual(identity.inspect_recorded_identity(child_identity), "dead")

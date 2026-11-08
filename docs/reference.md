@@ -354,9 +354,11 @@ upstream base rather than the first analysis snapshot.
 Worker timeout and remote Issue/PR closure terminate a verified worker process
 group. Before SIGTERM, Robert captures member identities while the leader is
 still verified. A surviving verified member permits escalation to SIGKILL even
-when the leader exits first. If the leader was already gone before that capture,
-a PGID alone does not authorize signals to remaining descendants. Unknown identity
-or unconfirmed cleanup retains ownership and capacity and requires operator
+when the leader exits first or its identity temporarily becomes unreadable.
+If every recorded identity becomes unverifiable, no further signal is sent,
+even if an identity later matches again. If the leader was already gone before
+that capture, a PGID alone does not authorize signals to remaining descendants.
+Unverified group ownership or unconfirmed cleanup retains capacity and requires operator
 investigation; it is never treated as successful process cleanup.
 
 Publication records the controller-observed result commit and fork owner in the

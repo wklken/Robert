@@ -200,6 +200,61 @@ class WorkerIdentityTests(unittest.TestCase):
         self.assertEqual(signals[0][0], 7)
         self.assertEqual(signals[0][1], getattr(__import__("signal"), "SIGTERM"))
 
+    def test_verified_member_preserves_group_authority_during_leader_exit_transition(self):
+        from unittest.mock import patch
+        import signal
+        from robert_agent.adapters.processes import identity as worker_identity
+
+        recorded = {
+            "pid": 7,
+            "process_group_id": 7,
+            "process_start_token": "123",
+            "command_fingerprint": "f" * 64,
+            "identity_source": "proc",
+        }
+        member = {**recorded, "pid": 8, "process_start_token": "124"}
+        for member_verified in (True, False):
+            with self.subTest(member_verified=member_verified):
+                elapsed = [0.0]
+                signals = []
+
+                def inspect(value):
+                    if signal.SIGKILL in signals:
+                        return "dead"
+                    if not signals:
+                        return "alive_same"
+                    if value["pid"] == recorded["pid"]:
+                        return "unknown" if elapsed[0] == 0 else "dead"
+                    # Once both anchors are unknown, a later matching member
+                    # must not reauthorize escalation after the evidence gap.
+                    return "alive_same" if member_verified or elapsed[0] > 0 else "unknown"
+
+                def sleep(seconds):
+                    elapsed[0] += seconds
+
+                # After KILL both identities are dead and no group remains.
+                with patch.object(
+                    worker_identity,
+                    "live_process_group",
+                    side_effect=lambda _: signal.SIGKILL not in signals,
+                ):
+                    result = worker_identity.terminate_recorded_identity(
+                        recorded,
+                        inspect=inspect,
+                        capture_members=lambda _: [member],
+                        signal_group=lambda _pgid, sig: signals.append(sig),
+                        supervisor_process_group_id=99,
+                        clock=lambda: elapsed[0],
+                        sleep=sleep,
+                        timeout_seconds=0.1,
+                    )
+                if member_verified:
+                    self.assertEqual(result["status"], "terminated", result)
+                    self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+                else:
+                    self.assertEqual(result["status"], "attention", result)
+                    self.assertEqual(signals, [signal.SIGTERM])
+
     def test_termination_waits_for_confirmed_exit_after_identity_loss(self):
         from robert_agent.adapters.processes import identity as worker_identity
 
