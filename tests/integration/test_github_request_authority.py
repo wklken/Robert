@@ -15,7 +15,10 @@ class GitHubRequestAuthorityTests(GitHubInputFixture):
         self.assert_body_request_not_repeated(legacy=True)
 
     def assert_body_request_not_repeated(self, legacy=False):
-        repo = validate_config(self.config_path, skip_external=True)["repos"][0]
+        from robert_agent.delivery.application import publish
+
+        config = validate_config(self.config_path, skip_external=True)
+        repo = config["repos"][0]
 
         def collect(updated, known):
             def runner(args, **kwargs):
@@ -23,8 +26,8 @@ class GitHubRequestAuthorityTests(GitHubInputFixture):
                     payload = [
                         {
                             "number": 123,
-                            "title": "Unclear request",
-                            "body": "@robert-bot please classify this",
+                            "title": "Analysis request",
+                            "body": "@robert-bot please analyze this",
                             "author": {"login": "wklken"},
                             "authorAssociation": "OWNER",
                             "isPullRequest": False,
@@ -48,8 +51,28 @@ class GitHubRequestAuthorityTests(GitHubInputFixture):
             first[0]["event_fingerprint"] = "mention:https://github.com/example/backend/issues/123:2026-11-08T00:00:00Z"
         self.scan(first)
         counts.append(len(self.rows("SELECT task_id FROM tasks")))
+        self.assertEqual(self.rows("SELECT route_id FROM tasks"), [("comment-analysis",)])
         fingerprints = [r[0] for r in self.rows("SELECT event_fingerprint FROM github_events")]
-        self.finish(fingerprints)
+        # Finish a terminal route so a clarification child cannot mask redispatch.
+        self.finish(
+            fingerprints,
+            output_type="comment_analysis",
+            planned_github_actions=[
+                {
+                    "type": "comment",
+                    "target_url": "https://github.com/example/backend/issues/123",
+                    "body": "Analysis complete.",
+                }
+            ],
+        )
+
+        def publish_runner(command, **kwargs):
+            payload = {"id": 90} if "-f" in command else []
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+        published = publish.publish_ready_actions(self.db(), config=config, run_command=publish_runner)
+        self.assertEqual(published["published_count"], 1, published)
+        self.scan([], consume_observations=True)
         self.assertEqual(self.rows("SELECT lifecycle FROM tasks"), [("completed",)])
         known = [r[0] for r in self.rows("SELECT workstream_id FROM workstreams")]
         self.scan(collect("2026-11-08T00:00:00Z", known))

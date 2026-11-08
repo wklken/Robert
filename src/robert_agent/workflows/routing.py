@@ -10,6 +10,9 @@ from robert_agent.work import source_policy
 
 
 def effective_route(config_result, repo, event, route_id=None):
+    if route_id == "new-pr" and event.get("source_type") == "pull_request" and event.get("has_open_dd_pr"):
+        # A classifier recommendation cannot widen an existing PR's delivery scope.
+        route_id = "update-existing-pr"
     if (
         config_result is not None
         and not route_id

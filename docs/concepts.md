@@ -114,6 +114,14 @@ The [packaged route catalog](../src/robert_agent/resources/routes.yml) contains
 `comment-analysis`, `new-pr`, `update-existing-pr`, `review-pr`, `review-comment`,
 `classification-result`, `local-result`, `waiting-for-user`, and `vote`.
 
+Unclear requests go through classification, including follow-ups on an existing
+Robert PR. Explicit implementation requests can still route directly to updating
+that PR; a classifier's `new-pr` recommendation for that PR is constrained to
+`update-existing-pr`. If classification omits its recommended route or leaves it
+blank, Robert first handles any pending trusted request. Otherwise GitHub work
+gets a `waiting-for-user` follow-up through the audited question flow, and local
+Web work records a clarification question and enters the waiting state directly.
+
 Immutable fields such as `allowed_github_actions`, `expected_output`,
 `verification_policy`, and `workspace_mode` cannot be changed in
 `~/.config/robert/config.yml`. Global and repository overrides select workers,

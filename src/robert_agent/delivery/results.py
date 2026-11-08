@@ -51,6 +51,8 @@ def load_result_payload(conn, result_row):
         "review_point_evaluation": metadata.get("review_point_evaluation", []),
         "review_input_kind": metadata.get("review_input_kind"),
         "recommended_route": recommended_route,
+        "classification_route_defaulted": metadata.get("normalized_payload", {}).get("classification_route_defaulted")
+        is True,
         "branch_slug": metadata.get("branch_slug", ""),
         "consumed_work_item_event_ids": metadata.get(
             "consumed_work_item_event_ids",

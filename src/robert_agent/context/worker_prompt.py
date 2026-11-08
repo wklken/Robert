@@ -383,7 +383,7 @@ def worker_prompt_input(
             values["base_ref"] = shlex.quote(base_ref) if base_ref else "<exact_base_ref>"
 
     if expected_output == OutputType.CLASSIFICATION_RESULT:
-        result.update(recommended_route="", branch_slug="")
+        result.update(recommended_route="waiting-for-user", branch_slug="")
     if expected_output == OutputType.WAITING_FOR_USER:
         result["operator_question"] = {"kind": "scope_decision", "summary": "<exact missing decision>"}
 
