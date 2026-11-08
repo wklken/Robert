@@ -3,7 +3,13 @@
 [文档目录](README.md)
 
 This guide is written for terminal coding agents such as Codex or Claude Code.
-Read the entire guide before executing commands.
+Read the entire guide before executing commands. This guide describes its own
+Git revision, which can be newer than the PyPI release. Do not mix a release
+package with main-branch configuration or instructions.
+
+For human operators, use the [manual guide (中文)](human-install.md). This is
+installation work, not permission to run a real GitHub task. Skills installed
+in the host agent do not change the user's deployment authorization.
 
 ## Goal
 
@@ -21,7 +27,8 @@ Read the entire guide before executing commands.
 - If `gh auth status` fails, stop and ask the user to run `gh auth login`.
 - Do not modify Robert's source or the target repository's source.
 - Do not create GitHub issues, comments, pull requests, tags, releases, or
-  other remote writes during setup.
+  other remote writes during setup preparation. An optional live acceptance
+  task requires the explicit authorization described in step 10.
 - Do not overwrite `~/.config/robert/config.yml` without explicit approval.
 - Do not use `--force` unless the user approves it after reviewing the existing
   configuration.
@@ -40,11 +47,16 @@ Determine safely or ask the user for:
 6. Read-only or writable Web, operator identity if writable, and whether access
    is local or through an authenticated reverse proxy. Default to local read-only
    access until the user chooses otherwise.
-7. Any existing Robert service or Supervisor configuration that must be
+7. Install source: an existing release and its matching tag documentation, or
+   the current source revision for this guide. Record the tag/full commit SHA.
+8. Actual default branch, `upstream` target, writable `origin`, and repository
+   commit identity. Use a dedicated checkout rather than one with unrelated work.
+9. Any existing Robert service or Supervisor configuration that must be
    preserved or stopped before starting this instance.
 
-Do not assume that the Robert account and trusted human actor are the same
-account.
+The authenticated `gh` account, configured listening account, and trusted human
+actor are different roles. Verify each; `github.account` does not switch gh login.
+Use a distinct trusted human to trigger the first task: bot-authored mention comments do not trigger new work. Also identify the OS account that will run the service.
 
 ## Setup Procedure
 
@@ -93,11 +105,33 @@ If `pipx` is missing, explain the platform-supported installation command and
 ask before installing a system package. Ensure the pipx binary directory is on
 `PATH`.
 
-### 4. Install Robert
+### 4. Select a revision and install Robert
+
+For a published release, resolve an actual version from
+[Releases](https://github.com/wklken/Robert/releases), replace `VERSION` below
+with its package version (without the tag's leading `v`), and **continue using
+that tag's guide**, which owns that release's configuration and commands:
 
 ```bash
-pipx install robert-github-agent --include-deps
+pipx install robert-github-agent==VERSION --include-deps
 ```
+
+For the capabilities in this guide, clone into a new user-approved source
+directory, resolve one full commit SHA, and read the guide from that checkout.
+Keep that revision for installation and verification; do not refetch main
+between steps. For example, when `~/src/Robert` does not exist:
+
+```bash
+mkdir -p ~/src
+git clone https://github.com/wklken/Robert.git ~/src/Robert
+cd ~/src/Robert
+git rev-parse HEAD
+pipx install . --include-deps
+```
+
+This source checkout installs Robert; it is separate from the target repository
+Robert will work on. Record the commit as well as `robert --version`, because
+development commits can share the same version string.
 
 `--include-deps` exposes `supervisord` and `supervisorctl` from Robert's
 Supervisor dependency. If already installed, report the current version and ask
@@ -110,10 +144,40 @@ robert --version
 robert --help
 ```
 
-### 5. Inspect Existing Configuration
+### 5. Verify the target repository and inspect existing configuration
+
+Using the confirmed target repository and checkout, inspect:
 
 ```bash
-test -f ~/.config/robert/config.yml
+gh api user --jq .login
+gh repo view OWNER/REPO --json nameWithOwner,defaultBranchRef,viewerPermission
+git -C /absolute/repository/path status --short
+git -C /absolute/repository/path remote -v
+git -C /absolute/repository/path var GIT_AUTHOR_IDENT
+```
+
+Current workspace preparation fetches from a remote named `upstream`.
+It must point to the configured target repository. `origin` must point to the
+branch repository the bot can write to (the same repository or its fork).
+Inspect existing remotes before changing anything. If `upstream` is missing,
+propose its exact URL and add it within the user's setup authorization; do not
+replace an existing remote. Verify `git fetch upstream ACTUAL_DEFAULT_BRANCH`
+in the checkout. This is a read, not proof that push is permitted. Git transport
+authentication and `gh auth status` are separate checks. For HTTPS, if Git
+should reuse gh authentication, explain the credential-helper change before
+running `gh auth setup-git --hostname github.com` within the user's setup
+authorization; preserve an existing credential setup. SSH uses its own keys. Resolve missing local
+Git name/email with the user; do not invent a commit identity.
+
+Do not reset, clean, or stash a dirty target checkout. Use a separate checkout
+when authorized or report the missing preparation. Then inspect the config:
+
+```bash
+if test -f ~/.config/robert/config.yml; then
+  echo "Configuration exists; inspect it before editing."
+else
+  echo "No configuration yet; proceed to initialization."
+fi
 ```
 
 If the file exists, do not overwrite it. Run validation and report its current
@@ -135,8 +199,8 @@ When no configuration exists, run one correctly quoted command:
 robert init --non-interactive \
   --config ~/.config/robert/config.yml \
   --repo OWNER/REPO \
-  --repo-path /absolute/repository/path \
-  --worker WORKER \
+  --repo-path "/absolute/repository/path" \
+  --worker "WORKER" \
   --github-account ROBERT_ACCOUNT \
   --trusted-actor TRUSTED_ACTOR
 ```
@@ -145,10 +209,10 @@ Use the values confirmed by the user. Read the generated YAML and compare it
 with the [configuration reference](reference.md#configuration):
 
 - `github.account` is the listening account, while `repos[].trusted_actors`
-  lists humans permitted to trigger work. Confirm the real `default_branch`.
+  lists humans permitted to trigger work. Set the real `default_branch`; initialization always writes `main`.
 - `workers` is a named mapping. Verify `adapter`, executable `command`, model,
   and effort. `init --worker` only auto-selects `codex`, `tcodex`, or `cbc`;
-  for Claude, OpenCode, and custom commands, correct the adapter explicitly.
+  for Claude, OpenCode, custom commands, and absolute executable paths, verify and correct the adapter explicitly.
 - `routes` selects workers, skills and ordinary automatic model/effort overrides.
   Set the required `default_worker` name explicitly; native model participants
   use their own worker settings.
@@ -182,7 +246,11 @@ robert run once --config ~/.config/robert/config.yml --dry-run --skip-external
 ```
 
 Do not claim success if a required check failed or was skipped. This preview
-alone does not prove live GitHub polling or worker execution.
+writes local run records, but alone does not prove live GitHub polling or worker
+execution. Doctor checks the default worker executable and gh authentication;
+it does not verify all configured models, Git remotes, push access, or a real
+model invocation. Check every selected worker command and its existing login
+without printing credentials. Do not label skipped external checks as verified.
 
 For root container Claude workers, version checks and mocked launches also
 miss the upstream permission-mode check. When live execution is authorized,
@@ -244,16 +312,34 @@ without evidence. If the user has not confirmed startup, finish with Supervisor
 prepared and both processes not started; do not report unattended operation as
 verified.
 
+### 10. Optional first-task verification
+
+After startup, offer the [first-task walkthrough (中文)](first-task.md). Only
+perform it when the user explicitly authorizes the target repository and live
+GitHub write. Prefer one analysis-only request from the trusted human first;
+verify the task record, publication receipt, and actual comment. PR creation
+needs a separate authorized implementation request and validates additional
+Git push permissions. Do not create remote test objects merely to claim setup
+success. Record this as pending if it was not authorized.
+
+Default startup can wait `github.polling.fallback_seconds` (300 seconds) before
+its first scan; check `/operations` before diagnosing an empty board as broken.
+The manual Supervisor example manages daemon and Web; `robert supervisor` is
+an additional independent observer, not the external Supervisor process manager.
+Host reboot startup is the host service manager's responsibility.
+
 ## Final Report
 
 Report:
 
-- Robert version.
+- Robert version, installation source, and full source commit SHA or release tag.
 - Configuration path: `~/.config/robert/config.yml`.
 - Runtime data path: `~/.local/share/robert/`.
 - Repository and worker selected.
 - Doctor result, Supervisor configuration path, both program statuses, Web URL,
   and access mode; distinguish prepared, started, and verified states.
+- Configured listening account, actual gh account, trusted human, default branch, and verified Git remotes (without credentials).
+- First-task verification status and observed GitHub result, if authorized.
 - Every skipped, blocked, or failed check.
 
 Preparation success means Robert is installed, configuration is valid, doctor

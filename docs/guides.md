@@ -4,51 +4,19 @@
 
 ## Installation
 
-```bash
-pipx install robert-github-agent --include-deps
-gh auth login
-robert --version
-robert init --config ~/.config/robert/config.yml
-robert doctor --config ~/.config/robert/config.yml
-```
-
-Runtime state is written to `~/.local/share/robert/`. Linux and macOS are
-supported directly. On Windows, run Robert inside WSL.
-
-For development:
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e '.[dev]'
-```
+Use the [manual installation guide (中文)](human-install.md) or the
+[coding-agent guide](agent-install.md). Select matching code and documentation
+before installing: a PyPI release can be older than the current main branch.
+Both paths cover GitHub authentication, worker selection, Git remotes,
+configuration, readiness checks, and daemon/Web startup.
 
 ## First Repository
 
-Create the initial configuration interactively:
-
-```bash
-robert init --config ~/.config/robert/config.yml
-robert doctor --config ~/.config/robert/config.yml --output json
-```
-
-Or use non-interactive setup:
-
-```bash
-robert init --non-interactive \
-  --config ~/.config/robert/config.yml \
-  --repo example/backend \
-  --repo-path /srv/repos/backend \
-  --worker codex \
-  --github-account robert-bot \
-  --trusted-actor maintainer
-```
-
-Preview one cycle:
-
-```bash
-robert run once --config ~/.config/robert/config.yml --dry-run --skip-external
-```
+Follow the repository preparation in the [manual guide](human-install.md):
+verify the target checkout, `upstream`, writable `origin`, actual default branch,
+Git commit identity, listening account, and trusted human. Initialization does
+not create remotes and always writes `main` as the default branch.
+Then use the [first-task walkthrough (中文)](first-task.md) to verify a real result.
 
 ## Configuration Layout
 
@@ -248,7 +216,7 @@ queued tasks.
 
 ### Prepare Supervisor
 
-The installation command above uses `--include-deps` to expose `supervisord`
+The installation guides use `--include-deps` to expose `supervisord`
 and `supervisorctl` from Robert's Supervisor dependency. Check the commands:
 
 ```bash

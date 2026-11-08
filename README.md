@@ -10,170 +10,122 @@
 
 An AI teammate that takes care of your GitHub work.
 
-Robert 是一个自托管的 GitHub 队友。它把可信的 Issue、提及、指派、评审和
-后续评论转换为受控的编码代理任务，并通过 Git worktree、审计门禁和 SQLite
-持久状态保证无人值守运行仍然可检查、可恢复。Robert 是运行在本机的 GitHub
-协作控制面：它发现事件、校验信任关系、选择路由和 Worker、监督执行、审计
-计划中的 GitHub 动作，并只发布路由允许的动作。
+**在 GitHub 上交代任务，让你自己的编码 Agent 分析问题、提交 PR、跟进评审。**
 
-编码代理本身不能解决授权、并发、去重、失败恢复和证据留存。Robert 将这些
-约束做成稳定协议，不需要 GitHub App，也不需要托管控制服务。Robert
-`0.1.0b2` 是公开 Beta，当前只使用轮询获取 GitHub 事件，稳定版之前接口仍
-可能调整。
+Robert 运行在你自己的 Linux 或 macOS 机器上。它持续关注指定仓库，把可信用户的请求
+交给本地 Codex、Claude Code 等 Agent 执行，并记录进度、检查结果和发布记录。
+你可以在 GitHub 继续讨论，也可以在本地看板查看任务卡在哪里、需要谁处理。
+
+[手工安装](docs/human-install.md) · [让 Agent 安装](docs/agent-install.md) ·
+[完成第一个任务](docs/first-task.md) · [常见问题](docs/troubleshooting.md)
+
+> 项目处于 Beta 阶段。这里描述的是当前分支的能力，可能领先于 PyPI 发布版。
+> 安装时请[选择匹配的代码与文档版本](docs/human-install.md#choose-version)；
+> 发布记录见 [Releases](https://github.com/wklken/Robert/releases) 和 [CHANGELOG](CHANGELOG.md)。
+
+## 可以帮你做什么
+
+在已配置仓库的 Issue 或 PR 中，用可信账号 `@你的机器人账号`：
+
+| 你交代的工作 | Robert 的处理方式 |
+| --- | --- |
+| “分析这个报错的原因，先不要改代码” | 阅读代码与讨论，回复分析结论 |
+| “修复这个问题，补充测试并提交 PR” | 创建独立工作区，调用 Agent 修改、验证，审计通过后提交 PR |
+| “评审这个 PR，重点看兼容性” | 检查 PR 源码并发布评审意见 |
+| “根据这条评审意见继续修改” | 在对应 PR 的任务中继续跟进并更新分支 |
+| 管理多个仓库的任务 | 分别配置可信用户、Agent、并发与工作目录，在同一看板查看进度 |
+
+具体触发方式、示例与成功判据见[第一个任务](docs/first-task.md)。
+不是每条 Issue 都会触发工作：需要匹配配置中的仓库、可信用户和触发条件。
 
 ## 功能特性
 
-- **GitHub 协作闭环**：处理可信的 Issue、PR、评审、指派、提及和后续评论，
-  从需求分析、创建 PR 到评审修改持续跟进；同一 workstream 串行执行并保留上下文。
-- **多仓库与隔离执行**：每个仓库独立配置 checkout、worktree 根目录、可信 Actor、
-  并发限制和路由覆盖，通过 Git worktree 隔离分析、实现与源码评审。
-- **多种编码 Agent**：内置 `codex`、`tcodex`、`claude`、`tclaude`、`opencode`、
-  `cbc` 和通用 `command` 适配器。可按路由选择 Worker、模型、推理 effort 和 Skill；
-  缺少必需 Skill 时，在创建 worktree 和启动 Worker 前阻止任务。
-- **执行监督与恢复**：记录执行阶段、心跳、日志和每次尝试，监督启动、超时与进程清理；
-  可配置连续超时后的备用模型，失败后保留原因与恢复入口。
-- **多模型评审与投票**：按 PR 作者白名单启用多模型评审，或响应可信用户的显式投票请求；
-  冻结输入、隔离轮次并共享模型并发额度。
-- **独立任务监督**：观察停滞与交付证据，记录事件；诊断、已知恢复和工程修复按配置启用。
-- **PR 自修复**：按仓库显式开启 CI 失败修复和冲突合并，限制检查名称、重试次数及预算。
-  发布前再次核对 PR head/base，只允许普通 push。
-- **任务生命周期看板**：从待整理、排队、执行、需要处理到待评审、完成和取消，
-  展示阶段、执行历史、产物及发布记录。显式开启写入后，可提交本地任务、回复、
-  重试执行、重试发布和取消；操作仍受权限、状态与幂等校验约束。
-- **无人值守运行**：推荐 Supervisor 分别管理 daemon 和 Web，提供自动重启、状态查询和日志；
-  也支持 systemd 用户服务及 macOS LaunchAgent。
-- **可审计的持久状态**：SQLite 保存任务、尝试、审核结果和发布去重记录；提供诊断历史保留策略、
-  脱敏诊断导出，以及可选的 OpenClaw 查询与双向消息。
+- **GitHub 协作闭环**：从 Issue 分析、代码修改、创建 PR 到评审与后续修订，在原有讨论中持续跟进。
+- **多种编码 Agent**：支持 Codex、Claude Code、OpenCode、`tcodex`、`tclaude`、`cbc` 和自定义命令；可按任务类型选择 Agent、模型和 Skills。见[Worker 配置](docs/guides.md#worker-adapters)。
+- **多仓库与独立工作区**：各仓库分别设置可信用户、并发和工作目录，代码修改使用 Git worktree，同一 Issue/PR 的工作串行处理。
+- **任务看板**：查看排队、执行、需要处理、待评审等状态及日志、产物；开启写入模式后可提交本地任务、回复、重试和取消。见[看板指南](docs/web-lifecycle-board.md)。
+- **执行监督与恢复**：记录阶段、心跳和每次尝试，处理启动失败、超时与进程清理；可配置备用模型，失败后保留原因和恢复入口。
+- **多模型评审与投票**：按 PR 作者白名单启用[多模型评审](docs/multi-model-review.md)，或响应可信用户的显式[投票请求](docs/multi-agent-vote.md)。需要额外配置。
+- **持续任务监督**：独立观察停滞与交付证据，按策略启用模型诊断、恢复决策和工程修复。见[监督指南](docs/task-supervision.md)。
+- **PR 自动修复**：按仓库启用 CI 失败修复和冲突处理，限制检查名称、次数与预算；默认关闭。见[配置参考](docs/reference.md#configuration)。
+- **无人值守运行**：支持 Supervisor 管理 daemon 与 Web，以及 systemd、macOS LaunchAgent；本地 SQLite 保存任务、审计和发布去重记录。见[服务部署](docs/guides.md#daemon-service)。
+- **OpenClaw 集成**：查询任务与运行状态；显式启用消息后接收提问和故障通知，并提交受权限约束的回复。见[消息指南](docs/operator-messaging.md)。
 
-## 工作流程
+## 它如何工作
 
 ```mermaid
 flowchart LR
-    A[通过 gh 轮询 GitHub] --> B[规范化并校验授权]
-    B --> C[创建或恢复 workstream]
-    C --> D[选择路由和 Skill]
-    D --> E[准备隔离 workspace]
-    E --> F[运行配置的 Worker]
-    F --> G[审计结构化结果]
-    G -->|通过| H[去重并发布]
-    G -->|阻止| I[保存失败证据]
-    H --> J[(SQLite 状态)]
-    I --> J
+    A[GitHub 请求] --> B[校验权限]
+    B --> C[Agent 执行]
+    C --> D{结果审计}
+    D -->|通过| E[评论或 PR]
+    D -->|需处理| F[原因与恢复]
+    E --> G[人工评审]
+    G --> B
 ```
 
-Robert 使用已认证的 `gh` CLI 轮询 GitHub，规范化事件，应用仓库级信任规则，
-创建或恢复 workstream，准备任务目录，启动本地 Worker，审计结构化结果，并
-在发布前执行去重。
+Robert 负责接单、调度、监督和发布；**编码 Agent 负责理解代码和完成工作**。
+它使用已认证的 `gh` CLI 轮询 GitHub，不需要 GitHub App 或 Webhook。
+任务与执行记录保存在本地 SQLite 中，修改代码使用 Git worktree。
+详细机制见[核心概念](docs/concepts.md)和[架构图](docs/architecture.md)。
 
-整体架构、模块关系及复杂机制的流程图和时序图见
-[架构与运行机制](docs/architecture.md)。
+## 看见进度和结果
 
-## 环境要求
+![Robert Web UI 任务看板](docs/imgs/webui-task-board.png)
 
-- Linux 或 macOS；Windows 通过 WSL 使用。
-- Python 3.11 或更高的官方仍维护稳定版本（当前为 3.11–3.15）。
-- Git 和已登录的 GitHub CLI。
-- 至少一个本地 Worker 命令。
-- 推荐使用 `pipx` 安装。
+*看板示例使用隔离演示数据，展示排队、执行、需要处理、待评审等状态。*
 
-## 使用编码 Agent 安装
+Web 默认只读，绑定 `127.0.0.1:8765`。开启写入模式后，可提交本地任务、回复、
+重试或取消；具体操作见[生命周期看板](docs/web-lifecycle-board.md)。
+**看板运行不等于任务会执行：后台 daemon 也必须运行。**
 
-把下面的提示词复制给 Codex、Claude Code 或其他终端编码 Agent：
+## 开始使用
+
+需要 Linux / macOS（Windows 使用 WSL）、Python 3.11–3.15、Git、已认证的 GitHub CLI，
+以及至少一个已安装、已登录且可用的编码 Agent。模型使用自己的账号与配额，Robert 不提供模型服务。
+
+### 手工部署
+
+按[手工安装指南](docs/human-install.md)依次完成：
+
+1. 选择代码版本，安装 Robert。
+2. 准备目标仓库、GitHub 账号与可信触发者。
+3. 生成并检查配置，运行 `robert doctor` 和离线预览。
+4. 用 Supervisor 启动 daemon 与 Web，再[验证首个任务](docs/first-task.md)。
+
+### 让编码 Agent 部署
+
+将下面的提示词复制给 Codex、Claude Code 或其他终端 Agent：
 
 ```text
 Install and fully configure Robert on this machine by following:
 https://github.com/wklken/Robert/blob/main/docs/agent-install.md
 
-Read the entire guide before executing. Ask me for required values and for
-confirmation wherever the guide requires it.
+Read the entire guide before executing. Match the installed code to the guide's
+revision. Ask me for missing deployment values. Prepare and validate first;
+obtain explicit confirmation before starting unattended operation or live tests.
+Report what was verified and what still needs a real task.
 ```
 
-## 配置
+## 适用范围与边界
 
-Robert 只接受 `version: 2` YAML，默认位于 `~/.config/robert/config.yml`。
-`workers` 定义 Agent，`default_worker` 显式选择默认 Agent，`routes` 配置路由和普通执行的模型覆盖。
-`github` 管理扫描，`scheduler` 管理容量与调度，`supervision` 管理监督，`maintenance` 管理保留策略。
-SQLite 是唯一执行引擎，没有引擎选择配置。
+- 适合希望在自己的机器上持续处理 GitHub 工作、并愿意配置账号和本地 Agent 的个人或团队。
+- 当前通过轮询获取事件，响应受扫描间隔、GitHub 配额和模型运行时间影响，不保证即时响应。
+- Git worktree 隔离代码目录，**不提供操作系统沙箱**。请使用专用账号或受控运行环境。
+- 只有可信用户能触发受保护工作；结果发布还须通过路由权限、审计与去重检查。
+- 默认 Web 没有面向公网的用户登录系统。远程访问需要经过认证的反向代理。
+- 自动化结果仍需人工评审。不要把“Agent 已完成”当成“PR 已合并”。
 
-完整示例、字段默认值与覆盖规则见[配置参考](docs/reference.md#configuration)，
-安装与多仓库示例见[操作指引](docs/guides.md)。
-Worker 可配置 `fallback_model`；同一 workstream 连续两次
-`failed_timeout` 后，第三次运行切换到该模型，推理 effort 保持不变。默认硬超时为
-45 分钟。
-CI 和冲突修复默认关闭；只有仓库配置中的 `pr_automation` 显式启用后才运行，
-CI 还必须配置非空 `check_allowlist`。
+信任和凭证边界见 [SECURITY.md](SECURITY.md)。
 
-## 守护进程
+## 文档与社区
 
-推荐使用 [Supervisor 同时管理 daemon 和 Web](docs/guides.md#daemon-service)。
-完成配置和检查后启动，并确认两个进程都为 `RUNNING`：
+| 我想…… | 入口 |
+| --- | --- |
+| 安装、检查并跑通一个任务 | [手工安装](docs/human-install.md) / [Agent 安装](docs/agent-install.md) / [第一个任务](docs/first-task.md) |
+| 配置其他 Agent、多仓库或后台服务 | [操作指引](docs/guides.md) / [配置与命令参考](docs/reference.md) |
+| 处理启动失败、任务不动或发布失败 | [故障排查](docs/troubleshooting.md) / [支持渠道](SUPPORT.md) |
+| 参与开发或改进文档 | [贡献指南](CONTRIBUTING.md) / [行为准则](CODE_OF_CONDUCT.md) |
+| 报告安全问题 | [私密报告流程](SECURITY.md#reporting-a-vulnerability) |
 
-```bash
-supervisord -c ~/.config/robert/supervisord.conf
-supervisorctl -c ~/.config/robert/supervisord.conf status
-```
-
-两个进程共用同一份 Robert 配置。Web 负责展示与提交操作，后台 daemon 负责调度执行。
-前台调试分别使用 `robert daemon run` 和 `robert web run`。
-`robert service install` 默认安装 daemon 和独立任务监督服务，并自动选择 systemd、launchd
-或 Linux 的 Supervisor 后端。Web 仅包含在 Supervisor 后端中，具体差异见操作指引。
-
-## 本地 Web UI
-
-![Robert Web UI 任务看板](docs/imgs/webui-task-board.png)
-
-当前代码的只读看板，使用隔离演示数据展示各生命周期状态。
-
-```bash
-robert web run
-```
-
-默认模式只读且仅监听本机。写入模式必须显式开启：
-
-```bash
-robert web run --writable --operator "$USER"
-```
-
-非回环地址还必须使用 `--allow-remote`，并部署经过认证的反向代理。
-
-首页以看板展示任务生命周期。执行进度、失败恢复、取消和发布重试见
-[任务生命周期看板](docs/web-lifecycle-board.md)。
-
-## OpenClaw 集成
-
-```bash
-robert openclaw install
-robert openclaw status
-```
-
-插件提供状态、任务、运行和产物查询。显式启用后，Worker 提问和 Supervisor
-故障通知可发送到 OpenClaw，受信任用户可以回复、确认或执行受状态约束的恢复操作。
-配置、权限和交付保证见[操作员消息](docs/operator-messaging.md)。
-
-## 故障排查
-
-先运行 `robert doctor --output json`，并用
-`supervisorctl -c ~/.config/robert/supervisord.conf status` 检查两个进程。
-使用原生服务时检查 `robert service status`。需要提供诊断信息时，生成经过脱敏的压缩包：
-
-```bash
-robert diagnostics export --output robert-diagnostics.zip
-```
-
-不要在公开 Issue 中上传凭证或私有仓库内容。
-
-## 参与贡献
-
-阅读 [COMMUNITY.md](COMMUNITY.md) 并执行其中的验证命令。首个 Beta
-不强制 DCO 签署，也不要求 CLA。
-
-## 安全与信任模型
-
-GitHub 文本始终按不可信输入处理。只有配置中的可信 Actor 能触发工作。仓库
-覆盖不能改变路由的 GitHub 权限和 workspace 策略。Worker 环境变量采用白名单，
-配置文件不保存 GitHub Token，所有对外文本都经过脱敏和审计。Web UI 默认绑定
-`127.0.0.1`。
-
-## 许可证
-
-Apache License 2.0，详见 `LICENSE`。
+Apache License 2.0，详见 [LICENSE](LICENSE)。

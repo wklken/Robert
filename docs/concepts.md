@@ -2,6 +2,19 @@
 
 [文档目录](README.md)
 
+## In plain language
+
+| Term | Meaning |
+| --- | --- |
+| Worker | The local coding-agent command Robert invokes. |
+| Route | The kind of work requested and what output/actions it permits. |
+| Workstream | The ongoing conversation for one issue, PR, or local work item. |
+| Task / attempt | One unit of requested work / one execution try for it. |
+| Audit / publication | Checking proposed results / carrying out allowed GitHub actions. |
+| Daemon / Web | The background executor / the board that displays and controls work. |
+
+For a concrete example, follow the [first-task walkthrough (中文)](first-task.md).
+
 ## Architecture
 
 Robert is a local Python control plane with five boundaries:
@@ -14,7 +27,7 @@ Robert is a local Python control plane with five boundaries:
 
 The installed `robert` command reads `~/.config/robert/config.yml`.
 `runtime.cycle` composes bounded cycles, `runtime.daemon` schedules them,
-`adapters.sqlite.database` owns schema setup, and route, worktree, dispatch,
+`persistence.schema` owns schema setup, and route, worktree, dispatch,
 audit, and publication modules enforce separate policies.
 
 Robert uses polling. It does not include a webhook receiver

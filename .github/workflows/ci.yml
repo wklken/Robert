@@ -139,4 +139,8 @@ jobs:
             README.md
             README_EN.md
             COMMUNITY.md
+            CONTRIBUTING.md
+            SECURITY.md
+            SUPPORT.md
+            CODE_OF_CONDUCT.md
             docs
