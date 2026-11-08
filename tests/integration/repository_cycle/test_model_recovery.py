@@ -64,6 +64,10 @@ class ModelWorkerRecoveryTests(RepositoryCycleFixture):
                 ).fetchone()[0],
                 0,
             )
+            failure = json.loads(
+                conn.execute("SELECT failure_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()[0]
+            )
+            self.assertEqual(failure["status"], "waiting_for_model_decision")
             workstream = conn.execute("SELECT workstream_id FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0]
             if not conn.in_transaction:
                 conn.execute("BEGIN IMMEDIATE")

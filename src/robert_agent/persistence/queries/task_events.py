@@ -1,5 +1,7 @@
 """Shared queries operations for task_events."""
 
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -31,24 +33,6 @@ def find_for_for_result(conn, task_id):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query3, {"p0": task_id})
-
-
-def find_for_acknowledge_effects(conn, fact_id):
-    table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
-    table3 = tables["tasks"].alias("t")
-    query4 = (
-        select(table3.c["task_id"], table3.c["lifecycle"])
-        .select_from(
-            table1.join(table2, (table2.c["event_id"] == table1.c["event_id"]), isouter=False).join(
-                table3, (table3.c["task_id"] == table1.c["task_id"]), isouter=False
-            )
-        )
-        .where((table2.c["event_fingerprint"] == bindparam("p0")))
-        .correlate_except(table1, table2, table3)
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query4, {"p0": fact_id})
 
 
 def find_for_build_task(conn, task_id):
@@ -296,10 +280,10 @@ def find_for_event_has_terminal_trigger(conn, event_fingerprint):
                                 (table1.c["relationship"] == sql_constant("trigger")),
                                 table3.c["lifecycle"].in_(
                                     [
-                                        sql_constant("completed"),
-                                        sql_constant("failed"),
-                                        sql_constant("canceled"),
-                                        sql_constant("ignored"),
+                                        sql_constant(TaskLifecycle.COMPLETED.value),
+                                        sql_constant(TaskLifecycle.FAILED.value),
+                                        sql_constant(TaskLifecycle.CANCELED.value),
+                                        sql_constant(TaskLifecycle.IGNORED.value),
                                     ]
                                 ),
                             )
@@ -405,8 +389,8 @@ def find_for_receipt_facts(conn, key, target_id, target_id_3):
                                 not_(
                                     table2.c["lifecycle"].in_(
                                         [
-                                            sql_constant("canceled"),
-                                            sql_constant("ignored"),
+                                            sql_constant(TaskLifecycle.CANCELED.value),
+                                            sql_constant(TaskLifecycle.IGNORED.value),
                                         ]
                                     )
                                 ),

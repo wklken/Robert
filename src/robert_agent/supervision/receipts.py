@@ -1,5 +1,7 @@
 """Pure proof checks for durable publication receipts."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus
+
 import json
 from robert_agent.supervision import rules as supervision_rules
 
@@ -11,7 +13,7 @@ def _object(value):
 
 def matches(facts, action, scope, receipt):
     if (
-        action["intent_status"] != "published"
+        action["intent_status"] != PublicationStatus.PUBLISHED
         or _object(action["intent_receipt"]) != receipt
         or receipt.get("scope") != scope
         or receipt.get("result_id") != facts["result_id"]
@@ -25,7 +27,7 @@ def matches(facts, action, scope, receipt):
         or any(receipt.get(key) != action[key] for key in ("action_id", "task_id", "action_type"))
     ):
         return False
-    if action["action_type"] == "push_existing_pr":
+    if action["action_type"] == GitHubActionType.PUSH_EXISTING_PR:
         return bool(scope.get("result_head_sha") and receipt.get("result_head_sha") == scope["result_head_sha"])
     return bool(
         receipt.get("external_id")

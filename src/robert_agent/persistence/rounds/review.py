@@ -1,5 +1,6 @@
 """Durable file handoffs for native PR review rounds (SQLite, no agent framework)."""
 
+from robert_agent.foundation.contracts.execution import ModelRunStatus
 from robert_agent.persistence.rounds import records as round_records
 
 from robert_agent.persistence import database as db_database
@@ -163,7 +164,7 @@ def release_slot(conn, run_id):
 
 
 def can_abandon(run):
-    return run["status"] == "starting" and not run["dispatch"] and bool(run.get("slot_reserved"))
+    return run["status"] == ModelRunStatus.STARTING and not run["dispatch"] and bool(run.get("slot_reserved"))
 
 
 def task_status(conn, task_id):

@@ -1,5 +1,8 @@
 """Read-only dashboard and artifact projections, independent of HTTP."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
+from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskLifecycle, WorkstreamLifecycle
+
 import json
 import os
 import stat
@@ -90,7 +93,7 @@ def _is_authorized_unattached_event(event):
 def _task_operator_state(task):
     if task.get("execution_attention"):
         return "needs_attention", "inspect_execution_attention"
-    if task["lifecycle"] in {"failed", "canceled"}:
+    if task["lifecycle"] in {TaskLifecycle.FAILED, TaskLifecycle.CANCELED}:
         notification = task.get("latest_notification") or {}
         if notification.get("notification_type") == "worker_timeout":
             return "needs_attention", "inspect_worker_timeout"
@@ -105,21 +108,27 @@ def _task_operator_state(task):
         return "needs_attention", "inspect_failure_notification"
     if task.get("pending_publish_actions", 0):
         return "waiting_publish", "publish_accepted_github_actions"
-    if task["lifecycle"] == "waiting_for_user" or task.get("workstream_lifecycle") == "waiting_for_user":
+    if (
+        task["lifecycle"] == TaskLifecycle.WAITING_FOR_USER
+        or task.get("workstream_lifecycle") == WorkstreamLifecycle.WAITING_FOR_USER
+    ):
         return "waiting_user", "wait_for_trusted_user_reply"
     if task.get("latest_attempt_status") == "stale":
         return "worker_stale", "inspect_worker_heartbeat"
-    if task["lifecycle"] in {"queued", "running"} and task.get("worker_resume_count", 0) >= 2:
+    if task["lifecycle"] in {TaskLifecycle.QUEUED, TaskLifecycle.RUNNING} and task.get("worker_resume_count", 0) >= 2:
         return "worker_retrying", "inspect_worker_resume"
-    if task["lifecycle"] in {"queued", "running"} and task.get("result_pending_audit"):
+    if task["lifecycle"] in {TaskLifecycle.QUEUED, TaskLifecycle.RUNNING} and task.get("result_pending_audit"):
         return "result_pending_audit", "wait_next_cycle_or_run_once"
-    if task["lifecycle"] in {"queued", "running"} and task.get("latest_attempt_status") == "running":
+    if (
+        task["lifecycle"] in {TaskLifecycle.QUEUED, TaskLifecycle.RUNNING}
+        and task.get("latest_attempt_status") == "running"
+    ):
         return "worker_running", "wait_for_worker_completion"
-    if task["lifecycle"] in {"detected", "authorized", "classified", "queued", "running"}:
+    if task["lifecycle"] in ACTIVE_TASK_LIFECYCLES:
         return "waiting_worker", "wait_for_worker_or_supervise"
-    if task["lifecycle"] == "completed":
+    if task["lifecycle"] == TaskLifecycle.COMPLETED:
         return "completed", "none"
-    if task["lifecycle"] == "ignored":
+    if task["lifecycle"] == TaskLifecycle.IGNORED:
         return "ignored", "none"
     return "unknown", "inspect_task"
 
@@ -142,7 +151,7 @@ def _attach_task_operator_state(conn, recent_tasks):
     }
     for row in task_history.actions_for_tasks(conn, task_ids):
         action_state = actions_by_task[row["task_id"]]
-        if row["audit_status"] == "accepted" and row["publish_status"] == "not_published":
+        if row["audit_status"] == AuditStatus.ACCEPTED and row["publish_status"] == PublishStatus.NOT_PUBLISHED:
             action_state["pending_publish_actions"] += 1
             if not action_state["latest_pending_publish"]:
                 action_state["latest_pending_publish"] = {
@@ -150,11 +159,11 @@ def _attach_task_operator_state(conn, recent_tasks):
                     "action_type": row["action_type"],
                     "target_url": row["target_url"],
                 }
-        if row["audit_status"] in {"failed", "policy_violation"}:
+        if row["audit_status"] in {AuditStatus.FAILED, AuditStatus.POLICY_VIOLATION}:
             action_state["failed_github_actions"] += 1
         metadata = _decode_json(row["metadata_json"]) or {}
         publish = metadata.get("publish") if isinstance(metadata, dict) else {}
-        if row["audit_status"] == "accepted" and row["publish_status"] == "skipped":
+        if row["audit_status"] == AuditStatus.ACCEPTED and row["publish_status"] == PublishStatus.SKIPPED:
             action_state["skipped_publish_actions"] += 1
             if not action_state["latest_publish_skipped"]:
                 action_state["latest_publish_skipped"] = {
@@ -600,7 +609,11 @@ def _build_notification_center(
         metadata = action.get("metadata") or {}
         publish = metadata.get("publish") if isinstance(metadata, dict) else {}
         failed_publish = isinstance(publish, dict) and publish.get("status") == "publish_failed"
-        if audit_status not in {"failed", "policy_violation"} and publish_status != "skipped" and not failed_publish:
+        if (
+            audit_status not in {AuditStatus.FAILED, AuditStatus.POLICY_VIOLATION}
+            and publish_status != PublishStatus.SKIPPED
+            and not failed_publish
+        ):
             continue
         task = tasks_by_id.get(action.get("task_id"), {})
         items.append(

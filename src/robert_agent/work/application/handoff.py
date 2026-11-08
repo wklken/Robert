@@ -1,5 +1,7 @@
 """Durable unfinished event handoffs after an accepted result is completed."""
 
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.delivery import contract as result_contract
 
@@ -16,7 +18,7 @@ def ready_rows(conn, repo_ids, now, *, config=None):
         if not supervision_actions.blocks_consumer(
             conn,
             task_id=task_id,
-            kind="handoff_resume",
+            kind=RecoveryActionKind.HANDOFF_RESUME.value,
             target_id=task_id,
             now=now,
             config=config,

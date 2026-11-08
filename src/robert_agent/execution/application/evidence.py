@@ -1,5 +1,7 @@
 """Collect attempt and command evidence for recovery."""
 
+from robert_agent.foundation.contracts.execution import RoundStatus
+
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 from robert_agent.persistence import records as db_records
@@ -260,7 +262,7 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         diagnostic = values.json_object(row[0] if row else None).get("submission_validation", {})
         return {
             "status": "recoverable_progress"
-            if review["status"] not in {"canceled", "superseded", "attention"}
+            if review["status"] not in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}
             else "unrecoverable",
             "reason_code": "native_review_checkpoint",
             "round_id": review["round_id"],
@@ -276,7 +278,7 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
                     for key in ("reason_code", "field_path", "findings", "safe_error", "required_action")
                     if key in diagnostic
                 }
-                if review["status"] == "attention"
+                if review["status"] == RoundStatus.ATTENTION
                 else {}
             ),
         }

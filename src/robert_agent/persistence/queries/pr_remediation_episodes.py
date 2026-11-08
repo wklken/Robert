@@ -1,5 +1,7 @@
 """Shared queries operations for pr_remediation_episodes."""
 
+from robert_agent.foundation.contracts.work import RemediationStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import select, bindparam, and_, null, case, LABEL_STYLE_NONE
@@ -14,45 +16,6 @@ def find_status_by_episode_id(conn, subject_id):
         select(tables["pr_remediation_episodes"].c["status"])
         .select_from(tables["pr_remediation_episodes"])
         .where((tables["pr_remediation_episodes"].c["episode_id"] == bindparam("p0")))
-        .correlate_except(tables["pr_remediation_episodes"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query1, {"p0": subject_id})
-
-
-def find_status_and_attempt_count_by_episode_id(conn, subject_id):
-    query1 = (
-        select(
-            tables["pr_remediation_episodes"].c["status"],
-            tables["pr_remediation_episodes"].c["attempt_count"],
-        )
-        .select_from(tables["pr_remediation_episodes"])
-        .where((tables["pr_remediation_episodes"].c["episode_id"] == bindparam("p0")))
-        .correlate_except(tables["pr_remediation_episodes"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    return statements.read(conn, query1, {"p0": subject_id})
-
-
-def find_for_decisions(conn, subject_id):
-    query1 = (
-        select(sql_constant(1))
-        .select_from(tables["pr_remediation_episodes"])
-        .where(
-            and_(
-                (tables["pr_remediation_episodes"].c["episode_id"] == bindparam("p0")),
-                tables["pr_remediation_episodes"]
-                .c["status"]
-                .in_(
-                    [
-                        sql_constant("resolved"),
-                        sql_constant("exhausted"),
-                        sql_constant("superseded"),
-                        sql_constant("canceled"),
-                    ]
-                ),
-            )
-        )
         .correlate_except(tables["pr_remediation_episodes"])
         .set_label_style(LABEL_STYLE_NONE)
     )
@@ -116,10 +79,10 @@ def find_for_collect_pr_remediation_decisions(conn, repo_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("resolved"),
-                        sql_constant("exhausted"),
-                        sql_constant("superseded"),
-                        sql_constant("canceled"),
+                        sql_constant(RemediationStatus.RESOLVED.value),
+                        sql_constant(RemediationStatus.EXHAUSTED.value),
+                        sql_constant(RemediationStatus.SUPERSEDED.value),
+                        sql_constant(RemediationStatus.CANCELED.value),
                     ]
                 ),
             )
@@ -141,7 +104,7 @@ def find_for_collect_pr_remediation_decisions_2(conn, workstream_id, value_2):
             and_(
                 tables["pr_remediation_episodes"].c["workstream_id"] == bindparam("p0"),
                 tables["pr_remediation_episodes"].c["subject_key"] == bindparam("p1"),
-                tables["pr_remediation_episodes"].c["status"] == sql_constant("open"),
+                tables["pr_remediation_episodes"].c["status"] == sql_constant(RemediationStatus.OPEN.value),
             )
         )
         .correlate_except(tables["pr_remediation_episodes"])
@@ -224,7 +187,7 @@ def find_for_next_system_decisions(conn, repo_id):
             and_(
                 table2.c["repo_id"] == bindparam("p0"),
                 table2.c["active_task_id"].is_(null()),
-                table1.c["status"] == sql_constant("open"),
+                table1.c["status"] == sql_constant(RemediationStatus.OPEN.value),
             )
         )
         .order_by(
@@ -259,10 +222,10 @@ def find_for_cancel_disabled_episodes(conn, repo_id):
                 (table2.c["repo_id"] == bindparam("p0")),
                 table1.c["status"].in_(
                     [
-                        sql_constant("open"),
-                        sql_constant("queued"),
-                        sql_constant("remediating"),
-                        sql_constant("waiting_for_signal"),
+                        sql_constant(RemediationStatus.OPEN.value),
+                        sql_constant(RemediationStatus.QUEUED.value),
+                        sql_constant(RemediationStatus.REMEDIATING.value),
+                        sql_constant(RemediationStatus.WAITING_FOR_SIGNAL.value),
                     ]
                 ),
             )

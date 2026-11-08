@@ -1,5 +1,8 @@
 """Shared queries operations for attempts."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from functools import lru_cache
 
 from functools import cache
@@ -36,8 +39,10 @@ def find_for_control_plane_state_gate(conn):
         .select_from(table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=False))
         .where(
             and_(
-                (table1.c["status"] == sql_constant("prepared")),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                (table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value)),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
             )
         )
         .correlate_except(table1, table2)
@@ -54,8 +59,12 @@ def find_for_control_plane_state_gate_2(conn):
         .select_from(table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=False))
         .where(
             and_(
-                table1.c["status"].in_([sql_constant("running"), sql_constant("stale")]),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table1.c["status"].in_(
+                    [sql_constant(AttemptStatus.RUNNING.value), sql_constant(AttemptStatus.STALE.value)]
+                ),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
             )
         )
         .correlate_except(table1, table2)
@@ -211,7 +220,7 @@ def find_for_completed_by_worker_result(conn, attempt_id):
         .where(
             and_(
                 (table1.c["attempt_id"] == bindparam("p0")),
-                (table1.c["status"] == sql_constant("completed")),
+                (table1.c["status"] == sql_constant(AttemptStatus.COMPLETED.value)),
             )
         )
         .limit(sql_constant(1))
@@ -243,8 +252,10 @@ def find_for_current_dispatch_target(conn, attempt_id):
         .where(
             and_(
                 table1.c["attempt_id"] == bindparam("p0"),
-                table1.c["status"] == sql_constant("prepared"),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
                 table3.c["artifact_type"] == sql_constant("prompt"),
                 or_(
                     table3.c["attempt_id"] == table1.c["attempt_id"],
@@ -351,9 +362,9 @@ def find_for_model_for_dispatch(conn, workstream_id, attempt_id):
                 table1.c["attempt_id"] != bindparam("p1"),
                 table1.c["status"].in_(
                     [
-                        sql_constant("completed"),
-                        sql_constant("failed"),
-                        sql_constant("canceled"),
+                        sql_constant(AttemptStatus.COMPLETED.value),
+                        sql_constant(AttemptStatus.FAILED.value),
+                        sql_constant(AttemptStatus.CANCELED.value),
                     ]
                 ),
             )
@@ -398,10 +409,12 @@ def find_for_supervision_observation_current(conn, attempt_id, value_2):
             and_(
                 table1.c["attempt_id"] == bindparam("p0"),
                 or_(
-                    table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                    table2.c["lifecycle"].in_(
+                        [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                    ),
                     and_(
                         bindparam("p1") == sql_constant("failed"),
-                        table2.c["lifecycle"] == sql_constant("failed"),
+                        table2.c["lifecycle"] == sql_constant(TaskLifecycle.FAILED.value),
                     ),
                 ),
                 table1.c["attempt_no"] == query5.scalar_subquery(),
@@ -445,9 +458,9 @@ def find_for_recover_failed_timeout_attempts(conn, repo_id, run_now):
         .where(
             and_(
                 table3.c["repo_id"] == bindparam("p0"),
-                table1.c["status"] == sql_constant("failed"),
-                table2.c["lifecycle"] == sql_constant("failed"),
-                table3.c["lifecycle"] == sql_constant("failed"),
+                table1.c["status"] == sql_constant(AttemptStatus.FAILED.value),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.FAILED.value),
+                table3.c["lifecycle"] == sql_constant(WorkstreamLifecycle.FAILED.value),
                 or_(
                     table1.c["finished_at"].is_(null()),
                     table1.c["finished_at"] < bindparam("p1"),
@@ -525,9 +538,9 @@ def find_for_bound_attempt_for_subject(conn, task_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("prepared"),
-                        sql_constant("running"),
-                        sql_constant("stale"),
+                        sql_constant(AttemptStatus.PREPARED.value),
+                        sql_constant(AttemptStatus.RUNNING.value),
+                        sql_constant(AttemptStatus.STALE.value),
                     ]
                 ),
             )
@@ -594,7 +607,7 @@ def list_board(conn):
                 isouter=False,
             )
         )
-        .where((table1.c["status"] == sql_constant("running")))
+        .where((table1.c["status"] == sql_constant(AttemptStatus.RUNNING.value)))
         .group_by(table3.c["repo_id"])
         .correlate_except(table1, table2, table3)
         .set_label_style(LABEL_STYLE_NONE)
@@ -609,7 +622,7 @@ def find_for_project_item(conn, task_id):
         .where(
             and_(
                 (tables["attempts"].c["task_id"] == bindparam("p0")),
-                (tables["attempts"].c["status"] == sql_constant("prepared")),
+                (tables["attempts"].c["status"] == sql_constant(AttemptStatus.PREPARED.value)),
             )
         )
         .correlate_except(tables["attempts"])
@@ -883,9 +896,9 @@ def find_for_retrigger_failed_github_task(conn, task_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("prepared"),
-                        sql_constant("running"),
-                        sql_constant("stale"),
+                        sql_constant(AttemptStatus.PREPARED.value),
+                        sql_constant(AttemptStatus.RUNNING.value),
+                        sql_constant(AttemptStatus.STALE.value),
                     ]
                 ),
             )
@@ -1050,7 +1063,7 @@ def find_for_supervise_running_attempts(conn, repo_id, task_id, task_id_3):
                 or_(
                     occupied_attempt(table1),
                     and_(
-                        table1.c["status"] == sql_constant("prepared"),
+                        table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value),
                         not_(
                             func.json_extract(
                                 table1.c["metadata_json"],
@@ -1059,7 +1072,9 @@ def find_for_supervise_running_attempts(conn, repo_id, task_id, task_id_3):
                         ),
                     ),
                 ),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
                 runnable_task(table2),
                 or_(bindparam("p1").is_(null()), table2.c["task_id"] == bindparam("p2")),
             )
@@ -1087,7 +1102,9 @@ def find_for_running_attempt_count(conn, repo_id):
             and_(
                 table3.c["repo_id"] == bindparam("p0"),
                 occupied_attempt(table1),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
             )
         )
         .correlate_except(table1, table2, table3)
@@ -1158,7 +1175,7 @@ def record_remote_terminal_state_locked(conn, task_id):
                 (tables["attempts"].c["task_id"] == bindparam("p0")),
                 (
                     or_(
-                        (tables["attempts"].c["status"] == sql_constant("prepared")),
+                        (tables["attempts"].c["status"] == sql_constant(AttemptStatus.PREPARED.value)),
                         (occupied_attempt(tables["attempts"])),
                     )
                 ),
@@ -1205,7 +1222,7 @@ def _supervision_transition_due_filtered_statement(scoped):
                 or_(
                     occupied_attempt(table1),
                     and_(
-                        table1.c["status"] == sql_constant("prepared"),
+                        table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value),
                         not_(
                             func.json_extract(
                                 table1.c["metadata_json"],
@@ -1214,7 +1231,9 @@ def _supervision_transition_due_filtered_statement(scoped):
                         ),
                     ),
                 ),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
                 runnable_task(table2),
             )
         )
@@ -1280,9 +1299,9 @@ def _has_local_work_filtered_statement(scoped):
         )
         .where(
             and_(
-                table1.c["status"] == sql_constant("failed"),
-                table2.c["lifecycle"] == sql_constant("failed"),
-                table3.c["lifecycle"] == sql_constant("failed"),
+                table1.c["status"] == sql_constant(AttemptStatus.FAILED.value),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.FAILED.value),
+                table3.c["lifecycle"] == sql_constant(WorkstreamLifecycle.FAILED.value),
                 func.json_extract(table1.c["failure_json"], sql_constant("$.status")) == sql_constant("failed_timeout"),
                 or_(
                     func.json_extract(
@@ -1297,7 +1316,7 @@ def _has_local_work_filtered_statement(scoped):
                     )
                     <= func.julianday(bindparam("p0")),
                 ),
-                table4.c["binding_status"] == sql_constant("active"),
+                table4.c["binding_status"] == sql_constant(BindingStatus.ACTIVE.value),
                 runnable_task(table2),
                 or_(
                     table1.c["finished_at"].is_(null()),
@@ -1341,7 +1360,7 @@ def _has_local_work_filtered_2_statement(scoped):
         )
         .where(
             and_(
-                table1.c["status"] == sql_constant("prepared"),
+                table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value),
                 func.json_extract(table2.c["metadata_json"], sql_constant("$.dispatch_wait")).is_(null()),
                 or_(
                     func.json_extract(
@@ -1356,7 +1375,9 @@ def _has_local_work_filtered_2_statement(scoped):
                     )
                     <= func.julianday(bindparam("p0")),
                 ),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
                 runnable_task(table2),
             )
         )
@@ -1388,7 +1409,9 @@ def has_occupied_runnable_attempt_filtered(conn, items):
         .where(
             and_(
                 table3.c["repo_id"].in_(bindparam("items", expanding=True)),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
                 occupied_attempt(table1),
                 runnable_task(table2),
             )
@@ -1417,7 +1440,9 @@ def running_attempt_count_for_repos_filtered(conn, items):
             and_(
                 table3.c["repo_id"].in_(bindparam("items", expanding=True)),
                 occupied_attempt(table1),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
             )
         )
         .correlate_except(table1, table2, table3)
@@ -1523,10 +1548,12 @@ def find_for_queue_prepared_attempts(conn, repo_id, capacity):
         .where(
             and_(
                 table3.c["repo_id"] == bindparam("p0"),
-                table1.c["status"] == sql_constant("prepared"),
+                table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value),
                 func.json_extract(table2.c["metadata_json"], sql_constant("$.dispatch_wait")).is_(null()),
                 runnable_task(table2),
-                table2.c["lifecycle"].in_([sql_constant("queued"), sql_constant("running")]),
+                table2.c["lifecycle"].in_(
+                    [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
+                ),
                 table4.c["artifact_type"] == sql_constant("prompt"),
                 or_(
                     func.json_extract(

@@ -4,6 +4,15 @@ Candidates and decisions use named supervision checkpoints. Every mutation uses
 the caller's writer transaction; model output never acts as a user credential.
 """
 
+from robert_agent.foundation.contracts.supervision import (
+    AUTOMATIC_DECISION_ACTIONS,
+    NONEXECUTING_DECISION_ACTIONS,
+    DecisionAction,
+    DecisionStatus,
+    SupervisionMode,
+)
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from importlib.resources import files
@@ -22,20 +31,6 @@ from robert_agent.work.questions import record_supervisor_question
 
 RUNNER_KEY = ("decision_runner", "installation", "current")
 
-AUTOMATIC = frozenset(
-    {
-        "repair_ci",
-        "resolve_conflict",
-        "retry_worker",
-        "spool_replay",
-        "audit_retry",
-        "handoff_resume",
-        "publication_reconcile",
-        "publication_retry",
-    }
-)
-CHOICES = frozenset({"wait", "notify_user", "ask_user", "finish_supervision"})
-
 
 def encode(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -46,7 +41,7 @@ def digest(value):
 
 
 def enabled(config):
-    return (config.get("supervision") or {}).get("mode") == "decide"
+    return (config.get("supervision") or {}).get("mode") == SupervisionMode.DECIDE.value
 
 
 def policy_version(config):
@@ -97,12 +92,12 @@ def offer(conn, config, *, workstream_id, action, target_id, facts, now):
     """Publish a bounded action candidate. This grants no authority to run it."""
     if not enabled(config):
         return None
-    if action not in AUTOMATIC or not isinstance(target_id, str) or not target_id:
+    if action not in AUTOMATIC_DECISION_ACTIONS or not isinstance(target_id, str) or not target_id:
         raise ValueError("unsupported decision candidate")
     if not conn.in_transaction:
         raise ValueError("candidate observation requires a writer transaction")
     root = queries.root_stream(conn, workstream_id)
-    if not root or root["lifecycle"] == "canceled":
+    if not root or root["lifecycle"] == WorkstreamLifecycle.CANCELED:
         return None
     key = digest([workstream_id, action, target_id])
     safe = _safe(facts)
@@ -134,8 +129,8 @@ def withdraw_repairs(conn, config, workstream_id, now):
     for row in queries.checkpoints(conn, "decision_candidate", root["workstream_id"]):
         candidate = json.loads(row["metadata_json"])
         if candidate.get("workstream_id") == workstream_id and candidate.get("action") in {
-            "repair_ci",
-            "resolve_conflict",
+            DecisionAction.REPAIR_CI.value,
+            DecisionAction.RESOLVE_CONFLICT.value,
         }:
             store.update_checkpoint(
                 conn,
@@ -149,7 +144,11 @@ def withdraw_repairs(conn, config, workstream_id, now):
 
 def snapshot(conn, root_id, config, now):
     context = queries.context(conn, root_id)
-    if not context or not context["repository"]["enabled"] or context["streams"][0]["lifecycle"] == "canceled":
+    if (
+        not context
+        or not context["repository"]["enabled"]
+        or context["streams"][0]["lifecycle"] == WorkstreamLifecycle.CANCELED
+    ):
         return None
     repo = next((r for r in config.get("repos", ()) if r["full_name"] == context["repository"]["full_name"]), None)
     if not repo or not repo.get("enabled", True):
@@ -210,7 +209,11 @@ def packet(snapshot_value, previous):
         "root_id": snapshot_value["root_id"],
         "input_generation": digest(snapshot_value),
         "evidence": evidence,
-        "allowed_actions": sorted(CHOICES if can_finish(snapshot_value) else CHOICES - {"finish_supervision"}),
+        "allowed_actions": sorted(
+            NONEXECUTING_DECISION_ACTIONS
+            if can_finish(snapshot_value)
+            else NONEXECUTING_DECISION_ACTIONS - {DecisionAction.FINISH_SUPERVISION.value}
+        ),
         "candidates": snapshot_value["candidates"][:16],
         "instructions": files("robert_agent.resources").joinpath("supervision-decision.md").read_text(),
     }
@@ -229,7 +232,8 @@ def packet(snapshot_value, previous):
 def can_finish(snapshot_value):
     context = snapshot_value["context"]
     if snapshot_value["candidates"] or any(
-        t["lifecycle"] not in {"completed", "canceled", "ignored"} for t in context["tasks"]
+        t["lifecycle"] not in {TaskLifecycle.COMPLETED, TaskLifecycle.CANCELED, TaskLifecycle.IGNORED}
+        for t in context["tasks"]
     ):
         return False
     proof = context["completion"]
@@ -273,9 +277,9 @@ def validate(raw, request):
     if result["bundle_id"] != request["bundle_id"] or result["bundle_sha256"] != request["bundle_sha256"]:
         raise ValueError("decision does not match evidence")
     action = result["action"]
-    if not isinstance(action, str) or action not in AUTOMATIC | CHOICES:
+    if not isinstance(action, str) or action not in AUTOMATIC_DECISION_ACTIONS | NONEXECUTING_DECISION_ACTIONS:
         raise ValueError("unknown decision action")
-    if action in AUTOMATIC:
+    if action in AUTOMATIC_DECISION_ACTIONS:
         candidate = next(
             (c for c in request["candidates"] if c["id"] == result["candidate_id"] and c["action"] == action), None
         )
@@ -296,7 +300,7 @@ def validate(raw, request):
             raise ValueError("invalid decision text")
     if not result["reason"].strip() or not result["expected_progress"].strip():
         raise ValueError("decision needs a reason and expected progress")
-    if action in {"ask_user", "notify_user"} and not result["message"].strip():
+    if action in {DecisionAction.ASK_USER.value, DecisionAction.NOTIFY_USER.value} and not result["message"].strip():
         raise ValueError("user interaction needs a message")
     return _safe(result)
 
@@ -309,7 +313,7 @@ def approve(conn, config, request, output, now):
     current = snapshot(conn, root_id, config, now)
     if not enabled(config) or not current or digest(current) != request["input_generation"]:
         return False
-    if output["action"] == "finish_supervision" and not can_finish(current):
+    if output["action"] == DecisionAction.FINISH_SUPERVISION.value and not can_finish(current):
         return False
     previous = read(conn, root_id)
     history = decision_history(previous)
@@ -317,7 +321,7 @@ def approve(conn, config, request, output, now):
     state = {
         "decision": output,
         "decided_at": now,
-        "status": "approved" if action in AUTOMATIC else action,
+        "status": DecisionStatus.APPROVED.value if action in AUTOMATIC_DECISION_ACTIONS else action,
         "input_generation": request["input_generation"],
         "policy_version": current["policy_version"],
         "candidate": next((c for c in request["candidates"] if c["id"] == output["candidate_id"]), None),
@@ -327,7 +331,7 @@ def approve(conn, config, request, output, now):
         "reply": previous.get("reply"),
         "bundle": request,
     }
-    if action in {"ask_user", "notify_user"}:
+    if action in {DecisionAction.ASK_USER.value, DecisionAction.NOTIFY_USER.value}:
         notification_id = request["bundle_id"]
         tasks = current["context"]["tasks"]
         unchanged_notice = (
@@ -343,7 +347,7 @@ def approve(conn, config, request, output, now):
             conn,
             notification_id,
             tasks[0]["task_id"] if tasks else None,
-            "supervision_question" if action == "ask_user" else "supervision_notice",
+            "supervision_question" if action == DecisionAction.ASK_USER.value else "supervision_notice",
             now,
             encode(
                 {
@@ -359,7 +363,12 @@ def approve(conn, config, request, output, now):
         )
         state["notification_id"] = notification_id
         goals = current["context"]["goals"]
-        if action == "ask_user" and goals and not goals[0]["canceled_at"] and not goals[0]["completed_at"]:
+        if (
+            action == DecisionAction.ASK_USER.value
+            and goals
+            and not goals[0]["canceled_at"]
+            and not goals[0]["completed_at"]
+        ):
             state["question_work_item_id"] = goals[0]["work_item_id"]
             state["question_event_id"] = record_supervisor_question(
                 conn,
@@ -394,7 +403,7 @@ def permit(conn, config, *, workstream_id, action, target_id, facts, now):
     selected = state.get("candidate") or {}
     expiry = timestamp(state.get("expires_at"))
     if (
-        state.get("status") != "approved"
+        state.get("status") != DecisionStatus.APPROVED.value
         or not expiry
         or timestamp(now) >= expiry
         or state.get("policy_version") != policy_version(config)
@@ -410,8 +419,8 @@ def executed(conn, config, workstream_id, receipt, now):
         return
     root = queries.root_stream(conn, workstream_id)
     state = read(conn, root["workstream_id"]) if root else {}
-    if state.get("status") == "approved":
-        state = {**state, "status": "verifying", "receipt": _safe(receipt)}
+    if state.get("status") == DecisionStatus.APPROVED.value:
+        state = {**state, "status": DecisionStatus.VERIFYING.value, "receipt": _safe(receipt)}
         write(conn, root["workstream_id"], state, now)
         store.update_checkpoint(
             conn, "decision_record", root["workstream_id"], state["decision"]["bundle_id"], now=now, metadata=state
@@ -420,8 +429,13 @@ def executed(conn, config, workstream_id, receipt, now):
 
 def reply(conn, config, root_id, decision_id, body, now):
     state = read(conn, root_id)
-    if state.get("status") != "ask_user" or (state.get("decision") or {}).get("bundle_id") != decision_id:
+    if state.get("status") != DecisionStatus.ASK_USER or (state.get("decision") or {}).get("bundle_id") != decision_id:
         raise ValueError("supervisor question changed or is no longer waiting")
     if not isinstance(body, str) or not body.strip() or len(body) > 8000:
         raise ValueError("reply must contain 1 to 8000 characters")
-    write(conn, root_id, {**state, "status": "reply_received", "reply": _safe(body), "next_check_at": now}, now)
+    write(
+        conn,
+        root_id,
+        {**state, "status": DecisionStatus.REPLY_RECEIVED.value, "reply": _safe(body), "next_check_at": now},
+        now,
+    )

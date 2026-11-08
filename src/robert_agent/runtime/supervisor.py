@@ -1,5 +1,7 @@
 """runtime supervisor responsibilities."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+
 from robert_agent.persistence import errors as db_errors
 from contextlib import contextmanager
 import fcntl
@@ -41,7 +43,7 @@ def instance_lock(config):
 
 def run(config, *, once=False, stop=None):
     settings = {**supervision_config.DEFAULTS, **config.get("supervision", {})}
-    if settings["mode"] == "off":
+    if settings["mode"] == SupervisionMode.OFF.value:
         return {"ok": True, "status": "disabled"}
     stop = stop or threading.Event()
     with instance_lock(config) as acquired:
@@ -59,7 +61,7 @@ def run(config, *, once=False, stop=None):
             while not stop.is_set():
                 result = supervision_checks.check(config, record=True)
                 if result["ok"]:
-                    if settings["mode"] != "decide":
+                    if settings["mode"] != SupervisionMode.DECIDE.value:
                         result["diagnosis"] = supervision_diagnose.poll(config)
                     result["decision"] = decision_loop.poll(config)
                 if delivery is not None and delivery.poll() is not None:
@@ -149,7 +151,7 @@ def _repair_once(config_path):
     signal.signal(signal.SIGINT, stopped)
     config = validate_config.validate_config(config_path, skip_external=True)
     if config.get("ok"):
-        if (config.get("supervision") or {}).get("mode") != "decide":
+        if (config.get("supervision") or {}).get("mode") != SupervisionMode.DECIDE.value:
             supervision_repair.poll(config)
         supervision_repair_followup.poll(config, runtime=supervision_health.runtime_status(config))
 

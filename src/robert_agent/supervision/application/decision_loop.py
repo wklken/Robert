@@ -1,5 +1,8 @@
 """Independent, bounded decision calls over durable Issue/PR snapshots."""
 
+from robert_agent.foundation.contracts.execution import ModelCommandStatus
+from robert_agent.foundation.contracts.supervision import DecisionStatus, DecisionRunStatus
+
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -56,22 +59,26 @@ class DecisionLoop:
                 lambda process_identity: self._started(config, request, process_identity),
             )
             output = None
-            if outcome["status"] in {"read", "exited"} and outcome.get("output"):
+            if outcome["status"] in {ModelCommandStatus.READ.value, ModelCommandStatus.EXITED.value} and outcome.get(
+                "output"
+            ):
                 try:
                     output = decisions.validate(outcome["output"], request)
                     if "error" in output:
-                        outcome.update(status="provider_rate_limited", provider_error=output["error"])
+                        outcome.update(
+                            status=DecisionRunStatus.PROVIDER_RATE_LIMITED.value, provider_error=output["error"]
+                        )
                         output = None
-                    elif outcome["status"] != "read":
+                    elif outcome["status"] != ModelCommandStatus.READ.value:
                         output = None
                 except (ValueError, RecursionError, UnicodeError):
-                    outcome["status"] = "invalid_output"
-            if outcome["status"] == "read" and output is None:
-                outcome["status"] = "invalid_output"
+                    outcome["status"] = ModelCommandStatus.INVALID_OUTPUT.value
+            if outcome["status"] == ModelCommandStatus.READ.value and output is None:
+                outcome["status"] = ModelCommandStatus.INVALID_OUTPUT.value
             self.result = (request, outcome, output)
         except (OSError, errors.Error, ValueError):
             # An unresolved identity keeps its durable claim for reconciliation.
-            self.result = (request, {"status": "process_attention", "stopped": False}, None)
+            self.result = (request, {"status": ModelCommandStatus.PROCESS_ATTENTION.value, "stopped": False}, None)
 
     def _finish(self, config, now):
         request, outcome, output = self.result
@@ -80,12 +87,16 @@ class DecisionLoop:
             runner = _read_runner(conn)
             claim = runner.get("claim") or {}
             if claim.get("bundle_id") != request["bundle_id"]:
-                return {"status": "claim_changed"}
+                return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
             state = decisions.read(conn, request["root_id"])
             status = outcome["status"]
             if output is not None:
-                status = "decided" if decisions.approve(conn, config, request, output, now) else "stale_evidence"
-            if status != "decided":
+                status = (
+                    DecisionRunStatus.DECIDED.value
+                    if decisions.approve(conn, config, request, output, now)
+                    else DecisionRunStatus.STALE_EVIDENCE.value
+                )
+            if status != DecisionRunStatus.DECIDED.value:
                 decisions.write(
                     conn,
                     request["root_id"],
@@ -96,7 +107,11 @@ class DecisionLoop:
                     },
                     now,
                 )
-            failures = 0 if status in {"decided", "stale_evidence"} else runner.get("failures", 0) + 1
+            failures = (
+                0
+                if status in {DecisionRunStatus.DECIDED.value, DecisionRunStatus.STALE_EVIDENCE.value}
+                else runner.get("failures", 0) + 1
+            )
             cooldown = max(
                 claim["cooldown_seconds"], (outcome.get("provider_error") or {}).get("retry_after_seconds", 0)
             )
@@ -130,19 +145,23 @@ class DecisionLoop:
     def _recover_previous(self, config, claim, now):
         recorded = claim.get("process_identity")
         if not recorded:
-            return {"status": "process_attention"}
+            return {"status": DecisionRunStatus.PROCESS_ATTENTION.value}
         state = identity.inspect_recorded_identity(recorded)
         if state == "alive_same" and timestamp(now) >= timestamp(claim["deadline_at"]):
             stopped = identity.terminate_recorded_identity(recorded, timeout_seconds=0.5)
             if stopped["status"] in {"terminated", "already_dead"}:
                 state = "dead"
         if state != "dead" or identity.live_process_group(recorded["process_group_id"]):
-            return {"status": "previous_process_running" if state == "alive_same" else "process_attention"}
+            return {
+                "status": DecisionRunStatus.PREVIOUS_PROCESS_RUNNING.value
+                if state == "alive_same"
+                else DecisionRunStatus.PROCESS_ATTENTION.value
+            }
         with closing(_connect(config)) as conn, conn:
             transactions.begin(conn, immediate=True)
             runner = _read_runner(conn)
             if (runner.get("claim") or {}).get("bundle_id") != claim["bundle_id"]:
-                return {"status": "claim_changed"}
+                return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
             _write_runner(
                 conn,
                 {
@@ -152,22 +171,22 @@ class DecisionLoop:
                 },
                 now,
             )
-        return {"status": "interrupted"}
+        return {"status": DecisionRunStatus.INTERRUPTED.value}
 
     def poll(self, config, *, now=None):
         now = now or datetime.now(timezone.utc).isoformat()
         try:
             if self.thread:
                 if self.thread.is_alive():
-                    return {"status": "running"}
+                    return {"status": DecisionRunStatus.RUNNING.value}
                 result = self._finish(config, now)
                 self.thread, self.result = None, None
                 return result
             if not decisions.enabled(config):
-                return {"status": "disabled"}
+                return {"status": DecisionRunStatus.DISABLED.value}
             profile = normalize_diagnosis(config["supervision"].get("decision"))
             if not profile:
-                return {"status": "disabled"}
+                return {"status": DecisionRunStatus.DISABLED.value}
             owner_identity = identity.capture_process_identity(os.getpid())
             with closing(_connect(config)) as conn, conn:
                 transactions.begin(conn, immediate=True)
@@ -177,12 +196,12 @@ class DecisionLoop:
                     conn.commit()
                     return self._recover_previous(config, claim, now)
                 if timestamp(runner.get("next_check_at")) and timestamp(now) < timestamp(runner["next_check_at"]):
-                    return {"status": "cooldown"}
+                    return {"status": DecisionRunStatus.COOLDOWN.value}
                 recent = [
                     stamp for stamp in runner.get("calls", []) if timestamp(stamp) > timestamp(now) - timedelta(hours=1)
                 ]
                 if len(recent) >= profile["max_calls_per_hour"]:
-                    return {"status": "call_budget_exhausted"}
+                    return {"status": DecisionRunStatus.CALL_BUDGET_EXHAUSTED.value}
                 repos = [repo["full_name"] for repo in config.get("repos", ()) if repo.get("enabled", True)]
                 targets = queries.targets(
                     conn, repos, config["supervision"].get("batch_size", 100), runner.get("cursor", "")
@@ -193,16 +212,18 @@ class DecisionLoop:
                     root_id = target["workstream_id"]
                     runner["cursor"] = root_id
                     previous = decisions.read(conn, root_id)
-                    if previous.get("status") == "ask_user":
+                    if previous.get("status") == DecisionStatus.ASK_USER:
                         continue
                     try:
                         snapshot = decisions.snapshot(conn, root_id, config, now)
                     except (ValueError, UnicodeError, RecursionError):
-                        decisions.write(conn, root_id, {**previous, "status": "evidence_unavailable"}, now)
+                        decisions.write(
+                            conn, root_id, {**previous, "status": DecisionStatus.EVIDENCE_UNAVAILABLE.value}, now
+                        )
                         continue
                     if not snapshot:
                         continue
-                    if previous.get("status") == "finish_supervision" and decisions.can_finish(snapshot):
+                    if previous.get("status") == DecisionStatus.FINISH_SUPERVISION and decisions.can_finish(snapshot):
                         continue
                     due = timestamp(previous.get("next_check_at"))
                     if due and timestamp(now) < due and previous.get("input_generation") == decisions.digest(snapshot):
@@ -215,7 +236,7 @@ class DecisionLoop:
                             root_id,
                             {
                                 **previous,
-                                "status": "evidence_unavailable",
+                                "status": DecisionStatus.EVIDENCE_UNAVAILABLE.value,
                                 "next_check_at": (
                                     timestamp(now) + timedelta(seconds=profile["cooldown_seconds"])
                                 ).isoformat(),
@@ -239,11 +260,11 @@ class DecisionLoop:
                     self.stop.clear()
                     self.thread = threading.Thread(target=self._run, args=(config, profile, request), daemon=True)
                     self.thread.start()
-                    return {"status": "launched", "workstream_id": root_id}
+                    return {"status": DecisionRunStatus.LAUNCHED.value, "workstream_id": root_id}
                 _write_runner(conn, runner, now)
-                return {"status": "idle"}
+                return {"status": DecisionRunStatus.IDLE.value}
         except (OSError, errors.Error, ValueError, RecursionError, identity.IdentityReadError):
-            return {"status": "unavailable"}
+            return {"status": DecisionRunStatus.UNAVAILABLE.value}
 
     def shutdown(self, config):
         if self.thread:
@@ -251,4 +272,4 @@ class DecisionLoop:
             self.thread.join(timeout=5)
             if not self.thread.is_alive():
                 return self.poll(config)
-        return {"status": "process_attention" if self.thread else "idle"}
+        return {"status": DecisionRunStatus.PROCESS_ATTENTION.value if self.thread else DecisionRunStatus.IDLE.value}

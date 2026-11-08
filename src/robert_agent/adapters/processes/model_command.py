@@ -1,5 +1,7 @@
 """Bounded no-tool model command transport with owned process cleanup."""
 
+from robert_agent.foundation.contracts.execution import ModelCommandStatus
+
 import os
 from pathlib import Path
 import selectors
@@ -23,20 +25,22 @@ def read_output(proc, deadline, stop):
         while not stop.is_set():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return "timed_out", b""
+                return ModelCommandStatus.TIMED_OUT.value, b""
             if eof:
                 if proc.poll() is not None:
-                    return ("exited" if proc.returncode else "read"), bytes(output)
+                    return (
+                        ModelCommandStatus.EXITED.value if proc.returncode else ModelCommandStatus.READ.value
+                    ), bytes(output)
                 stop.wait(min(remaining, 0.05))
             elif selector.select(min(remaining, 0.05)):
                 chunk = os.read(descriptor, min(4096, MAX_STDOUT + 1 - len(output)))
                 if chunk:
                     output.extend(chunk)
                     if len(output) > MAX_STDOUT:
-                        return "invalid_output", b""
+                        return ModelCommandStatus.INVALID_OUTPUT.value, b""
                 else:
                     eof = True
-    return "stopped", b""
+    return ModelCommandStatus.STOPPED.value, b""
 
 
 def stable_identity(proc, stop):
@@ -62,7 +66,7 @@ def stable_identity(proc, stop):
 
 def run(profile, payload, stop, on_started):
     """Return bounded output after the process group exits; persist identity at spawn."""
-    proc, stopped, output, status = None, True, b"", "stopped"
+    proc, stopped, output, status = None, True, b"", ModelCommandStatus.STOPPED.value
     try:
         with tempfile.TemporaryDirectory(prefix="robert-model-", ignore_cleanup_errors=True) as root:
             cwd = Path(root).resolve()
@@ -99,7 +103,7 @@ def run(profile, payload, stop, on_started):
                     if not stopped:
                         stopped = worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
     except (OSError, ValueError, subprocess.SubprocessError):
-        status = "launch_failed" if proc is None else "process_attention"
+        status = ModelCommandStatus.LAUNCH_FAILED.value if proc is None else ModelCommandStatus.PROCESS_ATTENTION.value
     if not stopped:
-        status, output = "process_attention", b""
+        status, output = ModelCommandStatus.PROCESS_ATTENTION.value, b""
     return {"status": status, "output": output, "stopped": stopped}

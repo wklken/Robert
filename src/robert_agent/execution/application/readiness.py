@@ -1,5 +1,8 @@
 """Observe durable readiness without claiming execution or external effects."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+
 from robert_agent.adapters.processes import attempt as attempt_process
 from robert_agent.delivery import results
 from robert_agent.execution import capacity
@@ -8,9 +11,6 @@ from robert_agent.execution.application import evidence
 from robert_agent.foundation import values
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
-from robert_agent.persistence.queries import (
-    execution_pending_facts as db_read_execution_pending_facts,
-)
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import scheduling
 from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
@@ -60,8 +60,8 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             return True
         if received_result:
             continue  # Only process exit/timeout can finish receipt supervision.
-        if (status["status"] == "stale" and attempt_status != "stale") or (
-            status["status"] == "running" and attempt_status == "stale"
+        if (status["status"] == "stale" and attempt_status != AttemptStatus.STALE) or (
+            status["status"] == "running" and attempt_status == AttemptStatus.STALE
         ):
             return True
         if (now_dt - values.parse_time(started_at)).total_seconds() >= config.get("worker_startup_grace_seconds", 300):
@@ -96,7 +96,7 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
         not supervision_actions.blocks_consumer(
             conn,
             task_id=task_id,
-            kind="audit_retry",
+            kind=RecoveryActionKind.AUDIT_RETRY.value,
             target_id=result_id,
             now=now,
             config=config_result,
@@ -106,9 +106,6 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     ):
         return True
     if scheduling.has_queued_native_round(conn, repo_ids) or _published_result_needs_finalization(conn, repo_ids):
-        return True
-    fact = db_records.first(db_read_execution_pending_facts.has_local_work_filtered(conn, repo_ids, now))
-    if fact:
         return True
     if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
         return True

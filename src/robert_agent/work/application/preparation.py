@@ -1,5 +1,9 @@
 """Prepare an attempt with durable inputs, a workspace and a prompt."""
 
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind, TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
@@ -99,8 +103,8 @@ def refresh_prepared_task(conn, data_dir, db_path, repo, event, run_now, dry_run
             current != state
             or not owner
             or owner[0] != state["task_id"]
-            or current["task_lifecycle"] != "queued"
-            or current["attempt_status"] != "prepared"
+            or current["task_lifecycle"] != TaskLifecycle.QUEUED
+            or current["attempt_status"] != AttemptStatus.PREPARED
         ):
             return None
         prompt_path = attempt_context.prompt_path_for_task(conn, data_dir, state["task_id"])
@@ -144,7 +148,7 @@ def _refresh_prepared_task_locked(
         return None
     if not execution_ownership.claim_task(conn, state["task_id"], run_now):
         return None
-    if state["task_lifecycle"] != "queued" or state["attempt_status"] != "prepared":
+    if state["task_lifecycle"] != TaskLifecycle.QUEUED or state["attempt_status"] != AttemptStatus.PREPARED:
         return None
     if event.get("source_type") != "pull_request" or not event.get("has_open_dd_pr"):
         return None
@@ -156,7 +160,7 @@ def _refresh_prepared_task_locked(
         return None
     input_policy = route.review_input_policy(route_result["expected_output"], event)
     if (
-        state["expected_output"] in {"update_existing_pr", "review_comment"}
+        state["expected_output"] in {OutputType.UPDATE_EXISTING_PR, OutputType.REVIEW_COMMENT}
         and source_events.task_review_input_policy(conn, state["task_id"]) == "required"
     ):
         input_policy = "required"
@@ -308,7 +312,7 @@ def create_task_attempt_and_prompt(
         if (
             not selected_round
             or selected_round["task_id"]
-            or selected_round["status"] != "queued"
+            or selected_round["status"] != RoundStatus.QUEUED
             or selected_round["workstream_id"] != stream["workstream_id"]
             or selected_round["request"]["event"]["event_fingerprint"] != event["event_fingerprint"]
         ):
@@ -358,7 +362,7 @@ def create_task_attempt_and_prompt(
         current_stream = db_records.first(
             db_read_workstreams.find_lifecycle_by_workstream_id(conn, stream["workstream_id"])
         )
-        if current_stream and current_stream[0] == "canceled" and new_request_event is None:
+        if current_stream and current_stream[0] == WorkstreamLifecycle.CANCELED.value and new_request_event is None:
             return None
     if remediation_context.get("episode_id") and not execution_ownership.claim_episode(
         conn,
@@ -373,9 +377,9 @@ def create_task_attempt_and_prompt(
     }
     workspace_blocked = bool(worktree_result and not worktree_result.get("ok", True))
     blocked = not skill_status["runnable"] or workspace_blocked
-    lifecycle = "failed" if blocked else "active"
-    task_lifecycle = "failed" if blocked else "queued"
-    attempt_status = "failed" if blocked else "prepared"
+    lifecycle = WorkstreamLifecycle.FAILED.value if blocked else WorkstreamLifecycle.ACTIVE.value
+    task_lifecycle = TaskLifecycle.FAILED.value if blocked else TaskLifecycle.QUEUED.value
+    attempt_status = AttemptStatus.FAILED.value if blocked else AttemptStatus.PREPARED.value
     related_events = list(related_events or [event])
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         related_events = [event]
@@ -397,7 +401,7 @@ def create_task_attempt_and_prompt(
         "task_id": task_id,
         "attempt_id": attempt_id,
         "workstream_id": workstream_id,
-        "task_kind": event.get("task_kind", "human_request"),
+        "task_kind": event.get("task_kind", TaskKind.HUMAN_REQUEST.value),
         "review_input_policy": route.review_input_policy(route_result["expected_output"], event),
     }
     runtime_knowledge_items = attempt_context.load_runtime_knowledge(
@@ -471,7 +475,7 @@ def create_task_attempt_and_prompt(
         ),
         **(
             {"remediation_episode_id": remediation_context.get("episode_id")}
-            if event.get("task_kind") in {"ci_remediation", "merge_conflict_remediation"}
+            if event.get("task_kind") in REMEDIATION_TASK_KINDS
             else {}
         ),
         **(
@@ -495,8 +499,10 @@ def create_task_attempt_and_prompt(
             conn,
             task_id,
             workstream_id,
-            event.get("task_kind", "human_request"),
-            "queued" if blocked and event.get("task_kind", "human_request") == "human_request" else task_lifecycle,
+            event.get("task_kind", TaskKind.HUMAN_REQUEST.value),
+            TaskLifecycle.QUEUED.value
+            if blocked and event.get("task_kind", TaskKind.HUMAN_REQUEST) == TaskKind.HUMAN_REQUEST
+            else task_lifecycle,
             parent_task_id,
             route_result["route_id"],
             route_result["expected_output"],
@@ -515,7 +521,7 @@ def create_task_attempt_and_prompt(
         if retrigger_wakeup_id and parent_task_id:
             parent = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
             previous_round = round_store.session(conn, task_id=parent_task_id)
-            if (previous_round and previous_round["status"] == "superseded") or (
+            if (previous_round and previous_round["status"] == RoundStatus.SUPERSEDED.value) or (
                 parent
                 and values.json_object(parent[0]).get("recovered_execution_attention", {}).get("reason_code")
                 == "result_contract_cutover"
@@ -533,8 +539,8 @@ def create_task_attempt_and_prompt(
                 recovery_key=recovery_key,
             )
         )
-        round_store.update(conn, entry["round_id"], task_id=task_id, status="queued", error=None)
-    if blocked and event.get("task_kind", "human_request") == "human_request":
+        round_store.update(conn, entry["round_id"], task_id=task_id, status=RoundStatus.QUEUED.value, error=None)
+    if blocked and event.get("task_kind", TaskKind.HUMAN_REQUEST) == TaskKind.HUMAN_REQUEST:
         db_write_tasks.update_for_supervise_running_attempts(conn, run_now, task_id)
         execution_ownership.close_terminal_task(conn, task_id, run_now)
     for index, related_event in enumerate(related_events):

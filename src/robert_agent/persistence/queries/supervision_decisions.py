@@ -2,6 +2,8 @@
 
 from sqlalchemy import select, func, or_
 
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
@@ -70,7 +72,7 @@ def targets(conn, repositories, limit=100, after=""):
         .where(
             ws.c.origin_workstream_id.is_(None),
             ws.c.workstream_id > after,
-            ws.c.lifecycle != "canceled",
+            ws.c.lifecycle != WorkstreamLifecycle.CANCELED.value,
             repo.c.enabled == 1,
             repo.c.full_name.in_(repositories),
             or_(
@@ -295,7 +297,12 @@ def context(conn, root_id):
             .exists()
             .label("unfinished_goal"),
             select(tasks.c.task_id)
-            .where(tasks.c.workstream_id.in_(ids), tasks.c.lifecycle.not_in(["completed", "canceled", "ignored"]))
+            .where(
+                tasks.c.workstream_id.in_(ids),
+                tasks.c.lifecycle.not_in(
+                    [TaskLifecycle.COMPLETED.value, TaskLifecycle.CANCELED.value, TaskLifecycle.IGNORED.value]
+                ),
+            )
             .exists()
             .label("unfinished_task"),
         ),

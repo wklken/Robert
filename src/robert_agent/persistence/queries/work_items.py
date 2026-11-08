@@ -1,5 +1,9 @@
 """Shared queries operations for work_items."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, OutputType, PublishStatus
+from robert_agent.foundation.contracts.execution import AttemptStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -177,9 +181,9 @@ def find_for_complete_published_analysis_items(conn, repo_id):
         .where(
             and_(
                 table7.c["result_id"] == table5.c["result_id"],
-                table7.c["action_type"] == sql_constant("comment"),
-                table7.c["audit_status"] == sql_constant("accepted"),
-                table7.c["publish_status"] == sql_constant("published"),
+                table7.c["action_type"] == sql_constant(GitHubActionType.COMMENT.value),
+                table7.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
+                table7.c["publish_status"] == sql_constant(PublishStatus.PUBLISHED.value),
             )
         )
         .correlate_except(table7)
@@ -194,8 +198,8 @@ def find_for_complete_published_analysis_items(conn, repo_id):
                 (table9.c["result_id"] == table5.c["result_id"]),
                 (
                     or_(
-                        (table9.c["audit_status"] != sql_constant("accepted")),
-                        (table9.c["publish_status"] != sql_constant("published")),
+                        (table9.c["audit_status"] != sql_constant(AuditStatus.ACCEPTED.value)),
+                        (table9.c["publish_status"] != sql_constant(PublishStatus.PUBLISHED.value)),
                     )
                 ),
             )
@@ -289,10 +293,10 @@ def find_for_complete_published_analysis_items(conn, repo_id):
                 table1.c["canceled_at"].is_(null()),
                 table2.c["source_type"] == sql_constant("issue"),
                 func.lower(table2.c["state"]) == sql_constant("open"),
-                table3.c["lifecycle"] == sql_constant("completed"),
+                table3.c["lifecycle"] == sql_constant(WorkstreamLifecycle.COMPLETED.value),
                 table3.c["active_task_id"].is_(null()),
-                table4.c["lifecycle"] == sql_constant("completed"),
-                table5.c["output_type"] == sql_constant("comment_analysis"),
+                table4.c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value),
+                table5.c["output_type"] == sql_constant(OutputType.COMMENT_ANALYSIS.value),
                 func.json_extract(table5.c["metadata_json"], sql_constant("$.audit.status"))
                 == sql_constant("accepted"),
                 query8.exists(),
@@ -352,8 +356,8 @@ def find_for_delivery(conn, work_item_id):
         .where(
             and_(
                 table1.c["work_item_id"] == bindparam("p0"),
-                table3.c["output_type"] == sql_constant("new_pr"),
-                table4.c["status"] == sql_constant("completed"),
+                table3.c["output_type"] == sql_constant(OutputType.NEW_PR.value),
+                table4.c["status"] == sql_constant(AttemptStatus.COMPLETED.value),
                 func.json_extract(table3.c["metadata_json"], sql_constant("$.audit.status"))
                 == sql_constant("accepted"),
                 or_(

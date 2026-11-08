@@ -1,5 +1,7 @@
 """Queue prepared attempts and claim launches under the task fence."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
+
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
 from robert_agent.persistence import database as db_database
@@ -68,11 +70,22 @@ def _record_dispatch_result(conn, attempt_id, dispatch_result):
             )
             execution_ownership.mark_attention(conn, row[0], now)
         return
-    status = dispatch_result.get("status", "prepared")
-    if status not in {"prepared", "running", "completed", "failed", "stale", "canceled"}:
-        status = "failed" if not dispatch_result.get("ok", True) else "prepared"
+    status = dispatch_result.get("status", AttemptStatus.PREPARED.value)
+    if status not in {
+        AttemptStatus.PREPARED.value,
+        AttemptStatus.RUNNING.value,
+        AttemptStatus.COMPLETED.value,
+        AttemptStatus.FAILED.value,
+        AttemptStatus.STALE.value,
+        AttemptStatus.CANCELED.value,
+    }:
+        status = AttemptStatus.FAILED.value if not dispatch_result.get("ok", True) else AttemptStatus.PREPARED.value
     current = db_records.first(db_read_attempts.find_status_and_metadata_json_by_attempt_id(conn, attempt_id))
-    if current and current[0] in {"completed", "failed", "canceled"}:
+    if current and current[0] in {
+        AttemptStatus.COMPLETED.value,
+        AttemptStatus.FAILED.value,
+        AttemptStatus.CANCELED.value,
+    }:
         metadata = values.json_object(current[1])
         metadata["dispatch"] = dispatch_result
         if dispatch_result.get("status") == "running":
@@ -84,13 +97,13 @@ def _record_dispatch_result(conn, attempt_id, dispatch_result):
     metadata_obj = values.json_object(current[1] if current else None)
     metadata_obj["dispatch"] = dispatch_result
     metadata = json.dumps(metadata_obj, ensure_ascii=False, sort_keys=True)
-    if status == "running":
+    if status == AttemptStatus.RUNNING.value:
         started_at = values.utc_now()
         metadata_obj["worker_started_at"] = started_at
         metadata = json.dumps(metadata_obj, ensure_ascii=False, sort_keys=True)
         db_write_attempts.record_dispatch_result(conn, status, started_at, started_at, metadata, attempt_id)
         return
-    if status == "failed":
+    if status == AttemptStatus.FAILED.value:
         finished_at = values.utc_now()
         failure_json = json.dumps(dispatch_result, ensure_ascii=False, sort_keys=True)
         db_write_attempts.record_dispatch_result_2(conn, status, finished_at, failure_json, metadata, attempt_id)
@@ -493,7 +506,7 @@ def dispatch_queued_locked(
                     round_store.update(
                         conn,
                         native_review["round_id"],
-                        status="canceled",
+                        status=RoundStatus.CANCELED.value,
                         error="current authorization or native route no longer permits this request",
                     )
                     execution_ownership.close_terminal_task(conn, task_info["task_id"], now)

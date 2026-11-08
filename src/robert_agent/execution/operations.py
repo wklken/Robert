@@ -1,5 +1,14 @@
 """SQLite subject state, process identity and domain recovery operations."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.work import (
+    FactClassification,
+    REMEDIATION_TASK_KINDS,
+    TERMINAL_REMEDIATION_STATUSES,
+    TERMINAL_TASK_LIFECYCLES,
+    TaskKind,
+)
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
 from robert_agent.persistence.queries import tasks as db_read_tasks
@@ -21,8 +30,6 @@ from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.execution import retry as retry_policy
 from robert_agent.persistence import execution_control as execution_store
 
-_TERMINAL_TASK_LIFECYCLES = {"completed", "failed", "canceled", "ignored"}
-_TERMINAL_EPISODE_STATUSES = {"resolved", "exhausted", "superseded", "canceled"}
 _SENSITIVE_METADATA_KEYS = {
     "api_key",
     "authorization",
@@ -87,7 +94,7 @@ def _existing_active_binding(conn, subject_type, subject_id):
     binding = execution_store.get_binding(conn, subject_type, subject_id)
     if not binding:
         return None
-    if binding["binding_status"] == "active":
+    if binding["binding_status"] == BindingStatus.ACTIVE:
         return binding
     return False
 
@@ -109,7 +116,7 @@ def _claim(conn, subject_type, subject_id, workflow_kind, eligible, now):
     except db_errors.IntegrityError:
         # A concurrent claim wins; never reset existing execution control.
         existing = execution_store.get_binding(conn, subject_type, subject_id)
-        if existing and existing["binding_status"] == "active":
+        if existing and existing["binding_status"] == BindingStatus.ACTIVE:
             return existing
         return None
 
@@ -128,14 +135,14 @@ def claim_subject(conn, subject_type, subject_id, *, now):
         if task is None:
             raise ValueError("workflow task subject does not exist")
         task_kind, lifecycle = task
-        if task_kind != "human_request":
+        if task_kind != TaskKind.HUMAN_REQUEST:
             raise ValueError("workflow task subject is not an eligible human task")
         return _claim(
             conn,
             "task",
             subject_id,
-            "human_request",
-            lifecycle not in _TERMINAL_TASK_LIFECYCLES,
+            TaskKind.HUMAN_REQUEST.value,
+            lifecycle not in TERMINAL_TASK_LIFECYCLES,
             now,
         )
 
@@ -146,7 +153,7 @@ def claim_subject(conn, subject_type, subject_id, *, now):
         "remediation_episode",
         subject_id,
         "pr_remediation",
-        episode_status not in _TERMINAL_EPISODE_STATUSES,
+        episode_status not in TERMINAL_REMEDIATION_STATUSES,
         now,
     )
 
@@ -217,7 +224,7 @@ def terminate_worker(db_path, attempt_id):
             subject_candidates.append(("task", attempt["task_id"]))
             for subject_type, subject_id in subject_candidates:
                 binding = execution_store.get_binding(conn, subject_type, subject_id)
-                if binding and binding["binding_status"] == "active":
+                if binding and binding["binding_status"] == BindingStatus.ACTIVE:
                     execution_store.mark_binding_attention(conn, subject_type, subject_id, now)
                     break
 
@@ -266,7 +273,7 @@ def _recovery_identity_status(evidence):
 def _mark_recovery_attention(conn, binding, now):
     if not binding:
         return
-    if binding["binding_status"] in {"active", "attention"}:
+    if binding["binding_status"] in {BindingStatus.ACTIVE, BindingStatus.ATTENTION}:
         execution_store.mark_binding_attention(
             conn,
             binding["subject_type"],
@@ -355,7 +362,7 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     consistent_attempt = (
         bool(
             attempt
-            and attempt["status"] in {"running", "stale", "failed"}
+            and attempt["status"] in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.FAILED}
             and _attempt_matches_subject(
                 conn,
                 subject_type,
@@ -368,7 +375,7 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
         if isinstance(evidence, dict)
         else False
     )
-    owner_ok = bool(binding and binding["binding_status"] == "active")
+    owner_ok = bool(binding and binding["binding_status"] == BindingStatus.ACTIVE)
     if not owner_ok or not consistent_attempt:
         _mark_recovery_attention(conn, binding, now)
         return "attention"
@@ -396,7 +403,7 @@ def publication_subject_for_action(conn, task_id, action_scope):
     scope = action_scope if isinstance(action_scope, dict) else {}
     task_kind = scope.get("task_kind")
     episode_id = scope.get("episode_id")
-    if task_kind in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
+    if task_kind in REMEDIATION_TASK_KINDS and episode_id:
         subject_type, subject_id = "remediation_episode", str(episode_id)
     else:
         subject_type, subject_id = "task", str(task_id or "")
@@ -414,7 +421,7 @@ def mark_publication_attention(conn, task_id, action_scope, reason_code, *, now)
     """
 
     subject_type, subject_id, binding = publication_subject_for_action(conn, task_id, action_scope)
-    if binding and binding.get("binding_status") == "active":
+    if binding and binding.get("binding_status") == BindingStatus.ACTIVE:
         execution_store.mark_binding_attention(conn, subject_type, subject_id, now)
     return subject_type, subject_id, binding
 
@@ -423,7 +430,7 @@ def publication_scope_is_current(conn, task_id, action_scope):
     """Return whether an accepted publication scope may safely retry absence."""
 
     subject_type, subject_id, binding = publication_subject_for_action(conn, task_id, action_scope)
-    if binding and binding.get("binding_status") != "active":
+    if binding and binding.get("binding_status") != BindingStatus.ACTIVE:
         return False
     # Legacy rows may predate workflow bindings.  Their durable publication
     # intent still protects the action; without a binding there is no owner to
@@ -433,9 +440,9 @@ def publication_scope_is_current(conn, task_id, action_scope):
         return True
     if subject_type == "remediation_episode":
         row = db_records.first(db_read_pr_remediation_episodes.find_status_by_episode_id(conn, subject_id))
-        return bool(row and row[0] not in _TERMINAL_EPISODE_STATUSES)
+        return bool(row and row[0] not in TERMINAL_REMEDIATION_STATUSES)
     row = db_records.first(db_read_tasks.find_lifecycle_by_task_id(conn, subject_id))
-    return bool(row and row[0] not in _TERMINAL_TASK_LIFECYCLES)
+    return bool(row and row[0] not in TERMINAL_TASK_LIFECYCLES)
 
 
 def bound_attempt_for_subject(conn, subject_type, subject_id):
@@ -489,7 +496,6 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
             "evidence": latest if isinstance(latest, dict) else evidence,
             "duplicate": True,
             "binding_status": binding["binding_status"],
-            "signal_id": None,
             "attempt_id": bound_attempt_for_subject(conn, subject_type, subject_id),
         }
     if isinstance(latest, dict) and latest.get("fact_id") == evidence["fact_id"]:
@@ -501,10 +507,9 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
             "evidence": evidence,
             "duplicate": True,
             "binding_status": binding["binding_status"],
-            "signal_id": None,
             "attempt_id": bound_attempt_for_subject(conn, subject_type, subject_id),
         }
-    if binding["binding_status"] != "active":
+    if binding["binding_status"] != BindingStatus.ACTIVE:
         raise ValueError("workflow subject binding is not active")
 
     db_write_execution_fact_receipts.insert_for_apply_classified_fact(
@@ -515,11 +520,9 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
         conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), now, subject_type, subject_id
     )
 
-    signal_id = None
-
-    if classification == workflow_events.TERMINAL:
+    if classification == FactClassification.TERMINAL.value:
         execution_store.close_binding(conn, subject_type, subject_id, now)
-    elif classification == workflow_events.INVALIDATING:
+    elif classification == FactClassification.INVALIDATING.value:
         execution_store.mark_binding_attention(conn, subject_type, subject_id, now)
 
     return {
@@ -528,12 +531,11 @@ def apply_classified_fact(conn, subject_type, subject_id, fact, *, now):
         "evidence": evidence,
         "duplicate": False,
         "binding_status": (
-            "terminal"
-            if classification == workflow_events.TERMINAL
-            else "attention"
-            if classification == workflow_events.INVALIDATING
-            else "active"
+            BindingStatus.TERMINAL.value
+            if classification == FactClassification.TERMINAL.value
+            else BindingStatus.ATTENTION.value
+            if classification == FactClassification.INVALIDATING.value
+            else BindingStatus.ACTIVE.value
         ),
-        "signal_id": signal_id,
         "attempt_id": bound_attempt_for_subject(conn, subject_type, subject_id),
     }

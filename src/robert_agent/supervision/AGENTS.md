@@ -23,3 +23,8 @@ These rules apply to this directory and its descendants. Follow the
 - Persist exact questions and replies. An answer wakes decision making without
   creating an attempt or resetting a budget. A model completion claim cannot
   close a goal without current domain evidence.
+
+- Shared modes, decision actions and decision/run statuses belong to
+  `foundation/contracts/supervision.py`; model command outcomes belong to
+  `foundation/contracts/execution.py`. Keep these state machines distinct and
+  preserve their string values at storage and protocol boundaries.

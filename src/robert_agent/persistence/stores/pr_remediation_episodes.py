@@ -1,5 +1,7 @@
 """Shared stores operations for pr_remediation_episodes."""
 
+from robert_agent.foundation.contracts.work import RemediationStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, bindparam, and_, not_, null, case, func
@@ -13,7 +15,7 @@ from robert_agent.persistence import statements
 def update_for_cancel_execution(conn, now, subject_id):
     stmt = (
         update(tables["pr_remediation_episodes"])
-        .values({"status": sql_constant("canceled"), "updated_at": bindparam("p0")})
+        .values({"status": sql_constant(RemediationStatus.CANCELED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
                 (tables["pr_remediation_episodes"].c["episode_id"] == bindparam("p1")),
@@ -22,10 +24,10 @@ def update_for_cancel_execution(conn, now, subject_id):
                     .c["status"]
                     .in_(
                         [
-                            sql_constant("resolved"),
-                            sql_constant("exhausted"),
-                            sql_constant("superseded"),
-                            sql_constant("canceled"),
+                            sql_constant(RemediationStatus.RESOLVED.value),
+                            sql_constant(RemediationStatus.EXHAUSTED.value),
+                            sql_constant(RemediationStatus.SUPERSEDED.value),
+                            sql_constant(RemediationStatus.CANCELED.value),
                         ]
                     )
                 ),
@@ -88,7 +90,7 @@ def insert_for_create_episode(
             "subject_key": bindparam("p3"),
             "observed_head_sha": bindparam("p4"),
             "observed_base_sha": bindparam("p5"),
-            "status": sql_constant("open"),
+            "status": sql_constant(RemediationStatus.OPEN.value),
             "failure_signature": bindparam("p6"),
             "first_seen_at": bindparam("p7"),
             "updated_at": bindparam("p8"),
@@ -101,7 +103,7 @@ def insert_for_create_episode(
             "updated_at": stmt.excluded["updated_at"],
             "failure_signature": case(
                 (
-                    (tables["pr_remediation_episodes"].c["status"] == sql_constant("open")),
+                    (tables["pr_remediation_episodes"].c["status"] == sql_constant(RemediationStatus.OPEN.value)),
                     func.coalesce(
                         stmt.excluded["failure_signature"],
                         tables["pr_remediation_episodes"].c["failure_signature"],
@@ -111,7 +113,7 @@ def insert_for_create_episode(
             ),
             "metadata_json": case(
                 (
-                    (tables["pr_remediation_episodes"].c["status"] == sql_constant("open")),
+                    (tables["pr_remediation_episodes"].c["status"] == sql_constant(RemediationStatus.OPEN.value)),
                     stmt.excluded["metadata_json"],
                 ),
                 else_=tables["pr_remediation_episodes"].c["metadata_json"],
@@ -141,7 +143,7 @@ def record_task_started(conn, task_id, now, episode_id):
         update(tables["pr_remediation_episodes"])
         .values(
             {
-                "status": sql_constant("remediating"),
+                "status": sql_constant(RemediationStatus.REMEDIATING.value),
                 "attempt_count": (tables["pr_remediation_episodes"].c["attempt_count"] + sql_constant(1)),
                 "last_task_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
@@ -151,7 +153,7 @@ def record_task_started(conn, task_id, now, episode_id):
         .where(
             and_(
                 (tables["pr_remediation_episodes"].c["episode_id"] == bindparam("p2")),
-                (tables["pr_remediation_episodes"].c["status"] == sql_constant("open")),
+                (tables["pr_remediation_episodes"].c["status"] == sql_constant(RemediationStatus.OPEN.value)),
             )
         )
     )

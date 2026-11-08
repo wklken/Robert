@@ -1,6 +1,9 @@
 """Observe worker attempts and apply bounded recovery decisions."""
 
+from robert_agent.foundation.contracts.supervision import DecisionAction
+
 from robert_agent.supervision import decisions as supervision_decisions
+from robert_agent.foundation.contracts.execution import AttemptStatus, MODEL_DECISION_WAIT_STATUS
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
@@ -180,7 +183,9 @@ def supervise_running_attempts(
                 hard_timeout_seconds=worker_timeout_seconds,
             )
         process_status = {"status": "not_checked"}
-        if attempt_status in {"running", "stale", "completed"} and status["status"] in {
+        if attempt_status in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.COMPLETED} and status[
+            "status"
+        ] in {
             "running",
             "stale",
             "failed_timeout",
@@ -312,7 +317,7 @@ def supervise_running_attempts(
                         conn,
                         config_result,
                         workstream_id=workstream_id,
-                        action="retry_worker",
+                        action=DecisionAction.RETRY_WORKER.value,
                         target_id=attempt_id,
                         facts={
                             "task_id": task_id,
@@ -326,7 +331,7 @@ def supervise_running_attempts(
                         if supervision_decisions.enabled(config_result):
                             # Proven stop releases capacity independently of retry authority.
                             metadata["process_stopped_at"] = run_now
-                            metadata["supervise"] = {**status, "status": "waiting_for_model_decision"}
+                            metadata["supervise"] = {**status, "status": MODEL_DECISION_WAIT_STATUS}
                             db_write_attempts.update_for_supervise_running_attempts_2(
                                 conn, run_now, json.dumps(metadata["supervise"]), json.dumps(metadata), attempt_id
                             )
@@ -484,7 +489,7 @@ def supervise_running_attempts(
             }
         metadata["supervise"] = status
         if status["status"] == "running":
-            if attempt_status == "stale":
+            if attempt_status == AttemptStatus.STALE:
                 supervised += 1
                 db_write_attempts.update_for_supervise_running_attempts_3(
                     conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id
@@ -495,7 +500,7 @@ def supervise_running_attempts(
             db_write_attempts.update_for_supervise_running_attempts(
                 conn, json.dumps(metadata, ensure_ascii=False, sort_keys=True), attempt_id
             )
-            if attempt_status != "stale":
+            if attempt_status != AttemptStatus.STALE:
                 execution_notifications.insert(
                     conn,
                     "worker_stale",
@@ -580,7 +585,7 @@ def recover_failed_timeout_attempts(
         heartbeat_at,
     ) in rows:
         failure = values.json_object(failure_json)
-        model_wait = failure.get("status") == "waiting_for_model_decision"
+        model_wait = failure.get("status") == MODEL_DECISION_WAIT_STATUS
         if failure.get("status") != "failed_timeout" and not model_wait:
             continue
         if not execution_ownership.claim_task(conn, task_id, run_now):
@@ -655,7 +660,7 @@ def recover_failed_timeout_attempts(
             conn,
             config_result,
             workstream_id=workstream_id,
-            action="retry_worker",
+            action=DecisionAction.RETRY_WORKER.value,
             target_id=attempt_id,
             facts={
                 "task_id": task_id,

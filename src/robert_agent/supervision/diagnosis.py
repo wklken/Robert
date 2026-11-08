@@ -1,5 +1,8 @@
 """Run a bounded, advisory diagnosis outside the business worker queue."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+from robert_agent.foundation.contracts.execution import ModelCommandStatus
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import origins as db_read_origins
 
@@ -313,12 +316,12 @@ def _validate_output(raw, claim):
 
 def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
     started = time.monotonic()
-    status, diagnosis, proc, stopped = "stopped", None, None, True
+    status, diagnosis, proc, stopped = ModelCommandStatus.STOPPED.value, None, None, True
     provider_error = None
     try:
         directory = tempfile.TemporaryDirectory(prefix="robert-diagnosis-", ignore_cleanup_errors=True)
     except OSError:
-        return _PendingCompletion(db_path, claim, now, "launch_failed", None, True)
+        return _PendingCompletion(db_path, claim, now, ModelCommandStatus.LAUNCH_FAILED.value, None, True)
     with directory as root:
         try:
             cwd = Path(root).resolve()
@@ -335,7 +338,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                 },
             )
         except (OSError, ValueError):
-            return _PendingCompletion(db_path, claim, now, "launch_failed", None, True)
+            return _PendingCompletion(db_path, claim, now, ModelCommandStatus.LAUNCH_FAILED.value, None, True)
         environment = {name: os.environ[name] for name in launch.environment_allowlist if name in os.environ}
         environment.update(HOME=str(cwd), TMPDIR=str(cwd), PATH=os.defpath)
         if not stop.is_set():
@@ -357,19 +360,23 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                     if not _set_claim(db_path, claim, now):
                         raise ValueError("diagnosis claim changed during spawn")
                 status, output = model_command.read_output(proc, started + launch.timeout_seconds, stop)
-                if status in {"read", "exited"} and output:
+                if status in {ModelCommandStatus.READ.value, ModelCommandStatus.EXITED.value} and output:
                     try:
                         validated = _validate_output(output, claim)
                         if "error" in validated:
                             status, provider_error = "provider_rate_limited", validated["error"]
-                        elif status == "read":
+                        elif status == ModelCommandStatus.READ.value:
                             status, diagnosis = "succeeded", validated
                     except (ValueError, RecursionError):
-                        status = "invalid_output"
-                elif status == "read":
-                    status = "invalid_output"
+                        status = ModelCommandStatus.INVALID_OUTPUT.value
+                elif status == ModelCommandStatus.READ.value:
+                    status = ModelCommandStatus.INVALID_OUTPUT.value
             except (OSError, db_errors.Error, ValueError, worker_identity.IdentityReadError):
-                status = "launch_failed" if proc is None else "process_attention"
+                status = (
+                    ModelCommandStatus.LAUNCH_FAILED.value
+                    if proc is None
+                    else ModelCommandStatus.PROCESS_ATTENTION.value
+                )
             finally:
                 if proc is not None:
                     proc.stdout.close()
@@ -380,7 +387,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                     if not stopped:
                         stopped = worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
             if not stopped:
-                status, diagnosis, provider_error = "process_attention", None, None
+                status, diagnosis, provider_error = ModelCommandStatus.PROCESS_ATTENTION.value, None, None
     finished = now + timedelta(seconds=time.monotonic() - observed_monotonic)
     return _PendingCompletion(db_path, claim, finished, status, diagnosis, stopped, provider_error=provider_error)
 
@@ -521,7 +528,7 @@ def poll(config, *, now=None):
     """Start or inspect one diagnosis without waiting on model or process I/O."""
     settings = config.get("supervision", {})
     profile = normalize_diagnosis(settings.get("diagnosis"))
-    if settings.get("mode") == "off" or profile is None:
+    if settings.get("mode") == SupervisionMode.OFF.value or profile is None:
         return _status("disabled")
     observed_monotonic = time.monotonic()
     current = supervision_rules.timestamp(now) if now is not None else datetime.now(timezone.utc)

@@ -1,5 +1,13 @@
 """Shared queries operations for wakeups."""
 
+from robert_agent.foundation.contracts.work import (
+    PUBLICATION_RETRY_WAKEUP_KIND,
+    TaskKind,
+    TaskLifecycle,
+    WakeupStatus,
+    WorkstreamLifecycle,
+)
+
 from functools import cache
 
 from robert_agent.persistence.expressions import sql_constant
@@ -47,13 +55,13 @@ def find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id):
                 table1.c["wakeup_id"] == bindparam("p0"),
                 table1.c["task_id"] == bindparam("p1"),
                 table1.c["repo_id"] == table3.c["repo_id"],
-                table1.c["status"] == sql_constant("pending"),
+                table1.c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 table1.c["reason"] == sql_constant("manual_operator_request"),
                 func.json_extract(table1.c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_retrigger"),
-                table2.c["task_kind"] == sql_constant("human_request"),
-                table2.c["lifecycle"] == sql_constant("failed"),
-                table3.c["lifecycle"] == sql_constant("failed"),
+                table2.c["task_kind"] == sql_constant(TaskKind.HUMAN_REQUEST.value),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.FAILED.value),
+                table3.c["lifecycle"] == sql_constant(WorkstreamLifecycle.FAILED.value),
                 table3.c["active_task_id"].is_(null()),
                 func.lower(table4.c["state"]) == sql_constant("open"),
             )
@@ -71,7 +79,7 @@ def find_for_project_item(conn, task_id):
         .where(
             and_(
                 tables["wakeups"].c["task_id"] == bindparam("p0"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_retrigger"),
             )
@@ -90,7 +98,7 @@ def find_for_get_work_item(conn, task_id):
             and_(
                 tables["wakeups"].c["task_id"] == bindparam("p0"),
                 tables["wakeups"].c["reason"] == sql_constant("manual_operator_request"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_retrigger"),
             )
@@ -111,7 +119,7 @@ def find_for_retrigger_failed_github_task(conn, repo_id, task_id):
                 tables["wakeups"].c["repo_id"] == bindparam("p0"),
                 tables["wakeups"].c["reason"] == sql_constant("manual_operator_request"),
                 tables["wakeups"].c["task_id"] == bindparam("p1"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_retrigger"),
             )
@@ -140,7 +148,7 @@ def record_retrigger_preparation_failure(conn, wakeup_id):
         .where(
             and_(
                 (tables["wakeups"].c["wakeup_id"] == bindparam("p0")),
-                (tables["wakeups"].c["status"] == sql_constant("pending")),
+                (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
         .correlate_except(tables["wakeups"])
@@ -172,7 +180,7 @@ def find_for_prepare_github_retrigger_tasks(conn, repo_id, run_now, run_now_3):
             and_(
                 table1.c["repo_id"] == bindparam("p0"),
                 table1.c["reason"] == sql_constant("manual_operator_request"),
-                table1.c["status"] == sql_constant("pending"),
+                table1.c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.julianday(table1.c["not_before_at"]) <= func.julianday(bindparam("p1")),
                 or_(
                     table1.c["expires_at"].is_(null()),
@@ -180,8 +188,8 @@ def find_for_prepare_github_retrigger_tasks(conn, repo_id, run_now, run_now_3):
                 ),
                 func.json_extract(table1.c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_retrigger"),
-                table2.c["lifecycle"] == sql_constant("failed"),
-                table3.c["lifecycle"] == sql_constant("failed"),
+                table2.c["lifecycle"] == sql_constant(TaskLifecycle.FAILED.value),
+                table3.c["lifecycle"] == sql_constant(WorkstreamLifecycle.FAILED.value),
                 table3.c["active_task_id"].is_(null()),
             )
         )
@@ -201,7 +209,7 @@ def find_for_scan(conn):
         .select_from(table1.join(table2, (table2.c["repo_id"] == table1.c["repo_id"]), isouter=False))
         .where(
             and_(
-                table1.c["status"] == sql_constant("pending"),
+                table1.c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.json_extract(table1.c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_context_refresh"),
                 func.julianday(table1.c["not_before_at"]) <= func.julianday(sql_constant("now")),
@@ -225,9 +233,9 @@ def _find_for_lifecycle_facts_statement():
         .where(
             and_(
                 tables["wakeups"].c["work_item_id"] == bindparam("p0"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind"))
-                == sql_constant("publication_retry"),
+                == sql_constant(PUBLICATION_RETRY_WAKEUP_KIND),
             )
         )
         .limit(sql_constant(1))
@@ -329,7 +337,7 @@ def find_for_summarize_wakeups_3(conn, now, now_2):
         .select_from(tables["wakeups"])
         .where(
             and_(
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 tables["wakeups"].c["not_before_at"] <= bindparam("p0"),
                 or_(
                     tables["wakeups"].c["expires_at"].is_(null()),
@@ -350,7 +358,7 @@ def has_due_context_refresh_filtered(conn, items, value_1, value_2):
         .where(
             and_(
                 tables["wakeups"].c["repo_id"].in_(bindparam("items", expanding=True)),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_context_refresh"),
                 func.julianday(tables["wakeups"].c["not_before_at"]) <= func.julianday(bindparam("p0")),

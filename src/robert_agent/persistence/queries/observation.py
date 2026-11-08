@@ -1,3 +1,6 @@
+from robert_agent.foundation.contracts.supervision import IncidentStatus
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 from sqlalchemy import (
     select,
@@ -90,17 +93,17 @@ def task_page(conn, cursor, limit, since, repos=(), has_incidents=True):
     eligible = or_(
         table1.c.lifecycle.in_(
             (
-                sql_constant("detected"),
-                sql_constant("authorized"),
-                sql_constant("classified"),
-                sql_constant("queued"),
-                sql_constant("running"),
-                sql_constant("waiting_for_user"),
+                sql_constant(TaskLifecycle.DETECTED.value),
+                sql_constant(TaskLifecycle.AUTHORIZED.value),
+                sql_constant(TaskLifecycle.CLASSIFIED.value),
+                sql_constant(TaskLifecycle.QUEUED.value),
+                sql_constant(TaskLifecycle.RUNNING.value),
+                sql_constant(TaskLifecycle.WAITING_FOR_USER.value),
             )
         ),
         and_(
             table2.c.active_task_id == table1.c.task_id,
-            table2.c.lifecycle == sql_constant("active"),
+            table2.c.lifecycle == sql_constant(WorkstreamLifecycle.ACTIVE.value),
         ),
         func.julianday(table1.c.updated_at) >= func.julianday(since),
     )
@@ -112,7 +115,9 @@ def task_page(conn, cursor, limit, since, repos=(), has_incidents=True):
             .where(
                 i.c.scope_type == sql_constant("task"),
                 i.c.scope_id == table1.c.task_id,
-                i.c.status.not_in((sql_constant("resolved"), sql_constant("dismissed"))),
+                i.c.status.not_in(
+                    (sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value))
+                ),
             )
             .exists(),
         )
@@ -134,7 +139,11 @@ def receipt_page(conn, scope_type, scope_id, since, limit, repos=()):
             and_(
                 table5.c["scope_type"] == table1.c["scope_type"],
                 table5.c["scope_id"] == table1.c["scope_id"],
-                not_(table5.c["status"].in_([sql_constant("resolved"), sql_constant("dismissed")])),
+                not_(
+                    table5.c["status"].in_(
+                        [sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value)]
+                    )
+                ),
             )
         )
         .correlate_except(table5)

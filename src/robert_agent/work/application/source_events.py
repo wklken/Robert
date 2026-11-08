@@ -1,5 +1,7 @@
 """Persist source events and read their associated task state."""
 
+from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_events as db_read_github_events
 from robert_agent.persistence.queries import task_events as db_read_task_events
@@ -128,12 +130,17 @@ def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
         )
     )
     remote_canceled = bool(
-        parent and parent[0] == "canceled" and values.json_object(parent[3]).get("remote_reconciliation")
+        parent
+        and parent[0] == TaskLifecycle.CANCELED.value
+        and values.json_object(parent[3]).get("remote_reconciliation")
     )
     if (
         not parent
-        or (parent[0] not in {"completed", "failed"} and not remote_canceled)
-        or (parent[1] not in {"completed", "failed"} and not remote_canceled)
+        or (parent[0] not in {TaskLifecycle.COMPLETED.value, TaskLifecycle.FAILED.value} and not remote_canceled)
+        or (
+            parent[1] not in {WorkstreamLifecycle.COMPLETED.value, WorkstreamLifecycle.FAILED.value}
+            and not remote_canceled
+        )
         or parent[2]
         or work_queries.latest_task_id(conn, event["workstream_id"]) != parent_task_id
     ):

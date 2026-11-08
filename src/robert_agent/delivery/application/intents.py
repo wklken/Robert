@@ -1,5 +1,7 @@
 """application delivery intents responsibilities."""
 
+from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublicationStatus, PublishStatus
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import tasks as db_read_tasks
 
@@ -22,7 +24,7 @@ from robert_agent.delivery import values as publication_values
 def derive_push_source_sha(action, action_scope, run_command):
     """Read the exact local source SHA for a non-remediation push."""
 
-    if action.get("action_type") != "push_existing_pr":
+    if action.get("action_type") != GitHubActionType.PUSH_EXISTING_PR:
         return action_scope, None
     scope = dict(action_scope or {})
     if scope.get("result_head_sha"):
@@ -60,7 +62,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
         action = dict(action_row)
         if not db_records.first(db_read_tasks.find_for_prepare_publication_intent(conn, action["task_id"])):
             return {"state": "missing", "action": action, "intent": None, "scope": None}
-        if action["publish_status"] != "not_published" or action["audit_status"] != "accepted":
+        if action["publish_status"] != PublishStatus.NOT_PUBLISHED or action["audit_status"] != AuditStatus.ACCEPTED:
             return {"state": "missing", "action": action, "intent": None, "scope": None}
         scope = publication_scope.trusted_action_scope(conn, action)
         intent = intent_facts.load_intent(conn, action_id)
@@ -73,7 +75,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
     head_owner = None
     if intent is None and (scope is None or not isinstance(scope, dict)):
         return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
-    if intent is not None and intent["status"] == "prepared" and not isinstance(scope, dict):
+    if intent is not None and intent["status"] == PublicationStatus.PREPARED and not isinstance(scope, dict):
         return {"state": "scope_missing", "action": action, "intent": intent, "scope": scope}
     if intent is not None:
         persisted_evidence = publication_values.decode_json(intent.get("remote_evidence_json"))
@@ -82,10 +84,10 @@ def prepare_publication_intent(db_path, action_id, run_command):
     # Source SHA is read before deriving the fingerprint and before the
     # prepared/executing commits.  On retries only the immutable value from
     # the existing intent is trusted; mutable local HEAD is never re-read.
-    if intent is None or intent["status"] == "prepared":
+    if intent is None or intent["status"] == PublicationStatus.PREPARED:
         if isinstance(scope, dict):
             scope, source_sha = derive_push_source_sha(action, scope, run_command)
-            if action.get("action_type") == "open_pr":
+            if action.get("action_type") == GitHubActionType.OPEN_PR:
                 with closing(db_database.connect(db_path)) as conn:
                     head_owner = publication_effects.trusted_head_owner_for_intent(
                         conn,
@@ -96,13 +98,13 @@ def prepare_publication_intent(db_path, action_id, run_command):
                 if head_owner:
                     scope = {**scope, "head_owner": head_owner}
     if (
-        action.get("action_type") == "push_existing_pr"
+        action.get("action_type") == GitHubActionType.PUSH_EXISTING_PR
         and isinstance(scope, dict)
         and not scope.get("result_head_sha")
         and not source_sha
     ):
         return {"state": "source_sha_missing", "action": action, "intent": intent, "scope": scope}
-    if action.get("action_type") == "open_pr" and not head_owner:
+    if action.get("action_type") == GitHubActionType.OPEN_PR and not head_owner:
         return {
             "state": "head_owner_missing",
             "action": action,
@@ -133,12 +135,12 @@ def prepare_publication_intent(db_path, action_id, run_command):
             )
     # A terminal published intent is replay success.  Backfill the action if
     # a process crashed after intent completion but before the action update.
-    if intent["status"] == "published":
+    if intent["status"] == PublicationStatus.PUBLISHED:
         return {"state": "published", "action": action, "intent": intent, "scope": scope}
-    if intent["status"] == "attention":
+    if intent["status"] == PublicationStatus.ATTENTION:
         return {"state": "attention", "action": action, "intent": intent, "scope": scope}
 
-    if intent["status"] == "executing":
+    if intent["status"] == PublicationStatus.EXECUTING:
         return {
             "state": "reconcile",
             "action": action,
@@ -155,18 +157,18 @@ def prepare_publication_intent(db_path, action_id, run_command):
         evidence["head_owner"] = head_owner
     with closing(db_database.connect(db_path)) as conn, conn:
         latest = intent_facts.load_intent(conn, action_id)
-        if latest["status"] == "prepared":
+        if latest["status"] == PublicationStatus.PREPARED.value:
             latest = dict(
                 execution_store.transition_publication_intent(
                     conn,
                     latest["publication_id"],
-                    "executing",
+                    PublicationStatus.EXECUTING.value,
                     now,
                     remote_evidence=evidence or None,
                 )
             )
-        elif latest["status"] in {"failed", "confirmed_absent"}:
-            if latest["status"] == "confirmed_absent":
+        elif latest["status"] in {PublicationStatus.FAILED.value, PublicationStatus.CONFIRMED_ABSENT.value}:
+            if latest["status"] == PublicationStatus.CONFIRMED_ABSENT.value:
                 evidence = {
                     **publication_values.decode_json(latest.get("remote_evidence_json")),
                     **evidence,
@@ -177,7 +179,7 @@ def prepare_publication_intent(db_path, action_id, run_command):
                 execution_store.transition_publication_intent(
                     conn,
                     latest["publication_id"],
-                    "executing",
+                    PublicationStatus.EXECUTING.value,
                     now,
                     remote_evidence=evidence or None,
                 )

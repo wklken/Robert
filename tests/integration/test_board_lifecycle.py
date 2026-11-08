@@ -1,6 +1,5 @@
 """Contracts for the operator's lifecycle board and its advertised actions."""
 
-from robert_agent.persistence.schema import execution_control as execution_schema
 from contextlib import closing
 import json
 import sqlite3
@@ -661,26 +660,21 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertEqual(detail["column"], "waiting")
         self.assertEqual(detail["valid_commands"], ["cancel"])
 
-    def test_old_database_readonly_inspection_and_mixed_controls_do_not_write(self):
+    def test_current_controls_readonly_inspection_does_not_write(self):
         from pathlib import Path
         from robert_agent.persistence import execution_control as execution_store
         from robert_agent.readmodels import workbench
 
-        item = self.create("Historical task")
+        item = self.create("Current task")
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute("DROP TABLE execution_subjects")
+            conn.execute(
+                "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at) VALUES ('task','current','human_request','attention','now','now')"
+            )
         before = Path(self.db).read_bytes()
         board.get_work_item_detail(self.db, item["work_item_id"])
         workbench.list_work_items(self.db)
-        self.assertEqual(Path(self.db).read_bytes(), before)
-        with closing(sqlite3.connect(self.db)) as conn, conn:
-            execution_schema.initialize(conn)
-            conn.execute(
-                "INSERT INTO workflow_bindings(subject_type,subject_id,workflow_kind,owner_engine,binding_status,workflow_id,created_at,updated_at) VALUES ('task','historical','human_request','dbos','attention','old:id','now','now')"
-            )
-        before = Path(self.db).read_bytes()
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(execution_store.read_binding(conn, "task", "historical")["binding_status"], "attention")
+            self.assertEqual(execution_store.get_binding(conn, "task", "current")["binding_status"], "attention")
         self.assertEqual(Path(self.db).read_bytes(), before)
 
 

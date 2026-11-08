@@ -1,5 +1,7 @@
 """Revalidate administrator policy against the database owned by the caller."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+
 from pathlib import Path
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
@@ -7,7 +9,10 @@ from robert_agent.persistence.dialects import sqlite as db_sqlite
 def current_config(conn, config):
     config = config or {}
     config_path = config.get("config_path")
-    if not config_path or (config.get("supervision") or {}).get("mode") not in {"recover_known", "decide"}:
+    if not config_path or (config.get("supervision") or {}).get("mode") not in {
+        SupervisionMode.RECOVER_KNOWN.value,
+        SupervisionMode.DECIDE.value,
+    }:
         # Explicit local observe/off gates also serve paused consumers.
         return config
     try:

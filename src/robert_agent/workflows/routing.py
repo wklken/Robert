@@ -1,5 +1,7 @@
 """Resolve workflow policy, current authority and installed skill requirements."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.workflows import routes as route
 from robert_agent.context import skills
@@ -44,8 +46,8 @@ def effective_route(config_result, repo, event, route_id=None):
             configured = {worker["name"]: worker for worker in config_result["workers"]}
             resolved.update(
                 native_review_workers=[configured[name] for name in selected],
-                expected_output="multi_agent_review_report",
-                allowed_github_actions=["submit_pr_review"],
+                expected_output=OutputType.MULTI_AGENT_REVIEW_REPORT.value,
+                allowed_github_actions=[GitHubActionType.SUBMIT_PR_REVIEW.value],
                 required_skills=[],
                 recommended_skills=[],
             )
@@ -61,7 +63,7 @@ def effective_route(config_result, repo, event, route_id=None):
             # Preserve the request as a visible explanation, never substitute a single-model vote.
             resolved.update(
                 id="waiting-for-user",
-                expected_output="waiting_for_user",
+                expected_output=OutputType.WAITING_FOR_USER.value,
                 allowed_github_actions=["comment"],
                 required_skills=[],
                 recommended_skills=[],

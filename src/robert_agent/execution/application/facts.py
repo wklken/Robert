@@ -1,8 +1,10 @@
 """Apply workflow invalidation facts and stop fenced attempts."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus
+from robert_agent.foundation.contracts.work import FactClassification
+
 from robert_agent.execution import operations as execution_operations
 from robert_agent.persistence import execution_control as execution_store
-from robert_agent.work import events as workflow_events
 from robert_agent.work import queries as work_queries
 
 
@@ -67,7 +69,7 @@ def apply_workflow_event_fact(conn, event, run_now):
             )
         ):
             raise
-        if binding.get("binding_status") == "active":
+        if binding.get("binding_status") == BindingStatus.ACTIVE:
             execution_store.mark_binding_attention(
                 conn,
                 subject_type,
@@ -75,9 +77,9 @@ def apply_workflow_event_fact(conn, event, run_now):
                 run_now,
             )
         return {
-            "classification": workflow_events.INVALIDATING,
+            "classification": FactClassification.INVALIDATING.value,
             "fact_id": fact["fact_id"],
-            "binding_status": "attention",
+            "binding_status": BindingStatus.ATTENTION.value,
             "attempt_id": execution_operations.bound_attempt_for_subject(conn, subject_type, subject_id),
             "validation_error": reason,
         }

@@ -1,5 +1,7 @@
 """Shared stores operations for supervision_incidents."""
 
+from robert_agent.foundation.contracts.supervision import IncidentStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, bindparam, and_, not_, null
@@ -15,7 +17,7 @@ def update_for_attention(conn, reason, now, incident_id):
         update(tables["supervision_incidents"])
         .values(
             {
-                "status": sql_constant("needs_attention"),
+                "status": sql_constant(IncidentStatus.NEEDS_ATTENTION.value),
                 "reason_code": bindparam("p0"),
                 "last_observed_at": bindparam("p1"),
             }
@@ -26,7 +28,7 @@ def update_for_attention(conn, reason, now, incident_id):
                 not_(
                     tables["supervision_incidents"]
                     .c["status"]
-                    .in_([sql_constant("resolved"), sql_constant("dismissed")])
+                    .in_([sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value)])
                 ),
             )
         )
@@ -37,7 +39,7 @@ def update_for_attention(conn, reason, now, incident_id):
 def update_for_begin(conn, incident_id):
     stmt = (
         update(tables["supervision_incidents"])
-        .values({"status": sql_constant("recovering")})
+        .values({"status": sql_constant(IncidentStatus.RECOVERING.value)})
         .where(
             and_(
                 (tables["supervision_incidents"].c["incident_id"] == bindparam("p0")),
@@ -45,9 +47,9 @@ def update_for_begin(conn, incident_id):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("open"),
-                        sql_constant("diagnosing"),
-                        sql_constant("needs_attention"),
+                        sql_constant(IncidentStatus.OPEN.value),
+                        sql_constant(IncidentStatus.DIAGNOSING.value),
+                        sql_constant(IncidentStatus.NEEDS_ATTENTION.value),
                     ]
                 ),
             )
@@ -59,14 +61,14 @@ def update_for_begin(conn, incident_id):
 def update_for_finish(conn, incident_id):
     stmt = (
         update(tables["supervision_incidents"])
-        .values({"status": sql_constant("verifying")})
+        .values({"status": sql_constant(IncidentStatus.VERIFYING.value)})
         .where(
             and_(
                 (tables["supervision_incidents"].c["incident_id"] == bindparam("p0")),
                 not_(
                     tables["supervision_incidents"]
                     .c["status"]
-                    .in_([sql_constant("resolved"), sql_constant("dismissed")])
+                    .in_([sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value)])
                 ),
             )
         )
@@ -79,7 +81,7 @@ def update_for_verify(conn, now, now_2, value_3, incident_id):
         update(tables["supervision_incidents"])
         .values(
             {
-                "status": sql_constant("resolved"),
+                "status": sql_constant(IncidentStatus.RESOLVED.value),
                 "resolved_by": sql_constant("supervisor"),
                 "resolved_at": bindparam("p0"),
                 "last_observed_at": bindparam("p1"),
@@ -93,7 +95,7 @@ def update_for_verify(conn, now, now_2, value_3, incident_id):
                 not_(
                     tables["supervision_incidents"]
                     .c["status"]
-                    .in_([sql_constant("resolved"), sql_constant("dismissed")])
+                    .in_([sql_constant(IncidentStatus.RESOLVED.value), sql_constant(IncidentStatus.DISMISSED.value)])
                 ),
             )
         )
@@ -104,11 +106,11 @@ def update_for_verify(conn, now, now_2, value_3, incident_id):
 def update_for_finish_2(conn, incident_id):
     stmt = (
         update(tables["supervision_incidents"])
-        .values({"status": sql_constant("open")})
+        .values({"status": sql_constant(IncidentStatus.OPEN.value)})
         .where(
             and_(
                 (tables["supervision_incidents"].c["incident_id"] == bindparam("p0")),
-                (tables["supervision_incidents"].c["status"] == sql_constant("recovering")),
+                (tables["supervision_incidents"].c["status"] == sql_constant(IncidentStatus.RECOVERING.value)),
             )
         )
     )
@@ -118,11 +120,11 @@ def update_for_finish_2(conn, incident_id):
 def update_for_verify_2(conn, incident_id):
     stmt = (
         update(tables["supervision_incidents"])
-        .values({"status": sql_constant("open")})
+        .values({"status": sql_constant(IncidentStatus.OPEN.value)})
         .where(
             and_(
                 (tables["supervision_incidents"].c["incident_id"] == bindparam("p0")),
-                (tables["supervision_incidents"].c["status"] == sql_constant("verifying")),
+                (tables["supervision_incidents"].c["status"] == sql_constant(IncidentStatus.VERIFYING.value)),
             )
         )
     )
@@ -134,7 +136,7 @@ def update_for_apply_observations(conn, now, now_2, value_3, incident_id):
         update(tables["supervision_incidents"])
         .values(
             {
-                "status": sql_constant("resolved"),
+                "status": sql_constant(IncidentStatus.RESOLVED.value),
                 "resolved_by": sql_constant("natural"),
                 "resolved_at": bindparam("p0"),
                 "last_observed_at": bindparam("p1"),
@@ -170,7 +172,7 @@ def insert_for_confirmed(
             "scope_id": bindparam("p2"),
             "rule_id": bindparam("p3"),
             "lineage_key": bindparam("p4"),
-            "status": sql_constant("open"),
+            "status": sql_constant(IncidentStatus.OPEN.value),
             "reason_code": bindparam("p5"),
             "severity": bindparam("p6"),
             "evidence_json": bindparam("p7"),

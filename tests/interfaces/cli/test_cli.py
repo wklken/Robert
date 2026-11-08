@@ -47,11 +47,11 @@ class CliTests(unittest.TestCase):
             "daemon",
             "service",
             "web",
-            "migrate",
             "openclaw",
             "diagnostics",
         ]:
             self.assertIn(command, output.getvalue())
+        self.assertNotIn("migrate", output.getvalue())
 
     def test_daemon_run_forwards_wait_for_lease(self):
         from robert_agent.cli import main as cli_main

@@ -1,5 +1,8 @@
 """Finish work from accepted results and resume durable continuations."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
@@ -202,7 +205,7 @@ def _create_child_task_for_pending_events(
     gate = supervision_actions.begin(
         conn,
         task_id=parent_task_id,
-        kind="handoff_resume",
+        kind=RecoveryActionKind.HANDOFF_RESUME.value,
         target_id=parent_task_id,
         now=run_now,
         config=recovery_config,
@@ -486,7 +489,7 @@ def finalize_accepted_result(
         related_item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
         if related_item:
             work_item_row = (related_item["work_item_id"], related_item["origin_type"])
-    if payload["output_type"] == "waiting_for_user":
+    if payload["output_type"] == OutputType.WAITING_FOR_USER:
         _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
         if work_item_row:
             question = payload.get("operator_question") or {}
@@ -509,7 +512,7 @@ def finalize_accepted_result(
             remediation.exhaust_episode(conn, episode_id=subject_id, reason="worker_waiting_for_user", now=run_now)
         return True
     for action in payload["planned_github_actions"]:
-        if action.get("type") == "open_pr":
+        if action.get("type") == GitHubActionType.OPEN_PR.value:
             _materialize_open_pr_workstream(
                 conn,
                 repo_id,
@@ -521,7 +524,7 @@ def finalize_accepted_result(
     related_events = work_queries.task_related_events(
         conn,
         payload["task_id"],
-        include_consumed=payload["output_type"] == "classification_result",
+        include_consumed=payload["output_type"] == OutputType.CLASSIFICATION_RESULT,
     )
     _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
     pending_events = pending_events_for_task(
@@ -530,7 +533,7 @@ def finalize_accepted_result(
         payload["consumed_event_fingerprints"],
     )
     db_write_tasks.update_for_finish_parent_for_child(conn, run_now, payload["task_id"])
-    if work_item_row and work_item_row[1] == "web" and payload["output_type"] == "local_result":
+    if work_item_row and work_item_row[1] == "web" and payload["output_type"] == OutputType.LOCAL_RESULT:
         work_items.record_system_event(
             conn,
             work_item_row[0],
@@ -541,7 +544,7 @@ def finalize_accepted_result(
             now=run_now,
         )
         db_write_work_items.update_for_finalize_accepted_result(conn, run_now, run_now, work_item_row[0])
-    if payload["output_type"] == "classification_result":
+    if payload["output_type"] == OutputType.CLASSIFICATION_RESULT:
         child_task = _create_child_task_for_recommended_route(
             conn,
             data_dir,

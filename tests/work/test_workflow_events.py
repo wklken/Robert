@@ -84,8 +84,8 @@ class WorkflowEventClassifierTests(unittest.TestCase):
 
 
 class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
-    def test_dbos_invalidation_persists_attention_and_one_signal_atomically(self):
-        self._bind("dbos")
+    def test_invalidation_persists_attention_and_receipt_atomically(self):
+        self._bind()
         fact = _fact(old_head_sha="a" * 40, new_head_sha="b" * 40, event_type="snapshot")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             result = execution_operations.apply_classified_fact(conn, "task", "task-1", fact, now=NOW)
@@ -101,7 +101,7 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
             )
 
     def test_fact_subject_must_match_target_binding(self):
-        self._bind("dbos")
+        self._bind()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             with self.assertRaisesRegex(ValueError, "subject"):
                 execution_operations.apply_classified_fact(
@@ -112,8 +112,8 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
                     now=NOW,
                 )
 
-    def test_old_dbos_fact_replay_does_not_replace_newer_evidence(self):
-        self._bind("dbos")
+    def test_old_fact_replay_does_not_replace_newer_evidence(self):
+        self._bind()
         old_fact = _fact(fact_id="event:old")
         new_fact = _fact(fact_id="event:new", event_type="review_comment")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -126,7 +126,7 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
             self.assertEqual(json.loads(binding["metadata_json"])["latest_fact"]["fact_id"], "event:new")
 
     def test_invalidation_termination_uses_exact_attempt_operation_after_commit(self):
-        self._bind("legacy")
+        self._bind()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO attempts(attempt_id, task_id, attempt_no, status) VALUES ('attempt-1', 'task-1', 1, 'running')"
@@ -157,8 +157,8 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
         evidence = workflow_events.normalize_fact_evidence(fact, "terminal")
         self.assertEqual(evidence["reason_code"], "source_merged")
 
-    def test_remote_terminal_reconciliation_uses_shared_classifier_for_dbos(self):
-        self._bind("dbos")
+    def test_remote_terminal_reconciliation_uses_shared_classifier(self):
+        self._bind()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, state) VALUES ('source-1', 'repo-1', 'github:example/repo!7', 'pull_request', 7, 'open')"
@@ -193,7 +193,7 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
             )
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
 
-    def test_remote_terminal_reconciliation_targets_dbos_episode_not_child_task(self):
+    def test_remote_terminal_reconciliation_targets_episode_not_child_task(self):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, state) VALUES ('source-1', 'repo-1', 'github:example/repo!7', 'pull_request', 7, 'open')"
@@ -231,7 +231,7 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
 
     def test_duplicate_fact_is_idempotent(self):
-        self._bind("dbos")
+        self._bind()
         fact = _fact()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             first = execution_operations.apply_classified_fact(conn, "task", "task-1", fact, now=NOW)
@@ -240,12 +240,12 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
 
-    def test_legacy_fact_persists_evidence_without_outbox(self):
-        self._bind("legacy")
+    def test_fact_persists_evidence_and_receipt(self):
+        self._bind()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             execution_operations.apply_classified_fact(conn, "task", "task-1", _fact(), now=NOW)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_outbox").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
             binding = execution_store.get_binding(conn, "task", "task-1")
             self.assertEqual(json.loads(binding["metadata_json"])["latest_fact"]["classification"], "additive")
 

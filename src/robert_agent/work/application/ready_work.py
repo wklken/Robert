@@ -1,5 +1,7 @@
 """Prepare work already admitted by operators or durable workflows."""
 
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, RemediationStatus, TaskKind
+
 import json
 import subprocess
 
@@ -374,9 +376,9 @@ def prepare_github_operator_tasks(
             episode = remediation.load_episode(conn, parent_episode) if parent_episode else None
             operator_episode_reply = bool(
                 parent_row
-                and parent_row[0] in {"ci_remediation", "merge_conflict_remediation"}
+                and parent_row[0] in REMEDIATION_TASK_KINDS
                 and episode
-                and episode["status"] == "exhausted"
+                and episode["status"] == RemediationStatus.EXHAUSTED
                 and episode.get("metadata", {}).get("last_transition_reason") == "worker_waiting_for_user"
             )
             if operator_episode_reply and not authorized:
@@ -431,7 +433,7 @@ def prepare_github_operator_tasks(
                 response = operator_responses[-1] if operator_responses else {"body": ""}
                 refreshed[0] = {
                     **refreshed[0],
-                    "task_kind": "human_request",
+                    "task_kind": TaskKind.HUMAN_REQUEST.value,
                     "actor_kind": "operator",
                     "event_type": "manual_operator_request",
                     "body": response["body"],

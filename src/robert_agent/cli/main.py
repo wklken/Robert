@@ -14,8 +14,6 @@ from robert_agent.persistence import errors as db_errors
 from robert_agent import __version__
 from robert_agent.runtime import daemon
 from robert_agent.operations import diagnostics
-from robert_agent.operations import migration as sqlite_migration
-from robert_agent.persistence import execution_control as execution_store
 from robert_agent.operations import retention
 from robert_agent.runtime import cycle as run_once
 from robert_agent.readmodels import status
@@ -207,23 +205,6 @@ def build_parser() -> argparse.ArgumentParser:
         repair.add_argument("--incident-id", required=True)
         if name == "repair-verify":
             repair.add_argument("--checkout", required=True)
-
-    migrate_parser = subparsers.add_parser(
-        "migrate",
-        help="Migrate legacy Robert state.",
-    )
-    migration_commands = migrate_parser.add_subparsers(
-        dest="migrate_command",
-        required=True,
-    )
-
-    sqlite_command = migration_commands.add_parser("dbos", help="Preview or apply an offline DBOS-to-SQLite handoff.")
-    sqlite_command.add_argument("--db", required=True, help="Existing Robert SQLite database.")
-    sqlite_command.add_argument("--plan-file", help="Create a new plan file in dry-run; read it with --apply.")
-    migration_action = sqlite_command.add_mutually_exclusive_group()
-    migration_action.add_argument("--dry-run", action="store_true", help="Read-only preview (default).")
-    migration_action.add_argument("--apply", action="store_true", help="Apply a validated offline plan.")
-    _add_output_argument(sqlite_command)
 
     service_parser = subparsers.add_parser(
         "service",
@@ -457,11 +438,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 doctor(args.config, skip_external=args.skip_external),
                 args.output,
             )
-        if args.command == "migrate" and args.migrate_command == "dbos":
-            return _emit_and_code(
-                sqlite_migration.run(args.db, plan_file=args.plan_file, apply_changes=args.apply),
-                args.output,
-            )
         if args.command == "supervisor":
             from robert_agent.runtime import supervisor
 
@@ -690,12 +666,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output,
             )
         parser.error(f"command is not wired yet: {args.command}")
-    except execution_store.MigrationRequiredError as exc:
-        emit_result(
-            {"ok": False, "status": "migration_required", "safe_error": str(exc)},
-            output=getattr(args, "output", "text"),
-        )
-        return exit_codes.STATE_FAILURE
     except (OSError, TypeError, ValueError) as exc:
         output = getattr(args, "output", "text")
         emit_result(

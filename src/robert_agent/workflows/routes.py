@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
+
 import argparse
 import json
 import re
@@ -32,10 +36,10 @@ def verification_policy_for(route_id):
 
 def review_input_policy(expected_output, trigger):
     """Select the review contract from controller-owned trigger metadata."""
-    if expected_output not in {"update_existing_pr", "review_comment"} or trigger.get("task_kind") in {
-        "ci_remediation",
-        "merge_conflict_remediation",
-    }:
+    if (
+        expected_output not in {OutputType.UPDATE_EXISTING_PR, OutputType.REVIEW_COMMENT}
+        or trigger.get("task_kind") in REMEDIATION_TASK_KINDS
+    ):
         return "none"
     if trigger.get("event_type") in {"comment", "manual_operator_request"}:
         return "classify"
@@ -45,14 +49,11 @@ def review_input_policy(expected_output, trigger):
 
 def route_task(task):
     task_kind = task.get("task_kind")
-    if task_kind in {
-        "ci_remediation",
-        "merge_conflict_remediation",
-    }:
+    if task_kind in REMEDIATION_TASK_KINDS:
         result = dict(ROUTES["update-existing-pr"])
         result["required_skills"] = (
             ["fast-test-fix", "fast-preflight"]
-            if task_kind == "ci_remediation"
+            if task_kind == TaskKind.CI_REMEDIATION
             else ["fast-conflict-fix", "fast-preflight"]
         )
         return result

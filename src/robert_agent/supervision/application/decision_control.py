@@ -1,5 +1,7 @@
 """Local operator replies and read-only decision status."""
 
+from robert_agent.foundation.contracts.supervision import DecisionStatus, DecisionRunStatus
+
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,7 +49,12 @@ def reply(config, workstream_id, decision_id, body):
                 now,
                 json.dumps({"kind": "supervisor_reply"}),
             )
-    return {"ok": True, "status": "reply_received", "workstream_id": workstream_id, "decision_id": decision_id}
+    return {
+        "ok": True,
+        "status": DecisionStatus.REPLY_RECEIVED.value,
+        "workstream_id": workstream_id,
+        "decision_id": decision_id,
+    }
 
 
 def runner_status(config):
@@ -94,7 +101,7 @@ def resolve_runner(config, decision_id, *, confirm_process_stopped=False):
             metadata={
                 **current,
                 "claim": None,
-                "last_status": "operator_resolved",
+                "last_status": DecisionRunStatus.OPERATOR_RESOLVED.value,
                 "next_check_at": now,
                 "resolution": resolution,
             },

@@ -1,3 +1,4 @@
+from robert_agent.foundation.contracts.execution import WorkerPhase
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence.dialects import sqlite as db_sqlite
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 
-VALID_PHASES = {"prepare", "analyze", "plan", "execute", "verify", "publish", "handoff"}
+VALID_PHASES = frozenset(phase.value for phase in WorkerPhase)
 
 
 def build_snapshot(task_id, attempt_id, phase, status, summary, next_step=""):

@@ -1,5 +1,7 @@
 """Trusted result targets shared by submission and final controller audit."""
 
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import task_events as db_read_task_events
 from robert_agent.persistence.queries import tasks as db_read_tasks
@@ -109,7 +111,7 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
             vote_publisher=vote["request"]["repo"]["github_account"],
         )
     episode_id = task_metadata.get("remediation_episode_id")
-    if row[5] in {"ci_remediation", "merge_conflict_remediation"} and episode_id:
+    if row[5] in REMEDIATION_TASK_KINDS and episode_id:
         episode = remediation.load_episode(conn, episode_id)
         if episode:
             action_scope.update(

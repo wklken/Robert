@@ -1,3 +1,8 @@
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskLifecycle
+
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import transactions as db_transactions
@@ -193,7 +198,6 @@ def _unavailable():
 
 def _lookup(db_path, envelope, digest):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
-        execution_store.require_migrated(conn)
         _, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"], include_scope=False)
         if rejection:
             return rejection
@@ -226,7 +230,10 @@ def _prepare(db_path, envelope):
         else:
             checked = audit_result.audit_result(normalized, final=False, **settings)
             if checked["ok"]:
-                if any(action["type"] == "push_existing_pr" for action in normalized["planned_github_actions"]):
+                if any(
+                    action["type"] == GitHubActionType.PUSH_EXISTING_PR.value
+                    for action in normalized["planned_github_actions"]
+                ):
                     if action_scope.observe_worktree_status(settings["action_scope"]) != "clean":
                         response = result_validation.failure(
                             {
@@ -347,7 +354,6 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
     result_created_at = created_at.isoformat()
     result_id = f"result-{uuid4().hex[:12]}"
     with closing(db_database.connect(db_path)) as conn, conn:
-        execution_store.require_migrated(conn)
         db_sqlite.configure(conn, foreign_keys=True)
         db_sqlite.configure(conn, busy_timeout_ms=busy_timeout_ms)
         db_transactions.begin(conn, immediate=True)
@@ -356,15 +362,15 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         task = db_records.first(
             db_read_tasks.find_lifecycle_and_task_kind_and_metadata_json_by_task_id(conn, payload["task_id"])
         )
-        if task and task[0] in {"canceled", "failed", "ignored"}:
+        if task and task[0] in {TaskLifecycle.CANCELED.value, TaskLifecycle.FAILED.value, TaskLifecycle.IGNORED.value}:
             return {"ok": False, "status": "rejected_by_supervisor"}
         subject_type, subject_id = "task", payload["task_id"]
-        if task and task[1] in {"ci_remediation", "merge_conflict_remediation"}:
+        if task and task[1] in REMEDIATION_TASK_KINDS:
             episode_id = json.loads(task[2] or "{}").get("remediation_episode_id")
             if episode_id:
                 subject_type, subject_id = "remediation_episode", episode_id
         owner = execution_store.get_binding(conn, subject_type, subject_id)
-        if owner and owner["binding_status"] != "active":
+        if owner and owner["binding_status"] != BindingStatus.ACTIVE:
             return {"ok": False, "status": "rejected_by_workflow_owner"}
         bound = db_records.first(db_read_attempts.record_result_db(conn, payload["attempt_id"], payload["task_id"]))
         if not bound or json.loads(bound[0] or "{}").get("result_contract") != result_contract.CONTRACT_ID:
@@ -380,18 +386,22 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
                 "status": "result_conflict",
                 "safe_error": "A different result was already recorded for this attempt.",
             }
-        if bound[1] not in {"prepared", "running", "stale"}:
+        if bound[1] not in {AttemptStatus.PREPARED.value, AttemptStatus.RUNNING.value, AttemptStatus.STALE.value}:
             return {"ok": False, "status": "rejected_by_supervisor"}
         prior_rejection = db_records.first(
             db_read_attempts.record_result_db_2(conn, payload["attempt_id"], payload["task_id"])
         )
         if prior_rejection and prior_rejection[0]:
             return {"ok": False, "status": "rejected_by_supervisor"}
-        if payload.get("output_type") == "waiting_for_user":
+        if payload.get("output_type") == OutputType.WAITING_FOR_USER:
             attempt = db_records.first(
                 db_read_attempts.record_result_db_3(conn, payload["attempt_id"], payload["task_id"])
             )
-            if not attempt or attempt[0] not in {"prepared", "running", "stale"}:
+            if not attempt or attempt[0] not in {
+                AttemptStatus.PREPARED.value,
+                AttemptStatus.RUNNING.value,
+                AttemptStatus.STALE.value,
+            }:
                 return {"ok": False, "status": "rejected_by_supervisor"}
             origin = db_records.first(db_read_work_items.record_result_db(conn, payload["task_id"]))
             error = None
@@ -414,7 +424,7 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
             gate = supervision_actions.begin(
                 conn,
                 task_id=payload["task_id"],
-                kind="spool_replay",
+                kind=RecoveryActionKind.SPOOL_REPLAY.value,
                 target_id=payload["attempt_id"],
                 generation=metadata["submission_fingerprint"],
                 now=result_created_at,

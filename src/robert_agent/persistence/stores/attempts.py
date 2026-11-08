@@ -1,5 +1,7 @@
 """Shared stores operations for attempts."""
 
+from robert_agent.foundation.contracts.execution import AttemptStatus
+
 from sqlalchemy import literal
 
 from robert_agent.persistence.expressions import sql_constant
@@ -27,7 +29,7 @@ def insert_canary_fixture(conn, value_1, now, now_3, now_4):
             "attempt_id": bindparam("p0"),
             "task_id": sql_constant("task-production-canary"),
             "attempt_no": sql_constant(1),
-            "status": sql_constant("completed"),
+            "status": sql_constant(AttemptStatus.COMPLETED.value),
             "started_at": bindparam("p1"),
             "heartbeat_at": bindparam("p2"),
             "finished_at": bindparam("p3"),
@@ -59,7 +61,7 @@ def record_result_db(conn, result_created_at, result_created_at_2, attempt_id, t
                             )
                             == sql_constant("integer")
                         ),
-                        sql_constant("running"),
+                        sql_constant(AttemptStatus.RUNNING.value),
                     ),
                     else_=sql_constant("completed"),
                 ),
@@ -91,9 +93,9 @@ def record_result_db(conn, result_created_at, result_created_at_2, attempt_id, t
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("running"),
-                        sql_constant("prepared"),
-                        sql_constant("stale"),
+                        sql_constant(AttemptStatus.RUNNING.value),
+                        sql_constant(AttemptStatus.PREPARED.value),
+                        sql_constant(AttemptStatus.STALE.value),
                     ]
                 ),
             )
@@ -138,7 +140,7 @@ def update_for_prepare(conn, now, value_2, now_3, attempt_id, status, metadata_j
         update(tables["attempts"])
         .values(
             {
-                "status": sql_constant("failed"),
+                "status": sql_constant(AttemptStatus.FAILED.value),
                 "finished_at": bindparam("p0"),
                 "failure_json": bindparam("p1"),
                 "metadata_json": func.json_set(
@@ -269,7 +271,7 @@ def record_dispatch_result_3(conn, now, now_2, value_3, value_4, attempt_id):
         update(tables["attempts"])
         .values(
             {
-                "status": sql_constant("stale"),
+                "status": sql_constant(AttemptStatus.STALE.value),
                 "finished_at": null(),
                 "started_at": func.coalesce(tables["attempts"].c["started_at"], bindparam("p0")),
                 "heartbeat_at": bindparam("p1"),
@@ -289,11 +291,11 @@ def record_dispatch_result_3(conn, now, now_2, value_3, value_4, attempt_id):
 def update_for_dispatch_queued_locked(conn, now, attempt_id):
     stmt = (
         update(tables["attempts"])
-        .values({"status": sql_constant("canceled"), "finished_at": bindparam("p0")})
+        .values({"status": sql_constant(AttemptStatus.CANCELED.value), "finished_at": bindparam("p0")})
         .where(
             and_(
                 (tables["attempts"].c["attempt_id"] == bindparam("p1")),
-                (tables["attempts"].c["status"] == sql_constant("prepared")),
+                (tables["attempts"].c["status"] == sql_constant(AttemptStatus.PREPARED.value)),
             )
         )
     )
@@ -303,11 +305,11 @@ def update_for_dispatch_queued_locked(conn, now, attempt_id):
 def update_for_dispatch_queued_locked_2(conn, now, attempt_id):
     stmt = (
         update(tables["attempts"])
-        .values({"status": sql_constant("failed"), "finished_at": bindparam("p0")})
+        .values({"status": sql_constant(AttemptStatus.FAILED.value), "finished_at": bindparam("p0")})
         .where(
             and_(
                 (tables["attempts"].c["attempt_id"] == bindparam("p1")),
-                (tables["attempts"].c["status"] == sql_constant("prepared")),
+                (tables["attempts"].c["status"] == sql_constant(AttemptStatus.PREPARED.value)),
             )
         )
     )
@@ -351,7 +353,7 @@ def update_for_recover_failed_timeout_attempts(conn, run_now, value_2, value_3, 
 def update_for_supervise_running_attempts(conn, value_1, attempt_id):
     stmt = (
         update(tables["attempts"])
-        .values({"status": sql_constant("stale"), "metadata_json": bindparam("p0")})
+        .values({"status": sql_constant(AttemptStatus.STALE.value), "metadata_json": bindparam("p0")})
         .where((tables["attempts"].c["attempt_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": value_1, "p1": attempt_id})
@@ -362,7 +364,7 @@ def update_for_supervise_running_attempts_2(conn, run_now, value_2, value_3, att
         update(tables["attempts"])
         .values(
             {
-                "status": sql_constant("failed"),
+                "status": sql_constant(AttemptStatus.FAILED.value),
                 "finished_at": bindparam("p0"),
                 "failure_json": bindparam("p1"),
                 "metadata_json": bindparam("p2"),
@@ -378,7 +380,7 @@ def update_for_defer_attempt_inspection_2(conn, run_now, value_2, run_now_3, att
         update(tables["attempts"])
         .values(
             {
-                "status": sql_constant("failed"),
+                "status": sql_constant(AttemptStatus.FAILED.value),
                 "finished_at": bindparam("p0"),
                 "failure_json": bindparam("p1"),
                 "metadata_json": func.json_set(
@@ -396,7 +398,7 @@ def update_for_defer_attempt_inspection_2(conn, run_now, value_2, run_now_3, att
 def update_for_supervise_running_attempts_3(conn, value_1, attempt_id):
     stmt = (
         update(tables["attempts"])
-        .values({"status": sql_constant("running"), "metadata_json": bindparam("p0")})
+        .values({"status": sql_constant(AttemptStatus.RUNNING.value), "metadata_json": bindparam("p0")})
         .where((tables["attempts"].c["attempt_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": value_1, "p1": attempt_id})
@@ -407,7 +409,7 @@ def update_for_supervise_running_attempts_4(conn, run_now, run_now_2, attempt_id
         update(tables["attempts"])
         .values(
             {
-                "status": sql_constant("completed"),
+                "status": sql_constant(AttemptStatus.COMPLETED.value),
                 "finished_at": bindparam("p0"),
                 "metadata_json": func.json_set(
                     tables["attempts"].c["metadata_json"],
@@ -426,7 +428,7 @@ def update_for_supervise_running_attempts_5(conn, run_now, value_2, attempt_id):
         update(tables["attempts"])
         .values(
             {
-                "status": sql_constant("failed"),
+                "status": sql_constant(AttemptStatus.FAILED.value),
                 "finished_at": bindparam("p0"),
                 "failure_json": bindparam("p1"),
             }
@@ -471,11 +473,11 @@ def set_heartbeat_at_by_attempt_id(conn, value_1, attempt_id):
 def update_for_execute_command(conn, now, task_id):
     stmt = (
         update(tables["attempts"])
-        .values({"status": sql_constant("canceled"), "finished_at": bindparam("p0")})
+        .values({"status": sql_constant(AttemptStatus.CANCELED.value), "finished_at": bindparam("p0")})
         .where(
             and_(
                 (tables["attempts"].c["task_id"] == bindparam("p1")),
-                (tables["attempts"].c["status"] == sql_constant("prepared")),
+                (tables["attempts"].c["status"] == sql_constant(AttemptStatus.PREPARED.value)),
             )
         )
     )
@@ -553,7 +555,7 @@ def insert_for_create_resume_attempt_and_prompt(
             "attempt_id": bindparam("p0"),
             "task_id": bindparam("p1"),
             "attempt_no": bindparam("p2"),
-            "status": sql_constant("prepared"),
+            "status": sql_constant(AttemptStatus.PREPARED.value),
             "worktree_path": bindparam("p3"),
             "branch_name": bindparam("p4"),
             "started_at": bindparam("p5"),
@@ -580,7 +582,7 @@ def insert_for_create_resume_attempt_and_prompt(
 def update_for_refresh_prepared_task_locked_2(conn, run_now, attempt_id):
     stmt = (
         update(tables["attempts"])
-        .values({"status": sql_constant("failed"), "finished_at": bindparam("p0")})
+        .values({"status": sql_constant(AttemptStatus.FAILED.value), "finished_at": bindparam("p0")})
         .where((tables["attempts"].c["attempt_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": run_now, "p1": attempt_id})
@@ -592,7 +594,7 @@ def insert_for_prepare_detected_local_tasks(conn, attempt_id, task_id, value_3, 
             "attempt_id": bindparam("p0"),
             "task_id": bindparam("p1"),
             "attempt_no": sql_constant(1),
-            "status": sql_constant("prepared"),
+            "status": sql_constant(AttemptStatus.PREPARED.value),
             "worktree_path": bindparam("p2"),
             "branch_name": bindparam("p3"),
             "started_at": bindparam("p4"),
@@ -620,7 +622,7 @@ def record_remote_terminal_state_locked(conn, run_now, value_2, value_3, attempt
         update(tables["attempts"])
         .values(
             {
-                "status": sql_constant("canceled"),
+                "status": sql_constant(AttemptStatus.CANCELED.value),
                 "finished_at": bindparam("p0"),
                 "failure_json": bindparam("p1"),
                 "metadata_json": bindparam("p2"),
@@ -670,7 +672,7 @@ def insert_fixture(conn, rows):
             "attempt_id": bindparam("p0"),
             "task_id": bindparam("p1"),
             "attempt_no": literal(1),
-            "status": literal("completed"),
+            "status": literal(AttemptStatus.COMPLETED.value),
             "started_at": bindparam("p2"),
             "heartbeat_at": bindparam("p3"),
         }
@@ -688,7 +690,7 @@ def cancel_execution_filtered(conn, items, value_1):
     )
     stmt = (
         update(tables["attempts"])
-        .values({"status": sql_constant("canceled"), "finished_at": bindparam("p0")})
+        .values({"status": sql_constant(AttemptStatus.CANCELED.value), "finished_at": bindparam("p0")})
         .where(
             and_(
                 tables["attempts"].c["task_id"].in_(query1),
@@ -696,9 +698,9 @@ def cancel_execution_filtered(conn, items, value_1):
                 .c["status"]
                 .in_(
                     [
-                        sql_constant("prepared"),
-                        sql_constant("running"),
-                        sql_constant("stale"),
+                        sql_constant(AttemptStatus.PREPARED.value),
+                        sql_constant(AttemptStatus.RUNNING.value),
+                        sql_constant(AttemptStatus.STALE.value),
                     ]
                 ),
             )

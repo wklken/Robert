@@ -1,5 +1,7 @@
 """Shared stores operations for wakeups."""
 
+from robert_agent.foundation.contracts.work import PUBLICATION_RETRY_WAKEUP_KIND, WakeupStatus
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import update, delete, bindparam, and_, not_, null, func
@@ -10,30 +12,16 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
-def update_for_consume_fact(conn, now, value_2):
-    stmt = (
-        update(tables["wakeups"])
-        .values({"status": sql_constant("consumed"), "updated_at": bindparam("p0")})
-        .where(
-            and_(
-                (tables["wakeups"].c["dedupe_key"] == bindparam("p1")),
-                (tables["wakeups"].c["status"] == sql_constant("pending")),
-            )
-        )
-    )
-    return statements.write(conn, stmt, {"p0": now, "p1": value_2})
-
-
 def update_for_publish_ready_actions(conn, value_1, task_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("consumed"), "updated_at": bindparam("p0")})
+        .values({"status": sql_constant(WakeupStatus.CONSUMED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
                 tables["wakeups"].c["task_id"] == bindparam("p1"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind"))
-                == sql_constant("publication_retry"),
+                == sql_constant(PUBLICATION_RETRY_WAKEUP_KIND),
             )
         )
     )
@@ -66,7 +54,7 @@ def insert_worker_result_wakeup(
                 "task_id": bindparam("p4"),
                 "attempt_id": bindparam("p5"),
                 "result_id": bindparam("p6"),
-                "status": sql_constant("pending"),
+                "status": sql_constant(WakeupStatus.PENDING.value),
                 "not_before_at": bindparam("p7"),
                 "created_at": bindparam("p8"),
                 "updated_at": bindparam("p9"),
@@ -97,11 +85,11 @@ def insert_worker_result_wakeup(
 def update_for_cancel_execution(conn, now, work_item_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("canceled"), "updated_at": bindparam("p0")})
+        .values({"status": sql_constant(WakeupStatus.CANCELED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
                 (tables["wakeups"].c["work_item_id"] == bindparam("p1")),
-                (tables["wakeups"].c["status"] == sql_constant("pending")),
+                (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
     )
@@ -111,11 +99,11 @@ def update_for_cancel_execution(conn, now, work_item_id):
 def update_for_finalize_superseded_result(conn, now, result_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("consumed"), "updated_at": bindparam("p0")})
+        .values({"status": sql_constant(WakeupStatus.CONSUMED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
                 (tables["wakeups"].c["result_id"] == bindparam("p1")),
-                (tables["wakeups"].c["status"] == sql_constant("pending")),
+                (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
     )
@@ -137,7 +125,7 @@ def record_retrigger_preparation_failure(conn, value_1, value_2, attempt_count, 
         .where(
             and_(
                 (tables["wakeups"].c["wakeup_id"] == bindparam("p5")),
-                (tables["wakeups"].c["status"] == sql_constant("pending")),
+                (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
     )
@@ -160,7 +148,7 @@ def update_for_prepare_detected_local_tasks(conn, run_id, run_now, work_item_id,
         update(tables["wakeups"])
         .values(
             {
-                "status": sql_constant("consumed"),
+                "status": sql_constant(WakeupStatus.CONSUMED.value),
                 "consumed_run_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -170,7 +158,7 @@ def update_for_prepare_detected_local_tasks(conn, run_id, run_now, work_item_id,
                 tables["wakeups"].c["work_item_id"] == bindparam("p2"),
                 tables["wakeups"].c["task_id"] == bindparam("p3"),
                 tables["wakeups"].c["reason"] == sql_constant("manual_operator_request"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
             )
         )
     )
@@ -182,7 +170,7 @@ def update_for_prepare_github_retrigger_tasks(conn, run_id, run_now, wakeup_id):
         update(tables["wakeups"])
         .values(
             {
-                "status": sql_constant("consumed"),
+                "status": sql_constant(WakeupStatus.CONSUMED.value),
                 "consumed_run_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -190,7 +178,7 @@ def update_for_prepare_github_retrigger_tasks(conn, run_id, run_now, wakeup_id):
         .where(
             and_(
                 (tables["wakeups"].c["wakeup_id"] == bindparam("p2")),
-                (tables["wakeups"].c["status"] == sql_constant("pending")),
+                (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
     )
@@ -202,7 +190,7 @@ def update_for_prepare_github_operator_tasks(conn, run_id, run_now, wakeup_id):
         update(tables["wakeups"])
         .values(
             {
-                "status": sql_constant("consumed"),
+                "status": sql_constant(WakeupStatus.CONSUMED.value),
                 "consumed_run_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -215,7 +203,7 @@ def update_for_prepare_github_operator_tasks(conn, run_id, run_now, wakeup_id):
 def update_for_prepare_github_retrigger_tasks_2(conn, run_now, wakeup_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("canceled"), "updated_at": bindparam("p0")})
+        .values({"status": sql_constant(WakeupStatus.CANCELED.value), "updated_at": bindparam("p0")})
         .where((tables["wakeups"].c["wakeup_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": run_now, "p1": wakeup_id})
@@ -224,11 +212,11 @@ def update_for_prepare_github_retrigger_tasks_2(conn, run_now, wakeup_id):
 def update_for_prepare_detected_local_tasks_2(conn, run_now, task_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("consumed"), "updated_at": bindparam("p0")})
+        .values({"status": sql_constant(WakeupStatus.CONSUMED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
                 (tables["wakeups"].c["task_id"] == bindparam("p1")),
-                (tables["wakeups"].c["status"] == sql_constant("pending")),
+                (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
     )
@@ -238,13 +226,13 @@ def update_for_prepare_detected_local_tasks_2(conn, run_now, task_id):
 def update_for_scan_repo(conn, repo_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("consumed")})
+        .values({"status": sql_constant(WakeupStatus.CONSUMED.value)})
         .where(
             and_(
                 tables["wakeups"].c["repo_id"] == bindparam("p0"),
                 func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_context_refresh"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
             )
         )
     )
@@ -277,7 +265,7 @@ def update_for_fail_batch(conn, value_1, value_2, value_3, batch_id):
 def update_for_retry_batch(conn, value_1, batch_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("pending"), "not_before_at": bindparam("p0")})
+        .values({"status": sql_constant(WakeupStatus.PENDING.value), "not_before_at": bindparam("p0")})
         .where(
             and_(
                 (
@@ -294,7 +282,7 @@ def update_for_retry_batch(conn, value_1, batch_id):
 def delete_for_finish_batch(conn):
     stmt = delete(tables["wakeups"]).where(
         and_(
-            (tables["wakeups"].c["status"] == sql_constant("consumed")),
+            (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.CONSUMED.value)),
             func.json_extract(tables["wakeups"].c["metadata_json"], sql_constant("$.kind")).in_(
                 [
                     sql_constant("github_observation_ready"),
@@ -309,7 +297,7 @@ def delete_for_finish_batch(conn):
 def update_for_finish_batch(conn, batch_id):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("consumed")})
+        .values({"status": sql_constant(WakeupStatus.CONSUMED.value)})
         .where(
             and_(
                 (
@@ -351,7 +339,7 @@ def insert_for_request_wakeup(
             "attempt_id": bindparam("p6"),
             "result_id": bindparam("p7"),
             "source_run_id": bindparam("p8"),
-            "status": sql_constant("pending"),
+            "status": sql_constant(WakeupStatus.PENDING.value),
             "not_before_at": bindparam("p9"),
             "expires_at": bindparam("p10"),
             "created_at": bindparam("p11"),
@@ -384,10 +372,10 @@ def insert_for_request_wakeup(
 def update_for_expire_due_wakeups(conn, now, now_2):
     stmt = (
         update(tables["wakeups"])
-        .values({"status": sql_constant("expired"), "updated_at": bindparam("p0")})
+        .values({"status": sql_constant(WakeupStatus.EXPIRED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 not_(tables["wakeups"].c["expires_at"].is_(null())),
                 tables["wakeups"].c["expires_at"] <= bindparam("p1"),
             )
@@ -401,7 +389,7 @@ def consume_wakeups_for_results_filtered(conn, items, value_1, value_2):
         update(tables["wakeups"])
         .values(
             {
-                "status": sql_constant("consumed"),
+                "status": sql_constant(WakeupStatus.CONSUMED.value),
                 "consumed_run_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
             }
@@ -409,7 +397,7 @@ def consume_wakeups_for_results_filtered(conn, items, value_1, value_2):
         .where(
             and_(
                 tables["wakeups"].c["reason"] == sql_constant("worker_result_ready"),
-                tables["wakeups"].c["status"] == sql_constant("pending"),
+                tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value),
                 tables["wakeups"].c["result_id"].in_(bindparam("items", expanding=True)),
             )
         )

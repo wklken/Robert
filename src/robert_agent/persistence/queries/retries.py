@@ -1,5 +1,7 @@
 """Shared queries operations for retries."""
 
+from robert_agent.foundation.contracts.work import TaskLifecycle
+
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
@@ -80,7 +82,7 @@ def find_for_execution_recovery(conn, task_id, repo_id, lineage):
         .select_from(cte2.join(table6, (table6.c["task_id"] == cte2.c["task_id"]), isouter=False))
         .where(
             and_(
-                (table6.c["lifecycle"] == sql_constant("completed")),
+                (table6.c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value)),
                 not_(query9.exists()),
             )
         )

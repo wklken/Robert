@@ -1,5 +1,14 @@
 """Claim and close execution subjects in the caller-owned transaction."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus
+from robert_agent.foundation.contracts.work import (
+    REMEDIATION_TASK_KINDS,
+    TERMINAL_REMEDIATION_STATUSES,
+    TERMINAL_TASK_LIFECYCLES,
+    TaskKind,
+    TaskLifecycle,
+)
+
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
 from robert_agent.persistence.queries import tasks as db_read_tasks
@@ -25,11 +34,7 @@ def _json_object(value):
 def subject_for_task(conn, task_id):
     row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     episode = _json_object(row[1]).get("remediation_episode_id") if row else None
-    return (
-        ("remediation_episode", episode)
-        if episode and row[0] in {"ci_remediation", "merge_conflict_remediation"}
-        else ("task", task_id)
-    )
+    return ("remediation_episode", episode) if episode and row[0] in REMEDIATION_TASK_KINDS else ("task", task_id)
 
 
 def claim_task(conn, task_id, run_now=None):
@@ -47,7 +52,7 @@ def claim_task(conn, task_id, run_now=None):
         "audit_retry_required"
     ):
         return False
-    if task_kind == "human_request":
+    if task_kind == TaskKind.HUMAN_REQUEST:
         return (
             execution_operations.claim_subject(
                 conn,
@@ -57,7 +62,7 @@ def claim_task(conn, task_id, run_now=None):
             )
             is not None
         )
-    if task_kind in {"ci_remediation", "merge_conflict_remediation"}:
+    if task_kind in REMEDIATION_TASK_KINDS:
         episode_id = _json_object(metadata_json).get("remediation_episode_id")
         if not episode_id:
             metadata = _json_object(metadata_json)
@@ -109,14 +114,18 @@ def parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
     binding = execution_store.get_binding(conn, "task", parent_task_id)
     if retrigger_wakeup_id is not None:
         # An audited operator request starts a new subject. It never reopens
-        # the failed parent or transfers a DBOS-owned subject to legacy.
+        # the failed parent or changes its recorded ownership.
         requested = db_records.first(
             db_read_wakeups.find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id)
         )
         return bool(requested) and (
-            not binding or (binding["binding_status"] == "terminal" or (binding["binding_status"] == "active"))
+            not binding
+            or (
+                binding["binding_status"] == BindingStatus.TERMINAL
+                or (binding["binding_status"] == BindingStatus.ACTIVE)
+            )
         )
-    return not binding or (binding["binding_status"] == "active")
+    return not binding or (binding["binding_status"] == BindingStatus.ACTIVE)
 
 
 def reconcile_task_allowed(conn, task_id, run_now):
@@ -125,20 +134,20 @@ def reconcile_task_allowed(conn, task_id, run_now):
     binding = execution_store.get_binding(conn, "task", task_id)
     if binding:
         return binding["binding_status"] in {
-            "active",
-            "terminal",
+            BindingStatus.ACTIVE,
+            BindingStatus.TERMINAL,
         }
     row = db_records.first(db_read_tasks.find_lifecycle_by_task_id(conn, task_id))
     if not row:
         return False
-    if row[0] in {"completed", "failed", "canceled", "ignored"}:
+    if row[0] in TERMINAL_TASK_LIFECYCLES:
         return True
     return claim_task(conn, task_id, run_now)
 
 
 def close_subject(conn, subject_type, subject_id, run_now):
     binding = execution_store.get_binding(conn, subject_type, subject_id)
-    if binding and binding["binding_status"] == "active":
+    if binding and binding["binding_status"] == BindingStatus.ACTIVE:
         execution_store.close_binding(conn, subject_type, subject_id, run_now)
 
 
@@ -147,15 +156,15 @@ def close_terminal_task(conn, task_id, run_now):
     if not row:
         return
     task_kind, lifecycle, metadata_json = row
-    if lifecycle not in {"completed", "failed", "canceled", "ignored"}:
+    if lifecycle not in TERMINAL_TASK_LIFECYCLES:
         return
-    if task_kind == "human_request":
+    if task_kind == TaskKind.HUMAN_REQUEST:
         close_subject(conn, "task", task_id, run_now)
         return
     episode_id = _json_object(metadata_json).get("remediation_episode_id")
     if episode_id:
         episode = db_records.first(db_read_pr_remediation_episodes.find_status_by_episode_id(conn, episode_id))
-        if episode and episode[0] in {"resolved", "exhausted", "superseded", "canceled"}:
+        if episode and episode[0] in TERMINAL_REMEDIATION_STATUSES:
             close_subject(conn, "remediation_episode", episode_id, run_now)
 
 
@@ -174,16 +183,16 @@ def mark_attention(conn, task_id, run_now):
         candidates.append(("task", task_id))
     for candidate_type, candidate_id in candidates:
         binding = execution_store.get_binding(conn, candidate_type, candidate_id)
-        if binding and binding["binding_status"] == "active":
+        if binding and binding["binding_status"] == BindingStatus.ACTIVE:
             execution_store.mark_binding_attention(conn, candidate_type, candidate_id, run_now)
             return
 
 
 def waiting_reply_allowed(conn, task_id, now):
     row = db_records.first(db_read_tasks.find_task_kind_and_lifecycle_and_metadata_json_by_task_id(conn, task_id))
-    if not row or row[1] != "waiting_for_user":
+    if not row or row[1] != TaskLifecycle.WAITING_FOR_USER.value:
         return False
-    if row[0] in {"ci_remediation", "merge_conflict_remediation"}:
+    if row[0] in REMEDIATION_TASK_KINDS:
         episode = _json_object(row[2]).get("remediation_episode_id")
         state = db_records.first(
             db_read_pr_remediation_episodes.find_status_and_metadata_json_by_episode_id(conn, episode)

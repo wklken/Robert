@@ -1,5 +1,8 @@
 """Deterministic read models for the DD repository task board."""
 
+from robert_agent.foundation.contracts.execution import BindingStatus
+from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskLifecycle, WorkCommand
+
 import base64
 import json
 from contextlib import closing
@@ -155,7 +158,7 @@ def _valid_commands(column, attention, *, running=False, publishing=False):
     if column == "done":
         return ["reopen"]
     if not publishing and any(a.get("metadata", {}).get("supervision_decision_id") for a in attention):
-        return ["reply", "cancel"]
+        return [WorkCommand.REPLY.value, WorkCommand.CANCEL.value]
     if publishing:
         return ["cancel"]
     if running:
@@ -265,7 +268,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         )
     elif (
         task
-        and task["lifecycle"] == "detected"
+        and task["lifecycle"] == TaskLifecycle.DETECTED
         and row["origin_type"] == "github"
         and not running
         and not publication_in_progress
@@ -279,7 +282,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
         )
     elif (
         task
-        and task["lifecycle"] in {"detected", "authorized", "classified", "queued"}
+        and task["lifecycle"]
+        in {TaskLifecycle.DETECTED, TaskLifecycle.AUTHORIZED, TaskLifecycle.CLASSIFIED, TaskLifecycle.QUEUED}
         and not running
         and not publication_in_progress
         and not any(a["type"] == "operator_decision_required" for a in attention)
@@ -308,7 +312,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             attention[0]["type"],
             attention[0]["summary"] or "Pull request review needs attention",
         )
-    elif task and task["lifecycle"] == "failed":
+    elif task and task["lifecycle"] == TaskLifecycle.FAILED:
         column, reason_code, reason_summary = (
             "waiting",
             "execution_failed",
@@ -320,7 +324,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             "source_closed",
             "Source closed; cancel this item to finish its lifecycle.",
         )
-    elif task and task["lifecycle"] in {"detected", "authorized", "classified", "queued", "running"}:
+    elif task and task["lifecycle"] in ACTIVE_TASK_LIFECYCLES:
         column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
     elif pr and (pr["state"] or "open").lower() == "open":
         column, reason_code, reason_summary = "review", "open_pr", f"PR #{pr['number']} is open"
@@ -415,12 +419,10 @@ def _project_item(conn, row, *, controls=None, facts=None):
                 if not facts["publication_retry_pending"] and not facts["publication_retry_blocked"]
                 else []
             ) + ["cancel"]
-        elif task and task["lifecycle"] == "failed" and not running and not publication_in_progress:
+        elif task and task["lifecycle"] == TaskLifecycle.FAILED and not running and not publication_in_progress:
             if row["origin_type"] != "web":
-                binding = execution_store.read_binding(conn, "task", task["task_id"])
-                ownership_blocked = binding and (
-                    binding["binding_status"] == "attention" or binding.get("owner_engine") == "dbos"
-                )
+                binding = execution_store.get_binding(conn, "task", task["task_id"])
+                ownership_blocked = binding and binding["binding_status"] == BindingStatus.ATTENTION
                 pending = db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"]))
                 operator_failure = json.loads(task["metadata_json"] or "{}").get("trigger_work_item_event_id") and any(
                     a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"]

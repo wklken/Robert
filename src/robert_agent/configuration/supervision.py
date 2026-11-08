@@ -1,11 +1,16 @@
 """Validate supervision settings without importing execution services."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+
+from robert_agent.foundation.contracts.delivery import GitHubActionType
+from robert_agent.foundation.contracts.supervision import RecoveryActionKind
+
 from pathlib import Path
 import re
 
 
 DEFAULTS = {
-    "mode": "observe",
+    "mode": SupervisionMode.OBSERVE.value,
     "poll_seconds": 60,
     "batch_size": 100,
     "stall_seconds": 300,
@@ -17,11 +22,11 @@ DEFAULTS = {
 }
 
 RECOVERY_STAGES = {
-    "spool_replay": "ingestion",
-    "audit_retry": "audit",
-    "handoff_resume": "handoff",
-    "publication_retry": "publication",
-    "publication_reconcile": "publication_reconcile",
+    RecoveryActionKind.SPOOL_REPLAY.value: "ingestion",
+    RecoveryActionKind.AUDIT_RETRY.value: "audit",
+    RecoveryActionKind.HANDOFF_RESUME.value: "handoff",
+    RecoveryActionKind.PUBLICATION_RETRY.value: "publication",
+    RecoveryActionKind.PUBLICATION_RECONCILE.value: "publication_reconcile",
 }
 
 _DIAGNOSIS_DEFAULTS = {
@@ -47,7 +52,7 @@ _DENIED_ENV_PREFIXES = (
 )
 _DENIED_ENV_NAMES = {"HOME", "PATH", "TMPDIR", "BASH_ENV", "ENV", "NODE_OPTIONS"}
 
-REPAIR_ACTIONS = ("push_existing_pr", "open_pr")
+REPAIR_ACTIONS = (GitHubActionType.PUSH_EXISTING_PR.value, GitHubActionType.OPEN_PR.value)
 _REPAIR_DEFAULTS: dict[str, object] = {
     "mode": "backlog",
     "worker": None,
@@ -152,7 +157,12 @@ def normalize(raw):
     if unknown:
         raise ValueError("unsupported supervision fields: " + ", ".join(sorted(unknown)))
     result = {**DEFAULTS, **raw}
-    if result["mode"] not in ("off", "observe", "recover_known", "decide"):
+    if result["mode"] not in (
+        SupervisionMode.OFF.value,
+        SupervisionMode.OBSERVE.value,
+        SupervisionMode.RECOVER_KNOWN.value,
+        SupervisionMode.DECIDE.value,
+    ):
         raise ValueError("supervision.mode must be off, observe, recover_known or decide")
     for key, maximum in (
         ("poll_seconds", 3600),
@@ -166,7 +176,7 @@ def normalize(raw):
         result["decision"] = normalize_diagnosis(result["decision"])
     except ValueError as exc:
         raise ValueError(str(exc).replace("supervision.diagnosis", "supervision.decision")) from exc
-    if result["mode"] == "decide" and result["decision"] is None:
+    if result["mode"] == SupervisionMode.DECIDE.value and result["decision"] is None:
         raise ValueError("supervision.mode decide requires supervision.decision")
     recovery = result["recovery"]
     if recovery is not None:
