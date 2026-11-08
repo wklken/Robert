@@ -12,10 +12,15 @@ class GitHubInputFixture(RepositoryCycleFixture):
     def db(self):
         return self.data_dir / "dd.sqlite3"
 
-    def scan(self, events):
+    def scan(self, events, *, consume_observations=False):
         self.fixture_path.write_text(json.dumps({"events": events}))
         value = cycle.run_once(
-            self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True, skip_publish=True
+            self.config_path,
+            fixture_path=self.fixture_path,
+            dry_run=True,
+            skip_external=True,
+            skip_publish=True,
+            consume_observations=consume_observations,
         )
         self.assertTrue(value["ok"], value)
         return value
