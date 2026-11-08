@@ -11,7 +11,15 @@ permissions:
   attestations: write
 
 jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+    with:
+      full-checks: true
+
   build-and-publish:
+    needs: checks
     runs-on: ubuntu-latest
     environment: pypi
     steps:
@@ -20,26 +28,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e .
       - run: python -m pip install build
-      - name: Restrict the disposable CI interpreter for maintenance tests
-        shell: python
-        run: |
-          import os, stat, subprocess, sys
-          from pathlib import Path
-          executable = Path(sys.executable).resolve()
-          info = executable.stat()
-          print(f"Maintenance interpreter: {executable}; mode={stat.S_IMODE(info.st_mode):04o}; owner={info.st_uid}; runner={os.geteuid()}", flush=True)
-          # The production maintenance policy rejects group/world-writable
-          # executables. Hosted tool caches can ship with broader permissions.
-          if info.st_mode & 0o022:
-              if info.st_uid == 0 and os.geteuid() != 0:
-                  subprocess.run(['sudo', '-n', 'chmod', 'go-w', str(executable)], check=True)
-              else:
-                  executable.chmod(stat.S_IMODE(info.st_mode) & ~0o022)
-          from robert_agent.workflows.maintenance.repair import _fingerprint_file
-          _fingerprint_file(executable)
-      - run: python -B -m unittest discover -s tests
       - run: python -m build
       - uses: actions/attest-build-provenance@v4
         with:

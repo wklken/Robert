@@ -10,7 +10,7 @@ Python 3.10 reached end of life on 2026-10-01 and is no longer supported.
 See the [official Python version status](https://devguide.python.org/versions/).
 
 When a branch reaches EOL, raise `project.requires-python` in `pyproject.toml`
-and update its classifiers, Ruff target, CI matrix and installation guides
+and update its classifiers, Ruff target, CI matrices and installation guides
 together. Add new stable Python releases to the matrix before claiming support.
 
 ```bash
@@ -87,6 +87,26 @@ Plans, reviews and remediation records under `docs/superpowers/`, `docs/reviews/
 and `docs/remediation/` are local archives ignored by Git; durable usage and
 architecture rules belong in the published guides.
 
+## CI checks
+
+Pull requests and pushes to `main` run four jobs:
+
+- The complete unittest suite on Linux with Python 3.11 and 3.15, the minimum
+  and maximum supported versions.
+- One Python 3.15 quality job for Ruff lint/format, import boundaries, the
+  configured mypy targets, compilation and diff checks.
+- Secret scanning.
+
+New commits to a pull request cancel its superseded CI run. Ordinary CI does
+not build packages, run installed-wheel smoke tests, audit dependencies or
+check documentation links.
+
+Pushing a `v*` release tag calls the same CI workflow with `full-checks: true`.
+It expands the test matrix to Linux/macOS and every supported Python version
+(3.11–3.15), audits each tested environment, and enables the installed-wheel
+smoke and documentation-link jobs. Quality and secret checks also run.
+The release publishing job waits for all these checks to pass.
+
 ## Architecture contracts
 
 ### Local and self-hosted
@@ -160,7 +180,7 @@ module and the existing dependencies do not provide these mapping and query-buil
 capabilities. The synchronous API supports the project's supported Python matrix; the
 runtime keeps sqlite3's existing transaction behavior and uses no ORM session identity map.
 The dependency range stays on the maintained 2.0 line. Its MIT license is compatible with
-this project; normal CI dependency audits include SQLAlchemy and its resolved dependencies.
+this project; release CI dependency audits include SQLAlchemy and its resolved dependencies.
 No additional database service, migration tool, or asynchronous driver is required.
 
 Hot read paths reuse immutable parameterized statement templates. A process-local cache
