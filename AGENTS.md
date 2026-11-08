@@ -31,7 +31,10 @@ for the published source contract. Execution plans and review records under
 ignored by Git. Published documentation describes current code and supported
 operations; keep implementation plans, review ledgers, historical comparisons
 and upgrade/migration procedures out of it. Use [the documentation index](docs/README.md)
-to find and maintain the current guides.
+to find and maintain the current guides. Keep installation, general usage,
+architecture and development entrypoints at the top level of `docs/`. Put
+feature-specific configuration and implementation details in `docs/features/`
+and add them to its index.
 
 Paths below are relative to `src/robert_agent/`.
 

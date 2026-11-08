@@ -1,6 +1,6 @@
 # 多 Agent 投票
 
-[文档目录](README.md)
+[文档目录](../README.md) · [功能专题](README.md)
 
 在 Issue 或 PR 中明确 `@` Robert 请求投票或表决。主 Agent 整理问题和选项，多个模型独立投票，再汇总回帖到触发请求所在的 GitHub 线程。投票提供决策建议，不会自动改代码、push、合并或关闭 Issue。
 

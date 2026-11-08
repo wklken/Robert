@@ -55,7 +55,7 @@ repos:
 Worker `adapter`, `command`, `model` and `effort` are required. The command
 adapter requires an argv list. Prompt transport is fixed to stdin.
 
-The [continuous supervision settings](task-supervision.md) live under
+The [continuous supervision settings](features/task-supervision.md) live under
 `supervision` alongside worker timing fields. The default mode is `observe`;
 diagnosis, recovery and repair require explicit configuration.
 
@@ -119,7 +119,7 @@ only after the current remote PR head and base match the audited snapshot.
 
 The ordinary worker deadline remains the smaller of the supervision ceiling
 and its own timeout_seconds. PR automation's max_wall_minutes is a separate
-business-episode budget and keeps its existing unit. See [polling](github-polling.md)
+business-episode budget and keeps its existing unit. See [polling](features/github-polling.md)
 for server-directed intervals and [retention](#diagnostic-retention) for protected history.
 
 ### Skill examples
@@ -444,5 +444,5 @@ use actual boundary timestamps and monotonic durations; Codex
 The opt-in `vote` route accepts explicit trusted mentions on Issues and PRs,
 prepares one fixed question/options/context, collects independent equal ballots,
 and posts a source-preserving report to the triggering conversation. See
-[Multi-Agent voting](multi-agent-vote.md) for configuration, abstentions, round
+[Multi-Agent voting](features/multi-agent-vote.md) for configuration, abstentions, round
 isolation, recovery and publication rules.

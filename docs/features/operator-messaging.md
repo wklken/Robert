@@ -1,5 +1,7 @@
 # Operator messaging
 
+[文档目录](../README.md) · [功能专题](README.md)
+
 Robert can send worker questions, approval requests and failure notifications to
 OpenClaw and receive explicit responses from an authorized operator. Messaging
 is disabled by default. The existing status/artifact commands remain available.

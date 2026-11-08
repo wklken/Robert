@@ -180,7 +180,7 @@ robert run once --config ~/.config/robert/config.yml --dry-run --skip-external
 
 按[Supervisor 完整配置](guides.md#daemon-service)创建配置与日志目录，替换示例中的用户路径。
 这个进程管理器与 `robert supervisor` 独立任务监督器是两回事；初次安装运行 daemon 和 Web 即可，
-额外监督服务按[持续监督指南](task-supervision.md)配置。
+额外监督服务按[持续监督指南](features/task-supervision.md)配置。
 
 启动 daemon 后，它可能接收已有请求、执行 Agent 并发布允许的 GitHub 动作。
 确认仓库和可信用户正确，且没有旧实例后执行：

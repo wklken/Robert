@@ -1,6 +1,6 @@
 # Continuous task supervision
 
-[文档目录](README.md)
+[文档目录](../README.md) · [功能专题](README.md)
 
 Robert's independent supervisor observes the existing control plane. It records
 incidents without changing task ownership, cancellation, audit, or publication.
@@ -28,7 +28,7 @@ supervision:
 ```
 
 The command is an administrator-provided model API wrapper. It reads one JSON
-bundle on stdin and returns the [decision contract](../src/robert_agent/resources/supervision-decision.md)
+bundle on stdin and returns the [decision contract](../../src/robert_agent/resources/supervision-decision.md)
 on stdout. It must expose no tools. The private working directory and HOME are
 not an OS sandbox. Only explicitly allowed model environment variables reach
 the command; ordinary coding adapters are not this profile. An existing
@@ -171,13 +171,13 @@ A same-host process cannot detect a complete host power loss; external liveness
 monitoring is a separate deployment responsibility.
 
 The published supervision boundaries are described in the
-[architecture guide](architecture.md#worker-监督与失败恢复).
+[architecture guide](../architecture.md#worker-监督与失败恢复).
 
 ## Optional semantic diagnosis
 
 Configure a dedicated administrator-owned wrapper that accepts one JSON evidence
 bundle on stdin and returns the structured JSON described in
-the [diagnosis contract](../src/robert_agent/resources/supervision-diagnosis.md).
+the [diagnosis contract](../../src/robert_agent/resources/supervision-diagnosis.md).
 It must expose no model tools. The ordinary coding adapters are not a diagnosis profile. Example (replace the executable):
 
 ```yaml

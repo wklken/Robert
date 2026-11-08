@@ -43,13 +43,13 @@ Robert 运行在你自己的 Linux 或 macOS 机器上。它持续关注指定�
 - **GitHub 协作闭环**：从 Issue 分析、代码修改、创建 PR 到评审与后续修订，在原有讨论中持续跟进。
 - **多种编码 Agent**：支持 Codex、Claude Code、OpenCode、`tcodex`、`tclaude`、`cbc` 和自定义命令；可按任务类型选择 Agent、模型和 Skills。见[Worker 配置](docs/guides.md#worker-adapters)。
 - **多仓库与独立工作区**：各仓库分别设置可信用户、并发和工作目录，代码修改使用 Git worktree，同一 Issue/PR 的工作串行处理。
-- **任务看板**：查看排队、执行、需要处理、待评审等状态及日志、产物；开启写入模式后可提交本地任务、回复、重试和取消。见[看板指南](docs/web-lifecycle-board.md)。
+- **任务看板**：查看排队、执行、需要处理、待评审等状态及日志、产物；开启写入模式后可提交本地任务、回复、重试和取消。见[看板指南](docs/features/web-lifecycle-board.md)。
 - **执行监督与恢复**：记录阶段、心跳和每次尝试，处理启动失败、超时与进程清理；可配置备用模型，失败后保留原因和恢复入口。
-- **多模型评审与投票**：按 PR 作者白名单启用[多模型评审](docs/multi-model-review.md)，或响应可信用户的显式[投票请求](docs/multi-agent-vote.md)。需要额外配置。
-- **持续任务监督**：独立观察停滞与交付证据，按策略启用模型诊断、恢复决策和工程修复。见[监督指南](docs/task-supervision.md)。
+- **多模型评审与投票**：按 PR 作者白名单启用[多模型评审](docs/features/multi-model-review.md)，或响应可信用户的显式[投票请求](docs/features/multi-agent-vote.md)。需要额外配置。
+- **持续任务监督**：独立观察停滞与交付证据，按策略启用模型诊断、恢复决策和工程修复。见[监督指南](docs/features/task-supervision.md)。
 - **PR 自动修复**：按仓库启用 CI 失败修复和冲突处理，限制检查名称、次数与预算；默认关闭。见[配置参考](docs/reference.md#configuration)。
 - **无人值守运行**：支持 Supervisor 管理 daemon 与 Web，以及 systemd、macOS LaunchAgent；本地 SQLite 保存任务、审计和发布去重记录。见[服务部署](docs/guides.md#daemon-service)。
-- **OpenClaw 集成**：查询任务与运行状态；显式启用消息后接收提问和故障通知，并提交受权限约束的回复。见[消息指南](docs/operator-messaging.md)。
+- **OpenClaw 集成**：查询任务与运行状态；显式启用消息后接收提问和故障通知，并提交受权限约束的回复。见[消息指南](docs/features/operator-messaging.md)。
 
 ## 它如何工作
 
@@ -76,7 +76,7 @@ Robert 负责接单、调度、监督和发布；**编码 Agent 负责理解代�
 *看板示例使用隔离演示数据，展示排队、执行、需要处理、待评审等状态。*
 
 Web 默认只读，绑定 `127.0.0.1:8765`。开启写入模式后，可提交本地任务、回复、
-重试或取消；具体操作见[生命周期看板](docs/web-lifecycle-board.md)。
+重试或取消；具体操作见[生命周期看板](docs/features/web-lifecycle-board.md)。
 **看板运行不等于任务会执行：后台 daemon 也必须运行。**
 
 ## 开始使用

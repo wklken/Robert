@@ -26,7 +26,7 @@ robert status --config ~/.config/robert/config.yml --output json
 | doctor 通过但模型启动失败 | doctor 不执行模型任务；检查 Worker 登录、配额、adapter、模型名和环境白名单 |
 | Claude 以 root 启动被拒绝 | 先确认运行账号和容器隔离；仅在符合条件时按[容器指南](guides.md#claude-workers-as-root-in-a-restricted-container)处理 |
 | Web 端口已占用 | 检查是否已有实例；不要为绕过错误启动同一配置的第二套 daemon |
-| 服务一直等待 lease | 排查旧实例和已记录进程，参照[进程恢复](github-polling.md#inspecting-and-recovering-attention)；不要直接删锁或数据库 |
+| 服务一直等待 lease | 排查旧实例和已记录进程，参照[进程恢复](features/github-polling.md#inspecting-and-recovering-attention)；不要直接删锁或数据库 |
 
 ## 看板正常，但没有执行或回复
 
@@ -54,7 +54,7 @@ supervisorctl -c ~/.config/robert/supervisord.conf tail robert-web stderr
 
 先修复失败原因。已启用写入模式时，根据任务当前状态使用看板提供的重试执行、重试发布或取消。
 若远端结果未知，先核实已有评论、分支或 PR，避免重复发布。
-操作含义见[看板指南](web-lifecycle-board.md)。
+操作含义见[看板指南](features/web-lifecycle-board.md)。
 
 手工 Supervisor 实例需要完全停止时：
 
@@ -78,7 +78,7 @@ supervisorctl -c ~/.config/robert/supervisord.conf shutdown
 **可以只开看板吗？** 可以查看已有数据，但没有 daemon 就不会推进新任务。
 
 **Supervisor 和 `robert supervisor` 是一个东西吗？** 前者是外部进程管理器，负责重启 daemon/Web；
-后者是 Robert 的独立任务监督进程，检查停滞和交付证据。详见[持续监督](task-supervision.md)。
+后者是 Robert 的独立任务监督进程，检查停滞和交付证据。详见[持续监督](features/task-supervision.md)。
 
 **数据在哪里？可以删掉重新来吗？** 默认配置在 `~/.config/robert/config.yml`，
 状态、任务和产物在 `~/.local/share/robert/`。不要把删除数据库作为重试方法：它包含授权、任务关联与发布去重证据。

@@ -360,7 +360,7 @@ Daemon definitions are `~/.config/systemd/user/robert.service`,
 uses `robert-supervisor.service`, `supervisord.supervision.conf`, or
 `dev.robert.supervisor.plist` in the corresponding directory.
 Use `--target daemon` or `--target supervisor` to select one service.
-See [continuous task supervision](task-supervision.md) for policy and operation.
+See [continuous task supervision](features/task-supervision.md) for policy and operation.
 The generated Supervisor template starts read-only Web on `127.0.0.1:8765`.
 Installing again overwrites the selected service definitions; inspect the
 preview and preserve intentional local settings before applying it.
@@ -435,7 +435,7 @@ robert openclaw install \
 
 The plugin exposes `/robert-status`, `/robert-task`, `/robert-run`, and
 `/robert-artifact`. Opt-in messaging adds `/robert-inbox`, `/robert-respond`
-and `/robert-messaging-context`. See [operator messaging](operator-messaging.md)
+and `/robert-messaging-context`. See [operator messaging](features/operator-messaging.md)
 for sender/session authorization, worker questions and supervisor notifications.
 The plugin never starts the Robert service or installs a scheduler.
 
