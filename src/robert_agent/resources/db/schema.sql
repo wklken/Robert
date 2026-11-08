@@ -695,3 +695,10 @@ CREATE TABLE IF NOT EXISTS dispatch_requests (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_requests_pending ON dispatch_requests(status, created_at);
+
+-- Recent dashboard pages read in index order instead of sorting all history.
+CREATE INDEX IF NOT EXISTS idx_tasks_recent ON tasks(updated_at DESC, task_id DESC);
+CREATE INDEX IF NOT EXISTS idx_github_actions_recent ON github_actions(created_at DESC, action_id DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_recent ON notifications(created_at DESC, notification_id DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_results_recent ON worker_results(created_at DESC, result_id DESC);
+CREATE INDEX IF NOT EXISTS idx_github_events_recent ON github_events(event_at DESC, event_id DESC);

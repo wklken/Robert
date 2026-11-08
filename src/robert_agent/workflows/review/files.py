@@ -80,6 +80,8 @@ def _text(value, label):
 
 def _source_path(value):
     _text(value, "source path")
+    if any(ord(char) < 32 or ord(char) == 127 or char == "`" for char in value):
+        raise ValueError("source location contains unsafe Markdown or control characters")
     path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts or "\\" in value or value in (".", ""):
         raise ValueError("source location must be a relative repository path")

@@ -116,6 +116,8 @@ class GitHubEvent(Base):
     event_at: Mapped[str] = mapped_column(Text)
     payload_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
+    __table_args__ = (Index("idx_github_events_recent", text("event_at DESC"), text("event_id DESC")),)
+
 
 class Workstream(Base):
     __tablename__ = "workstreams"
@@ -184,6 +186,7 @@ class Task(Base):
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
     __table_args__ = (
+        Index("idx_tasks_recent", text("updated_at DESC"), text("task_id DESC")),
         CheckConstraint("task_kind IN ('human_request', 'ci_remediation', 'merge_conflict_remediation')"),
         CheckConstraint(
             "lifecycle IN ('detected', 'authorized', 'classified', 'queued', 'running', 'completed', "

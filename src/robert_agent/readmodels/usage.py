@@ -5,6 +5,7 @@ from robert_agent.persistence.queries import github_actions as db_read_github_ac
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 
 import json
+from robert_agent.foundation.values import json_object
 import math
 import sys
 from pathlib import Path
@@ -173,10 +174,7 @@ def summarize_acceptance_metrics(conn):
     published_actions, publish_failed_actions, deduplicated_actions = _action_counts(conn)
     payloads = []
     for row in db_read_worker_results.find_for_summarize_acceptance_metrics(conn):
-        try:
-            metadata = json.loads(row[0] or "{}")
-        except ValueError:
-            metadata = {}
+        metadata = json_object(row[0])
         payloads.append(metadata.get("usage"))
     usage_summary = summarize_usage_payloads(payloads)
     result_total = accepted_results + rejected_results

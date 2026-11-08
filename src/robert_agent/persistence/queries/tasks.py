@@ -6,7 +6,7 @@ from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle, Work
 
 from functools import cache
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
 from robert_agent.persistence.predicates import runnable_task
 
@@ -1309,8 +1309,10 @@ def find_for_task(conn, task_id):
     table2 = tables["workstreams"].alias("w")
     table3 = tables["repos"].alias("r")
     table4 = tables["github_sources"].alias("s")
-    query7 = select(table1.c["workstream_id"].label("id"), sql_constant(0).label("depth")).set_label_style(
-        LABEL_STYLE_NONE
+    query7 = (
+        select(table1.c["workstream_id"].label("id"), sql_constant(0).label("depth"))
+        .where(table1.c.task_id == bindparam("p0"))
+        .set_label_style(LABEL_STYLE_NONE)
     )
     cte8 = query7.cte("ancestry", recursive=True)
     table9 = tables["workstreams"].alias("w")
@@ -1375,20 +1377,6 @@ def find_for_task(conn, task_id):
 def collect_filtered(conn, items, value_1, value_2, value_3):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
-    table3 = tables["github_actions"].alias("ga")
-    query4 = (
-        select(sql_constant(1))
-        .select_from(table3)
-        .where(
-            and_(
-                table3.c["task_id"] == table1.c["task_id"],
-                table3.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
-                table3.c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
-            )
-        )
-        .correlate_except(table3)
-        .set_label_style(LABEL_STYLE_NONE)
-    )
     table6 = tables["github_actions"].alias("ga")
     query7 = (
         select(sql_constant(1))
@@ -1409,7 +1397,7 @@ def collect_filtered(conn, items, value_1, value_2, value_3):
         select(
             table1.c["task_id"],
             case(
-                (query4.exists(), sql_constant("publication_delayed")),
+                (query7.exists(), sql_constant("publication_delayed")),
                 else_=sql_constant("queue_delayed"),
             ),
         )
@@ -1754,7 +1742,7 @@ def _lifecycle_facts_filtered_2_statement():
         select(
             tables["tasks"].c["task_id"],
             func.json_extract(
-                tables["tasks"].c["metadata_json"],
+                valid_json_or_empty(tables["tasks"].c.metadata_json),
                 sql_constant("$.remediation_episode_id"),
             ),
         )

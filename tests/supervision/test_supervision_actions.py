@@ -83,6 +83,20 @@ class SupervisionActionTests(unittest.TestCase):
             config=config or self.config,
         )
 
+    def test_unrelated_cancellation_does_not_block_recovery(self):
+        self.task("other", "other-lineage")
+        self.conn.execute(
+            "INSERT INTO work_items(work_item_id,repo_id,workstream_id,origin_type,title,"
+            "creation_idempotency_key,created_by,created_at,updated_at,canceled_at) "
+            "VALUES('other-item','repo','stream-other','web','Canceled','other','operator',?,?,?)",
+            (NOW, NOW, NOW),
+        )
+        self.assertEqual(len(self.plan()), 1)
+        self.assertEqual(self.begin()["status"], "claimed")
+        self.assertEqual(
+            actions.plan(self.conn, observations=[self.observation("other")], now=NOW, config=self.config), []
+        )
+
     def test_plan_reserves_once_without_mutating_business_state(self):
         first = self.plan()
         self.assertEqual(len(first), 1)

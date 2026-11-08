@@ -27,7 +27,10 @@ class WorkerResult(Base):
     created_at: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
-    __table_args__ = (UniqueConstraint("task_id", "attempt_id"),)
+    __table_args__ = (
+        Index("idx_worker_results_recent", text("created_at DESC"), text("result_id DESC")),
+        UniqueConstraint("task_id", "attempt_id"),
+    )
 
 
 class GitHubAction(Base):
@@ -48,6 +51,7 @@ class GitHubAction(Base):
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
     __table_args__ = (
+        Index("idx_github_actions_recent", text("created_at DESC"), text("action_id DESC")),
         CheckConstraint("audit_status IN ('pending', 'accepted', 'policy_violation', 'failed')"),
         CheckConstraint("publish_status IN ('not_published', 'published', 'skipped')"),
     )
@@ -82,6 +86,7 @@ class Notification(Base):
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
     __table_args__ = (
+        Index("idx_notifications_recent", text("created_at DESC"), text("notification_id DESC")),
         Index(
             "idx_notifications_delivery_pending",
             "channel",

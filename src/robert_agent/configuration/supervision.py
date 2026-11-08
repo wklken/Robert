@@ -50,7 +50,20 @@ _DENIED_ENV_PREFIXES = (
     "LD_",
     "DYLD_",
 )
-_DENIED_ENV_NAMES = {"HOME", "PATH", "TMPDIR", "BASH_ENV", "ENV", "NODE_OPTIONS"}
+_DENIED_ENV_NAMES = {
+    "HOME",
+    "PATH",
+    "TMPDIR",
+    "BASH_ENV",
+    "ENV",
+    "NODE_OPTIONS",
+    "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+    "KUBECONFIG",
+    "AZURE_CLIENT_SECRET",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "DOCKER_CONFIG",
+}
 
 REPAIR_ACTIONS = (GitHubActionType.PUSH_EXISTING_PR.value, GitHubActionType.OPEN_PR.value)
 _REPAIR_DEFAULTS: dict[str, object] = {

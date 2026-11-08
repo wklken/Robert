@@ -1,5 +1,7 @@
 """The sole worker submission contract and deterministic result normalization."""
 
+from robert_agent.context.memory_policy import memory_delta_error
+
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType, ReviewAction, VerificationStatus
 from robert_agent.foundation.contracts.work import TaskKind
 
@@ -236,6 +238,8 @@ def validate_submission(submission, output_type, origin_type):
             )
     if "memory_delta" in submission:
         memory = submission["memory_delta"]
+        memory_error = memory_delta_error(memory)
+        _require(memory_error is None, "memory_delta", memory_error or "")
         _require(isinstance(memory, dict), "memory_delta", "Memory delta must be an object.")
         for name in ("status", "reason"):
             _require(

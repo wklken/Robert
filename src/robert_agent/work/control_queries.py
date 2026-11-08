@@ -92,7 +92,11 @@ def lifecycle_facts(conn, item, *, controls=None):
             )
     attention = []
     for (encoded,) in db_read_tasks.lifecycle_facts_filtered(conn, streams):
-        stopped = json.loads(encoded or "{}").get("execution_attention")
+        try:
+            metadata = json.loads(encoded or "{}")
+            stopped = metadata.get("execution_attention")
+        except (ValueError, AttributeError):
+            stopped = {"reason_code": "invalid_task_metadata"}
         if isinstance(stopped, dict):
             attention.append(safe_text(stopped.get("reason_code") or "Execution requires operator attention."))
     from robert_agent.persistence import execution_control as execution_store

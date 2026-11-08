@@ -258,6 +258,18 @@ class ProjectMemoryTests(unittest.TestCase):
             },
         }
 
+    def test_unsafe_or_oversized_memory_never_reaches_storage(self):
+        from robert_agent.context import project as project_memory
+
+        for title in ("password=private-test-value", "x" * 70000, "/Users/sample/private/project"):
+            with self.subTest(kind=title[:20]), closing(sqlite3.connect(self.db_path)) as conn, conn:
+                payload = self._result_payload(title=title, short_summary="Useful context")
+                outcome = project_memory.record_memory_delta(
+                    conn, payload, "github:example/backend!456", self.repo_id, self.now
+                )
+                self.assertEqual(outcome["recorded_count"], 0)
+                self.assertEqual(conn.execute("SELECT count(*) FROM project_memory_entries").fetchone()[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

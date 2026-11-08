@@ -7,7 +7,7 @@ from functools import lru_cache
 
 from functools import cache
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
 from robert_agent.persistence.predicates import (
     occupied_attempt,
@@ -248,6 +248,7 @@ def find_for_current_dispatch_target(conn, attempt_id):
             table3.c["path"],
             table2.c["routing_mode"],
             table2.c["requested_worker"],
+            table1.c["branch_name"],
         )
         .select_from(
             table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=False).join(
@@ -1682,4 +1683,29 @@ def can_resume_native_slot(conn, attempt_id):
             task.c.lifecycle.in_(("queued", "running")),
         ),
         {},
+    )
+
+
+def find_dispatch_workspace_ownership(conn, attempt_id, task_id):
+    current = tables["attempts"].alias("current_workspace_attempt")
+    previous = tables["attempts"].alias("previous_workspace_attempt")
+    metadata = valid_json_or_empty(current.c.metadata_json)
+    owned_resume = (
+        select(1)
+        .where(
+            previous.c.attempt_id == func.json_extract(metadata, "$.resume.previous_attempt_id"),
+            func.json_extract(metadata, "$.resume.strategy") == "resume_from_worktree",
+            previous.c.task_id == current.c.task_id,
+            previous.c.worktree_path == current.c.worktree_path,
+            previous.c.branch_name == current.c.branch_name,
+            previous.c.attempt_no < current.c.attempt_no,
+        )
+        .correlate(current)
+        .exists()
+    )
+    return statements.read(
+        conn,
+        select(current.c.worktree_path, current.c.branch_name, owned_resume).where(
+            current.c.attempt_id == attempt_id, current.c.task_id == task_id
+        ),
     )

@@ -369,7 +369,7 @@ def find_for_source_has_active_unpublished_result(conn, source_id, source_id_2):
                                 not_(table5.c["action_id"].is_(null())),
                                 table5.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
                             ),
-                            table5.c["publish_status"] != sql_constant(PublishStatus.PUBLISHED.value),
+                            table5.c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
                         ),
                     )
                 ),

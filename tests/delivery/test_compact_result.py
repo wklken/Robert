@@ -238,6 +238,26 @@ class CompactResultTests(CompactResultFixture):
             with self.subTest(output=output):
                 self.assertIsNotNone(audit_result._audit_expected_actions(output, types))
 
+    def test_completed_attempt_cannot_prepare_a_new_spooled_submission(self):
+        db, task, attempt, _, _ = self.prepare("comment")
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("UPDATE attempts SET status='completed' WHERE attempt_id=?", (attempt,))
+        with patch.object(result_contract, "normalize", wraps=result_contract.normalize) as normalize:
+            receipt = result.record_result(db, self.envelope(task, attempt))
+        self.assertEqual(receipt["status"], "rejected_by_supervisor")
+        normalize.assert_not_called()
+        self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
+
+    def test_memory_validation_blocks_secret_and_oversized_payload_before_spooling(self):
+        for value in ("password=private-test-value", "x" * 70000):
+            envelope = self.envelope("t", "a")
+            envelope["submission"]["memory_delta"] = {
+                "status": "has_memory",
+                "entries": [{"title": value, "short_summary": "Context"}],
+            }
+            with self.subTest(kind=value[:20]), self.assertRaises(result_contract.InvalidSubmission):
+                result_contract.normalize(envelope, self.settings())
+
 
 if __name__ == "__main__":
     unittest.main()

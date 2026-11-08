@@ -1,6 +1,7 @@
 import json
+import os
+import tempfile
 from pathlib import Path
-import shutil
 import subprocess
 
 from robert_agent.paths import default_data_dir
@@ -257,6 +258,26 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
                     "robert openclaw status to inspect the installed plugin."
                 ),
             }
+    if path.is_symlink() or path.resolve() in {Path.home().resolve(), Path(path.anchor or "/")}:
+        return {"ok": False, "status": "unsafe_target", "safe_error": "Plugin target must be a dedicated directory."}
+    if path.exists():
+        try:
+            owned = (
+                all(
+                    (path / name).is_file() and not (path / name).is_symlink()
+                    for name in ("package.json", "openclaw.plugin.json", "index.js")
+                )
+                and json.loads((path / "openclaw.plugin.json").read_text())["id"] == PLUGIN_ID
+                and json.loads((path / "package.json").read_text())["name"] == "openclaw-robert-commands-local"
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            owned = False
+        if not owned:
+            return {
+                "ok": False,
+                "status": "unsafe_target",
+                "safe_error": "--force only updates an existing Robert plugin.",
+            }
     package = {
         "name": "openclaw-robert-commands-local",
         "version": "0.1.0",
@@ -299,11 +320,19 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
             "plugin_dir": str(path),
             "files": sorted(files),
         }
-    if path.exists():
-        shutil.rmtree(path)
-    path.mkdir(parents=True)
+    path.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():
-        (path / name).write_text(content, encoding="utf-8")
+        # Replace the directory entry; never overwrite an existing inode that
+        # could also be linked from an unrelated path.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path, delete=False) as output:
+                temporary = Path(output.name)
+                output.write(content)
+            os.replace(temporary, path / name)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return {
         "ok": True,
         "status": "written",

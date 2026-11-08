@@ -12,6 +12,9 @@ the origin's consumed array: GitHub `consumed_event_fingerprints` or Web
 consume later arrivals implicitly. `used_skills` describes skills actually used.
 `handoff` describes completed scope, limitations and recovery evidence. Optional
 `used_memory_ids` and `memory_delta` retain their project-memory meaning.
+`memory_delta` is limited to 32 entries and 64 KiB of UTF-8 JSON. All text,
+including nested evidence, must be free of secrets and already redacted before
+submission; invalid memory is rejected before result spooling and again at audit.
 
 Actions contain only semantic fields:
 

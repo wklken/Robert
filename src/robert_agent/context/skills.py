@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import warnings
 
 
 NAME_RE = re.compile(r"^name:\s*(?P<name>.+?)\s*$", re.MULTILINE)
@@ -12,7 +13,11 @@ def discover_skill_names(search_paths):
         if not root.exists():
             continue
         for manifest in root.rglob("SKILL.md"):
-            match = NAME_RE.search(manifest.read_text(encoding="utf-8"))
+            try:
+                match = NAME_RE.search(manifest.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError):
+                warnings.warn(f"Cannot read skill manifest: {manifest}", RuntimeWarning, stacklevel=2)
+                continue
             if match:
                 names.add(match.group("name").strip())
     return names

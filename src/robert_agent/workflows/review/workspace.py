@@ -304,9 +304,12 @@ def freeze_context(manifest):
         frozen["files"][str(context / name)] = review_files.sha256_file(context / name)
     prompt_path = Path(manifest["artifact_root"]) / "reviewer-prompt.md"
     review_files.safe_path(prompt_path, manifest["artifact_root"])
+    expected_prompt = _reviewer_text(frozen)
     if prompt_path.exists():
-        raise ValueError("unregistered reviewer prompt already exists")
-    prompt_path.write_text(_reviewer_text(frozen), encoding="utf-8")
+        if prompt_path.read_text(encoding="utf-8") != expected_prompt:
+            raise ValueError("unregistered reviewer prompt differs from frozen context")
+    else:
+        prompt_path.write_text(expected_prompt, encoding="utf-8")
     frozen.update(
         prompt_path=str(prompt_path),
         prompt_sha256=review_files.sha256_file(prompt_path),

@@ -325,3 +325,12 @@ class ReviewFilesTests(unittest.TestCase):
         review_files.atomic_json(self.path, invalid_result)
         with self.assertRaises(ValueError):
             review_files.read_result(self.path, self.manifest)
+
+    def test_source_locations_cannot_inject_markdown_or_control_lines(self):
+        for path in ("src/a`b.py", "src/a\nb.py", "src/a\x00b.py", "src/a\rb.py"):
+            with self.subTest(path=path):
+                result = copy.deepcopy(self.result)
+                result["findings"][0]["location"]["path"] = path
+                review_files.atomic_json(self.path, result)
+                with self.assertRaises(ValueError):
+                    review_files.read_result(self.path, self.manifest)

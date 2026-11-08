@@ -215,7 +215,7 @@ def find_for_notify_exhausted_episode(conn, notification_type, episode_id):
     return statements.read(conn, query1, {"p0": notification_type, "p1": episode_id})
 
 
-def find_for_deliver_pending(conn, now, limit, repo_ids=(), *, messaging_repo_ids=None, messaging_settings=None):
+def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None):
     notification = tables["notifications"]
     stmt = (
         select(notification.c.notification_id)
@@ -272,8 +272,6 @@ def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_i
             _dispatch_identity(messaging_settings),
         )
     )
-    if not repo_ids:
-        stmt = stmt.where(tables["notifications"].c.task_id.is_(None))
     return statements.read(conn, stmt.limit(1))
 
 
@@ -289,7 +287,7 @@ def _pending_delivery(now, repo_ids):
         ).not_in((sql_constant("sent"), sql_constant("exhausted"))),
         or_(retry_at.is_(None), func.julianday(retry_at) <= func.julianday(now)),
     )
-    if repo_ids:
+    if repo_ids is not None:
         task, stream = tables["tasks"], tables["workstreams"]
         scoped = (
             select(task.c.task_id)

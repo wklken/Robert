@@ -5,6 +5,7 @@ from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskL
 
 import base64
 import json
+from robert_agent.foundation.values import json_object
 from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -84,7 +85,8 @@ def _decode_json(value, default):
     if not value:
         return default
     try:
-        return json.loads(value)
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, type(default)) else default
     except (TypeError, ValueError):
         return default
 
@@ -241,7 +243,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             "worker_cleanup_pending",
             "Worker cleanup is incomplete: " + facts["cleanup_pending"][0],
         )
-    elif task and json.loads(task["metadata_json"] or "{}").get("audit_retry_required") and not running:
+    elif task and json_object(task["metadata_json"]).get("audit_retry_required") and not running:
         column, reason_code, reason_summary = (
             "waiting",
             "audit_inspection_exhausted",
@@ -393,7 +395,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             card["valid_commands"] = ["cancel"]
         elif (
             task
-            and json.loads(task["metadata_json"] or "{}").get("execution_attention", {}).get("reason_code")
+            and json_object(task["metadata_json"]).get("execution_attention", {}).get("reason_code")
             == "result_contract_cutover"
         ):
             from robert_agent.execution import rounds as native_rounds
@@ -410,7 +412,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
                 and not (running or publication_in_progress or prepared or pending)
             )
             card["valid_commands"] = (["retrigger"] if recoverable else []) + ["cancel"]
-        elif task and json.loads(task["metadata_json"] or "{}").get("audit_retry_required") and not running:
+        elif task and json_object(task["metadata_json"]).get("audit_retry_required") and not running:
             card["valid_commands"] = ["retry", "cancel"]
         elif unavailable and not running and not publication_in_progress:
             card["valid_commands"] = ["retry", "cancel"]
@@ -425,7 +427,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
                 binding = execution_store.get_binding(conn, "task", task["task_id"])
                 ownership_blocked = binding and binding["binding_status"] == BindingStatus.ATTENTION
                 pending = db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"]))
-                operator_failure = json.loads(task["metadata_json"] or "{}").get("trigger_work_item_event_id") and any(
+                operator_failure = json_object(task["metadata_json"]).get("trigger_work_item_event_id") and any(
                     a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"]
                     for a in attention
                 )
@@ -517,6 +519,8 @@ def list_board(
         raise BoardQueryError("invalid column")
     if priority and priority not in {"P0", "P1", "P2", "P3"}:
         raise BoardQueryError("invalid priority")
+    if attention is not None and attention not in {True, False, "true", "false", "1", "0", "yes", "no"}:
+        raise BoardQueryError("attention must be a boolean")
     cursor_value = _cursor_decode(cursor)
     with closing(_connect(db_path)) as conn:
         db_transactions.begin(conn)  # Historical and active partitions share one read snapshot.
@@ -546,11 +550,11 @@ def list_board(
             + terminal["counts"].get(column_id, 0)
             for column_id in [name for name, _label in COLUMNS] + ["history"]
         }
+        agents = sorted({item["agent"] for item in projections} | set(terminal["agents"]) | {"Auto"})
         if cursor_value:
             projections = [item for item in projections if (item["updated_at"], item["work_item_id"]) < cursor_value]
         if column:
             projections = [item for item in projections if item["column"] == column]
-        agents = sorted({item["agent"] for item in projections} | set(terminal["agents"]) | {"Auto"})
         page = sorted(
             projections + [dict(row) for row in terminal["rows"]],
             key=lambda item: (item["updated_at"], item["work_item_id"]),

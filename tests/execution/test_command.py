@@ -435,3 +435,13 @@ class CommandJournalTests(WorkerProtocolFixture):
                 ).fetchone()[0],
                 1,
             )
+
+    def test_live_pid_without_recorded_identity_is_unknown(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(cycle_evidence.os, "kill"),
+            patch.object(cycle_evidence.attempt_process, "process_state", return_value="S"),
+            patch.object(cycle_evidence.command_heartbeat, "process_identity", return_value="current"),
+        ):
+            self.assertEqual(cycle_evidence._command_process_status(123, ""), "unknown")

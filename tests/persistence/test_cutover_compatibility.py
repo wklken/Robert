@@ -242,7 +242,7 @@ class PreOrmCutoverTests(unittest.TestCase):
             command=["fixture-receiver"],
             runner=receive,
             now=_NOW,
-            repo_ids=[],
+            repo_ids=None,
         )
         self.assertEqual(unscoped["sent"], 1)
         self.assertEqual(delivered[-1], "foreign")

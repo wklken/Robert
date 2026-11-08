@@ -220,6 +220,34 @@ class RedactionTests(unittest.TestCase):
         self.assertIn("<local-path>", result["text"])
         self.assertNotIn("/home/runner", result["text"])
 
+    def test_structured_and_common_secret_key_assignments_are_blocked(self):
+        from robert_agent.security import redaction
+
+        for key in ("apiKey", "secret_key", "private_key", "AWS_SECRET_ACCESS_KEY", "x-api-key", "accessToken"):
+            for template in ('"{}": "private-test-value"', "{}=private-test-value"):
+                with self.subTest(key=key, template=template):
+                    self.assertFalse(redaction.redact_text(template.format(key))["ok"])
+        for value in ('"cache_key": "normal-cache-key"', "monkey=banana", "max_tokens=100000"):
+            self.assertTrue(redaction.redact_text(value)["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CredentialScanBudgetTests(unittest.TestCase):
+    def test_maximum_memory_text_does_not_rescan_every_hyphen(self):
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from robert_agent.security.redaction import redact_text; assert redact_text('a-' * 32768)['ok']",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
