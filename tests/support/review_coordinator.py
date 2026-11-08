@@ -155,7 +155,10 @@ class ReviewCoordinatorFixture(unittest.TestCase):
 
     def coordinator(self):
         task, attempt = self.current()
-        return review_coordinator.Coordinator(self.db, task, attempt, fetch_pr=self.pr, launcher=self.launcher)
+        # Keep real slot/exit checks without the production one-second polling delay.
+        return review_coordinator.Coordinator(
+            self.db, task, attempt, fetch_pr=self.pr, launcher=self.launcher, poll_seconds=0.02
+        )
 
     def finish_task(self, task):
         with fixture_database.connect(self.db) as conn:
