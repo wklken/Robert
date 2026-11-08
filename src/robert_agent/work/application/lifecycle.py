@@ -1,8 +1,10 @@
 """Task lifecycle transitions shared by execution and publication."""
 
 from robert_agent.foundation.contracts.work import TaskKind
+from robert_agent.security.redaction import redact_and_truncate
 
 from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import task_events as db_read_task_events
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.stores import tasks as db_write_tasks
@@ -41,6 +43,29 @@ def finalize_failed_task(conn, task_id, workstream_id, run_now, audit):
         reason=(audit.get("status") if isinstance(audit, dict) else "task_failed") or "task_failed",
         now=run_now,
     )
+    pending = db_read_task_events.find_for_pending_events_for_task(conn, task_id)
+    if pending:
+        item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+        if item:
+            requests = []
+            for payload, fingerprint in pending:
+                event = json.loads(payload)
+                excerpt = redact_and_truncate(" ".join(str(event.get("body") or event.get("title") or "").split()), 240)
+                requests.append(f"- {fingerprint}: " + excerpt.get("text", "[redacted]"))
+            work_items.record_system_event(
+                conn,
+                item["work_item_id"],
+                event_type="pending_followups_recorded",
+                idempotency_key="failed-followups:" + task_id,
+                body=f"Task failed with {len(pending)} attached follow-up request(s) awaiting handoff. "
+                "Manual recovery is required; retry the task to include this context.\n" + "\n".join(requests),
+                metadata={
+                    "task_id": task_id,
+                    "kind": "pending_followups",
+                    "pending_event_fingerprints": [fingerprint for _, fingerprint in pending],
+                },
+                now=run_now,
+            )
     if not (isinstance(audit, dict) and audit.get("status") == "failed_timeout"):
         execution_ownership.close_terminal_task(conn, task_id, run_now)
     return True

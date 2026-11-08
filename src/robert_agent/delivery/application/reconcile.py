@@ -6,6 +6,8 @@ Returned evidence is deliberately small so a remote response can never leak
 an unbounded body, command output, or credential into Robert state.
 """
 
+from robert_agent.foundation.commands import ControlDeadlineExceeded
+
 from robert_agent.foundation.contracts.delivery import GitHubActionType
 
 import hashlib
@@ -221,6 +223,8 @@ def _reconcile_comment(action, action_scope, run_command):
     command = ["gh", "api", f"{endpoint}?per_page=100", "--paginate", "--slurp"]
     try:
         completed = run_command(command, capture_output=True, text=True)
+    except ControlDeadlineExceeded:
+        raise
     except Exception as exc:  # query failure is intentionally unknown
         return _result("unknown", "comment_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "comment_query_failed"):
@@ -290,6 +294,8 @@ def _reconcile_open_pr(action, action_scope, run_command):
     ]
     try:
         completed = run_command(command, capture_output=True, text=True)
+    except ControlDeadlineExceeded:
+        raise
     except Exception as exc:
         return _result("unknown", "open_pr_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "open_pr_query_failed"):
@@ -328,6 +334,8 @@ def _reconcile_open_pr(action, action_scope, run_command):
         ]
         try:
             viewed = run_command(view_command, capture_output=True, text=True)
+        except ControlDeadlineExceeded:
+            raise
         except Exception as exc:
             return _result("unknown", "open_pr_query_failed", error_type=type(exc).__name__)
         if _command_failure(viewed, "open_pr_query_failed"):
@@ -386,6 +394,8 @@ def _remote_branch(action, action_scope, run_command):
         else:
             command = ["git", "ls-remote", "--heads", remote, branch]
             completed = run_command(command, cwd=worktree, capture_output=True, text=True)
+    except ControlDeadlineExceeded:
+        raise
     except Exception as exc:
         return _result("unknown", "remote_branch_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "remote_branch_query_failed"):
@@ -418,6 +428,8 @@ def _remote_branch(action, action_scope, run_command):
             return _result("unknown", "existing_pr_snapshot_incomplete")
         try:
             snapshot = pr_health.fetch_pr_snapshot(repo, pr_number, runner=run_command)
+        except ControlDeadlineExceeded:
+            raise
         except Exception as exc:
             return _result(
                 "unknown",

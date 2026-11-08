@@ -74,6 +74,11 @@ def prepare_detected_local_tasks(
             description,
             created_by,
         ) = row
+        prior_retry = values.json_object(task_metadata_json).get("preparation_retry", {})
+        if prior_retry.get("next_retry_at") and values.parse_time(prior_retry["next_retry_at"]) > values.parse_time(
+            run_now
+        ):
+            continue
         event_rows = db_read_work_item_events.find_for_prepare_detected_local_tasks(conn, work_item_id)
         local_events = [
             {
@@ -147,9 +152,31 @@ def prepare_detected_local_tasks(
         except ControlDeadlineExceeded:
             raise
         except (OSError, subprocess.SubprocessError) as exc:
+            failed_at = values.utc_now()
+            db_transactions.begin(conn, immediate=True)
+            current = next(
+                (
+                    row
+                    for row in db_read_tasks.find_for_prepare_detected_local_tasks(conn, repo_id)
+                    if row[0] == task_id
+                ),
+                None,
+            )
+            if not current or not execution_ownership.claim_task(conn, task_id, failed_at):
+                continue
+            failure = retry_policy.failure_state(
+                values.json_object(current[6]).get("preparation_retry", {}),
+                getattr(exc, "stderr", None) or str(exc),
+                failed_at,
+                retryable=not isinstance(exc, FileNotFoundError),
+            )
+            db_write_tasks.record_local_preparation_retry(conn, task_id, json.dumps(failure))
+            if failure["retryable"]:
+                db_write_wakeups.defer_local_preparation(conn, task_id, failure["next_retry_at"], failed_at)
+                continue
             reason = run_errors.safe_route_error(exc)["safe_error"]
             work_application_lifecycle.finalize_failed_task(
-                conn, task_id, workstream_id, run_now, {"status": "preparation_failed", "safe_error": reason}
+                conn, task_id, workstream_id, failed_at, {"status": "preparation_failed", "safe_error": reason}
             )
             work_items.record_system_event(
                 conn,
@@ -158,9 +185,9 @@ def prepare_detected_local_tasks(
                 idempotency_key="prepare:" + task_id,
                 body=reason,
                 metadata={"task_id": task_id},
-                now=run_now,
+                now=failed_at,
             )
-            db_write_wakeups.update_for_prepare_detected_local_tasks_2(conn, run_now, task_id)
+            db_write_wakeups.update_for_prepare_detected_local_tasks_2(conn, failed_at, task_id)
             continue
         skill_status = route_result.get("skill_status") or {"runnable": True}
         if not skill_status["runnable"] or (worktree_result and not worktree_result.get("ok", True)):

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import os
+import signal
+import threading
 import subprocess
 import time
 from pathlib import Path
@@ -34,6 +36,49 @@ def reap_finished_process(pid):
     process = tracked_process(pid)
     if process is not None and process.poll() is not None:
         _BACKGROUND_PROCESSES.pop(pid, None)
+
+
+@contextmanager
+def defer_termination():
+    """Deliver main-thread stop signals after the caller's launch checkpoint."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    pending = []
+    previous = {}
+
+    def defer(signum, _frame):
+        if signum not in pending:
+            pending.append(signum)
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous[signum] = signal.signal(signum, defer)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+        for signum in pending:
+            signal.raise_signal(signum)
+
+
+def stop_dispatch(recorded):
+    """Clean up a launch that lost authority, retaining uncertain identities."""
+    if not recorded.get("pid") or recorded.get("cleanup_pending") is False:
+        return True
+    process = tracked_process(recorded["pid"])
+    if process is not None:
+        stopped = worker_identity.cleanup_new_process(process)
+        if stopped:
+            reap_finished_process(process.pid)
+        return stopped
+    try:
+        if recorded.get("process_exited"):
+            return not worker_identity.live_process_group(recorded["pid"])
+        result = worker_identity.terminate_recorded_identity(recorded)
+        return result["status"] != "attention" and not worker_identity.live_process_group(recorded["pid"])
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def _worker_environment(allowed_names=(), environ=None):

@@ -91,6 +91,90 @@ class SQLiteRuntimeTests(unittest.TestCase):
             self.assertEqual(state, "attention")
             self.assertIn("dispatch_outcome_unknown", metadata)
 
+    def test_sigterm_waits_until_launched_worker_identity_is_committed(self):
+        import json
+        import os
+        import signal
+        import subprocess
+        import sys
+        from unittest.mock import patch
+        from robert_agent.adapters.processes import worker, identity
+
+        db, queue, kwargs = self._prepared_queue()
+        observations = []
+        children = []
+
+        def observe_stop(_signum, _frame):
+            with closing(sqlite3.connect(db)) as conn:
+                metadata = json.loads(conn.execute("SELECT metadata_json FROM attempts").fetchone()[0])
+                observations.append(metadata.get("dispatch", {}).get("pid"))
+
+        def launch(**_kwargs):
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(30)"],
+                start_new_session=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            self.addCleanup(child.stdout.close)
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            children.append(child)
+            self.addCleanup(identity.cleanup_new_process, child)
+            recorded = identity.capture_process_identity(child.pid)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return {"ok": True, "status": "running", **recorded}
+
+        previous = signal.signal(signal.SIGTERM, observe_stop)
+        try:
+            with (
+                patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value={}),
+                patch.object(worker, "dispatch_worker", side_effect=launch),
+            ):
+                dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue, False, 3, **kwargs)
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+        self.assertEqual(observations, [children[0].pid])
+
+    def test_lost_post_launch_claim_retains_identity_and_stops_worker(self):
+        import json
+        import subprocess
+        import sys
+        from unittest.mock import patch
+        from robert_agent.adapters.processes import worker, identity
+
+        db, queue, kwargs = self._prepared_queue()
+        children = []
+
+        def launch(**_kwargs):
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(30)"],
+                start_new_session=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            self.addCleanup(child.stdout.close)
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            children.append(child)
+            self.addCleanup(identity.cleanup_new_process, child)
+            recorded = identity.capture_process_identity(child.pid)
+            with closing(sqlite3.connect(db)) as conn, conn:
+                conn.execute("UPDATE execution_subjects SET binding_status='attention'")
+                conn.execute("UPDATE attempts SET status='completed'")
+            return {"ok": True, "status": "running", **recorded}
+
+        with (
+            patch.object(dispatch_queue, "ensure_dispatch_worktree", return_value={}),
+            patch.object(worker, "dispatch_worker", side_effect=launch),
+        ):
+            dispatch_queue.dispatch_queued(db, ["repo:example/backend"], queue, False, 3, **kwargs)
+        self.assertIsNotNone(children[0].poll())
+        with closing(sqlite3.connect(db)) as conn:
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM attempts").fetchone()[0])
+            self.assertEqual(metadata["dispatch"]["pid"], children[0].pid)
+            self.assertFalse(metadata["dispatch"].get("cleanup_pending"))
+            self.assertTrue(metadata.get("process_stopped_at"))
+            self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "completed")
+
     def _prepared_queue(self, count=1):
         import json
         from tests.support import repository_cycle as test_run_once

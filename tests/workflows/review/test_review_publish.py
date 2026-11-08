@@ -50,6 +50,18 @@ class ReviewPublishTests(unittest.TestCase):
             )
         self.seed("1", self.action, self.scope)
 
+    def test_deadline_escapes_reconciliation_and_snapshot_queries(self):
+        from unittest import mock
+        from robert_agent.foundation.commands import ControlDeadlineExceeded
+
+        for responses in (
+            [ControlDeadlineExceeded(["gh", "api"], 0)],
+            [Completed([]), ControlDeadlineExceeded(["gh", "api"], 0)],
+        ):
+            with self.subTest(call_count=len(responses)):
+                with self.assertRaises(ControlDeadlineExceeded):
+                    review_publish.publish(self.action, self.scope, mock.Mock(side_effect=responses))
+
     def make_action(self, round_id):
         body = (
             "\n\n".join(

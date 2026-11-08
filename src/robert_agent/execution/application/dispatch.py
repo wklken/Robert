@@ -607,107 +607,148 @@ def dispatch_queued_locked(
                     db_write_execution_subjects.update_for_dispatch_queued_locked(
                         conn, json.dumps(metadata), subject_type, subject_id
                     )
-        try:
-            if worktree_result and not worktree_result.get("ok", True):
+        with dispatch.defer_termination():
+            try:
+                if worktree_result and not worktree_result.get("ok", True):
+                    dispatch_result = {
+                        "ok": False,
+                        "status": "failed_dispatch",
+                        "safe_error": worktree_result.get("status", "worktree_unavailable"),
+                    }
+                else:
+                    dispatch_result = dispatch.dispatch_worker(**worker_kwargs)
+            except Exception as exc:
                 dispatch_result = {
-                    "ok": False,
-                    "status": "failed_dispatch",
-                    "safe_error": worktree_result.get("status", "worktree_unavailable"),
+                    **run_errors.safe_dispatch_error(exc),
+                    "task_id": task_info["task_id"],
+                    "attempt_id": task_info["attempt_id"],
                 }
-            else:
-                dispatch_result = dispatch.dispatch_worker(**worker_kwargs)
-        except Exception as exc:
-            dispatch_result = {
-                **run_errors.safe_dispatch_error(exc),
-                "task_id": task_info["task_id"],
-                "attempt_id": task_info["attempt_id"],
-            }
-        dispatch_logs = (
-            {kind: {"tail": evidence.tail_file(dispatch_result.get(f"{kind}_path"))} for kind in ("stdout", "stderr")}
-            if not dispatch_result.get("ok", True) and dispatch_result.get("pid")
-            else {}
-        )
-        if (
-            not dispatch_result.get("ok", True)
-            and dispatch_result.get("pid")
-            and (evidence.terminal_transport_failure(dispatch_logs) or retry_policy.terminal_rate_limit(dispatch_logs))
-        ):
-            # Even an exit during the startup probe must pass through the same
-            # supervised, bounded continuation path as a later stream failure.
-            dispatch_result = {
-                **dispatch_result,
-                "ok": True,
-                "status": "running",
-                "original_status": dispatch_result.get("status"),
-                "process_exited": True,
-            }
-        dispatch_result = {
-            **dispatch_result,
-            "worker_name": selected_worker["name"],
-            "model": model,
-            "fallback_model": selected_worker.get("fallback_model"),
-            "reasoning_effort": worker_kwargs["reasoning_effort"],
-        }
-        with closing(db_database.connect(db_path)) as conn, conn:
-            db_sqlite.configure(conn, foreign_keys=True)
-            db_sqlite.configure(conn, busy_timeout_ms=5000)
-            if not execution_ownership.claim_task(conn, task_info["task_id"]):
-                continue
-            _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
-            subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])
-            binding = execution_store.get_binding(conn, subject_type, subject_id)
-            if binding:
-                metadata = values.json_object(binding["metadata_json"])
-                metadata.pop("dispatch_inflight", None)
-                db_write_execution_subjects.update_for_dispatch_queued_locked(
-                    conn, json.dumps(metadata), subject_type, subject_id
-                )
-            _record_dispatch_artifacts(conn, task_info, dispatch_result, values.utc_now())
-            if dispatch_result.get("cleanup_pending"):
-                execution_notifications.insert(
-                    conn,
-                    "worker_identity_attention",
-                    "recorded",
-                    values.utc_now(),
-                    {
-                        "task_id": task_info["task_id"],
-                        "attempt_id": task_info["attempt_id"],
-                        "workstream_id": task_info["workstream_id"],
-                        "reason_code": "startup_cleanup_unconfirmed",
-                        "required_action": "Verify the launch process group has stopped, then cancel this execution.",
-                    },
-                )
-                results.append(dispatch_result)
-                continue
+            dispatch_logs = (
+                {
+                    kind: {"tail": evidence.tail_file(dispatch_result.get(f"{kind}_path"))}
+                    for kind in ("stdout", "stderr")
+                }
+                if not dispatch_result.get("ok", True) and dispatch_result.get("pid")
+                else {}
+            )
             if (
-                not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed"
-            ) and _completed_by_worker_result(conn, task_info["attempt_id"]):
+                not dispatch_result.get("ok", True)
+                and dispatch_result.get("pid")
+                and (
+                    evidence.terminal_transport_failure(dispatch_logs)
+                    or retry_policy.terminal_rate_limit(dispatch_logs)
+                )
+            ):
+                # Even an exit during the startup probe must pass through the same
+                # supervised, bounded continuation path as a later stream failure.
                 dispatch_result = {
                     **dispatch_result,
                     "ok": True,
-                    "status": "completed_by_worker_result",
+                    "status": "running",
                     "original_status": dispatch_result.get("status"),
+                    "process_exited": True,
                 }
-            if not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed":
-                run_now = values.utc_now()
-                work_application_lifecycle.finalize_failed_task(
-                    conn,
-                    task_info["task_id"],
-                    task_info["workstream_id"],
-                    run_now,
-                    dispatch_result,
-                )
-                execution_notifications.insert(
-                    conn,
-                    "worker_dispatch_failed",
-                    "recorded",
-                    run_now,
-                    {
-                        "task_id": task_info["task_id"],
-                        "attempt_id": task_info["attempt_id"],
-                        "workstream_id": task_info["workstream_id"],
-                        "safe_error": dispatch_result.get("safe_error", ""),
-                    },
-                )
-        results.append(dispatch_result)
+            dispatch_result = {
+                **dispatch_result,
+                "worker_name": selected_worker["name"],
+                "model": model,
+                "fallback_model": selected_worker.get("fallback_model"),
+                "reasoning_effort": worker_kwargs["reasoning_effort"],
+            }
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_sqlite.configure(conn, foreign_keys=True)
+                db_sqlite.configure(conn, busy_timeout_ms=5000)
+                if not execution_ownership.claim_task(conn, task_info["task_id"]):
+                    # Process evidence survives lost authority; cleanup must not hold a writer.
+                    _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
+                    conn.commit()
+                    stopped = dispatch.stop_dispatch(dispatch_result)
+                    dispatch_result = {
+                        **dispatch_result,
+                        "ok": False,
+                        "status": "failed_dispatch",
+                        "safe_error": "Task ownership changed during worker launch.",
+                        "cleanup_pending": not stopped,
+                    }
+                    _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
+                    if stopped:
+                        current = db_records.first(
+                            db_read_attempts.find_status_and_metadata_json_by_attempt_id(conn, task_info["attempt_id"])
+                        )
+                        if current:
+                            db_write_attempts.update_for_prepare_2(
+                                conn, values.utc_now(), task_info["attempt_id"], current[0], current[1]
+                            )
+                    if not stopped:
+                        execution_notifications.insert(
+                            conn,
+                            "worker_identity_attention",
+                            "recorded",
+                            values.utc_now(),
+                            {
+                                "task_id": task_info["task_id"],
+                                "attempt_id": task_info["attempt_id"],
+                                "reason_code": "startup_cleanup_unconfirmed",
+                                "required_action": "Verify the launch process group has stopped, then cancel this execution.",
+                            },
+                        )
+                    results.append(dispatch_result)
+                    continue
+                _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
+                subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])
+                binding = execution_store.get_binding(conn, subject_type, subject_id)
+                if binding:
+                    metadata = values.json_object(binding["metadata_json"])
+                    metadata.pop("dispatch_inflight", None)
+                    db_write_execution_subjects.update_for_dispatch_queued_locked(
+                        conn, json.dumps(metadata), subject_type, subject_id
+                    )
+                _record_dispatch_artifacts(conn, task_info, dispatch_result, values.utc_now())
+                if dispatch_result.get("cleanup_pending"):
+                    execution_notifications.insert(
+                        conn,
+                        "worker_identity_attention",
+                        "recorded",
+                        values.utc_now(),
+                        {
+                            "task_id": task_info["task_id"],
+                            "attempt_id": task_info["attempt_id"],
+                            "workstream_id": task_info["workstream_id"],
+                            "reason_code": "startup_cleanup_unconfirmed",
+                            "required_action": "Verify the launch process group has stopped, then cancel this execution.",
+                        },
+                    )
+                    results.append(dispatch_result)
+                    continue
+                if (
+                    not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed"
+                ) and _completed_by_worker_result(conn, task_info["attempt_id"]):
+                    dispatch_result = {
+                        **dispatch_result,
+                        "ok": True,
+                        "status": "completed_by_worker_result",
+                        "original_status": dispatch_result.get("status"),
+                    }
+                if not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed":
+                    run_now = values.utc_now()
+                    work_application_lifecycle.finalize_failed_task(
+                        conn,
+                        task_info["task_id"],
+                        task_info["workstream_id"],
+                        run_now,
+                        dispatch_result,
+                    )
+                    execution_notifications.insert(
+                        conn,
+                        "worker_dispatch_failed",
+                        "recorded",
+                        run_now,
+                        {
+                            "task_id": task_info["task_id"],
+                            "attempt_id": task_info["attempt_id"],
+                            "workstream_id": task_info["workstream_id"],
+                            "safe_error": dispatch_result.get("safe_error", ""),
+                        },
+                    )
+            results.append(dispatch_result)
     return results
