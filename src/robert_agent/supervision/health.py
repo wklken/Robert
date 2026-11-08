@@ -1,5 +1,7 @@
 """supervision health responsibilities."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -83,7 +85,7 @@ def health(config, result, now):
 
 
 def owns_health_alerts(config, now):
-    if not config or config.get("supervision", {}).get("mode") == "off":
+    if not config or config.get("supervision", {}).get("mode") == SupervisionMode.OFF.value:
         return False
     health = read_health(config)
     from robert_agent.supervision.rules import timestamp

@@ -1,7 +1,7 @@
 """Deterministic read models for the DD repository task board."""
 
 from robert_agent.foundation.contracts.execution import BindingStatus
-from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskLifecycle
+from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskLifecycle, WorkCommand
 
 import base64
 import json
@@ -66,6 +66,7 @@ SAFE_EVENT_METADATA_KEYS = frozenset(
         "url",
         "route_confidence",
         "requested_worker",
+        "supervision_decision_id",
     }
 )
 
@@ -156,6 +157,8 @@ def _valid_commands(column, attention, *, running=False, publishing=False):
         return []
     if column == "done":
         return ["reopen"]
+    if not publishing and any(a.get("metadata", {}).get("supervision_decision_id") for a in attention):
+        return [WorkCommand.REPLY.value, WorkCommand.CANCEL.value]
     if publishing:
         return ["cancel"]
     if running:
@@ -563,6 +566,28 @@ def list_board(
     }
 
 
+def _supervision_decision(conn, workstream_id):
+    from robert_agent.persistence.queries import supervision_decisions as decision_queries
+    from robert_agent.supervision import decisions
+
+    root = decision_queries.root_stream(conn, workstream_id) if workstream_id else None
+    if not root:
+        return None
+    state = decisions.read(conn, root["workstream_id"])
+    return (
+        {
+            "workstream_id": root["workstream_id"],
+            **{
+                key: state[key]
+                for key in ("status", "decision", "next_check_at", "receipt", "notification_id")
+                if key in state
+            },
+        }
+        if state
+        else None
+    )
+
+
 def _supervision_incidents(conn, tasks, work_item_id):
     from robert_agent.supervision import store as supervision_store
 
@@ -646,6 +671,7 @@ def get_work_item_detail(db_path, work_item_id):
             "canceled_at": row["canceled_at"],
             "tasks": tasks,
             "supervision_incidents": _supervision_incidents(conn, tasks, work_item_id),
+            "supervision_decision": _supervision_decision(conn, row["workstream_id"]),
             "events": timeline["events"],
             "events_next_cursor": timeline["next_cursor"],
         }

@@ -1107,6 +1107,41 @@ def execute_command(
                     raise WorkItemConflictError(
                         "The attention item changed. Review the latest question or failure before continuing."
                     )
+                question_metadata = _decode_json(unresolved["metadata_json"], {}) if unresolved else {}
+                if command == WorkCommand.REPLY and question_metadata.get("kind") == "supervisor_question":
+                    from robert_agent.supervision import decisions as supervisor_decisions
+
+                    try:
+                        supervisor_decisions.reply(
+                            conn,
+                            {},
+                            question_metadata["workstream_id"],
+                            question_metadata["supervision_decision_id"],
+                            body,
+                            now,
+                        )
+                    except ValueError as exc:
+                        raise WorkItemConflictError(str(exc)) from exc
+                    result = {
+                        "ok": True,
+                        "command": WorkCommand.REPLY.value,
+                        "item": _item_from_row(item),
+                        "task_id": None,
+                        "resolved_event_id": unresolved["event_id"],
+                    }
+                    _insert_event(
+                        conn,
+                        work_item_id,
+                        event_type="user_response",
+                        actor_kind=context.actor_kind,
+                        actor_identity=context.actor_identity,
+                        idempotency_key=idempotency_key,
+                        body=body,
+                        resolves_event_id=unresolved["event_id"],
+                        metadata={"command_result": result},
+                        now=now,
+                    )
+                    return _commit_result(conn, db_path, result, notifier)
                 review_changes = (
                     command == WorkCommand.REQUEST_CHANGES
                     and not unresolved

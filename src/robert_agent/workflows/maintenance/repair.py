@@ -1,7 +1,7 @@
 """Policy-bound engineering work items and separate repair evidence milestones."""
 
 from robert_agent.foundation.contracts.delivery import OutputType
-from robert_agent.foundation.contracts.supervision import IncidentStatus
+from robert_agent.foundation.contracts.supervision import IncidentStatus, SupervisionMode
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import origins as db_read_origins
@@ -73,7 +73,7 @@ def _connect(config, *, readonly=False):
 
 def _policy(config):
     settings = config.get("supervision", {})
-    return None if settings.get("mode") == "off" else normalize_repair(settings.get("repair"))
+    return None if settings.get("mode") == SupervisionMode.OFF else normalize_repair(settings.get("repair"))
 
 
 def _repo(config, policy):

@@ -168,6 +168,7 @@ def run_repo_pipeline(
             db_path=db_path,
             repo=repo,
             resume_attempt=preparation.create_resume_attempt_and_prompt,
+            config_result=config_result,
         )
         supervised_count += failed_timeout_recovered_count
         summary["supervised_count"] = supervised_count
@@ -421,6 +422,7 @@ def run_repo_pipeline(
                 repo,
                 discovery_runner or subprocess.run,
                 run_now,
+                config=config_result,
             )
             run_journal.mark_repo_run_step(
                 conn,

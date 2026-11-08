@@ -1,5 +1,7 @@
 """Supervision fences around the existing publisher's exact action and task lock."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+
 from robert_agent.foundation.contracts.delivery import PublicationStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 
@@ -28,7 +30,9 @@ def _connect(db):
 
 def needs_config(config):
     settings = (config or {}).get("supervision") or {}
-    return settings.get("mode") == "recover_known" or bool(settings.get("repair"))
+    return settings.get("mode") in {SupervisionMode.RECOVER_KNOWN.value, SupervisionMode.DECIDE.value} or bool(
+        settings.get("repair")
+    )
 
 
 def fresh_config(config, db=None):

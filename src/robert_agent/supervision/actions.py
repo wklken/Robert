@@ -1,5 +1,10 @@
 """Typed recovery requests consumed under existing Robert domain ownership."""
 
+from robert_agent.foundation.contracts.supervision import SupervisionMode
+
+from robert_agent.supervision import decisions as model_decisions
+from robert_agent.supervision.policy import current_config
+from robert_agent.persistence.queries import supervision_decisions as decision_queries
 from robert_agent.foundation.contracts.delivery import AuditStatus, PublicationStatus, PublishStatus
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind, RecoveryStatus
@@ -14,7 +19,6 @@ from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 
 from robert_agent.persistence import transactions as db_transactions
-from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 from robert_agent.persistence.queries import supervision_incidents as db_read_supervision_incidents
 from robert_agent.persistence.queries import task_events as db_read_task_events
@@ -25,7 +29,6 @@ from robert_agent.persistence.stores import supervision_recovery_actions as db_w
 from datetime import timedelta
 import hashlib
 import json
-from pathlib import Path
 from uuid import uuid4
 
 from robert_agent.security import redaction
@@ -80,24 +83,6 @@ def _action_payload_digest(metadata):
     return _digest(body)
 
 
-def _authoritative_config(conn, config):
-    config = config or {}
-    config_path = config.get("config_path")
-    if not config_path or (config.get("supervision") or {}).get("mode") != "recover_known":
-        # Explicit local observe/off gates also serve paused consumers.
-        return config
-    try:
-        from robert_agent.configuration.command import validate_config
-
-        current = validate_config(config_path, skip_external=True)
-        main_path = next((row[2] for row in db_sqlite.database_list(conn) if row[1] == "main"), "")
-        if current["ok"] and main_path and Path(current["db_path"]).resolve() == Path(main_path).resolve():
-            return current
-    except (OSError, RuntimeError, ValueError):
-        pass
-    return None
-
-
 def _policy(config, repo, kind):
     settings = config.get("supervision", {})
     recovery = settings.get("recovery") or {}
@@ -105,7 +90,7 @@ def _policy(config, repo, kind):
     repositories = recovery.get("repositories", ())
     configured = next((item for item in config.get("repos", ()) if item["full_name"] == repo), None)
     if (
-        settings.get("mode") != "recover_known"
+        settings.get("mode") not in {SupervisionMode.RECOVER_KNOWN.value, SupervisionMode.DECIDE.value}
         or not config.get("daemon", {}).get("enabled", True)
         or kind not in STAGES
         or kind not in allowed
@@ -307,8 +292,11 @@ def _reserve(conn, task, kind, target_id, target, policy, now, *, expected=None,
 
 def plan(conn, *, observations, now, config, limit=8):
     """Reserve at most ``limit`` requests. The caller owns a short writer transaction."""
-    config = _authoritative_config(conn, config)
-    if not config or (config.get("supervision") or {}).get("mode") != "recover_known":
+    config = current_config(conn, config)
+    if not config or (config.get("supervision") or {}).get("mode") not in {
+        SupervisionMode.RECOVER_KNOWN.value,
+        SupervisionMode.DECIDE.value,
+    }:
         return []
     if not conn.in_transaction:
         db_transactions.begin(conn, immediate=True)
@@ -329,6 +317,17 @@ def plan(conn, *, observations, now, config, limit=8):
         target = _target(conn, task, kind, target_id, now, generation) if policy else None
         if not target:
             continue
+        workstream_id = decision_queries.task(conn, task["task_id"])["workstream_id"]
+        if not model_decisions.permit(
+            conn,
+            config,
+            workstream_id=workstream_id,
+            action=kind,
+            target_id=target_id,
+            facts={"task_id": task["task_id"], "target_generation": _generation(task, target)},
+            now=now,
+        ):
+            continue
         action, reason = _reserve(
             conn,
             task,
@@ -341,6 +340,7 @@ def plan(conn, *, observations, now, config, limit=8):
             rule=observation.get("rule_id"),
         )
         if action:
+            model_decisions.executed(conn, config, workstream_id, {"recovery_action_id": action["action_id"]}, now)
             requests.append(action)
         elif reason == "recovery_budget_exhausted":
             _budget_notice(conn, task, kind, now)
@@ -406,6 +406,8 @@ def begin(conn, *, task_id, kind, target_id, now, config, generation=None, nativ
     # Ordinary domain work must not acquire a new writer or spend a recovery
     # budget. Only a previously planned supervision action grants extra work.
     if not next((dict(row) for row in db_read_supervision_recovery_actions.find_for_begin_4(conn, task_id)), None):
+        if native_retry and model_decisions.enabled(config or {}):
+            return _blocked("waiting_for_model_decision")
         return {"status": "legacy"}
     # Caller may already own a write transaction in atomic consumers.
     if not conn.in_transaction:
@@ -423,7 +425,7 @@ def begin(conn, *, task_id, kind, target_id, now, config, generation=None, nativ
     if not action:
         return {"status": "legacy"}
     task = _task(conn, task_id)
-    config = _authoritative_config(conn, config)
+    config = current_config(conn, config)
     if config is None:
         return _blocked("recovery_policy_unavailable")
     policy = _policy(config, task["repo"], kind) if task else None
@@ -470,7 +472,7 @@ def _fenced(conn, claim, config, now):
     if not row or _due(now, row["claim_expires_at"]):
         return None, None
     task = _task(conn, row["scope_id"])
-    config = _authoritative_config(conn, config)
+    config = current_config(conn, config)
     if not task or config is None or _policy(config, task["repo"], row["action_kind"]) != row["policy_version"]:
         return None, None
     return row, task

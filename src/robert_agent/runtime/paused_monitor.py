@@ -13,6 +13,7 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded, emit
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution.application import monitor
 from robert_agent.foundation import values
+from robert_agent.foundation.contracts.supervision import SupervisionMode
 from robert_agent.execution import journal as run_journal
 from robert_agent.work import repositories as work_repositories, task_state
 
@@ -26,7 +27,7 @@ def run(config_path):
     # claim a new supervised recovery action on behalf of paused admission.
     recovery_config = {
         **config,
-        "supervision": {**config.get("supervision", {}), "mode": "observe"},
+        "supervision": {**config.get("supervision", {}), "mode": SupervisionMode.OBSERVE.value},
     }
     replay_pending_results(db_path, config=recovery_config)
     now = values.utc_now()
