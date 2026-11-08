@@ -29,7 +29,7 @@ codex --version
 pipx --version
 ```
 
-缺少 `pipx` 时，按其[官方安装指南](https://pipx.pypa.io/stable/installation/)安装，
+缺少 `pipx` 时，按其[官方安装指南](https://pipx.pypa.io/stable/how-to/install-pipx.html)安装，
 运行 `pipx ensurepath` 后重新打开终端。Agent 的安装与模型登录需按对应工具的说明完成。
 版本输出只证明命令可执行，不证明模型认证或真实任务可用。
 
