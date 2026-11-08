@@ -13,6 +13,26 @@ from tests.support.publication_reconcile import Completed, PublicationReconcileF
 
 
 class PublicationReconcileTests(PublicationReconcileFixture):
+    def test_marker_requires_matching_publisher_and_exact_body(self):
+        action = {
+            "action_type": "comment",
+            "target_url": "https://github.com/x/y/issues/1",
+            "metadata_json": json.dumps({"body": self.body}),
+        }
+        scope = {"repo": "x/y", "github_account": "bot"}
+        for login, body, expected in (
+            ("outsider", self.body, "confirmed_absent"),
+            ("bot", self.body + "changed", "unknown"),
+            ("BOT", self.body, "confirmed_effect"),
+        ):
+            with self.subTest(login=login, body=body):
+
+                def runner(*args, **kwargs):
+                    return Completed(json.dumps([{"id": 7, "body": body, "user": {"login": login}}]))
+
+                result = publication_reconcile.classify_remote_state(action, scope, runner)
+                self.assertEqual(result["status"], expected)
+
     def test_last_ambiguous_write_reconciles_before_terminal_attention(self):
         from robert_agent.execution import retry as retry_policy
 
@@ -43,7 +63,14 @@ class PublicationReconcileTests(PublicationReconcileFixture):
                 self.assertNotIn("-f", command)
                 return Completed(
                     json.dumps(
-                        [{"id": 7, "body": self.body, "html_url": "https://github.com/x/y/issues/1#issuecomment-7"}]
+                        [
+                            {
+                                "id": 7,
+                                "user": {"login": "bot"},
+                                "body": self.body,
+                                "html_url": "https://github.com/x/y/issues/1#issuecomment-7",
+                            }
+                        ]
                     )
                 )
 
@@ -102,6 +129,7 @@ class PublicationReconcileTests(PublicationReconcileFixture):
                     [
                         {
                             "id": 7,
+                            "user": {"login": "bot"},
                             "body": self.body,
                             "html_url": "https://github.com/x/y/issues/1#issuecomment-7",
                         }
@@ -138,12 +166,12 @@ class PublicationReconcileTests(PublicationReconcileFixture):
 
         result = publication_reconcile.classify_remote_state(
             action,
-            {"repo": "x/y", "sources": [{"source_type": "issue", "number": 1}]},
+            {"repo": "x/y", "github_account": "bot", "sources": [{"source_type": "issue", "number": 1}]},
             lambda *_args, **_kwargs: Completed(
                 json.dumps(
                     [
-                        {"id": 1, "body": self.body},
-                        {"id": 2, "body": self.body},
+                        {"id": 1, "body": self.body, "user": {"login": "bot"}},
+                        {"id": 2, "body": self.body, "user": {"login": "bot"}},
                     ]
                 )
             ),

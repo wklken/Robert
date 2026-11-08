@@ -5,6 +5,52 @@ from tests.support.publication import PublicationFixture
 
 
 class PublishPushTests(PublicationFixture):
+    def test_existing_pr_push_must_target_the_actual_head_repository(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from robert_agent.delivery.application import effects, scope
+
+        action = {
+            "task_id": "task",
+            "target_url": "https://github.com/x/y/pull/42",
+            "metadata_json": json.dumps({"worktree_path": "/controlled", "branch": "shared"}),
+        }
+        trusted = {
+            "repo": "x/y",
+            "github_account": "robot",
+            "branch_name": "shared",
+            "remote": "origin",
+            "worktree_path": "/controlled",
+            "existing_pr_head_sha": "a" * 40,
+            "result_head_sha": "b" * 40,
+            "sources": [{"source_type": "pull_request", "number": 42}],
+        }
+        writes = []
+
+        def runner(command, **kwargs):
+            if command[:2] == ["gh", "api"]:
+                payload = {
+                    "state": "open",
+                    "user": {"login": "robot"},
+                    "head": {"ref": "shared", "sha": "a" * 40, "repo": {"full_name": "outsider/y"}},
+                }
+                stdout = json.dumps(payload)
+            elif command[:3] == ["git", "ls-remote", "--get-url"]:
+                stdout = command[-1] + "\n"
+            elif command[:3] == ["git", "remote", "get-url"]:
+                stdout = "https://github.com/x/y.git\n"
+            elif command[:2] == ["git", "ls-remote"]:
+                stdout = "a" * 40 + "\trefs/heads/shared\n"
+            else:
+                writes.append(command)
+                stdout = ""
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        with patch.object(scope, "trusted_action_scope", return_value=trusted):
+            result = effects.publish_push_existing_pr(action, runner)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(writes, [])
+
     def test_publish_ready_push_existing_pr_pushes_branch(self):
         from robert_agent.delivery.application import publish
 

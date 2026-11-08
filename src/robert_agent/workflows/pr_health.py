@@ -184,6 +184,13 @@ def _workflow_observation(
             evidence["evidence_status"] = "unavailable"
     observation = {
         "source_kind": "workflow_run",
+        "producer_id": (
+            "workflow:" + str(workflow["workflow_id"])
+            if workflow.get("workflow_id")
+            else "path:" + str(workflow["path"])
+            if workflow.get("path")
+            else "run:" + str(workflow.get("id") or "")
+        ),
         "external_id": str(workflow.get("id") or ""),
         "attempt_no": int(workflow.get("run_attempt") or 1),
         "check_name": check_name,
@@ -260,6 +267,13 @@ def _check_observation(
         evidence = _evidence(text, max_summary_chars)
     observation = {
         "source_kind": "check_run",
+        "producer_id": (
+            "app:" + str(_mapping(check.get("app"))["id"])
+            if _mapping(check.get("app")).get("id")
+            else "slug:" + str(_mapping(check.get("app"))["slug"])
+            if _mapping(check.get("app")).get("slug")
+            else "check:" + str(check.get("id") or "")
+        ),
         "external_id": str(check.get("id") or ""),
         "attempt_no": 1,
         "check_name": check_name,
@@ -357,12 +371,16 @@ def summarize_ci(observations, check_allowlist):
         check_name = observation.get("check_name")
         if check_name not in check_allowlist:
             continue
-        current = latest.get(check_name)
+        identity = (observation.get("source_kind", ""), observation.get("producer_id", ""), check_name)
+        current = latest.get(identity)
         if current is None or _observation_freshness(observation) > _observation_freshness(current):
-            latest[check_name] = observation
+            latest[identity] = observation
 
-    missing = [name for name in check_allowlist if name not in latest]
-    incomplete = [name for name, observation in latest.items() if observation.get("status") != "completed"]
+    names = {observation["check_name"] for observation in latest.values()}
+    missing = [name for name in check_allowlist if name not in names]
+    incomplete = {
+        observation["check_name"] for observation in latest.values() if observation.get("status") != "completed"
+    }
     if missing or incomplete:
         return {
             "status": "waiting",

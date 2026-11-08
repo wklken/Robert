@@ -34,9 +34,7 @@ def _publish_ready_actions_for_repo(
     }
     if limit is not None:
         kwargs["limit"] = limit
-    from robert_agent.supervision.application import publication as supervision_publication
-
-    if supervision_publication.needs_config(config_result):
+    if config_result is not None:
         kwargs["config"] = config_result
     return publish.publish_ready_actions(db_path, **kwargs)
 
@@ -102,6 +100,7 @@ def run_repo_pipeline(
     repo_dispatch_start = len(dispatch_queue)
     system_decisions = []
     conn.commit()
+    lease_observation = execution_leases.observe_owner(conn, repo_id, run_now)
     transactions.savepoint(conn, "repo_pipeline")
     try:
         run_journal.mark_repo_run_step(conn, run_id, repo_id, "acquire_lease", "running", run_now)
@@ -111,6 +110,7 @@ def run_repo_pipeline(
             run_id,
             run_now,
             config_result.get("lease_ttl_seconds", 540),
+            observation=lease_observation,
         )
         summary["lease_status"] = lease_result["status"]
         if not lease_result["ok"]:

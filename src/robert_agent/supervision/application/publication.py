@@ -120,7 +120,8 @@ def begin(db, action, config, now):
 
 
 def guard(db, action, state, config, now):
-    """Check current policy and the durable claim just before a remote mutation."""
+    """Reauthorize every new write; unknown prior effects remain read-only."""
+    configured = config is not None
     config = fresh_config(config, db)
     with closing(_connect(db)) as conn:
         repair, allowed = _repair_allowed(conn, action, config)
@@ -129,19 +130,27 @@ def guard(db, action, state, config, now):
         if state.get("claim") and state["status"] == "claimed":
             if not supervision_actions.publication_current(conn, state["claim"], config=config, now=now):
                 return False
-            if not repair:
-                from robert_agent.execution import rounds as native_rounds
+        if not repair and (configured or state.get("claim")):
+            from robert_agent.execution import rounds as native_rounds
+            from robert_agent.configuration import routes as route_config
+            from robert_agent.foundation.contracts.work import TaskKind
 
-                row = db_records.first(db_read_tasks.find_for_guard(conn, action["task_id"]))
-                repo = next((value for value in config.get("repos", ()) if row and value["full_name"] == row[0]), None)
-                if not repo:
+            row = db_records.first(db_read_tasks.find_for_guard(conn, action["task_id"]))
+            repo = next((value for value in config.get("repos", ()) if row and value["full_name"] == row[0]), None)
+            if not repo:
+                return False
+            native = native_rounds.session(conn, task_id=action["task_id"])
+            if native:
+                return workflow_routing.native_request_allowed(native, repo, config)
+            if row[1] in {TaskKind.CI_REMEDIATION.value, TaskKind.MERGE_CONFLICT_REMEDIATION.value}:
+                kind = "ci" if row[1] == TaskKind.CI_REMEDIATION.value else "conflict"
+                if not ((repo.get("pr_automation") or {}).get(kind) or {}).get("enabled"):
                     return False
-                native = native_rounds.session(conn, task_id=action["task_id"])
-                return (
-                    workflow_routing.native_request_allowed(native, repo, config)
-                    if native
-                    else work_admission.ordinary_dispatch_allowed(conn, action["task_id"], repo)
-                )
+            if row[2] in route_config.ROUTE_POLICIES and config.get("routes"):
+                route = route_config.resolve_route_config(config, repo, route_config.ROUTE_POLICIES[row[2]])
+                if action["action_type"] not in route["allowed_github_actions"]:
+                    return False
+            return work_admission.ordinary_dispatch_allowed(conn, action["task_id"], repo)
     return True
 
 

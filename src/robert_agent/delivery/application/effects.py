@@ -17,6 +17,7 @@ from robert_agent.supervision import git as supervision_git
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import guards as publication_guards
 from robert_agent.delivery import values as publication_values
+from robert_agent.delivery.comment_receipts import match_comment
 
 COMMENT_MARKER_RE = re.compile(
     r"<!--\s*robert-comment\s+task_id=\S+\s+attempt_id=\S+\s+action_index=\d+\s*-->",
@@ -60,7 +61,7 @@ def command_failure(completed, fallback):
     return (getattr(completed, "stderr", "") or fallback).strip()
 
 
-def find_existing_comment(endpoint, marker, run_command):
+def find_existing_comment(endpoint, marker, run_command, *, expected_body, publisher):
     command = ["gh", "api", f"{endpoint}?per_page=100", "--paginate", "--slurp"]
     completed = run_command(command, capture_output=True, text=True)
     safe_error = command_failure(completed, "gh api comment lookup failed")
@@ -72,18 +73,20 @@ def find_existing_comment(endpoint, marker, run_command):
             "command": command,
         }
     response = publication_values.decode_json(getattr(completed, "stdout", ""))
-    for comment in iter_json_objects(response):
-        body = comment.get("body") if isinstance(comment.get("body"), str) else ""
-        if marker and marker in body:
-            return {
-                "ok": True,
-                "status": "published",
-                "deduplicated": True,
-                "external_id": str(comment.get("id") or ""),
-                "target_url": comment.get("html_url") or comment.get("url") or "",
-                "response": {"existing_comment": comment},
-                "command": command,
-            }
+    receipt = match_comment(iter_json_objects(response), expected_body, publisher, marker)
+    if receipt["status"] == "unknown":
+        return {"ok": False, "status": "publish_failed", "safe_error": receipt["reason_code"], "command": command}
+    if receipt["status"] == "confirmed_effect":
+        comment = receipt["comment"]
+        return {
+            "ok": True,
+            "status": "published",
+            "deduplicated": True,
+            "external_id": str(comment.get("id") or ""),
+            "target_url": comment.get("html_url") or comment.get("url") or "",
+            "response": {"existing_comment": comment},
+            "command": command,
+        }
     return {"ok": True, "status": "not_found", "command": command}
 
 
@@ -110,7 +113,14 @@ def publish_comment(action, run_command, conn=None, recovery_guard=None):
             "status": "publish_failed",
             "safe_error": "comment action requires GitHub issue or PR target_url",
         }
-    existing = find_existing_comment(endpoint, marker, run_command)
+    scope = publication_scope.trusted_action_scope(conn, action) or {}
+    existing = find_existing_comment(
+        endpoint,
+        marker,
+        run_command,
+        expected_body=body,
+        publisher=publication_scope.comment_publisher(conn, action, scope),
+    )
     if not existing["ok"] or existing["status"] == "published":
         return existing
     scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
@@ -497,8 +507,18 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
             "result_head_sha": result_head_sha,
             "response": {},
         }
+    target_scope = dict(action_scope)
+    if any(source.get("source_type") == "pull_request" for source in action_scope.get("sources", ())):
+        target_scope["github_account"] = publication_scope.comment_publisher(conn, action, action_scope)
+    read_remote = remote
+    target = publication_guards.existing_pr_push_target(target_scope, run_command)
+    if target:
+        if not target["ok"]:
+            return target
+        remote = target["remote"]
+        read_remote = target["read_remote"]
     if expected_remote_sha:
-        lookup_command = ["git", "ls-remote", "--heads", remote, branch]
+        lookup_command = ["git", "ls-remote", "--heads", read_remote, branch]
         lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
         lookup_error = command_failure(lookup, "git ls-remote failed")
         if lookup_error:
@@ -527,7 +547,7 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
                 "fetch",
                 "--no-tags",
                 "--no-write-fetch-head",
-                remote,
+                read_remote,
                 destination_ref,
             ]
             fetched = run_command(

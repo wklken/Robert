@@ -10,6 +10,7 @@ from robert_agent.context import project as project_memory
 from uuid import uuid4
 import json
 import os
+import re
 import sys
 
 
@@ -48,6 +49,7 @@ def _event_context_markdown(events):
     ]
     for index, event in enumerate(events, start=1):
         body = event.get("body") or ""
+        fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", body)), default=0))
         metadata = dict(event)
         metadata["body"] = f"<stored below, {len(body)} chars>"
         lines.extend(
@@ -62,9 +64,9 @@ def _event_context_markdown(events):
                 "",
                 "Body:",
                 "",
-                "```text",
+                f"{fence}text",
                 body,
-                "```",
+                fence,
                 "",
             ]
         )

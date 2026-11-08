@@ -162,6 +162,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
             "actor_kind": "github_user",
             "actor_login": "wklken",
             "body": "@robert-bot please analyze this",
+            "body_authorization_complete": True,
             "authorization_status": "authorized_trigger",
             "intent": "analysis",
             "url": "https://github.com/example/backend/pull/13",

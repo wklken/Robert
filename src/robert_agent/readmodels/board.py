@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import execution_control as execution_store
 from robert_agent.persistence import records as db_records
+from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import github_sources as db_read_github_sources
 from robert_agent.persistence.queries import repos as db_read_repos
@@ -440,9 +441,12 @@ def _project_item(conn, row, *, controls=None, facts=None):
     return card
 
 
-def _all_projections(conn, *, repo=None, include_history=True):
-    rows = work_item_queries.work_items_with_repositories(conn, repo=repo, include_history=include_history)
-    controls = execution_store.read_controls(conn) if rows else {}
+def _all_projections(conn, *, repo=None, include_history=True, active_only=False, controls=None):
+    rows = work_item_queries.work_items_with_repositories(
+        conn, repo=repo, include_history=include_history, active_only=active_only
+    )
+    if controls is None:
+        controls = execution_store.read_controls(conn) if rows else {}
     return [_project_item(conn, row, controls=controls) for row in rows]
 
 
@@ -515,30 +519,56 @@ def list_board(
         raise BoardQueryError("invalid priority")
     cursor_value = _cursor_decode(cursor)
     with closing(_connect(db_path)) as conn:
+        db_transactions.begin(conn)  # Historical and active partitions share one read snapshot.
+        controls = execution_store.read_controls(conn)
+        terminal = work_item_queries.terminal_board_page(
+            conn,
+            repo=repo,
+            column=column,
+            agent=agent,
+            priority=priority,
+            attention=attention,
+            query=query,
+            before=cursor_value,
+            limit=limit + 1,
+            include_history=include_history,
+            attention_types=sorted(ATTENTION_EVENTS),
+        )
         projections = [
             item
-            for item in _all_projections(conn, repo=repo, include_history=include_history)
-            if _matches(
-                item,
-                repo=repo,
-                agent=agent,
-                priority=priority,
-                attention=attention,
-                query=query,
+            for item in _all_projections(
+                conn, repo=repo, include_history=include_history, active_only=True, controls=controls
             )
-            and (include_history or item["column"] != "history")
+            if _matches(item, repo=repo, agent=agent, priority=priority, attention=attention, query=query)
         ]
         counts = {
             column_id: sum(1 for item in projections if item["column"] == column_id)
+            + terminal["counts"].get(column_id, 0)
             for column_id in [name for name, _label in COLUMNS] + ["history"]
         }
         if cursor_value:
             projections = [item for item in projections if (item["updated_at"], item["work_item_id"]) < cursor_value]
         if column:
             projections = [item for item in projections if item["column"] == column]
-        page = projections[: limit + 1]
+        agents = sorted({item["agent"] for item in projections} | set(terminal["agents"]) | {"Auto"})
+        page = sorted(
+            projections + [dict(row) for row in terminal["rows"]],
+            key=lambda item: (item["updated_at"], item["work_item_id"]),
+            reverse=True,
+        )[: limit + 1]
         has_more = len(page) > limit
-        items = page[:limit]
+        selected = page[:limit]
+        terminal_ids = {row["work_item_id"] for row in terminal["rows"]}
+        selected_ids = [item["work_item_id"] for item in selected if item["work_item_id"] in terminal_ids]
+        historical = (
+            {
+                row["work_item_id"]: _project_item(conn, row, controls=controls)
+                for row in work_item_queries.work_items_with_repositories(conn, item_ids=selected_ids)
+            }
+            if selected_ids
+            else {}
+        )
+        items = [historical.get(item["work_item_id"], item) for item in selected]
         next_cursor = (
             _cursor_encode([items[-1]["updated_at"], items[-1]["work_item_id"]]) if has_more and items else None
         )
@@ -548,7 +578,6 @@ def list_board(
             {"repo_id": row[0], "full_name": row[1], "running": per_repo_running.get(row[0], 0)}
             for row in db_read_repos.list_board(conn)
         ]
-        agents = sorted({item["agent"] for item in projections} | {"Auto"})
     return {
         "columns": [{"id": column_id, "label": label, "count": counts[column_id]} for column_id, label in COLUMNS],
         "counts": counts,

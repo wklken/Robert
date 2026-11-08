@@ -4,6 +4,7 @@ from robert_agent.foundation.contracts.work import TaskKind
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import task_events as db_read_task_events
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.stores import task_events as db_write_task_events
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
@@ -45,6 +46,16 @@ def ordinary_dispatch_allowed(conn, task_id, repo):
     if (item and item[0] == "web") or metadata.get("trigger_work_item_event_id"):
         return True
     events = work_queries.task_related_events(conn, task_id, include_consumed=True)
+    fingerprint = metadata.get("request_event_fingerprint")
+    if fingerprint:
+        events = [event for event in events if event.get("event_fingerprint") == fingerprint]
+    else:
+        # Older tasks lack the explicit binding. Only a surviving trigger
+        # relationship can identify their authority; arbitrary context cannot.
+        triggers = {row[1] for row in db_read_task_events.task_related_events_filtered(conn, ["trigger"], task_id)}
+        if len(triggers) != 1:
+            return False
+        events = [event for event in events if event.get("event_fingerprint") in triggers]
     if not events:
         return False
     return any(

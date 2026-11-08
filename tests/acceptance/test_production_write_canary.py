@@ -26,6 +26,8 @@ class _CommentRunner:
 
     def __call__(self, command, **kwargs):
         self.calls.append({"command": list(command), "kwargs": dict(kwargs)})
+        if command == ["gh", "api", "user"]:
+            return _Completed(json.dumps({"login": "canary-publisher"}))
         if command == [
             "gh",
             "api",
@@ -86,7 +88,7 @@ class ProductionWriteCanaryTests(unittest.TestCase):
         self.assertEqual(result["publish_result"]["deduplicated_count"], 0)
         commands = [call["command"] for call in runner.calls]
         self.assertEqual(
-            commands[0],
+            commands[1],
             [
                 "gh",
                 "api",
@@ -95,7 +97,7 @@ class ProductionWriteCanaryTests(unittest.TestCase):
                 "--slurp",
             ],
         )
-        self.assertEqual(commands[1][:3], ["gh", "api", "repos/x/y/issues/1/comments"])
+        self.assertEqual(commands[2][:3], ["gh", "api", "repos/x/y/issues/1/comments"])
         with sqlite3.connect(result["db_path"]) as conn:
             row = conn.execute(
                 "SELECT publish_status, external_id, target_url, metadata_json FROM github_actions"
@@ -117,6 +119,7 @@ class ProductionWriteCanaryTests(unittest.TestCase):
                             "id": 987,
                             "html_url": "https://github.com/x/y/issues/1#issuecomment-987",
                             "body": body,
+                            "user": {"login": "canary-publisher"},
                         }
                     ]
                 ]
@@ -139,13 +142,14 @@ class ProductionWriteCanaryTests(unittest.TestCase):
         self.assertEqual(
             commands,
             [
+                ["gh", "api", "user"],
                 [
                     "gh",
                     "api",
                     "repos/x/y/issues/1/comments?per_page=100",
                     "--paginate",
                     "--slurp",
-                ]
+                ],
             ],
         )
 

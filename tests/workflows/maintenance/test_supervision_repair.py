@@ -11,6 +11,7 @@ from unittest.mock import patch
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.execution import runtime_state as daemon_state
 from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.context import project
 from tests.support.supervision_repair import RepairFixture
 
 
@@ -154,7 +155,12 @@ class RepairTests(RepairFixture):
         now = self.when.isoformat()
         task_id = created["task_id"]
         pr_url = "https://github.com/acme/robert/pull/42"
+        action_scope = {"result_head_sha": revision}
         with closing(sqlite3.connect(self.db)) as conn, conn:
+            (repo_id,) = conn.execute(
+                "SELECT repo_id FROM tasks JOIN workstreams USING (workstream_id) WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
             conn.execute(
                 "UPDATE tasks SET lifecycle='completed',route_id='new-pr',expected_output='new_pr' WHERE task_id=?",
                 (task_id,),
@@ -173,35 +179,44 @@ class RepairTests(RepairFixture):
                         {
                             "audit": {
                                 "status": "accepted",
-                                "action_scope": {"result_head_sha": revision},
+                                "action_scope": action_scope,
                             }
                         }
                     ),
                 ),
             )
-            for action in ("push_existing_pr", "open_pr"):
+            for action, external_id in (("push_existing_pr", "repair"), ("open_pr", "42")):
                 receipt = {
+                    "schema_version": 1,
                     "action_id": action,
                     "action_type": action,
                     "result_id": "result",
                     "task_id": task_id,
+                    "scope": action_scope,
+                    "external_id": external_id,
                     "result_head_sha": revision,
                     "target_url": pr_url,
+                    "confirmation_method": "publisher_acknowledgement",
+                    "confirmed_at": now,
                 }
                 conn.execute(
-                    """INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,created_at,metadata_json)
-                    VALUES (?,'result',?,?,'accepted','published',?,?)""",
+                    """INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,
+                    created_at,external_id,target_url,metadata_json)
+                    VALUES (?,'result',?,?,'accepted','published',?,?,?,?)""",
                     (
                         action,
                         task_id,
                         action,
                         now,
+                        external_id,
+                        pr_url,
                         json.dumps({"publish": {"receipt": receipt}}),
                     ),
                 )
                 conn.execute(
-                    """INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,status,created_at,updated_at)
-                    VALUES (?,?,?,?,'published',?,?)""",
+                    """INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,
+                    status,created_at,updated_at,remote_evidence_json)
+                    VALUES (?,?,?,?,'published',?,?,?)""",
                     (
                         "intent-" + action,
                         action,
@@ -209,10 +224,17 @@ class RepairTests(RepairFixture):
                         "request-" + action,
                         now,
                         now,
+                        json.dumps({"status": "confirmed_effect", "receipt": receipt}),
                     ),
                 )
             daemon_state.start_daemon_run(conn, config_path=self.config_file, owner_id="daemon", now=now)
             daemon_state.acquire_daemon_lease(conn, resource_key="fixture", owner_id="daemon", ttl_seconds=60, now=now)
+
+        def provenance():
+            with closing(sqlite3.connect(self.db)) as conn:
+                return project.memory_provenance(conn, repo_id, task_id, "result")
+
+        self.assertEqual(provenance()["stage"], "publication_confirmed")
 
         def remote(path, jq):
             if path.endswith("/pulls/42"):
@@ -251,6 +273,7 @@ class RepairTests(RepairFixture):
             self.assertEqual(old["verification"]["mainline_verified"]["status"], "verified")
             self.assertEqual(old["verification"]["deployed_verified"]["status"], "pending")
             self.assertEqual(old["verification"]["original_progress"]["status"], "pending")
+            self.assertEqual(provenance()["stage"], "publication_confirmed")
             runtime["source_revision"] = merged
             deployed = self.repair.verify(
                 self.config,
@@ -261,6 +284,11 @@ class RepairTests(RepairFixture):
             )
             self.assertEqual(deployed["verification"]["deployed_verified"]["status"], "verified")
             self.assertEqual(deployed["verification"]["original_progress"]["status"], "pending")
+            deployed_memory = provenance()
+            self.assertEqual(deployed_memory["stage"], "deployment_confirmed")
+            self.assertEqual(deployed_memory["deployment"]["incident_id"], self.incident_id)
+            self.assertEqual(deployed_memory["deployment"]["revision"], revision)
+            self.assertEqual(deployed_memory["deployment"]["source_revision"], merged)
 
             def progress(evidence):
                 with closing(sqlite3.connect(self.db)) as conn, conn:

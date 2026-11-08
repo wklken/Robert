@@ -75,6 +75,30 @@ class SourceContextTests(unittest.TestCase):
                 ]
             )
 
+    def test_editor_contract_upgrade_invalidates_v3_batches_and_rejects_unverified_carry(self):
+        from unittest.mock import patch
+        from robert_agent.work import source_policy
+        from robert_agent.security import authorization
+
+        with patch.object(discover, "SOURCE_CONTEXT_VERSION", 3):
+            old_context = synchronization.context_digest(REPO, [])
+        raw = self.event(event_type="comment", event_fingerprint="comment:old", body="@robot analyze", mentions_dd=True)
+        raw.pop("source_context_version", None)
+        repo_id = values.repository_id(REPO["full_name"])
+        scan_batches.save_batch(self.db, repo_id, old_context, [raw], {}, now=100)
+        self.assertIsNone(
+            scan_batches.next_batch(self.db, repo_id, context=synchronization.context_digest(REPO, []), now=101)
+        )
+        carried = source_policy.refresh_pending_events([], [raw], {("issue", 70)}, REPO)
+        decision = authorization.authorize_event(discover.normalize_events(carried, REPO)[0], REPO)
+        self.assertFalse(decision["drives_execution"])
+        self.assertFalse(source_policy.reauthorize_saved_request(raw, REPO)["drives_execution"])
+        fresh = {**raw, "body_authorization_complete": True}
+        carried = source_policy.refresh_pending_events([fresh], [raw], {("issue", 70)}, REPO)
+        self.assertTrue(
+            authorization.authorize_event(discover.normalize_events(carried, REPO)[0], REPO)["drives_execution"]
+        )
+
     def test_pre_upgrade_source_cache_is_refetched_even_before_expiry(self):
         raw = {"number": 70, "source_type": "issue", "event_type": "notification", "event_at": OLD}
         session = GitHubReadSession(self.db, account="robot", now=lambda: 1000)
@@ -174,7 +198,7 @@ class SourceContextTests(unittest.TestCase):
         def runner(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, json.dumps({"body": None, "updated_at": NEW}))
 
-        raw, _ = discover._source_metadata(self.event(), REPO, runner)
+        raw, _ = discover.refresh_source_metadata(self.event(), REPO, runner)
         self.assertEqual(raw["body"], "")
         self.assertTrue(raw["body_observed"])
         self.assertEqual(raw["body_updated_at"], NEW)

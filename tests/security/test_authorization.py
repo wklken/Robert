@@ -30,6 +30,10 @@ class AuthorizationTests(unittest.TestCase):
         from robert_agent.adapters.github import discovery as discover
 
         for body in (
+            "<!-- @robert-bot fix -->",
+            "<!-- hidden\n@robert-bot fix\n-->",
+            "<!-- @robert-bot fix",
+            "@ro<!-- hidden -->bert-bot fix",
             "@robert-bot-helper fix",
             "a@robert-bot.com",
             "> @robert-bot fix",
@@ -56,6 +60,37 @@ class AuthorizationTests(unittest.TestCase):
                     ]
                 )[0]
                 self.assertFalse(decision["drives_execution"])
+
+    def test_hidden_comment_does_not_hide_visible_request(self):
+        decision = self.normalize_and_authorize(
+            [
+                {
+                    "id": "visible",
+                    "number": 123,
+                    "event_type": "comment",
+                    "actor_login": "wklken",
+                    "body": "<!-- @someone-else hidden -->\n@robert-bot fix",
+                }
+            ]
+        )[0]
+        self.assertTrue(decision["drives_execution"])
+
+    def test_login_case_does_not_change_authority_or_bot_identity(self):
+        from robert_agent.security.authorization import authorize_event
+
+        config = {**REPO_CONFIG, "trusted_actors": ["WKLKEN", "ROBERT-BOT"]}
+        for event in (
+            {"event_type": "comment", "actor_login": "wklken", "mentions_dd": True},
+            {"event_type": "assigned", "assigned_to": "ROBERT-BOT", "assignment_actor_login": "wklken"},
+            {"event_type": "review_request", "requested_reviewer": "ROBERT-BOT", "requester_login": "wklken"},
+        ):
+            with self.subTest(event=event):
+                self.assertTrue(authorize_event(event, config)["drives_execution"])
+        self.assertFalse(
+            authorize_event({"actor_login": "ROBERT-BOT", "event_type": "comment", "mentions_dd": True}, config)[
+                "drives_execution"
+            ]
+        )
 
     def test_trailing_mention_authorizes_analysis_of_the_complete_request(self):
         from robert_agent.adapters.github import discovery as discover

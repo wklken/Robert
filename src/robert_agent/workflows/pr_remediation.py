@@ -613,10 +613,9 @@ def budget_status(conn, *, episode, policy, now):
             }
     max_tokens = policy.get("max_total_tokens")
     max_cost = policy.get("max_cost_usd")
-    if (
-        episode["attempt_count"] > 0
-        and (max_tokens or max_cost)
-        and result["measured_attempt_count"] < episode["attempt_count"]
+    expected = max(episode["attempt_count"], result["attempt_usage_count"])
+    if (max_tokens and result["measured_token_attempt_count"] < expected) or (
+        max_cost and result["measured_cost_attempt_count"] < expected
     ):
         return {
             **result,

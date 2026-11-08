@@ -67,6 +67,7 @@ class _DedupeRunner:
                                 "id": 987,
                                 "html_url": "https://github.com/x/y/issues/1#issuecomment-987",
                                 "body": COMMENT_BODY,
+                                "user": {"login": "robot"},
                             }
                         ]
                     ]

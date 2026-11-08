@@ -86,3 +86,5 @@ are observation times; worker completion and successful publication are separate
 facts. Finished tasks fold their latest worker report, retaining per-attempt
 phases and exact artifact links. Missing remote files are described once per
 attempt rather than repeated as unusable links.
+
+已完成和已取消项目先在数据库中按原有条件筛选、计数和分页，再为当前页生成完整卡片。活动项目仍按完整生命周期事实分类。默认视图不会因为历史增长而隐藏已完成项目；游标继续按更新时间和项目 ID 倒序排列。

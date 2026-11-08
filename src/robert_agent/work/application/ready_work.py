@@ -373,21 +373,21 @@ def prepare_github_operator_tasks(
                 context_task = parent[0] if parent else None
             # Notification trust is derived from the current configuration,
             # never from a persisted boolean set by an earlier scanner.
-            trusted = set(repo.get("trusted_actors", []))
+            trusted = {login.casefold() for login in repo.get("trusted_actors", [])}
             for event in events:
                 if event.get("event_type") == "notification":
                     event["trusted_trigger_found"] = bool(
                         event.get("authorization_lookup_complete") is not False
                         and (
                             (
-                                event.get("assigned_to") == repo["github_account"]
-                                and event.get("assignment_actor_login") in trusted
+                                (event.get("assigned_to") or "").casefold() == repo["github_account"].casefold()
+                                and (event.get("assignment_actor_login") or "").casefold() in trusted
                             )
                             or (
-                                event.get("requested_reviewer") == repo["github_account"]
-                                and event.get("requester_login") in trusted
+                                (event.get("requested_reviewer") or "").casefold() == repo["github_account"].casefold()
+                                and (event.get("requester_login") or "").casefold() in trusted
                             )
-                            or (event.get("mentions_dd") and event.get("actor_login") in trusted)
+                            or (event.get("mentions_dd") and (event.get("actor_login") or "").casefold() in trusted)
                         )
                     )
             authorized = [

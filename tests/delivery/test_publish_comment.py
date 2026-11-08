@@ -147,6 +147,7 @@ class PublishCommentTests(PublicationFixture):
                     [
                         {
                             "id": 987,
+                            "user": {"login": "robert-bot"},
                             "html_url": "https://github.com/x/y/issues/1#issuecomment-987",
                             "body": body,
                         }

@@ -50,7 +50,7 @@ def admit_requests(
     active_workstreams,
     summary,
 ):
-    if not dry_run and dispatch_budget["remaining"] > 0:
+    if not dry_run:
         queued_prepared_count = dispatcher.queue_prepared_attempts(
             conn,
             repo_id,
@@ -127,7 +127,7 @@ def admit_requests(
             admission = supervision_lineage.record_github_received(conn, event, event_id, repo_id, source_id, run_now)
         if (
             event.get("authorization_status") == "context_only"
-            and event.get("actor_login") != repo["github_account"]
+            and (event.get("actor_login") or "").casefold() != repo["github_account"].casefold()
             and event.get("mentions_dd")
         ):
             # Retain discussion as data without routing, resuming, or
@@ -136,7 +136,7 @@ def admit_requests(
             continue
         if (
             event.get("authorization_status") in {"authorized_trigger", "accepted_context"}
-            and event.get("actor_login") in repo.get("trusted_actors", [])
+            and work_policies.is_trusted_actor(event, repo)
             and event.get("intent") == "vote"
         ):
             if task_state.event_is_attached(conn, event_id):
@@ -162,8 +162,7 @@ def admit_requests(
             event.get("source_type") == "pull_request"
             and event.get("authorization_status") in {"authorized_trigger", "accepted_context"}
             and (
-                event.get("authorization_status") == "authorized_trigger"
-                or event.get("actor_login") in repo.get("trusted_actors", [])
+                event.get("authorization_status") == "authorized_trigger" or work_policies.is_trusted_actor(event, repo)
             )
         ):
             review_route = workflow_routing.effective_route(config_result, repo, event)

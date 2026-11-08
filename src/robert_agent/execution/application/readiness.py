@@ -16,6 +16,7 @@ from robert_agent.persistence.queries import scheduling
 from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.work import repositories as work_repositories
+from robert_agent.supervision import decisions as supervision_decisions
 from robert_agent.work import wakeup
 from robert_agent.work.application import completion
 from robert_agent.work.application import handoff as pending_handoff
@@ -114,6 +115,8 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
         return True
     if completion.has_orphaned_classification_result(conn, scoped_repos, now):
         return True
+    if supervision_decisions.has_ready_worker_retry(conn, config_result or {}, repo_ids, now):
+        return True
     recovery_pending = db_records.first(db_read_attempts.has_local_work_filtered(conn, repo_ids, now, now))
     if recovery_pending:
         return True
@@ -124,13 +127,15 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
         if config_result is None:
             return True
         global_limit = config_result.get("max_concurrency", 1)
+        if any(resumable for _, _, resumable in prepared):
+            return True
         if capacity.running_attempt_count_for_repos(conn, scoped_repos) < global_limit:
             limits = {
                 repo["full_name"]: repo.get("max_concurrency", global_limit) for repo in config_result.get("repos", [])
             }
             if any(
                 capacity.running_attempt_count(conn, candidate_id) < limits.get(full_name, global_limit)
-                for candidate_id, full_name in prepared
+                for candidate_id, full_name, _ in prepared
             ):
                 return True
     if not include_publication:

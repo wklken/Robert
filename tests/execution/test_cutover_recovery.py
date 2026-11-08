@@ -159,7 +159,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
             result_cutover.prepare(self.db, now=self.now)
             with patch.object(
                 discover,
-                "_source_metadata",
+                "refresh_source_metadata",
                 return_value=({**event, "body": "suppress specified plugin warning"}, "open"),
             ):
                 result = work_items.retrigger_failed_github_task(
@@ -237,7 +237,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
         context = work_items.CommandContext("operator", "owner", frozenset({"repo"}), frozenset())
         with patch.object(attempt_process, "dispatch_status", return_value={"status": "alive_same"}):
             result_cutover.prepare(self.db, now=self.now)
-        with patch.object(discover, "_source_metadata", return_value=(event, "open")):
+        with patch.object(discover, "refresh_source_metadata", return_value=(event, "open")):
             with self.assertRaisesRegex(work_items.WorkItemConflictError, "termination"):
                 work_items.retrigger_failed_github_task(self.db, "bad", context=context, idempotency_key="live")
             with closing(sqlite3.connect(self.db)) as conn, conn:
@@ -309,7 +309,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                     "classification_result",
                 )
             context = work_items.CommandContext("operator", "owner", frozenset({"repo"}), frozenset())
-            with patch.object(discover, "_source_metadata", return_value=({"body": "refreshed"}, "open")):
+            with patch.object(discover, "refresh_source_metadata", return_value=({"body": "refreshed"}, "open")):
                 requested = work_items.retrigger_failed_github_task(
                     self.db, "bad", context=context, idempotency_key="after-exit"
                 )
@@ -482,7 +482,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
                 "X-Idempotency-Key": "board-recovery",
             }
             self.assertIn("retrigger", board.get_work_item_detail(self.db, "item")["valid_commands"])
-            with patch.object(discover, "_source_metadata", return_value=({"body": "fresh source"}, "open")):
+            with patch.object(discover, "refresh_source_metadata", return_value=({"body": "fresh source"}, "open")):
                 status, _, body = web.handle_dashboard_post(
                     "/api/tasks/bad/retrigger", b"{}", self.db, control_context=context, request_headers=headers
                 )

@@ -19,9 +19,9 @@ def authorize_event(event, repo_config, existing_workstreams=None, known_workstr
     if known_workstreams is None:
         known_workstreams = existing_workstreams
     known_workstreams = set(known_workstreams or [])
-    trusted_actors = set(repo_config.get("trusted_actors", []))
-    github_account = repo_config["github_account"]
-    actor = event.get("actor_login")
+    trusted_actors = {login.casefold() for login in repo_config.get("trusted_actors", [])}
+    github_account = repo_config["github_account"].casefold()
+    actor = (event.get("actor_login") or "").casefold()
     event_type = event.get("event_type")
 
     if event.get("actor_kind") == "github_system" or event.get("authorization_status") == "authorized_system_trigger":
@@ -30,13 +30,16 @@ def authorize_event(event, repo_config, existing_workstreams=None, known_workstr
             "ignored_untrusted_system_event",
         )
 
-    if event_type == "assigned" and event.get("assigned_to") == github_account:
-        assignment_actor = event.get("assignment_actor_login")
+    if event_type == "assigned" and (event.get("assigned_to") or "").casefold() == github_account:
+        assignment_actor = (event.get("assignment_actor_login") or "").casefold()
         if not assignment_actor:
             return _decision(event, "pending_authorization")
         if assignment_actor in trusted_actors:
             return _decision(event, "authorized_trigger", creates_task=True, drives_execution=True)
         return _decision(event, "ignored_untrusted_trigger")
+
+    if event.get("body_authorization_complete") is False:
+        return _decision(event, "pending_authorization")
 
     if actor == github_account:
         return _decision(event, "context_only")
@@ -59,11 +62,11 @@ def authorize_event(event, repo_config, existing_workstreams=None, known_workstr
 
     requested_review = (
         event.get("requested_review_dd")
-        or event.get("requested_reviewer") == github_account
-        or event.get("requested_team") == github_account
+        or (event.get("requested_reviewer") or "").casefold() == github_account
+        or (event.get("requested_team") or "").casefold() == github_account
     )
     if event_type == "review_request" and requested_review:
-        requester = event.get("requester_login") or actor
+        requester = (event.get("requester_login") or actor).casefold()
         if requester in trusted_actors:
             return _decision(event, "authorized_trigger", creates_task=True, drives_execution=True)
         return _decision(event, "ignored_untrusted_trigger")

@@ -341,7 +341,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None):
+        def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None, config=None):
             raise FileNotFoundError("gh")
 
         try:

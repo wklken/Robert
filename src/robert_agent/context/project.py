@@ -1,6 +1,8 @@
 """Project-memory helpers for DD GitHub agent tasks."""
 
 from robert_agent.foundation.contracts.delivery import GitHubActionType
+from robert_agent.persistence.queries import github_actions as action_queries
+from robert_agent.supervision.receipts import matches as receipt_matches
 
 from robert_agent.persistence.queries import project_memory_terms as db_read_project_memory_terms
 
@@ -398,12 +400,16 @@ def retrieve_memories(conn, repo_id, workstream_id, route_result, events, limit=
             confidence,
             updated_at,
             metadata_json,
+            source_task_id,
+            source_result_id,
         ) = row
         metadata = json.loads(metadata_json or "{}")
         score = scores[memory_id] + CONFIDENCE_SCORES.get(confidence, 0)
         memories.append(
             {
                 "memory_id": memory_id,
+                "_source_task_id": source_task_id,
+                "_source_result_id": source_result_id,
                 "memory_thread_key": memory_thread_key,
                 "kind": kind,
                 "title": title,
@@ -418,4 +424,72 @@ def retrieve_memories(conn, repo_id, workstream_id, route_result, events, limit=
             }
         )
     memories.sort(key=lambda item: (-item["score"], item["updated_at"], item["memory_id"]))
-    return memories[:limit]
+    selected = memories[:limit]
+    for memory in selected:
+        memory["provenance"] = memory_provenance(
+            conn,
+            repo_id,
+            memory.pop("_source_task_id"),
+            memory.pop("_source_result_id"),
+        )
+    return selected
+
+
+def memory_provenance(conn, repo_id, task_id, result_id):
+    """Report controller evidence, never a lifecycle claim from memory text."""
+    provenance = {
+        "stage": "unknown",
+        "task_id": task_id,
+        "result_id": result_id,
+        "attempt_id": None,
+        "publication_receipts": [],
+        "deployment": None,
+    }
+    source = db_records.first(db_read_project_memory_entries.memory_source(conn, repo_id, task_id, result_id))
+    if not source:
+        return provenance
+    provenance["attempt_id"] = source["attempt_id"]
+    audit = json.loads(source["metadata_json"] or "{}").get("audit") or {}
+    if audit.get("status") != "accepted":
+        return provenance
+    provenance["stage"] = "audit_accepted"
+    scope = audit.get("action_scope") or {}
+    actions = action_queries.find_for_publication_facts(conn, source["created_at"], result_id, None)
+    for row in actions:
+        action = dict(row)
+        receipt = (json.loads(action["metadata_json"] or "{}").get("publish") or {}).get("receipt")
+        if (
+            action["audit_status"] != "accepted"
+            or action["publish_status"] != "published"
+            or not isinstance(receipt, dict)
+            or not scope
+            or not receipt_matches({"result_id": result_id}, action, scope, receipt)
+        ):
+            continue
+        provenance["publication_receipts"].append(
+            {
+                key: receipt.get(key)
+                for key in ("action_id", "action_type", "target_url", "result_head_sha", "confirmed_at")
+            }
+        )
+    if not actions or len(provenance["publication_receipts"]) != len(actions):
+        return provenance
+    provenance["stage"] = "publication_confirmed"
+    proof = db_records.first(db_read_project_memory_entries.deployment_proof(conn, result_id))
+    if proof:
+        deployment = (json.loads(proof["metadata_json"]) or {}).get("deployed_verified") or {}
+        if (
+            deployment.get("task_id") == task_id
+            and deployment.get("revision") == scope.get("result_head_sha")
+            and deployment.get("revision")
+            and deployment.get("source_revision")
+            and deployment.get("build_id")
+            and deployment.get("run_id")
+        ):
+            provenance["stage"] = "deployment_confirmed"
+            provenance["deployment"] = {
+                **deployment,
+                "observed_at": proof["updated_at"],
+                "incident_id": proof["scope_id"],
+            }
+    return provenance

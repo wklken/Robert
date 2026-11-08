@@ -5,16 +5,21 @@ from robert_agent.persistence.queries import github_actions as db_read_github_ac
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 
 import json
+import math
+import sys
 from pathlib import Path
 
 
 def _as_number(value, default=0):
     if isinstance(value, bool):
         return default
-    if isinstance(value, (int, float)):
-        return value
+    if isinstance(value, int):
+        return value if value >= 0 else default
+    if isinstance(value, float):
+        return value if math.isfinite(value) and value >= 0 else default
     try:
-        return int(value)
+        number = int(value)
+        return number if number >= 0 else default
     except (TypeError, ValueError):
         return default
 
@@ -133,8 +138,13 @@ def _add_usage_totals(totals, usage_payload):
         "cacheReadInputTokens",
     )
     cost = usage_payload.get("total_cost_usd")
-    if isinstance(cost, (int, float)):
+    if type(cost) in (int, float) and 0 <= cost <= sys.float_info.max:
         totals["total_cost_usd"] += float(cost)
+        totals["measured_cost_attempt_count"] += 1
+    input_value = block.get("input_tokens", block.get("inputTokens"))
+    output_value = block.get("output_tokens", block.get("outputTokens"))
+    if _as_number(input_value, None) is not None and _as_number(output_value, None) is not None:
+        totals["measured_token_attempt_count"] += 1
     return True
 
 
@@ -145,6 +155,8 @@ def summarize_usage_payloads(usage_payloads):
         "total_cache_creation_input_tokens": 0,
         "total_cache_read_input_tokens": 0,
         "total_cost_usd": 0.0,
+        "measured_token_attempt_count": 0,
+        "measured_cost_attempt_count": 0,
     }
     available = False
     for payload in usage_payloads:

@@ -43,6 +43,12 @@ class RuntimeRemediationTests(unittest.TestCase):
             )
             conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a','t',1,'running')")
 
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            from robert_agent.persistence import execution_control
+
+            conn.execute("UPDATE workstreams SET active_task_id='t' WHERE workstream_id='w'")
+            execution_control.ensure_subject(conn, "task", "t", "human_request", "2026-11-08T00:00:00Z")
+
     def test_command_completion_does_not_wait_for_heartbeat_deadline(self):
         started = time.monotonic()
         result = heartbeat.run_command_with_heartbeat(

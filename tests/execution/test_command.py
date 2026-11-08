@@ -9,6 +9,54 @@ from tests.support.worker_protocol import WorkerProtocolFixture
 
 
 class CommandJournalTests(WorkerProtocolFixture):
+    def test_terminal_or_superseded_attempt_cannot_spawn_a_command(self):
+        from robert_agent.execution import command as heartbeat
+        from unittest.mock import patch
+
+        db_path = self._init_attempt_db()
+        for state in ("canceled", "completed", "superseded"):
+            with self.subTest(state=state), closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute("DELETE FROM attempts WHERE attempt_id='attempt-2'")
+                conn.execute("UPDATE tasks SET lifecycle='running'")
+                conn.execute("UPDATE workstreams SET lifecycle='active',active_task_id='task-1'")
+                if state == "superseded":
+                    conn.execute(
+                        "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES('attempt-2','task-1',2,'prepared')"
+                    )
+                else:
+                    conn.execute("UPDATE tasks SET lifecycle=?", (state,))
+                conn.commit()
+                with patch.object(heartbeat.subprocess, "Popen", wraps=heartbeat.subprocess.Popen) as spawn:
+                    with self.assertRaisesRegex(ValueError, "execution authority"):
+                        heartbeat.run_command_with_heartbeat(
+                            db_path, "task-1", "attempt-1", "verify", [sys.executable, "-c", "pass"]
+                        )
+                    spawn.assert_not_called()
+
+    def test_cancel_after_initial_read_is_rechecked_before_spawn(self):
+        from robert_agent.execution import command as heartbeat
+        from unittest.mock import patch
+
+        db_path = self._init_attempt_db()
+        snapshot = heartbeat._record_command_snapshot
+
+        def cancel(**kwargs):
+            if kwargs.get("summary") == "Starting command":
+                with closing(sqlite3.connect(db_path)) as writer, writer:
+                    writer.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id='task-1'")
+                    writer.execute("UPDATE workstreams SET lifecycle='canceled', active_task_id=NULL")
+            return snapshot(**kwargs)
+
+        with (
+            patch.object(heartbeat, "_record_command_snapshot", side_effect=cancel),
+            patch.object(heartbeat.subprocess, "Popen", wraps=heartbeat.subprocess.Popen) as spawn,
+        ):
+            with self.assertRaisesRegex(ValueError, "execution authority"):
+                heartbeat.run_command_with_heartbeat(
+                    db_path, "task-1", "attempt-1", "verify", [sys.executable, "-c", "pass"]
+                )
+            self.assertNotIn([sys.executable, "-c", "pass"], [call.args[0] for call in spawn.call_args_list])
+
     def test_heartbeat_command_record_tracks_active_command(self):
         from robert_agent.execution import command as heartbeat
 

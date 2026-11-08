@@ -92,6 +92,8 @@ def retrieve_memories_filtered(conn, items):
             tables["project_memory_entries"].c["confidence"],
             tables["project_memory_entries"].c["updated_at"],
             tables["project_memory_entries"].c["metadata_json"],
+            tables["project_memory_entries"].c["source_task_id"],
+            tables["project_memory_entries"].c["source_result_id"],
         )
         .select_from(tables["project_memory_entries"])
         .where(tables["project_memory_entries"].c["memory_id"].in_(bindparam("items", expanding=True)))
@@ -99,3 +101,33 @@ def retrieve_memories_filtered(conn, items):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {"items": items})
+
+
+def memory_source(conn, repo_id, task_id, result_id):
+    result, task, stream = tables["worker_results"], tables["tasks"], tables["workstreams"]
+    return statements.read(
+        conn,
+        select(result)
+        .select_from(
+            result.join(task, task.c.task_id == result.c.task_id).join(
+                stream, stream.c.workstream_id == task.c.workstream_id
+            )
+        )
+        .where(result.c.result_id == result_id, task.c.task_id == task_id, stream.c.repo_id == repo_id),
+    )
+
+
+def deployment_proof(conn, result_id):
+    proof = tables["supervision_checkpoints"]
+    return statements.read(
+        conn,
+        select(proof.c.scope_id, proof.c.metadata_json, proof.c.updated_at)
+        .where(
+            proof.c.scope_type == "repair",
+            proof.c.rule_id == "verification",
+            func.json_extract(proof.c.metadata_json, "$.deployed_verified.result_id") == result_id,
+            func.json_extract(proof.c.metadata_json, "$.deployed_verified.status") == "verified",
+        )
+        .order_by(proof.c.updated_at.desc())
+        .limit(1),
+    )
