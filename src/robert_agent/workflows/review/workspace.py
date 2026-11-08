@@ -8,6 +8,8 @@ import shutil
 import subprocess
 
 from robert_agent.foundation.commands import run_command
+from robert_agent.context.native_prompts import review_evaluate_input
+from robert_agent.context.prompts import render_prompt
 
 from robert_agent.workflows.review import files as review_files
 
@@ -214,6 +216,14 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
     return manifest
 
 
+def _reviewer_text(manifest):
+    return render_prompt(
+        review_evaluate_input(
+            manifest, severities=review_files.SEVERITIES, recommendations=review_files.RECOMMENDATIONS
+        )
+    ).text
+
+
 def verify_snapshot(manifest):
     tree = Path(manifest["worktree_path"])
     try:
@@ -239,7 +249,7 @@ def verify_snapshot(manifest):
             path = review_files.safe_path(manifest["prompt_path"], manifest["artifact_root"])
             if review_files.sha256_file(path) != manifest["prompt_sha256"]:
                 raise ValueError("review prompt hash changed")
-            if path.read_text(encoding="utf-8") != review_files.build_reviewer_prompt(manifest):
+            if path.read_text(encoding="utf-8") != _reviewer_text(manifest):
                 raise ValueError("review prompt no longer matches the built-in template")
             saved = json.loads(Path(manifest["context_dir"], "manifest.json").read_text(encoding="utf-8"))
             if saved != manifest:
@@ -296,7 +306,7 @@ def freeze_context(manifest):
     review_files.safe_path(prompt_path, manifest["artifact_root"])
     if prompt_path.exists():
         raise ValueError("unregistered reviewer prompt already exists")
-    prompt_path.write_text(review_files.build_reviewer_prompt(frozen), encoding="utf-8")
+    prompt_path.write_text(_reviewer_text(frozen), encoding="utf-8")
     frozen.update(
         prompt_path=str(prompt_path),
         prompt_sha256=review_files.sha256_file(prompt_path),

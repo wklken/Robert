@@ -1,5 +1,6 @@
 """Incompatible task results require attention without stopping other work."""
 
+from robert_agent.context.worker_prompt import worker_prompt_input
 from robert_agent.adapters.processes import attempt as attempt_process
 from contextlib import closing
 import json
@@ -536,11 +537,13 @@ class RuntimeAndContextTests(unittest.TestCase):
                 "/tmp/db", {"python_bin": "/opt/old/bin/python", "default_base_branch": "main"}
             )
             prompt = render_prompt.render_prompt(
-                {"task_id": "task", "attempt_id": "attempt", "workstream_id": "ws"},
-                route.ROUTES["classification-result"],
-                [],
-                runtime_context={**runtime, "python_bin": "/opt/old/bin/python"},
-            )
+                worker_prompt_input(
+                    {"task_id": "task", "attempt_id": "attempt", "workstream_id": "ws"},
+                    route.ROUTES["classification-result"],
+                    [],
+                    runtime_context={**runtime, "python_bin": "/opt/old/bin/python"},
+                )
+            ).text
         self.assertEqual(runtime["python_bin"], "/opt/current/bin/python")
         self.assertIn("/opt/current/bin/python", prompt)
         self.assertNotIn("/opt/old/bin/python", prompt)

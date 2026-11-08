@@ -118,7 +118,7 @@ reviewer 在 notes 中说明实际执行的检查、重要的未验证行为，�
 ## 审查原则与人工决策
 
 普通 PR review、review 意见核验、原生 reviewer 和汇总阶段共用
-[`review-policy.md`](../../src/robert_agent/resources/review-policy.md)。每轮根据当前代码快照、
+[`review-policy.md`](../../src/robert_agent/resources/prompts/guidance/review-policy.md)。每轮根据当前代码快照、
 issue/PR 验收要求及源码和测试证据独立判断。历史结论、自己的实现和模型信心不能代替证据；
 已确认的需求及仍有效的恢复证据继续保留。汇总阶段只复核已有 finding，不新增无来源的问题。
 

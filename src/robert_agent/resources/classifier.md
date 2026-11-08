@@ -1,5 +1,10 @@
 # Classifier
 
+This is a routing reference, not a runtime prompt template. The classification
+agent receives [task-classify.md](prompts/stages/task-classify.md) through the
+shared [context.prompts](../context/prompts.py) renderer. Fixed route policy
+remains in [routes.yml](routes.yml).
+
 Classification turns authorized GitHub events into one of the fixed output types:
 
 - `multi_agent_vote_report` (request intent and route: `vote`)

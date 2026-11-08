@@ -1,3 +1,4 @@
+from robert_agent.context.worker_prompt import worker_prompt_input
 from tests.support.results import internal_result
 from contextlib import closing
 import json
@@ -123,15 +124,17 @@ class ReviewInputWorkflowTests(unittest.TestCase):
 
     def test_conditional_prompt_has_explicit_branch_and_result_classification(self):
         prompt = render_prompt.render_prompt(
-            {
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:x/y!1",
-                "review_input_policy": "classify",
-            },
-            route.ROUTES["update-existing-pr"],
-            [{"event_type": "comment", "body": "Add a null check"}],
-        )
+            worker_prompt_input(
+                {
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:x/y!1",
+                    "review_input_policy": "classify",
+                },
+                route.ROUTES["update-existing-pr"],
+                [{"event_type": "comment", "body": "Add a null check"}],
+            )
+        ).text
         self.assertIn("review_input_kind", prompt)
         self.assertIn("request", prompt)
         self.assertIn("review_feedback", prompt)
@@ -143,14 +146,16 @@ class ReviewInputWorkflowTests(unittest.TestCase):
         for route_id in ("new-pr", "update-existing-pr"):
             with self.subTest(route_id=route_id):
                 prompt = render_prompt.render_prompt(
-                    {
-                        "task_id": "task-1",
-                        "attempt_id": "attempt-1",
-                        "workstream_id": "github:x/y!1",
-                    },
-                    route.ROUTES[route_id],
-                    [{"event_type": "comment", "body": "Update documentation"}],
-                )
+                    worker_prompt_input(
+                        {
+                            "task_id": "task-1",
+                            "attempt_id": "attempt-1",
+                            "workstream_id": "github:x/y!1",
+                        },
+                        route.ROUTES[route_id],
+                        [{"event_type": "comment", "body": "Update documentation"}],
+                    )
+                ).text
                 self.assertIn("Commit all task-owned changes locally before submitting", prompt)
                 self.assertIn(
                     "Robert publishes commits; it does not stage or commit working-tree changes",

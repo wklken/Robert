@@ -28,7 +28,7 @@ supervision:
 ```
 
 The command is an administrator-provided model API wrapper. It reads one JSON
-bundle on stdin and returns the [decision contract](../../src/robert_agent/resources/supervision-decision.md)
+bundle on stdin and returns the [decision contract](../../src/robert_agent/resources/prompts/stages/supervision-decide.md)
 on stdout. It must expose no tools. The private working directory and HOME are
 not an OS sandbox. Only explicitly allowed model environment variables reach
 the command; ordinary coding adapters are not this profile. An existing
@@ -177,7 +177,7 @@ The published supervision boundaries are described in the
 
 Configure a dedicated administrator-owned wrapper that accepts one JSON evidence
 bundle on stdin and returns the structured JSON described in
-the [diagnosis contract](../../src/robert_agent/resources/supervision-diagnosis.md).
+the [diagnosis contract](../../src/robert_agent/resources/prompts/stages/supervision-diagnose.md).
 It must expose no model tools. The ordinary coding adapters are not a diagnosis profile. Example (replace the executable):
 
 ```yaml
@@ -334,6 +334,12 @@ GitHub actions; audit and publisher perform them. The command worker and
 launcher must be administrator-controlled. Normal Codex/Claude coding adapters
 are not automatically qualified for this profile. Revoke or change the policy
 to stop future dispatch/publication under the old authority.
+
+Preparation renders this stdout submission contract directly, without database
+paths, runtime helper commands or helper-acknowledgement requirements. Request
+events are included in full: the restricted child cannot read the controller's
+context archive. Failed or blocked work must be reported honestly in the same
+submission; the broker still validates it as `new_pr`.
 
 Automatic maintenance uses a separate clone, with no shared worktree metadata or
 hard-linked objects. Update the configured source repository's base branch before

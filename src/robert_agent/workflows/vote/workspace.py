@@ -7,6 +7,8 @@ import subprocess
 
 from robert_agent.workflows.review import workspace as review_workspace
 from robert_agent.workflows.vote import files as vote_files
+from robert_agent.context.native_prompts import vote_cast_input
+from robert_agent.context.prompts import render_prompt
 
 
 def api(repo, endpoint, *, run_command=None):
@@ -234,7 +236,7 @@ def verify_snapshot(manifest):
     if manifest.get("frozen"):
         if (
             vote_files.digest(manifest["prompt_path"]) != manifest["prompt_sha256"]
-            or Path(manifest["prompt_path"]).read_text() != vote_files.voter_prompt(manifest)
+            or Path(manifest["prompt_path"]).read_text() != render_prompt(vote_cast_input(manifest)).text
             or vote_files._read_json(Path(manifest["context_dir"]) / "manifest.json") != manifest
         ):
             raise ValueError("frozen vote manifest or prompt changed")
@@ -258,7 +260,7 @@ def freeze(manifest, prepared):
         "frozen": True,
     }
     prompt = Path(manifest["artifact_root"]) / "voter-prompt.md"
-    content = vote_files.voter_prompt(frozen)
+    content = render_prompt(vote_cast_input(frozen)).text
     if prompt.exists() and prompt.read_text() != content:
         raise ValueError("existing voter prompt differs")
     prompt.write_text(content)

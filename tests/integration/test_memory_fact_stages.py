@@ -89,9 +89,9 @@ class MemoryFactStagesTests(GitHubInputFixture):
         prompt = Path(prompt_path).read_text(encoding="utf-8")
         _, heading, section = prompt.partition("Relevant Project Memories")
         self.assertTrue(heading, "project memory is absent from the follow-up prompt")
-        _, opening, section = section.partition("\n\n    [")
+        _, opening, section = section.partition("\n\n```json\n")
         self.assertTrue(opening, "project memory JSON is absent from the follow-up prompt")
-        memories, _ = json.JSONDecoder().raw_decode("[" + section)
+        memories, _ = json.JSONDecoder().raw_decode(section)
         return self.memory_from(memories)
 
     def publish_comment(self, source):

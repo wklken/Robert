@@ -1,3 +1,4 @@
+from robert_agent.context.worker_prompt import worker_prompt_input
 from robert_agent.context import attempt as attempt_context
 from tests.support.temp_workspace import TemporaryWorkspace
 
@@ -7,26 +8,28 @@ class WorkerCommandPromptTests(TemporaryWorkspace):
         from robert_agent.context import prompts as render_prompt
 
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/backend!456",
-            },
-            route_result={
-                "expected_output": "update_existing_pr",
-                "allowed_github_actions": ["push_existing_pr", "comment"],
-                "required_skills": [],
-            },
-            events=[{"event_fingerprint": "comment:1"}],
-            runtime_context={
-                "python_bin": "/usr/bin/python3.11",
-                "db_path": "/tmp/dd.sqlite3",
-                "result_script": "/agent/result.py",
-                "snapshot_script": "/worker/snapshot.py",
-                "heartbeat_script": "/worker/heartbeat.py",
-                "status_script": "/agent/status.py",
-            },
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/backend!456",
+                },
+                route_result={
+                    "expected_output": "update_existing_pr",
+                    "allowed_github_actions": ["push_existing_pr", "comment"],
+                    "required_skills": [],
+                },
+                events=[{"event_fingerprint": "comment:1"}],
+                runtime_context={
+                    "python_bin": "/usr/bin/python3.11",
+                    "db_path": "/tmp/dd.sqlite3",
+                    "result_script": "/agent/result.py",
+                    "snapshot_script": "/worker/snapshot.py",
+                    "heartbeat_script": "/worker/heartbeat.py",
+                    "status_script": "/agent/status.py",
+                },
+            )
+        ).text
 
         import sys
 

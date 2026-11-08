@@ -1,32 +1,37 @@
+from robert_agent.context.worker_prompt import worker_prompt_input
 import json
 import unittest
+from dataclasses import replace
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.context import prompts as render_prompt
+from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
 from robert_agent.workflows import routes as route
 
 
 class PromptScopeTests(unittest.TestCase):
     def render(self, route_id, **kwargs):
         return render_prompt.render_prompt(
-            {
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:x/y!1",
-            },
-            route.ROUTES[route_id],
-            [{"event_fingerprint": "comment:1", "event_type": "comment"}],
-            runtime_context={
-                "github_context": {
-                    "md_path": "/context/input.md",
-                    "json_path": "/context/input.json",
+            worker_prompt_input(
+                {
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:x/y!1",
                 },
-                "result_script": "/runtime/result.py",
-                "status_script": "/runtime/status.py",
-                **kwargs.pop("runtime_context", {}),
-            },
-            **kwargs,
-        )
+                route.ROUTES[route_id],
+                [{"event_fingerprint": "comment:1", "event_type": "comment"}],
+                runtime_context={
+                    "github_context": {
+                        "md_path": "/context/input.md",
+                        "json_path": "/context/input.json",
+                    },
+                    "result_script": "/runtime/result.py",
+                    "status_script": "/runtime/status.py",
+                    **kwargs.pop("runtime_context", {}),
+                },
+                **kwargs,
+            )
+        ).text
 
     def test_mutation_testing_requires_explicit_task_or_repository_requirement(self):
         for route_id in ("new-pr", "update-existing-pr"):
@@ -38,6 +43,57 @@ class PromptScopeTests(unittest.TestCase):
                 )
                 self.assertIn("Otherwise omit mutation testing without a skip explanation", prompt)
                 self.assertNotIn("When feasible, use scoped mutation testing", prompt)
+
+    def test_task_prompt_exposes_ordered_sections_and_stage_identity(self):
+        prompt = self.render("new-pr")
+        headings = [line for line in prompt.splitlines() if line.startswith("## ")]
+        self.assertEqual(
+            headings,
+            [
+                "## Stage",
+                "## Task",
+                "## Boundaries",
+                "## Context",
+                "## Work",
+                "## Verification",
+                "## Delivery",
+                "## Ending",
+            ],
+        )
+        self.assertIn("task.implement", prompt.split("## Task", 1)[0])
+
+    def test_renderer_rejects_stage_protocol_and_context_mismatches(self):
+        request = PromptInput(
+            "supervision.diagnose",
+            {"bundle_id": "bundle-1"},
+            OutputContract("stdout-json", "diagnosis", "stdout", "Robert supervisor"),
+        )
+        with self.assertRaisesRegex(ValueError, "invalid output contract"):
+            render_prompt.render_prompt(replace(request, output=replace(request.output, schema="decision")))
+        with self.assertRaisesRegex(ValueError, "file context requires file access"):
+            render_prompt.render_prompt(
+                replace(
+                    request,
+                    context_items=(ContextItem("logs", "Failure logs", "Worker", delivery="file", locator="/logs"),),
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "required context is unavailable"):
+            render_prompt.render_prompt(
+                replace(
+                    request,
+                    context_items=(
+                        ContextItem(
+                            "request",
+                            "Current request",
+                            "Original task",
+                            requirement="required",
+                            delivery="unavailable",
+                            completeness="unavailable",
+                            reason="Source missing",
+                        ),
+                    ),
+                )
+            )
 
     def test_classification_has_only_its_result_fields_and_no_publication_help(self):
         prompt = self.render("classification-result")
@@ -62,6 +118,41 @@ class PromptScopeTests(unittest.TestCase):
         self.assertIn("verification", payload)
         self.assertIn("planned_github_actions", payload)
 
+    def test_brokered_repair_has_one_stdout_contract_without_runtime_helpers(self):
+        prompt = self.render(
+            "new-pr",
+            runtime_context={
+                "origin_type": "web",
+                "result_transport": "stdout_compact_submission",
+                "db_path": "/private/controller.sqlite3",
+                "snapshot_script": "/runtime/snapshot.py",
+                "heartbeat_script": "/runtime/heartbeat.py",
+                "work_item_event_ids": ["reply-1"],
+            },
+        )
+        self.assertIn("Return exactly one compact-v1 new_pr submission JSON object on stdout", prompt)
+        self.assertIn("The trusted broker", prompt)
+        self.assertIn("Do not access Robert DB or runtime commands", prompt)
+        self.assertIn('"consumed_work_item_event_ids": [', prompt)
+        self.assertIn('"verification": [', prompt)
+        self.assertIn("Follow verification_policy and repository requirements", prompt)
+        for forbidden in (
+            "/private/controller.sqlite3",
+            "/runtime/",
+            "Submission acknowledgement:",
+            "<<'JSON'",
+            "waiting_for_user",
+            "recorded or deferred acknowledgement",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, prompt)
+
+    def test_invalid_submission_transport_is_rejected_before_rendering(self):
+        with self.assertRaisesRegex(ValueError, "unsupported result transport"):
+            self.render("new-pr", runtime_context={"result_transport": "unknown"})
+        with self.assertRaisesRegex(ValueError, "restricted repair requires new_pr"):
+            self.render("local-result", runtime_context={"result_transport": "stdout_compact_submission"})
+
     def test_new_pr_discloses_assumptions_and_decisions_in_public_body(self):
         for origin_type in ("github", "web"):
             with self.subTest(origin_type=origin_type):
@@ -78,14 +169,16 @@ class PromptScopeTests(unittest.TestCase):
                 self.assertIn("alternatives", guidance)
                 self.assertIn("impact", guidance)
                 self.assertIn("No material assumptions or discretionary decisions", guidance)
-                self.assertIn("waiting_for_user", guidance)
+                self.assertIn("does not authorize new scope or resolve missing authorization", guidance)
+                self.assertIn("submission contract below", guidance)
+                self.assertIn("record --output-type waiting_for_user", prompt)
                 payload = json.loads(prompt.split("<<'JSON'\n", 1)[1].split("\nJSON", 1)[0])
                 action = next(item for item in payload["planned_github_actions"] if item["type"] == "open_pr")
                 self.assertIn("## Assumptions and decisions", action["body"])
 
     def test_pr_body_guidance_is_absent_without_open_pr_authority(self):
         for route_id, route_config in route.ROUTES.items():
-            if "open_pr" in route_config["allowed_github_actions"]:
+            if route_id == "vote" or "open_pr" in route_config["allowed_github_actions"]:
                 continue
             with self.subTest(route_id=route_id):
                 prompt = self.render(route_id)
@@ -94,8 +187,9 @@ class PromptScopeTests(unittest.TestCase):
 
     def test_context_has_one_primary_entry_and_json_is_on_demand(self):
         prompt = self.render("new-pr")
-        self.assertIn("Read /context/input.md first", prompt)
-        self.assertIn("Use /context/input.json only when structured fields are needed", prompt)
+        self.assertIn("Primary archive of the complete request and discussion", prompt)
+        self.assertIn("Read /context/input.md.", prompt)
+        self.assertIn("Read condition: when structured fields are needed.\n  Read /context/input.json.", prompt)
         self.assertNotIn("Read those files before acting", prompt)
 
     def test_code_tasks_keep_human_intent_and_verification_limits_visible(self):
@@ -122,16 +216,33 @@ class PromptScopeTests(unittest.TestCase):
 
     def test_non_code_routes_do_not_receive_implementation_collaboration_workflow(self):
         for route_id, config in route.ROUTES.items():
-            if config["expected_output"] in {"new_pr", "update_existing_pr"}:
+            if route_id == "vote" or config["expected_output"] in {"new_pr", "update_existing_pr"}:
                 continue
             with self.subTest(route_id=route_id):
                 self.assertNotIn("Human collaboration:", self.render(route_id))
+
+    def test_vote_has_no_ordinary_worker_prompt(self):
+        with self.assertRaisesRegex(ValueError, "no ordinary worker stage"):
+            self.render("vote")
 
     def test_source_review_checks_decisions_and_reports_coverage_limits(self):
         prompt = self.render("review-pr")
         self.assertIn("undisclosed decisions", prompt)
         self.assertIn("unreviewed scope", prompt)
         self.assertIn("not a defect by itself", prompt)
+
+    def test_memory_context_discloses_omitted_details(self):
+        memories = [
+            {"memory_id": f"m{index}", "short_summary": "Historical hint", "long_summary": f"Detail {index}"}
+            for index in range(4)
+        ]
+        prompt = self.render("new-pr", project_memories=memories)
+        self.assertIn("Detail 2", prompt)
+        self.assertNotIn("Detail 3", prompt)
+        self.assertIn("memory (optional, inline, truncated)", prompt)
+        self.assertIn("long summaries after the first three memories are omitted", prompt)
+        complete = self.render("new-pr", project_memories=memories[:3])
+        self.assertIn("memory (optional, inline, complete)", complete)
 
     def test_nonempty_memory_keeps_evidence_requirements(self):
         prompt = self.render(
@@ -157,15 +268,17 @@ class PromptScopeTests(unittest.TestCase):
 
     def test_review_escalation_has_configured_identity_and_uses_planned_comment(self):
         prompt = render_prompt.render_prompt(
-            {
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:x/y!1",
-            },
-            route.ROUTES["review-pr"],
-            [{"source_type": "pull_request", "pr_author_login": "Robert-Bot"}],
-            runtime_context={"github_account": "robert-bot"},
-        )
+            worker_prompt_input(
+                {
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:x/y!1",
+                },
+                route.ROUTES["review-pr"],
+                [{"source_type": "pull_request", "pr_author_login": "Robert-Bot"}],
+                runtime_context={"github_account": "robert-bot"},
+            )
+        ).text
         self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
         self.assertIn("case-insensitively", prompt)
         self.assertIn("planned comment body", prompt)

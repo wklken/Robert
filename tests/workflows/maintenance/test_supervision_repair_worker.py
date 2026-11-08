@@ -9,6 +9,7 @@ import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.resource_files import resource
 from tests.support.supervision_repair_worker import (
     BrokerFixture,
     SUBMISSION,
@@ -78,9 +79,11 @@ class BrokerProcessTests(unittest.TestCase):
         self.assertNotIn("No module named robert_agent.workflows.maintenance.worker", stderr)
 
     def test_valid_output_uses_existing_result_submission(self):
+        instructions = resource("prompts", "protocols", "restricted-repair.md").read_text(encoding="utf-8").strip()
         fixture = self.fixture(
             "import json,sys\nrequest = json.load(sys.stdin)\n"
-            'assert request["result_transport"] == "stdout_compact_submission"\n' + submission_source()
+            'assert request["result_transport"] == "stdout_compact_submission"\n'
+            f'assert request["instructions"] == {instructions!r}\n' + submission_source()
         )
         report = broker_result(self.launch(fixture))
         self.assertTrue(report["ok"], report)

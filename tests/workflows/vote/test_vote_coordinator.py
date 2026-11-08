@@ -11,6 +11,32 @@ from tests.support.vote_coordinator import VoteCoordinatorFixture
 
 
 class VoteCoordinatorTests(VoteCoordinatorFixture):
+    def test_synthesis_retry_reuses_sealed_ballots_and_prompt(self):
+        driver = self.start()
+        failed_prompts = []
+
+        def fail_synthesis(**kwargs):
+            path = Path(kwargs["prompt_path"])
+            if path.name.startswith("synthesis-"):
+                failed_prompts.append(path)
+                return {"ok": False, "safe_error": "synthesis unavailable"}
+            return self.launcher(**kwargs)
+
+        driver.launcher = fail_synthesis
+        with self.assertRaisesRegex(RuntimeError, "synthesis unavailable"):
+            driver.run()
+        self.assertEqual(len(failed_prompts), 1)
+        original_bytes = failed_prompts[0].read_bytes()
+        report = self.driver().run()
+        self.assertTrue(report.is_file())
+        self.assertEqual(failed_prompts[0].read_bytes(), original_bytes)
+        self.assertEqual([c[2] for c in self.calls if c[0] == "synthesis"], [original_bytes])
+        counts = Counter((c[0], c[1]) for c in self.calls)
+        self.assertEqual(counts[("prepare", "codex")], 1)
+        self.assertEqual(counts[("vote", "codex")], 1)
+        self.assertEqual(counts[("vote", "claude")], 1)
+        self.assertEqual(counts[("synthesis", "codex")], 1)
+
     def test_unverified_synthesis_cannot_present_consensus_as_program_fact(self):
         driver = self.start()
         launch = driver.launcher
@@ -74,6 +100,11 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         self.assertIn("主 Agent 建议", report)
         self.assertIsNone(driver.manifest["source_worktree"])
         self.assertEqual(len(set(c[2] for c in self.calls if c[0] == "vote")), 1)
+        phases = {"prepare": "vote.prepare", "vote": "vote.cast", "synthesis": "vote.synthesize"}
+        for phase, _, prompt, _ in self.calls:
+            self.assertIn(f"Stage: {phases[phase]}".encode(), prompt)
+            self.assertIn(b"## Context", prompt)
+            self.assertIn(b"## Delivery", prompt)
         self.fixture.cycle([])
         with fixture_database.connect(self.db) as conn:
             row = conn.execute("SELECT audit_status,target_url FROM github_actions").fetchone()
