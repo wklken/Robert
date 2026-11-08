@@ -4,17 +4,51 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
+    inputs:
+      full-checks:
+        description: Run the complete release validation matrix and packaging checks
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+          cache: pip
+      - run: python -m pip install --upgrade pip setuptools certifi
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m ruff check src tests
+      - run: python -m ruff format --check src tests
+      - run: lint-imports --config pyproject.toml --no-cache
+      - run: >-
+          python -m mypy
+          src/robert_agent/cli
+          src/robert_agent/paths.py
+          src/robert_agent/configuration
+          src/robert_agent/execution/stages.py
+          src/robert_agent/context/skills.py
+          src/robert_agent/adapters/services/native.py
+      - run: python -m compileall -q src
+      - run: git diff --check
+
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        os: ${{ fromJSON(inputs.full-checks && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
+        python: ${{ fromJSON(inputs.full-checks && '["3.11", "3.12", "3.13", "3.14", "3.15"]' || '["3.11", "3.15"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -41,22 +75,9 @@ jobs:
                   executable.chmod(stat.S_IMODE(info.st_mode) & ~0o022)
           from robert_agent.workflows.maintenance.repair import _fingerprint_file
           _fingerprint_file(executable)
-      - run: python -m ruff check src tests
-      - run: python -m ruff format --check src tests
-      - run: lint-imports --config pyproject.toml --no-cache
-      - run: >-
-          python -m mypy
-          src/robert_agent/cli
-          src/robert_agent/paths.py
-          src/robert_agent/configuration
-          src/robert_agent/execution/stages.py
-          src/robert_agent/context/skills.py
-          src/robert_agent/adapters/services/native.py
       - run: python -B -m unittest discover -s tests
-      - run: python -m compileall -q src
-      - run: python -m build
-      - run: git diff --check
       - name: Record the tested environment for dependency audit
+        if: inputs.full-checks
         id: audit-target
         shell: python
         run: |
@@ -66,15 +87,20 @@ jobs:
       # Keep audit tooling isolated while inspecting the actual packages
       # tested on every supported Python version.
       - uses: actions/setup-python@v7
+        if: inputs.full-checks
         with:
           python-version: "3.14"
       - run: python -m venv .audit-venv
+        if: inputs.full-checks
       - run: .audit-venv/bin/python -m pip install --upgrade pip pip-audit 'filelock>=4.2.1'
+        if: inputs.full-checks
       - run: .audit-venv/bin/python -m pip_audit --path '${{ steps.audit-target.outputs.site }}' --skip-editable
+        if: inputs.full-checks
       - run: .audit-venv/bin/python -m pip_audit
-
+        if: inputs.full-checks
 
   wheel-smoke:
+    if: inputs.full-checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -128,6 +154,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docs-links:
+    if: inputs.full-checks
     runs-on: ubuntu-latest
     env:
       # Keep requests to the same host conservative during link checks.
