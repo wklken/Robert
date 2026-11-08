@@ -107,7 +107,9 @@ class VoteCoordinatorFixture(unittest.TestCase):
 
     def driver(self):
         task, attempt = self.fixture.current()
-        return vote_coordinator.Coordinator(self.db, task, attempt, source_reader=self.source, launcher=self.launcher)
+        return vote_coordinator.Coordinator(
+            self.db, task, attempt, source_reader=self.source, launcher=self.launcher, poll_seconds=0.02
+        )
 
     def start(self):
         self.fixture.cycle([self.event()])
