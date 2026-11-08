@@ -9,6 +9,7 @@ from robert_agent.foundation import errors as run_errors
 from robert_agent.execution.application import facts
 from robert_agent.execution import workspace as assigned_workspace
 from robert_agent.work.application import admission as work_admission
+from robert_agent.work.application import dispatch_admission
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import completion
 from robert_agent.work.application import github_requests
@@ -50,6 +51,18 @@ def admit_requests(
     active_workstreams,
     summary,
 ):
+    admitted = dispatch_admission.prepare(
+        conn,
+        config=config_result,
+        repo=repo,
+        repo_id=repo_id,
+        now=run_now,
+        dispatch_queue=dispatch_queue,
+        dispatch_budget=dispatch_budget,
+        prompt_paths=prompt_paths,
+    )
+    known_workstreams.update(admitted)
+    active_workstreams.update(admitted)
     if not dry_run:
         queued_prepared_count = dispatcher.queue_prepared_attempts(
             conn,

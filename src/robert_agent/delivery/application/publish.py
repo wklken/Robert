@@ -31,6 +31,7 @@ from robert_agent.delivery.application import receipts as publication_receipts
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import queries as publication_queries
 from robert_agent.delivery import values as publication_values
+from robert_agent.persistence.queries import dispatch_requests
 
 PUBLISH_COMMAND_TIMEOUT_SECONDS = 60
 
@@ -121,6 +122,9 @@ def publish_ready_actions(
             if not ready:
                 continue
             action = ready[0]
+            with closing(db_database.connect(db_path)) as auth_conn:
+                dispatch_bound = dispatch_requests.for_task(auth_conn, action["task_id"]) is not None
+            action_config = {} if config is None and dispatch_bound else config
             # Consume the request before this pass, including reconciliation
             # failures, so a failed attempt never leaves retry disabled.
             with closing(db_database.connect(db_path)) as retry_conn, retry_conn:
@@ -165,7 +169,7 @@ def publish_ready_actions(
                             failed_result_ids.add(result_id)
                         continue
                 try:
-                    supervision = supervision_publication.begin(db_path, action, config, now)
+                    supervision = supervision_publication.begin(db_path, action, action_config, now)
                 except db_errors.Error:
                     # No remote effect or publication attempt has started. Leave
                     # this task's ordered actions pending and try other tasks.
@@ -535,9 +539,13 @@ def publish_ready_actions(
                 with closing(db_database.connect(db_path)) as conn:
                     remote_effect_started = True
                     guard_kwargs = {}
-                    if config is not None or supervision.get("guard_required") or supervision.get("reconcile_only"):
+                    if (
+                        action_config is not None
+                        or supervision.get("guard_required")
+                        or supervision.get("reconcile_only")
+                    ):
                         guard_kwargs["recovery_guard"] = lambda: supervision_publication.guard(
-                            db_path, action, supervision, config, publication_values.now()
+                            db_path, action, supervision, action_config, publication_values.now()
                         )
                     result = publication_effects.publish_action(
                         action,
@@ -573,7 +581,7 @@ def publish_ready_actions(
                             now=now,
                             reason="supervision_fence_rejected",
                         )
-                    if config is not None:
+                    if action_config is not None:
                         with closing(db_database.connect(db_path)) as conn, conn:
                             publication_outcomes.record_failure(conn, action, {**result, "retryable": False}, now)
                         failed_count += 1

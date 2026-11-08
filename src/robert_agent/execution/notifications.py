@@ -43,6 +43,10 @@ def record_control_stop(conn, daemon_run_id, lane, now, attention):
 def has_pending_local_delivery(conn, repo_ids, now, config=None):
     return bool(
         db_read_notifications.has_pending_local_delivery_filtered(
-            conn, repo_ids, now, messaging_repo_ids=messages.delivery_repo_ids(conn, config)
+            conn,
+            repo_ids,
+            now,
+            messaging_repo_ids=messages.delivery_repo_ids(conn, config),
+            messaging_settings=config.get("messaging", {}) if config is not None else None,
         )
     )

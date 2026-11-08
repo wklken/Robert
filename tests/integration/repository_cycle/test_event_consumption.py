@@ -188,7 +188,9 @@ class EventConsumptionTests(RepositoryCycleFixture):
                 "SELECT relationship FROM task_events WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
-        self.assertEqual(task_count, 1)
+        # The classifier completes with one clarification child; replay must not
+        # interpret its consumed trigger as another request.
+        self.assertEqual(task_count, 2)
         self.assertEqual(relationship, "consumed")
 
     def test_consumed_comment_is_deduplicated_independently_of_task_lifecycle(self):

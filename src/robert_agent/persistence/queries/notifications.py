@@ -16,6 +16,7 @@ from sqlalchemy import (
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+from robert_agent.persistence.queries.dispatch_requests import task_binding
 
 
 def find_task_id_and_notification_type_and_status_and_metadata_json_by_notification_id(conn, notification_id):
@@ -214,11 +215,15 @@ def find_for_notify_exhausted_episode(conn, notification_type, episode_id):
     return statements.read(conn, query1, {"p0": notification_type, "p1": episode_id})
 
 
-def find_for_deliver_pending(conn, now, limit, repo_ids=(), *, messaging_repo_ids=None):
+def find_for_deliver_pending(conn, now, limit, repo_ids=(), *, messaging_repo_ids=None, messaging_settings=None):
     notification = tables["notifications"]
     stmt = (
         select(notification.c.notification_id)
-        .where(_pending_delivery(now, repo_ids), _pending_attention(messaging_repo_ids))
+        .where(
+            _pending_delivery(now, repo_ids),
+            _pending_attention(messaging_repo_ids),
+            _dispatch_identity(messaging_settings),
+        )
         .order_by(notification.c.created_at, notification.c.notification_id)
         .limit(limit)
     )
@@ -257,11 +262,15 @@ def update_failure(conn, kind, key):
     return statements.read(conn, query1, {"p0": kind, "p1": key})
 
 
-def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_ids=None):
+def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None):
     stmt = (
         select(sql_constant(1))
         .select_from(tables["notifications"])
-        .where(_pending_delivery(now, repo_ids), _pending_attention(messaging_repo_ids))
+        .where(
+            _pending_delivery(now, repo_ids),
+            _pending_attention(messaging_repo_ids),
+            _dispatch_identity(messaging_settings),
+        )
     )
     if not repo_ids:
         stmt = stmt.where(tables["notifications"].c.task_id.is_(None))
@@ -352,7 +361,7 @@ def _pending_attention(repo_ids):
     )
 
 
-def find_inbox(conn, *, messaging_repo_ids, limit=100):
+def find_inbox(conn, *, messaging_repo_ids, messaging_settings=None, limit=100):
     notice = tables["notifications"]
     stmt = (
         select(notice.c.notification_id)
@@ -364,6 +373,7 @@ def find_inbox(conn, *, messaging_repo_ids, limit=100):
                 func.json_extract(notice.c.metadata_json, "$.attention_event_id").is_not(None),
             ),
             _pending_attention(messaging_repo_ids),
+            _dispatch_identity(messaging_settings),
         )
         .order_by(notice.c.created_at.desc(), notice.c.notification_id.desc())
         .limit(limit)
@@ -416,3 +426,32 @@ def _incident_binding(incident_id):
 def find_incident_scope(conn, incident_id):
     """Recover older task-null notices' scope without rewriting their receipts."""
     return statements.read(conn, _incident_binding(incident_id))
+
+
+def _dispatch_identity(settings):
+    """Use the same endpoint/sender binding for inbox, delivery and readiness."""
+    if settings is None:
+        return True
+    notice, task, request = (tables[name] for name in ("notifications", "tasks", "dispatch_requests"))
+    task_identity = (
+        select(request.c.identity_json)
+        .select_from(request.join(task, task_binding(request, task)))
+        .where(task.c.task_id == notice.c.task_id)
+        .correlate(notice)
+        .scalar_subquery()
+    )
+    identity = func.coalesce(func.json_extract(notice.c.metadata_json, "$.dispatch_identity"), task_identity)
+    if not settings.get("enabled"):
+        return identity.is_(None)
+    matches = [
+        func.json_extract(identity, "$." + field) == settings.get(field, "")
+        for field in ("provider", "channel", "account", "conversation", "thread")
+    ]
+    return or_(
+        identity.is_(None),
+        and_(
+            *matches,
+            func.json_extract(identity, "$.protocol") == "robert.message.v1",
+            func.json_extract(identity, "$.sender_id").in_(settings.get("allowed_senders", [])),
+        ),
+    )

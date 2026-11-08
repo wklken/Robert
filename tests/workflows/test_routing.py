@@ -1,8 +1,21 @@
+from robert_agent.context.worker_prompt import worker_prompt_input
 import sys
 import unittest
 
 
 class RoutingTests(unittest.TestCase):
+    def test_classifier_cannot_open_another_pr_for_existing_robert_pr(self):
+        from robert_agent.workflows import routing
+
+        result = routing.effective_route(
+            None,
+            {},
+            {"source_type": "pull_request", "has_open_dd_pr": True, "intent": "unclear"},
+            route_id="new-pr",
+        )
+        self.assertEqual(result["route_id"], "update-existing-pr")
+        self.assertNotIn("open_pr", result["allowed_github_actions"])
+
     def test_routes_do_not_advertise_internal_worker_as_skill(self):
         from robert_agent.workflows import routes as route
 
@@ -269,20 +282,22 @@ class RoutingTests(unittest.TestCase):
                 self.assertEqual(result["workspace_mode"], "review_pr")
                 self.assertEqual(result["allowed_github_actions"], ["comment"])
 
-    def test_dd_pr_unclear_followup_defaults_to_existing_pr_update(self):
+    def test_dd_pr_unclear_followup_requires_classification(self):
         from robert_agent.workflows import routes as route
 
-        result = route.route_task(
-            {
-                "source_type": "pull_request",
-                "has_open_dd_pr": True,
-                "intent": "unclear",
-            }
-        )
+        for intent in (None, "unclear", "unknown"):
+            with self.subTest(intent=intent):
+                result = route.route_task(
+                    {
+                        "source_type": "pull_request",
+                        "has_open_dd_pr": True,
+                        "intent": intent,
+                    }
+                )
 
-        self.assertEqual(result["expected_output"], "update_existing_pr")
-        self.assertIn("push_existing_pr", result["allowed_github_actions"])
-        self.assertNotIn("open_pr", result["allowed_github_actions"])
+                self.assertEqual(result["expected_output"], "classification_result")
+                self.assertEqual(result["allowed_github_actions"], [])
+                self.assertEqual(result["workspace_mode"], "none")
 
     def test_prompt_includes_metadata_and_allowed_actions(self):
         from robert_agent.context import prompts as render_prompt
@@ -290,21 +305,23 @@ class RoutingTests(unittest.TestCase):
 
         route_result = route.route_task({"intent": "bug_fix"})
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/backend#123",
-            },
-            route_result=route_result,
-            events=[{"event_fingerprint": "comment:1"}],
-            runtime_context={
-                "db_path": "/tmp/dd.sqlite3",
-                "result_script": "/agent/result.py",
-                "snapshot_script": "/worker/snapshot.py",
-                "heartbeat_script": "/worker/heartbeat.py",
-                "status_script": "/agent/status.py",
-            },
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/backend#123",
+                },
+                route_result=route_result,
+                events=[{"event_fingerprint": "comment:1"}],
+                runtime_context={
+                    "db_path": "/tmp/dd.sqlite3",
+                    "result_script": "/agent/result.py",
+                    "snapshot_script": "/worker/snapshot.py",
+                    "heartbeat_script": "/worker/heartbeat.py",
+                    "status_script": "/agent/status.py",
+                },
+            )
+        ).text
 
         self.assertIn("stable action markers", prompt)
         self.assertIn("allowed_github_actions", prompt)
@@ -343,14 +360,16 @@ class RoutingTests(unittest.TestCase):
         for route_id in ("review-pr", "review-comment", "update-existing-pr"):
             with self.subTest(route_id=route_id):
                 prompt = render_prompt.render_prompt(
-                    task={
-                        "task_id": "task-1",
-                        "attempt_id": "attempt-1",
-                        "workstream_id": "github:example/repo!77",
-                    },
-                    route_result=route.ROUTES[route_id],
-                    events=[],
-                )
+                    worker_prompt_input(
+                        task={
+                            "task_id": "task-1",
+                            "attempt_id": "attempt-1",
+                            "workstream_id": "github:example/repo!77",
+                        },
+                        route_result=route.ROUTES[route_id],
+                        events=[],
+                    )
+                ).text
                 self.assertIn("adversarial review", prompt)
                 self.assertIn("counterexamples", prompt)
                 self.assertIn("evidence", prompt)
@@ -360,16 +379,20 @@ class RoutingTests(unittest.TestCase):
         from robert_agent.workflows import routes as route
 
         for route_id, route_result in route.ROUTES.items():
+            if route_id == "vote":
+                continue
             with self.subTest(route_id=route_id):
                 prompt = render_prompt.render_prompt(
-                    task={
-                        "task_id": "task-1",
-                        "attempt_id": "attempt-1",
-                        "workstream_id": "github:example/repo#77",
-                    },
-                    route_result=route_result,
-                    events=[],
-                )
+                    worker_prompt_input(
+                        task={
+                            "task_id": "task-1",
+                            "attempt_id": "attempt-1",
+                            "workstream_id": "github:example/repo#77",
+                        },
+                        route_result=route_result,
+                        events=[],
+                    )
+                ).text
                 if route_id in {"new-pr", "update-existing-pr"}:
                     self.assertIn("Unit-test writing guidance:", prompt)
                     self.assertIn("mutation testing", prompt)
@@ -388,18 +411,20 @@ class RoutingTests(unittest.TestCase):
 
         route_result = route.route_task({"intent": "bug_fix", "source_type": "pull_request", "has_open_dd_pr": True})
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/repo!77",
-            },
-            route_result=route_result,
-            events=[{"event_fingerprint": "comment:77"}],
-            runtime_context={
-                "db_path": "/tmp/dd.sqlite3",
-                "result_script": "/agent/result.py",
-            },
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/repo!77",
+                },
+                route_result=route_result,
+                events=[{"event_fingerprint": "comment:77"}],
+                runtime_context={
+                    "db_path": "/tmp/dd.sqlite3",
+                    "result_script": "/agent/result.py",
+                },
+            )
+        ).text
 
         self.assertIn("required_skills: []", prompt)
         self.assertIn("Review-point evaluation", prompt)
@@ -425,14 +450,16 @@ class RoutingTests(unittest.TestCase):
             "body": "@robert-bot allow editing skills/bk-cli-aidev/SKILL.md",
         }
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/repo!77",
-            },
-            route_result=route.route_task(event),
-            events=[event],
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/repo!77",
+                },
+                route_result=route.route_task(event),
+                events=[event],
+            )
+        ).text
 
         self.assertIn("Repository skill files, such as skills/*/SKILL.md", prompt)
         self.assertIn(
@@ -452,15 +479,17 @@ class RoutingTests(unittest.TestCase):
         from robert_agent.workflows import routes as route
 
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/repo!77",
-            },
-            route_result=route.route_task({"intent": "bug_fix", "has_open_dd_pr": True}),
-            events=[{"event_fingerprint": "comment:77"}],
-            runtime_context={"result_script": "/agent/result.py"},
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/repo!77",
+                },
+                route_result=route.route_task({"intent": "bug_fix", "has_open_dd_pr": True}),
+                events=[{"event_fingerprint": "comment:77"}],
+                runtime_context={"result_script": "/agent/result.py"},
+            )
+        ).text
 
         self.assertIn("--output-type waiting_for_user", prompt)
         self.assertIn('"kind": "scope_decision"', prompt)
@@ -493,18 +522,20 @@ class RoutingTests(unittest.TestCase):
             },
         }
         prompt = render_prompt.render_prompt(
-            task,
-            route.route_task(task),
-            [event],
-            runtime_context={
-                "db_path": "/tmp/robert.sqlite3",
-                "result_script": "/agent/result.py",
-                "worktree_path": "/tmp/worktree",
-                "branch_name": "codex/fix",
-                "head_ref": "refs/robert/prs/pr-77-head",
-                "base_ref": "refs/robert/prs/pr-77-base",
-            },
-        )
+            worker_prompt_input(
+                task,
+                route.route_task(task),
+                [event],
+                runtime_context={
+                    "db_path": "/tmp/robert.sqlite3",
+                    "result_script": "/agent/result.py",
+                    "worktree_path": "/tmp/worktree",
+                    "branch_name": "codex/fix",
+                    "head_ref": "refs/robert/prs/pr-77-head",
+                    "base_ref": "refs/robert/prs/pr-77-base",
+                },
+            )
+        ).text
 
         self.assertIn("task_kind: ci_remediation", prompt)
         self.assertIn("episode-ci", prompt)
@@ -526,27 +557,29 @@ class RoutingTests(unittest.TestCase):
             "task_kind": "merge_conflict_remediation",
         }
         prompt = render_prompt.render_prompt(
-            task,
-            route.route_task(task),
-            [
-                {
-                    "event_fingerprint": ("github-system:merge-conflict:77:head-1:base-1"),
-                    "metadata": {
-                        "remediation": {
-                            "episode_id": "episode-conflict",
-                            "episode_kind": "merge_conflict",
-                            "observed_head_sha": "head-1",
-                            "observed_base_sha": "base-1",
-                        }
-                    },
-                }
-            ],
-            runtime_context={
-                "base_ref": "refs/robert/prs/pr-77-base",
-                "worktree_path": "/tmp/worktree",
-                "branch_name": "codex/fix",
-            },
-        )
+            worker_prompt_input(
+                task,
+                route.route_task(task),
+                [
+                    {
+                        "event_fingerprint": ("github-system:merge-conflict:77:head-1:base-1"),
+                        "metadata": {
+                            "remediation": {
+                                "episode_id": "episode-conflict",
+                                "episode_kind": "merge_conflict",
+                                "observed_head_sha": "head-1",
+                                "observed_base_sha": "base-1",
+                            }
+                        },
+                    }
+                ],
+                runtime_context={
+                    "base_ref": "refs/robert/prs/pr-77-base",
+                    "worktree_path": "/tmp/worktree",
+                    "branch_name": "codex/fix",
+                },
+            )
+        ).text
 
         self.assertIn(
             "git merge --no-edit refs/robert/prs/pr-77-base",
@@ -564,23 +597,25 @@ class RoutingTests(unittest.TestCase):
 
         route_result = route.route_task({"intent": "analysis"})
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/repo#77",
-            },
-            route_result=route_result,
-            events=[
-                {
-                    "event_fingerprint": "comment:77",
-                    "url": "https://github.com/example/repo/issues/77",
-                }
-            ],
-            runtime_context={
-                "db_path": "/tmp/dd.sqlite3",
-                "result_script": "/agent/result.py",
-            },
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/repo#77",
+                },
+                route_result=route_result,
+                events=[
+                    {
+                        "event_fingerprint": "comment:77",
+                        "url": "https://github.com/example/repo/issues/77",
+                    }
+                ],
+                runtime_context={
+                    "db_path": "/tmp/dd.sqlite3",
+                    "result_script": "/agent/result.py",
+                },
+            )
+        ).text
 
         self.assertIn("--output-type comment_analysis", prompt)
         self.assertIn('"type": "comment"', prompt)
@@ -594,24 +629,26 @@ class RoutingTests(unittest.TestCase):
 
         route_result = route.route_task({"intent": "unclear"})
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/repo#77",
-            },
-            route_result=route_result,
-            events=[
-                {
-                    "event_fingerprint": "comment:77",
-                    "title": "Add frontend env var",
-                    "body": "Need a jump link.",
-                }
-            ],
-            runtime_context={
-                "db_path": "/tmp/dd.sqlite3",
-                "result_script": "/agent/result.py",
-            },
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/repo#77",
+                },
+                route_result=route_result,
+                events=[
+                    {
+                        "event_fingerprint": "comment:77",
+                        "title": "Add frontend env var",
+                        "body": "Need a jump link.",
+                    }
+                ],
+                runtime_context={
+                    "db_path": "/tmp/dd.sqlite3",
+                    "result_script": "/agent/result.py",
+                },
+            )
+        ).text
 
         self.assertIn("Classification scope:", prompt)
         self.assertIn("only for task classification", prompt)
@@ -619,6 +656,8 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("changed-file or module list", prompt)
         self.assertIn("Avoid broad repo exploration", prompt)
         self.assertIn("--output-type classification_result", prompt)
+        self.assertIn('"recommended_route": "waiting-for-user"', prompt)
+        self.assertIn("A missing or blank route defaults to waiting-for-user", prompt)
         self.assertIn('"branch_slug": ""', prompt)
         self.assertIn("meaningful lowercase English kebab-case", prompt)
 
@@ -628,20 +667,22 @@ class RoutingTests(unittest.TestCase):
 
         route_result = route.route_task({"intent": "bug_fix"})
         prompt = render_prompt.render_prompt(
-            task={
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "workstream_id": "github:example/backend#123",
-            },
-            route_result=route_result,
-            events=[{"event_fingerprint": "comment:1"}],
-            runtime_context={
-                "db_path": "/tmp/dd.sqlite3",
-                "result_script": "/agent/result.py",
-                "snapshot_script": "/worker/snapshot.py",
-                "heartbeat_script": "/worker/heartbeat.py",
-            },
-        )
+            worker_prompt_input(
+                task={
+                    "task_id": "task-1",
+                    "attempt_id": "attempt-1",
+                    "workstream_id": "github:example/backend#123",
+                },
+                route_result=route_result,
+                events=[{"event_fingerprint": "comment:1"}],
+                runtime_context={
+                    "db_path": "/tmp/dd.sqlite3",
+                    "result_script": "/agent/result.py",
+                    "snapshot_script": "/worker/snapshot.py",
+                    "heartbeat_script": "/worker/heartbeat.py",
+                },
+            )
+        ).text
 
         self.assertIn("workstream_id: github:example/backend#123", prompt)
         self.assertNotIn("source_issue:", prompt)

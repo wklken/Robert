@@ -79,11 +79,12 @@ class NewSkillSkeletonTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 for literal in forbidden_literals:
                     if literal == "result.json" and path.relative_to(PACKAGE_ROOT).as_posix() in {
+                        "context/native_prompts.py",
                         "workflows/review/files.py",
                         "workflows/review/coordinator.py",
                     }:
-                        # Native review results are registered artifacts, not the
-                        # removed file-backed task/control plane.
+                        # Native review inputs name a registered output artifact,
+                        # not the removed file-backed task/control plane.
                         continue
                     if literal in text:
                         offenders.append(f"{path.relative_to(REPO_ROOT)} contains {literal}")

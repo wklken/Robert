@@ -20,7 +20,6 @@ from robert_agent.persistence.queries import worker_phases as db_read_worker_pha
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from importlib.resources import files
 import json
 import os
 from pathlib import Path
@@ -31,6 +30,8 @@ import threading
 import time
 from uuid import uuid4
 
+from robert_agent.context.prompts import render_prompt
+from robert_agent.context.supervision_prompts import diagnosis_input
 from robert_agent.security import redaction
 from robert_agent.supervision import rules as supervision_rules
 from robert_agent.supervision import store as supervision_store
@@ -61,6 +62,7 @@ _OUTPUT_FIELDS = {
     "recommended_action",
     "expected_progress",
 }
+_MAX_EXPECTED_PROGRESS = 1000
 _MAX_BUNDLE = 49152
 _RUNNER = ("diagnostic", "installation", "runner")
 _IN_PROGRESS = ("open", "needs_attention", "diagnosing")
@@ -223,10 +225,15 @@ def _bundle(snapshot, target, bundle_id):
         "scope": _safe(target),
         "evidence": evidence,
         "missing": missing,
-        "instructions": files("robert_agent.resources")
-        .joinpath("supervision-diagnosis.md")
-        .read_text(encoding="utf-8"),
     }
+    packet["instructions"] = render_prompt(
+        diagnosis_input(
+            packet,
+            classes=_DIAGNOSIS_CLASSES,
+            recommendations=_RECOMMENDATIONS,
+            max_progress_chars=_MAX_EXPECTED_PROGRESS,
+        )
+    ).text
     return {**packet, "bundle_sha256": _digest(packet)}
 
 
@@ -305,7 +312,7 @@ def _validate_output(raw, claim):
     ):
         raise ValueError("diagnosis references unknown or duplicate evidence")
     expected = output["expected_progress"]
-    if not isinstance(expected, str) or not expected.strip() or len(expected) > 1000:
+    if not isinstance(expected, str) or not expected.strip() or len(expected) > _MAX_EXPECTED_PROGRESS:
         raise ValueError("expected progress is missing or too large")
     safe = redaction.redact_text(expected)
     if not safe["ok"]:

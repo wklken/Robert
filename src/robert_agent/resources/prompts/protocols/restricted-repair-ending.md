@@ -1,0 +1,1 @@
+If blocked, describe the missing input or scope decision in handoff and failed or skipped verification honestly. Do not invent successful checks or completed work. The broker's output type remains new_pr.

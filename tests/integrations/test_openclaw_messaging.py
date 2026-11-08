@@ -44,6 +44,12 @@ const response = await commands['robert-respond'].handler(context);
 const status = await commands['robert-status'].handler(context);
 const denied = await commands['robert-respond'].handler({ ...context, isAuthorizedSender: false });
 const malformed = await commands['robert-respond'].handler({ ...context, args: 'notice reply yes' });
+const dispatch = {};
+for (const args of ['', 'new example/repo Research $(touch never)\\nSecond line',
+  'submit dispatch-' + 'a'.repeat(32), 'status dispatch-' + 'a'.repeat(32), 'retry dispatch-' + 'a'.repeat(32)]) {
+  dispatch[args.split(' ')[0]] = await commands['robert-inbox'].handler({ ...context, args });
+}
+const deniedDispatch = await commands['robert-inbox'].handler({ ...context, args: 'new example/repo Research', isAuthorizedSender: false });
 const reads = [];
 for (const name of ['robert-status', 'robert-task', 'robert-run', 'robert-artifact']) {
   const readContext = { isAuthorizedSender: true, args: 'some-id report' };
@@ -51,7 +57,7 @@ for (const name of ['robert-status', 'robert-task', 'robert-run', 'robert-artifa
     allowed: await commands[name].handler(readContext),
     denied: await commands[name].handler({ ...readContext, isAuthorizedSender: false }) });
 }
-console.log(JSON.stringify({ response, status, denied, malformed, reads, auth: commands['robert-respond'].requireAuth }));
+console.log(JSON.stringify({ response, status, denied, malformed, reads, dispatch, deniedDispatch, auth: commands['robert-respond'].requireAuth }));
 """)
             result = subprocess.run(
                 ["node", str(script)],
@@ -92,6 +98,16 @@ console.log(JSON.stringify({ response, status, denied, malformed, reads, auth: c
                 # No Robert operator binding is supplied: channel-authorized
                 # readers may query this entire instance, including artifacts.
                 self.assertEqual(json.loads(read["allowed"]["text"])["request"], {})
+            self.assertTrue(value["deniedDispatch"]["isError"])
+            for action in ("new", "submit", "status", "retry"):
+                dispatch = json.loads(value["dispatch"][action]["text"])
+                self.assertEqual(dispatch["args"][:2], ["messages", "dispatch"])
+                self.assertEqual(dispatch["request"]["action"], action)
+                self.assertEqual(dispatch["request"]["sender_id"], "42")
+            draft = json.loads(value["dispatch"]["new"]["text"])["request"]
+            self.assertEqual(draft["body"], "Research $(touch never)\nSecond line")
+            self.assertEqual(draft["repo"], "example/repo")
+            self.assertEqual(json.loads(value["dispatch"][""]["text"])["args"][:2], ["messages", "inbox"])
             self.assertTrue(value["auth"])
             self.assertTrue(value["denied"]["isError"])
             self.assertTrue(value["malformed"]["isError"])

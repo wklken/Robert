@@ -15,11 +15,12 @@ from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLife
 
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from importlib.resources import files
 import json
 import re
 from uuid import uuid4
 
+from robert_agent.context.prompts import render_prompt
+from robert_agent.context.supervision_prompts import decision_input
 from robert_agent.persistence.queries import supervision_decisions as queries
 from robert_agent.persistence.stores import notifications
 from robert_agent.security import redaction
@@ -30,6 +31,11 @@ from robert_agent.work.questions import record_supervisor_question
 
 
 RUNNER_KEY = ("decision_runner", "installation", "current")
+_MAX_CANDIDATES = 16
+_MAX_BUNDLE = 48000
+_MIN_RECHECK_SECONDS = 30
+_MAX_RECHECK_SECONDS = 3600
+_MAX_TEXT_CHARS = 2000
 
 
 def encode(value):
@@ -214,19 +220,35 @@ def packet(snapshot_value, previous):
             if can_finish(snapshot_value)
             else NONEXECUTING_DECISION_ACTIONS - {DecisionAction.FINISH_SUPERVISION.value}
         ),
-        "candidates": snapshot_value["candidates"][:16],
-        "instructions": files("robert_agent.resources").joinpath("supervision-decision.md").read_text(),
+        "candidates": snapshot_value["candidates"][:_MAX_CANDIDATES],
     }
-    value = _safe(value)
+    sanitized = _safe(value)
+    candidates_sanitized = sanitized["candidates"] != value["candidates"]
+    value = sanitized
+    candidates_omitted = max(0, len(snapshot_value["candidates"]) - _MAX_CANDIDATES)
+    compacted_fields = set()
     # Preserve routing IDs and fingerprints; summarize only descriptive evidence.
-    for chars in (512, 160, 48):
-        if len(encode(value).encode()) <= 48000:
-            break
-        value["evidence"] = [{**e, "data": _brief(e["data"], chars)} for e in value["evidence"]]
-        value["candidates"] = [{**c, "facts": _brief(c["facts"], chars)} for c in value["candidates"]]
-    if len(encode(value).encode()) > 48000:
-        raise ValueError("decision identifiers exceed byte limit")
-    return {**value, "bundle_sha256": digest(value)}
+    for chars in (None, 512, 160, 48):
+        if chars is not None:
+            for key, field in (("evidence", "data"), ("candidates", "facts")):
+                shortened = [{**item, field: _brief(item[field], chars)} for item in value[key]]
+                if shortened != value[key]:
+                    compacted_fields.add(key)
+                    value[key] = shortened
+        value["instructions"] = render_prompt(
+            decision_input(
+                value,
+                min_recheck=_MIN_RECHECK_SECONDS,
+                max_recheck=_MAX_RECHECK_SECONDS,
+                max_text_chars=_MAX_TEXT_CHARS,
+                compacted_fields=compacted_fields,
+                candidates_omitted=candidates_omitted,
+                candidates_sanitized=candidates_sanitized,
+            )
+        ).text
+        if len(encode(value).encode()) <= _MAX_BUNDLE:
+            return {**value, "bundle_sha256": digest(value)}
+    raise ValueError("decision identifiers exceed byte limit")
 
 
 def can_finish(snapshot_value):
@@ -293,10 +315,12 @@ def validate(raw, request):
     allowed = {item["id"] for item in request["evidence"]}
     if not isinstance(ids, list) or not ids or any(not isinstance(i, str) or i not in allowed for i in ids):
         raise ValueError("unknown decision evidence")
-    if type(result["recheck_seconds"]) is not int or not 30 <= result["recheck_seconds"] <= 3600:
+    if type(result["recheck_seconds"]) is not int or not (
+        _MIN_RECHECK_SECONDS <= result["recheck_seconds"] <= _MAX_RECHECK_SECONDS
+    ):
         raise ValueError("decision recheck must be between 30 and 3600 seconds")
     for key in ("reason", "expected_progress", "message"):
-        if not isinstance(result[key], str) or len(result[key]) > 2000:
+        if not isinstance(result[key], str) or len(result[key]) > _MAX_TEXT_CHARS:
             raise ValueError("invalid decision text")
     if not result["reason"].strip() or not result["expected_progress"].strip():
         raise ValueError("decision needs a reason and expected progress")

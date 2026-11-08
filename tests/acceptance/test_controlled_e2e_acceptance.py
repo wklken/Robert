@@ -96,7 +96,18 @@ repos:
             "assert 'robert_agent' not in sys.modules; runpy.run_path(sys.argv[1], run_name='__main__')"
         )
         # An invalid identity exercises the full generated script without creating work.
-        prompt = f"task_id: \nattempt_id: missing\nevent_fingerprints: []\ndb_path: {self.root / 'unused.sqlite3'}\n"
+        from robert_agent.context.prompts import render_prompt
+        from robert_agent.context.worker_prompt import worker_prompt_input
+        from robert_agent.workflows.routes import ROUTES
+
+        prompt = render_prompt(
+            worker_prompt_input(
+                {"task_id": "", "attempt_id": "missing", "workstream_id": "github:example/repo!1"},
+                ROUTES["new-pr"],
+                [],
+                runtime_context={"db_path": str(self.root / "unused.sqlite3")},
+            )
+        ).text
         result = subprocess.run(
             [sys.executable, "-I", "-S", "-c", bootstrap, str(worker)],
             cwd=self.root,

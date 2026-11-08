@@ -167,6 +167,8 @@ def _normalize(config, path, skip_external):
         for policy in known_routes.values():
             resolve_route_config(result, repo, policy)
     messaging = result["messaging"]
+    if messaging.get("dispatch_enabled") and not messaging["enabled"]:
+        raise ValueError("messaging.dispatch_enabled requires messaging.enabled")
     if messaging["enabled"]:
         for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos"):
             if not messaging.get(field):

@@ -6,6 +6,8 @@ import tempfile
 import unittest
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
+from robert_agent.context import native_prompts
+from robert_agent.context.prompts import render_prompt
 from robert_agent.workflows.review import files as review_files
 
 
@@ -56,6 +58,26 @@ class ReviewFilesTests(unittest.TestCase):
         }
         self.path = self.root / "runs" / "codex" / "attempt-1" / "result.json"
         review_files.atomic_json(self.path, self.result)
+
+    def reviewer_prompt(self, manifest=None):
+        return render_prompt(
+            native_prompts.review_evaluate_input(
+                self.manifest if manifest is None else manifest,
+                severities=review_files.SEVERITIES,
+                recommendations=review_files.RECOMMENDATIONS,
+            )
+        ).text
+
+    def synthesis_prompt(self, manifest=None):
+        return render_prompt(
+            native_prompts.review_synthesize_input(
+                self.manifest if manifest is None else manifest,
+                {"path": str(self.root / "inputs.json"), "sha256": "synthesis-inputs-hash"},
+                severities=review_files.SEVERITIES,
+                recommendations=review_files.RECOMMENDATIONS,
+                dispositions=review_files.DISPOSITIONS,
+            )
+        ).text
 
     def record(self, worker_id="codex"):
         path = self.path if worker_id == "codex" else self.root / "runs" / worker_id / "attempt-1" / "result.json"
@@ -152,10 +174,10 @@ class ReviewFilesTests(unittest.TestCase):
             report,
         )
         self.assertIn("[from Robert]", report)
-        prompt = review_files.build_reviewer_prompt(self.manifest)
+        prompt = self.reviewer_prompt()
         self.assertIn("ROBERT_REVIEW_OUTPUT_DIR", prompt)
         self.assertNotIn(str(self.path.parent), prompt)
-        self.assertIn("result.json.tmp", prompt)
+        self.assertIn("ROBERT_REVIEW_OUTPUT_DIR/result.json", prompt)
         self.assertIn("manifest.json", prompt)
 
         for record in records:
@@ -166,8 +188,8 @@ class ReviewFilesTests(unittest.TestCase):
 
     def test_native_review_prompts_require_redacted_public_output(self):
         for prompt in (
-            review_files.build_reviewer_prompt(self.manifest),
-            review_files.build_synthesis_prompt(self.manifest, self.root / "inputs.json"),
+            self.reviewer_prompt(),
+            self.synthesis_prompt(),
         ):
             self.assertIn("Redact", prompt)
             self.assertIn("<redacted>", prompt)
@@ -224,9 +246,9 @@ class ReviewFilesTests(unittest.TestCase):
         self.assertIn("未检查源码", report)
 
     def test_native_review_keeps_human_decisions_and_evidence_limits_visible(self):
-        prepare = review_files.build_prepare_prompt(self.manifest)
-        reviewer = review_files.build_reviewer_prompt(self.manifest)
-        synthesis = review_files.build_synthesis_prompt(self.manifest, self.root / "inputs.json")
+        prepare = render_prompt(native_prompts.review_prepare_input(self.manifest)).text
+        reviewer = self.reviewer_prompt()
+        synthesis = self.synthesis_prompt()
         self.assertIn("original request", prepare)
         self.assertIn("undisclosed decisions", reviewer)
         self.assertIn("not a defect by itself", reviewer)
@@ -237,8 +259,8 @@ class ReviewFilesTests(unittest.TestCase):
 
     def test_reviewer_and_synthesis_prompts_require_adversarial_review(self):
         prompts = {
-            "reviewer": review_files.build_reviewer_prompt(self.manifest),
-            "synthesis": review_files.build_synthesis_prompt(self.manifest, self.root / "inputs.json"),
+            "reviewer": self.reviewer_prompt(),
+            "synthesis": self.synthesis_prompt(),
         }
         for phase, prompt in prompts.items():
             with self.subTest(phase=phase):
@@ -246,12 +268,12 @@ class ReviewFilesTests(unittest.TestCase):
                 self.assertIn("counterexamples", prompt)
                 self.assertIn("evidence", prompt)
         self.assertIn("never add an unsourced finding", prompts["synthesis"])
-        self.assertNotIn("adversarial review", review_files.build_prepare_prompt(self.manifest))
+        self.assertNotIn("adversarial review", render_prompt(native_prompts.review_prepare_input(self.manifest)).text)
 
     def test_review_policy_preserves_native_phase_and_result_contracts(self):
         manifest = self.manifest | {"github_account": "robert-bot"}
-        reviewer = review_files.build_reviewer_prompt(manifest)
-        synthesis = review_files.build_synthesis_prompt(manifest, self.root / "inputs.json")
+        reviewer = self.reviewer_prompt(manifest)
+        synthesis = self.synthesis_prompt(manifest)
         for prompt in (reviewer, synthesis):
             self.assertIn("Treat every review round as a fresh independent judgment", prompt)
             self.assertIn("Security review is required and proportional", prompt)
@@ -260,7 +282,7 @@ class ReviewFilesTests(unittest.TestCase):
             self.assertIn("case-insensitively", prompt)
             self.assertIn("@wklken", prompt)
             self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
-        self.assertNotIn("Review judgment policy:", review_files.build_prepare_prompt(manifest))
+        self.assertNotIn("Review judgment policy:", render_prompt(native_prompts.review_prepare_input(manifest)).text)
         self.assertIn("coverage.notes", reviewer)
         self.assertIn("Do not invent a finding to carry a decision request", reviewer)
         self.assertIn("merge_reason", synthesis)
@@ -270,7 +292,7 @@ class ReviewFilesTests(unittest.TestCase):
         self.assertIn("ready to merge", synthesis)
 
     def test_missing_native_account_does_not_guess_robot_identity(self):
-        prompt = review_files.build_reviewer_prompt(self.manifest)
+        prompt = self.reviewer_prompt()
         self.assertIn('Configured Robert GitHub account: ""', prompt)
         self.assertIn("If identity cannot be established, ask @wklken", prompt)
 

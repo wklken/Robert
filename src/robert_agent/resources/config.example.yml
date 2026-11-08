@@ -111,3 +111,4 @@ repos: []
 # See docs/features/operator-messaging.md for exact identity and repository scoping.
 messaging:
   enabled: false
+  dispatch_enabled: false

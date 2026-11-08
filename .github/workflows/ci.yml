@@ -152,18 +152,39 @@ jobs:
   docs-links:
     if: inputs.full-checks
     runs-on: ubuntu-latest
+    env:
+      # Keep requests to the same host conservative during link checks.
+      LYCHEE_ARGS: >-
+        --no-progress
+        --host-concurrency 2
+        --cache
+        README.md
+        README_EN.md
+        COMMUNITY.md
+        CONTRIBUTING.md
+        SECURITY.md
+        SUPPORT.md
+        CODE_OF_CONDUCT.md
+        docs
     steps:
       - uses: actions/checkout@v7
-      - uses: lycheeverse/lychee-action@v2
+      - name: Start with a fresh link-check cache
+        # Share successful checks only between attempts in this job.
+        run: rm -f .lycheecache
+      - name: Check documentation links
+        id: links
+        # Retry transient download/HTTP failures once; repeated failure stays fatal.
+        continue-on-error: true
+        uses: lycheeverse/lychee-action@v2
         with:
           failIfEmpty: false
-          args: >-
-            --no-progress
-            README.md
-            README_EN.md
-            COMMUNITY.md
-            CONTRIBUTING.md
-            SECURITY.md
-            SUPPORT.md
-            CODE_OF_CONDUCT.md
-            docs
+          args: ${{ env.LYCHEE_ARGS }}
+      - name: Wait before retrying link checks
+        if: steps.links.outcome == 'failure'
+        run: sleep 15
+      - name: Retry documentation links once
+        if: steps.links.outcome == 'failure'
+        uses: lycheeverse/lychee-action@v2
+        with:
+          failIfEmpty: false
+          args: ${{ env.LYCHEE_ARGS }}

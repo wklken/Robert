@@ -8,6 +8,7 @@ import subprocess
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.context import attempt as attempt_context
 from robert_agent.context import prompts as render_prompt
+from robert_agent.context.worker_prompt import worker_prompt_input
 from robert_agent.delivery import contract as result_contract
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
@@ -32,8 +33,8 @@ from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import wakeups as db_write_wakeups
-from robert_agent.security import authorization as authorize
 from robert_agent.supervision import store as supervision_store
+from robert_agent.work import source_policy
 from robert_agent.work import queries as work_queries
 from robert_agent.work import streams as workstream
 from robert_agent.work.application import commands as work_items
@@ -93,7 +94,6 @@ def prepare_detected_local_tasks(
             }
             for event_row in event_rows
         ]
-        event_ids = [event["work_item_event_id"] for event in local_events]
         from robert_agent.supervision import git as supervision_git
         from robert_agent.workflows.maintenance import repair as supervision_repair
 
@@ -235,40 +235,28 @@ def prepare_detected_local_tasks(
                 "origin_type": "web",
                 "repo_full_name": repo["full_name"],
                 "work_item_id": work_item_id,
-                "work_item_event_ids": event_ids,
                 "requirement": {"title": title, "description": description},
-                "prior_question_summaries": [
-                    event["body"]
-                    for event in local_events
-                    if event["event_type"] in {"operator_question", "agent_question"}
-                ],
-                "prior_result_summaries": [
-                    event["body"] for event in local_events if event["event_type"] in {"result_recorded", "completed"}
-                ],
-                "operator_reply": next(
-                    (
-                        event["body"]
-                        for event in reversed(local_events)
-                        if event["event_type"] in {"user_response", "approved", "changes_requested"}
-                    ),
-                    "",
-                ),
             }
         )
-        prompt_path.write_text(
-            render_prompt.render_prompt(
-                {
-                    "task_id": task_id,
-                    "attempt_id": attempt_id,
-                    "workstream_id": workstream_id,
-                    "review_input_policy": route.review_input_policy(route_result["expected_output"], normalized),
-                },
-                route_result,
-                local_events,
-                runtime_context=runtime_context,
-            ),
-            encoding="utf-8",
+        if maintenance:
+            # The restricted child cannot read controller artifacts or invoke
+            # runtime helpers. Its input must be self-contained; the broker submits.
+            runtime_context["result_transport"] = "stdout_compact_submission"
+        else:
+            runtime_context["task_context_path"] = str(context_path)
+        prompt_input = worker_prompt_input(
+            {
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "workstream_id": workstream_id,
+                "review_input_policy": route.review_input_policy(route_result["expected_output"], normalized),
+            },
+            route_result,
+            local_events,
+            runtime_context=runtime_context,
         )
+        rendered = render_prompt.render_prompt(prompt_input)
+        prompt_path.write_text(rendered.text, encoding="utf-8")
         preparation.upsert_route_decision(conn, task_id, route_result, run_now)
         task_metadata = values.json_object(task_metadata_json)
         task_metadata["local_source_reference"] = source_reference
@@ -297,6 +285,7 @@ def prepare_detected_local_tasks(
                     "origin_type": "web",
                     "work_item_id": work_item_id,
                     "result_contract": result_contract.CONTRACT_ID,
+                    "prompt_contract": rendered.metadata,
                     **(
                         {"repair_git": worktree_result["repair_git"]}
                         if worktree_result and "repair_git" in worktree_result
@@ -393,7 +382,9 @@ def prepare_github_operator_tasks(
             authorized = [
                 event
                 for event in events
-                if authorize.authorize_event(event, repo, known_workstreams=set())["authorization_status"]
+                if source_policy.reauthorize_saved_request(
+                    event, repo, known_workstreams=set(), conn=conn, config=config_result
+                )["authorization_status"]
                 in {"authorized_trigger", "accepted_context"}
             ]
             parent_row = db_records.first(

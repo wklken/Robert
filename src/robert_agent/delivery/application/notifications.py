@@ -71,7 +71,12 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
         ids = [
             r[0]
             for r in db_read_notifications.find_for_deliver_pending(
-                conn, now, limit, repo_ids, messaging_repo_ids=messages.delivery_repo_ids(conn, config)
+                conn,
+                now,
+                limit,
+                repo_ids,
+                messaging_repo_ids=messages.delivery_repo_ids(conn, config),
+                messaging_settings=config.get("messaging", {}) if config is not None else None,
             )
         ]
     processed = 0

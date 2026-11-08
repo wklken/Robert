@@ -4,11 +4,14 @@ from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputT
 from robert_agent.foundation.contracts.execution import RoundStatus
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import signal
 
 from robert_agent.workflows.vote import files as vote_files
+from robert_agent.context.native_prompts import vote_prepare_input, vote_synthesize_input
+from robert_agent.context.prompts import render_prompt
 from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.workflows.vote import tally as vote_tally
 from robert_agent.workflows.vote import workspace as vote_workspace
@@ -63,7 +66,7 @@ class Coordinator(StageCoordinator):
             if self.manifest.get("frozen"):
                 return True
             prompt = self.prompt(
-                "prepare-" + self.manifest["snapshot_id"] + ".md", vote_files.prepare_prompt(self.manifest)
+                "prepare-" + self.manifest["snapshot_id"] + ".md", render_prompt(vote_prepare_input(self.manifest)).text
             )
 
             def validate(output, model):
@@ -141,8 +144,6 @@ class Coordinator(StageCoordinator):
             "tally": tally,
         }
         encoded = json.dumps(inputs_value, sort_keys=True).encode()
-        import hashlib
-
         inputs_hash = hashlib.sha256(encoded).hexdigest()
         inputs = root / f"inputs-{inputs_hash}.json"
         # Hash the bytes actually consumed by synthesis, not an alternate serialization.
@@ -151,7 +152,8 @@ class Coordinator(StageCoordinator):
         if vote_files.digest(inputs) != inputs_hash:
             raise ValueError("synthesis inputs changed")
         prompt = self.prompt(
-            f"synthesis-{inputs_hash}.md", vote_files.synthesis_prompt(self.manifest, inputs, inputs_hash, records)
+            f"synthesis-{inputs_hash}.md",
+            render_prompt(vote_synthesize_input(self.manifest, inputs, inputs_hash, records)).text,
         )
 
         def validate(output, model):

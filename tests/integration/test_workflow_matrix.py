@@ -362,7 +362,7 @@ repos:
                     "event_type": "review",
                     "actor_login": "wklken",
                     "author_association": "MEMBER",
-                    "body": "@robert-bot please address this review",
+                    "body": "@robert-bot please fix the issue identified in this review",
                     "intent": "bug_fix",
                     "has_open_dd_pr": True,
                     "existing_pr_head_branch": "codex/dd-101-task",

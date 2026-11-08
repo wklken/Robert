@@ -150,7 +150,7 @@ def guard(db, action, state, config, now):
                 route = route_config.resolve_route_config(config, repo, route_config.ROUTE_POLICIES[row[2]])
                 if action["action_type"] not in route["allowed_github_actions"]:
                     return False
-            return work_admission.ordinary_dispatch_allowed(conn, action["task_id"], repo)
+            return work_admission.ordinary_dispatch_allowed(conn, action["task_id"], repo, config)
     return True
 
 

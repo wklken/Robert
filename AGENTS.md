@@ -44,7 +44,7 @@ Paths below are relative to `src/robert_agent/`.
 | `execution/` | Identity/ownership, capacity, leases, progress/command journals, result spool, shared model stages and round mechanics | `execution/application/`: dispatch, monitoring, recovery evidence and readiness |
 | `delivery/` | Submission contract, pure policies, locks, result/intent facts, selection and notification persistence | `delivery/application/`: audit, submission, trusted scope, guarded effects, intents, receipts, notifications, reconciliation and publication |
 | `supervision/` | Rules, lineage, model decision grants, durable recovery records, receipt proof and health projections | `supervision/application/`: observation, checks, decision calls and replies, publication recovery coordination |
-| `context/` | Prompt/skill rendering, review guidance, project memory and runtime knowledge | `context/application/`: transactional human knowledge review |
+| `context/` | Unified prompt contracts/rendering, stage inputs, skills, review guidance, project memory and runtime knowledge | `context/application/`: transactional human knowledge review |
 | `workflows/` | Concrete review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
 | `configuration/` | v2 loading, normalization, schema validation and route/supervision settings | Boundary parsing only; no execution or workflow imports |
 | `readmodels/` | Read-only dashboard, board, status, execution, usage and history projections | No HTTP dependency and no lifecycle mutations |
@@ -138,6 +138,12 @@ Paths below are relative to `src/robert_agent/`.
 
 ## Configuration and extension rules
 
+- Agent-facing workflow instructions are rendered through `context.prompts`
+  from structured inputs; their common, stage and protocol text lives in
+  `resources/prompts/`. Callers supply authorized facts and preserve their own
+  output validators; they must not append a separate handwritten instruction
+  contract. Keep context independent of concrete workflows and application use cases.
+
 - Version 2 is the configuration contract. Loading, schema application,
   normalization and validation have one owner in `configuration/`; no alternate
   CLI/workflow parser or restored legacy aliases.
@@ -158,6 +164,7 @@ Paths below are relative to `src/robert_agent/`.
   redacted envelopes; adapters own transport only. All messaging queries and
   writes use named operations in `persistence/queries/` and `persistence/stores/`;
   inbox, delivery and readiness share filtering before limits.
+- Issue dispatch binds a durable authenticated request to its confirmed Issue. Reconcile unknown creation effects before retrying; classifier or waiting results are not delivery. Completion requires final publication receipts and the original Issue result comment.
 - Chat ingress checks explicit provider/session/sender/repository configuration
   and delegates to existing versioned work commands. Acknowledgement is a
   receipt, never incident resolution, recovery authority or process release.

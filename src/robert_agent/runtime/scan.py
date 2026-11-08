@@ -3,7 +3,7 @@
 import argparse
 from robert_agent.foundation.commands import emit
 
-from robert_agent.delivery.application import lane as delivery_lane
+from robert_agent.application import publication_cycle as delivery_lane
 from robert_agent.work.application import synchronization as synchronization
 from robert_agent.operations import scan_batches as scan_batch_operations
 

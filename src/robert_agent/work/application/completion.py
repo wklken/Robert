@@ -133,6 +133,30 @@ def recover_pending_handoffs(
     return recovered
 
 
+def _pending_driving_request(pending_events, repo, workstream_id, *, conn, config_result):
+    # Saved discussion is data; only a current trusted request may drive its child.
+    return next(
+        (
+            decision
+            for pending_event in pending_events
+            if (
+                decision := source_policy.reauthorize_saved_request(
+                    pending_event,
+                    repo,
+                    conn=conn,
+                    config=config_result,
+                    known_workstreams=(
+                        ()
+                        if pending_event.get("event_type") in {"assigned", "review_request", "notification"}
+                        else (workstream_id,)
+                    ),
+                )
+            ).get("drives_execution")
+        ),
+        None,
+    )
+
+
 def _create_child_task_for_pending_events(
     conn,
     data_dir,
@@ -164,25 +188,7 @@ def _create_child_task_for_pending_events(
         db_write_workstreams.update_for_execute_command(conn, run_now, workstream_id)
         return None
 
-    # Saved discussion is data; only a current trusted request may drive its child.
-    child_event = next(
-        (
-            decision
-            for pending_event in pending_events
-            if (
-                decision := source_policy.reauthorize_saved_request(
-                    pending_event,
-                    repo,
-                    known_workstreams=(
-                        ()
-                        if pending_event.get("event_type") in {"assigned", "review_request", "notification"}
-                        else (workstream_id,)
-                    ),
-                )
-            ).get("drives_execution")
-        ),
-        None,
-    )
+    child_event = _pending_driving_request(pending_events, repo, workstream_id, conn=conn, config_result=config_result)
     if child_event is None:
         _save_pending_handoff(conn, parent_task_id, {"status": "completed", "retryable": False})
         db_write_workstreams.update_for_execute_command(conn, run_now, workstream_id)
@@ -381,6 +387,8 @@ def _create_child_task_for_recommended_route(
     child_event = source_policy.reauthorize_saved_request(
         child_event,
         repo,
+        conn=conn,
+        config=config_result,
         known_workstreams=[]
         if child_event.get("event_type") in {"assigned", "review_request", "notification"}
         else [workstream_id],
@@ -507,14 +515,25 @@ def finalize_accepted_result(
     work_item_row = db_records.first(
         db_read_work_items.find_work_item_id_and_origin_type_by_workstream_id(conn, workstream_id)
     )
+    local_source = bool(work_item_row and work_item_row[1] == "web")
     if work_item_row is None:
         related_item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
         if related_item:
             work_item_row = (related_item["work_item_id"], related_item["origin_type"])
-    if payload["output_type"] == OutputType.WAITING_FOR_USER:
+    local_classification_wait = (
+        local_source
+        and payload["output_type"] == OutputType.CLASSIFICATION_RESULT
+        and payload.get("recommended_route") == "waiting-for-user"
+    )
+    if payload["output_type"] == OutputType.WAITING_FOR_USER or local_classification_wait:
         _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
         if work_item_row:
             question = payload.get("operator_question") or {}
+            if local_classification_wait and not question:
+                question = {
+                    "kind": "clarification",
+                    "summary": "What outcome and scope should Robert use for this request?",
+                }
             work_items.record_system_event(
                 conn,
                 work_item_row[0],
@@ -566,7 +585,11 @@ def finalize_accepted_result(
             now=run_now,
         )
         db_write_work_items.update_for_finalize_accepted_result(conn, run_now, run_now, work_item_row[0])
-    if payload["output_type"] == OutputType.CLASSIFICATION_RESULT:
+    if payload["output_type"] == OutputType.CLASSIFICATION_RESULT and not (
+        payload.get("classification_route_defaulted")
+        and _pending_driving_request(pending_events, repo, workstream_id, conn=conn, config_result=config_result)
+        is not None
+    ):
         child_task = _create_child_task_for_recommended_route(
             conn,
             data_dir,
