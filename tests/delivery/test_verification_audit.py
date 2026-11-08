@@ -84,6 +84,49 @@ class VerificationAuditTests(WorkerProtocolFixture):
 
         self.assertEqual(audit["status"], "accepted")
 
+    def test_independent_failed_required_check_blocks_publication(self):
+        from robert_agent.delivery.application import audit as audit_result
+
+        payload = internal_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="new_pr",
+            planned_github_actions=[
+                {
+                    "type": "push_existing_pr",
+                    "worktree_path": "/repo/.worktrees/dd-123",
+                    "branch": "codex/dd-123",
+                },
+                {
+                    "type": "open_pr",
+                    "repo": "x/y",
+                    "head": "codex/dd-123",
+                    "base": "master",
+                    "title": "Fix timeout",
+                    "body": self._dd_pr_body("Implements the fix"),
+                },
+            ],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[
+                self._verification_entry(),
+                {**self._verification_entry(status="failed"), "command": "python -m unittest", "exit_code": 1},
+            ],
+            handoff="opened pr",
+            used_skills=[],
+        )
+
+        audit = audit_result.audit_result(
+            payload,
+            allowed_github_actions=["push_existing_pr", "open_pr", "comment"],
+            verification_policy={
+                "mode": "required",
+                "required_statuses": ["passed"],
+                "allow_skipped": False,
+            },
+        )
+
+        self.assertEqual(audit["status"], "failed")
+
     def test_route_policy_rejects_skipped_required_verification(self):
         from robert_agent.delivery.application import audit as audit_result
 

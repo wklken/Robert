@@ -26,11 +26,16 @@ class PublishRemediationTests(PublicationFixture):
                         {
                             "state": "open",
                             "merged": False,
-                            "head": {"sha": "head-1", "ref": "codex/fix"},
+                            "head": {"sha": "head-1", "ref": "codex/fix", "repo": {"full_name": "x/y"}},
+                            "user": {"login": "robert-bot"},
                             "base": {"sha": "base-1", "ref": "main"},
                         }
                     )
                 )
+            if command[:3] == ["git", "ls-remote", "--get-url"]:
+                return Completed(command[-1] + "\n")
+            if command[:3] == ["git", "remote", "get-url"]:
+                return Completed("https://github.com/x/y.git\n")
             if command == ["git", "rev-parse", "HEAD"]:
                 return Completed("repair-1\n")
             if command[:2] == ["git", "push"]:
@@ -226,11 +231,16 @@ class PublishRemediationTests(PublicationFixture):
                         {
                             "state": "open",
                             "merged": False,
-                            "head": {"sha": "head-1", "ref": "codex/fix"},
+                            "head": {"sha": "head-1", "ref": "codex/fix", "repo": {"full_name": "x/y"}},
+                            "user": {"login": "robert-bot"},
                             "base": {"sha": "base-1", "ref": "main"},
                         }
                     )
                 )
+            if command[:3] == ["git", "ls-remote", "--get-url"]:
+                return Completed(stdout=command[-1] + "\n")
+            if command[:3] == ["git", "remote", "get-url"]:
+                return Completed(stdout="https://github.com/x/y.git\n")
             if command == ["git", "rev-parse", "HEAD"]:
                 return Completed(stdout="repair-1\n")
             if command == [
@@ -299,7 +309,8 @@ class PublishRemediationTests(PublicationFixture):
                         {
                             "state": "open",
                             "merged": False,
-                            "head": {"sha": "head-1", "ref": "codex/fix"},
+                            "head": {"sha": "head-1", "ref": "codex/fix", "repo": {"full_name": "x/y"}},
+                            "user": {"login": "robert-bot"},
                             "base": {"sha": "base-1", "ref": "main"},
                         }
                     )

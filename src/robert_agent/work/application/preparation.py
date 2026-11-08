@@ -250,7 +250,9 @@ def _refresh_prepared_task_locked(
     db_write_tasks.update_for_refresh_prepared_task_locked(
         conn, route_result["route_id"], route_result["expected_output"], run_now, state["task_id"]
     )
-    db_write_tasks.update_for_refresh_prepared_task_locked_2(conn, input_policy, state["task_id"])
+    db_write_tasks.update_for_refresh_prepared_task_locked_2(
+        conn, input_policy, state["task_id"], event["event_fingerprint"]
+    )
     upsert_route_decision(conn, state["task_id"], route_result, run_now)
     attempt_metadata_row = db_records.first(
         db_read_attempts.find_metadata_json_by_attempt_id(conn, state["attempt_id"])
@@ -466,6 +468,7 @@ def create_task_attempt_and_prompt(
         **(values.json_object(existing[0]) if existing else {}),
         **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
         "review_input_policy": task["review_input_policy"],
+        "request_event_fingerprint": event["event_fingerprint"],
         **(
             {"refreshed_context": related_events}
             if existing

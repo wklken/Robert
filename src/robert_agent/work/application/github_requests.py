@@ -74,7 +74,7 @@ def enqueue_native_request(conn, store, repo, event, route, workers, admission, 
 
 def resume_waiting_vote(conn, repo, event, run_now, admission=None):
     if (
-        event.get("actor_login") not in repo.get("trusted_actors", [])
+        not work_policies.is_trusted_actor(event, repo)
         or not event.get("mentions_dd")
         or not discover.bot_requests(event.get("body"), repo["github_account"])
         or event.get("authorization_status") not in {"accepted_context", "authorized_trigger"}

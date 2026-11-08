@@ -480,7 +480,7 @@ def retrigger_failed_github_task(
                 refreshed_context = task_related_events(reader, task_id)
                 refreshed = []
                 for event in refreshed_context:
-                    updated, state = discover._source_metadata(event, dict(snapshot), subprocess.run)
+                    updated, state = discover.refresh_source_metadata(event, dict(snapshot), subprocess.run)
                     if state is None:
                         raise WorkItemConflictError("GitHub source refresh failed; retry after access is restored")
                     if state.lower() != "open":
@@ -785,6 +785,15 @@ def create_work_item(
     if not isinstance(start, bool):
         raise WorkItemValidationError("start must be a boolean")
 
+    creation_request = {
+        "repo_id": repo_id,
+        "title": title,
+        "description": description,
+        "priority": priority,
+        "routing_mode": routing_mode,
+        "requested_worker": requested_worker,
+        "start": start,
+    }
     db_path = Path(db_path).expanduser()
     with closing(db_database.connect(db_path, isolation_level=None)) as conn:
         db_sqlite.configure(conn, foreign_keys=True)
@@ -797,6 +806,13 @@ def create_work_item(
             if existing:
                 metadata = _decode_json(existing["metadata_json"], {}) or {}
                 result = metadata.get("command_result")
+                original_request = metadata.get("creation_request")
+                if original_request is None and result:
+                    original_item = result.get("item") or {}
+                    original_request = {key: original_item.get(key) for key in creation_request if key != "start"}
+                    original_request["start"] = result.get("command") == "create_and_start"
+                if existing["repo_id"] != repo_id or original_request != creation_request:
+                    raise WorkItemConflictError("creation idempotency key belongs to a different request")
                 if result:
                     return _commit_result(conn, db_path, result, notifier)
                 result = {"ok": True, "command": "create", "item": _item_from_row(existing)}
@@ -814,6 +830,7 @@ def create_work_item(
                 start=start,
                 idempotency_key=idempotency_key,
                 now=utc_now(),
+                metadata={"creation_request": creation_request},
             )
             return _commit_result(conn, db_path, result, notifier)
         except Exception:

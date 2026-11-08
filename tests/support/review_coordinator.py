@@ -186,8 +186,14 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
         if mode == "timeout":
             driver.request["workers"][0]["timeout_seconds"] = 1
         try:
-            expected_error = RuntimeError if mode == "failure" else review_coordinator.StageStopped
-            expected_message = "worker exited immediately" if mode == "failure" else "process group"
+            expected_error = RuntimeError if mode in {"failure", "timeout"} else review_coordinator.StageStopped
+            expected_message = (
+                "worker exited immediately"
+                if mode == "failure"
+                else "timed out"
+                if mode == "timeout"
+                else "process group"
+            )
             with self.assertRaisesRegex(expected_error, expected_message):
                 driver.run()
             with fixture_database.connect(self.db) as conn:
@@ -195,9 +201,9 @@ Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text('{}')
                 self.assertFalse(any(run["stage"] == "review" and run["status"] == "succeeded" for run in runs))
                 self.assertEqual(
                     review_store.session(conn, task_id=driver.task_id)["status"],
-                    "failed" if mode == "failure" else "attention",
+                    "failed" if mode in {"failure", "timeout"} else "attention",
                 )
-                if mode == "failure":
+                if mode in {"failure", "timeout"}:
                     for run in runs:
                         if run["stage"] == "review":
                             self.assertFalse(worker_identity.live_process_group(run["dispatch"]["pid"]))

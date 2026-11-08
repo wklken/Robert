@@ -26,6 +26,7 @@ from uuid import uuid4
 from robert_agent.foundation.commands import emit
 from robert_agent.persistence.schema import database as storage
 from robert_agent.delivery.application import publish
+from robert_agent.adapters.github import client as github_client
 
 
 TARGET_RE = re.compile(r"^/([^/]+)/([^/]+)/(issues|pull)/([0-9]+)(?:/)?$")
@@ -73,7 +74,7 @@ def comment_body(marker_id):
     )
 
 
-def _insert_canary_fixture(db_path, target, marker_id):
+def _insert_canary_fixture(db_path, target, marker_id, publisher=None):
     storage.init_database(db_path)
     now = _now()
     body = comment_body(marker_id)
@@ -98,6 +99,7 @@ def _insert_canary_fixture(db_path, target, marker_id):
                         "status": "accepted",
                         "action_scope": {
                             "repo": target["repo"],
+                            "github_account": publisher,
                             "sources": [{"source_type": target["source_type"], "number": target["number"]}],
                         },
                     },
@@ -142,7 +144,17 @@ def production_write_canary(
     marker_id = marker_id or uuid4().hex[:12]
     workspace = _workspace_dir(workspace_dir)
     db_path = workspace / "dd.sqlite3"
-    body = _insert_canary_fixture(db_path, target, marker_id)
+    publisher = None
+    if confirm_github_write:
+        account = github_client.try_read_json(["gh", "api", "user"], runner=run_command)
+        publisher = account.get("login") if isinstance(account, dict) else None
+        if not isinstance(publisher, str) or not publisher.strip():
+            return {
+                "ok": False,
+                "status": "publisher_unavailable",
+                "safe_error": "Authenticated publisher identity unavailable",
+            }
+    body = _insert_canary_fixture(db_path, target, marker_id, publisher)
     if not confirm_github_write:
         publish_result = publish.publish_ready_actions(db_path, dry_run=True)
         return {

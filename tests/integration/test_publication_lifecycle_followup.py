@@ -151,6 +151,26 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
 
         def transport(command, **kwargs):
             calls.append(command)
+            if command == ["gh", "api", "repos/example/backend/pulls/456"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "state": "open",
+                            "user": {"login": "robert-bot"},
+                            "head": {
+                                "repo": {"full_name": "example/backend"},
+                                "ref": saved["audit"]["action_scope"]["branch_name"],
+                            },
+                        }
+                    ),
+                    "",
+                )
+            if command[:3] == ["git", "ls-remote", "--get-url"]:
+                return subprocess.CompletedProcess(command, 0, command[-1] + "\n", "")
+            if command[:3] == ["git", "remote", "get-url"]:
+                return subprocess.CompletedProcess(command, 0, "https://github.com/example/backend.git\n", "")
             if command[:2] == ["git", "ls-remote"]:
                 return subprocess.CompletedProcess(command, 0, remote_head + " refs/heads/main\n", "")
             if command[:2] == ["git", "fetch"]:
@@ -546,6 +566,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                             {
                                 "id": 99,
                                 "body": fixture.body,
+                                "user": {"login": "bot"},
                                 "html_url": "https://github.com/x/y/issues/1#issuecomment-99",
                             }
                         ]

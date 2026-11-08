@@ -173,7 +173,9 @@ export default definePluginEntry({
       description: "Show Robert status.",
       acceptsArgs: false,
       requireAuth: true,
-      handler: async () => runConfigured(["status", "--output", "json"]),
+      handler: async (ctx) => ctx.isAuthorizedSender
+        ? runConfigured(["status", "--output", "json"])
+        : { text: "Unauthorized sender.", isError: true },
     });
     api.registerCommand({
       name: "robert-task",
@@ -181,6 +183,7 @@ export default definePluginEntry({
       acceptsArgs: true,
       requireAuth: true,
       handler: async (ctx) => {
+        if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
         const [taskId] = splitArgs(ctx.args);
         if (!taskId) {
           return { text: "Usage: /robert-task <task-id>", isError: true };
@@ -194,6 +197,7 @@ export default definePluginEntry({
       acceptsArgs: true,
       requireAuth: true,
       handler: async (ctx) => {
+        if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
         const [runId] = splitArgs(ctx.args);
         if (!runId) {
           return { text: "Usage: /robert-run <run-id>", isError: true };
@@ -207,6 +211,7 @@ export default definePluginEntry({
       acceptsArgs: true,
       requireAuth: true,
       handler: async (ctx) => {
+        if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
         const [taskId, artifactType] = splitArgs(ctx.args);
         if (!taskId || !artifactType) {
           return {

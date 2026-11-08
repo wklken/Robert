@@ -154,7 +154,7 @@ def snapshot(conn, root_id, config, now):
     if not repo or not repo.get("enabled", True):
         return None
     candidates = []
-    for row in queries.checkpoints(conn, "decision_candidate", root_id):
+    for row in queries.checkpoints(conn, "decision_candidate", root_id, now=now, policy_version=policy_version(config)):
         item = json.loads(row["metadata_json"])
         observed = timestamp(item.get("observed_at"))
         if (
@@ -439,3 +439,15 @@ def reply(conn, config, root_id, decision_id, body, now):
         {**state, "status": DecisionStatus.REPLY_RECEIVED.value, "reply": _safe(body), "next_check_at": now},
         now,
     )
+
+
+def has_ready_worker_retry(conn, config, repo_ids, now):
+    """Observe a durable current grant without offering, claiming, or executing it."""
+    if not enabled(config) or not config.get("daemon", {}).get("enabled", True):
+        return False
+    for row in queries.approved_worker_retries(conn, repo_ids, now, policy_version(config)):
+        state = json.loads(row["metadata_json"])
+        current = snapshot(conn, row["scope_id"], config, now)
+        if current and state.get("input_generation") == digest(current):
+            return True
+    return False

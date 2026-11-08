@@ -6,6 +6,10 @@ Returned evidence is deliberately small so a remote response can never leak
 an unbounded body, command output, or credential into Robert state.
 """
 
+from robert_agent.delivery.comment_receipts import match_comment
+from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.delivery.application import guards as publication_guards
+
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 
 from robert_agent.foundation.contracts.delivery import GitHubActionType
@@ -234,22 +238,18 @@ def _reconcile_comment(action, action_scope, run_command):
         response = json.loads(raw or "[]")
     except (TypeError, ValueError):
         return _result("unknown", "comment_response_malformed")
-    matches = []
-    for comment in _iter_objects(response):
-        body = comment.get("body") if isinstance(comment.get("body"), str) else ""
-        if marker in body:
-            matches.append(comment)
-    if len(matches) > 1:
-        return _result("unknown", "comment_marker_conflict", match_count=len(matches))
-    if matches:
-        comment = matches[0]
+    receipt = match_comment(
+        _iter_objects(response), metadata.get("body"), (action_scope or {}).get("github_account"), marker
+    )
+    if receipt["status"] == "confirmed_effect":
+        comment = receipt["comment"]
         return _result(
-            "confirmed_effect",
-            "comment_marker_match",
+            receipt["status"],
+            receipt["reason_code"],
             external_id=str(comment.get("id") or ""),
             target_url=comment.get("html_url") or comment.get("url") or "",
         )
-    return _result("confirmed_absent", "comment_lookup_complete_absent")
+    return _result(receipt["status"], receipt["reason_code"])
 
 
 def _reconcile_open_pr(action, action_scope, run_command):
@@ -379,11 +379,11 @@ def _reconcile_open_pr(action, action_scope, run_command):
     return _result("unknown", "open_pr_candidate_conflict")
 
 
-def _remote_branch(action, action_scope, run_command):
+def _remote_branch(action, action_scope, run_command, *, push_remote=None):
     metadata = _decode_json(action.get("metadata_json"))
     scope = action_scope if isinstance(action_scope, dict) else {}
     worktree = metadata.get("worktree_path") or scope.get("worktree_path")
-    remote = metadata.get("remote") or scope.get("remote") or "origin"
+    remote = push_remote or metadata.get("remote") or scope.get("remote") or "origin"
     branch = metadata.get("branch") or metadata.get("head") or scope.get("branch_name")
     if not worktree or not branch:
         return _result("unknown", "push_scope_incomplete")
@@ -455,9 +455,17 @@ def classify_remote_state(action, action_scope, run_command, *, conn=None):
     if action_type == GitHubActionType.SUBMIT_PR_REVIEW:
         return review_publish.reconcile(action, action_scope, run_command)
     if action_type == GitHubActionType.COMMENT:
-        return _reconcile_comment(action, action_scope, run_command)
+        publisher = publication_scope.comment_publisher(conn, action, action_scope)
+        return _reconcile_comment(action, {**action_scope, "github_account": publisher}, run_command)
     if action_type == GitHubActionType.OPEN_PR:
         return _reconcile_open_pr(action, action_scope, run_command)
     if action_type == GitHubActionType.PUSH_EXISTING_PR:
-        return _remote_branch(action, action_scope, run_command)
+        target_scope = {
+            **action_scope,
+            "github_account": publication_scope.comment_publisher(conn, action, action_scope),
+        }
+        target = publication_guards.existing_pr_push_target(target_scope, run_command, reconcile=True)
+        if target and not target["ok"]:
+            return _result("unknown", "existing_pr_push_target_mismatch")
+        return _remote_branch(action, action_scope, run_command, push_remote=target["read_remote"] if target else None)
     return _result("unknown", "unsupported_action_type")

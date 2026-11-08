@@ -159,7 +159,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """
@@ -341,7 +341,7 @@ raise SystemExit(0 if record["ok"] else 1)
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """

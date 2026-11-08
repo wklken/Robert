@@ -35,8 +35,8 @@ class PublicationBudgetFixture(unittest.TestCase):
         self.now = datetime.now(timezone.utc)
         self.calls = []
         self.error = "permission denied"
+        storage.init_database(self.db)
         with closing(sqlite3.connect(self.db)) as c, c:
-            c.executescript(storage.schema_sql())
             c.execute(
                 "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('repo','x/y','bot','main','/repo','/worktrees')"
             )

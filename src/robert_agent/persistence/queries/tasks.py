@@ -118,6 +118,7 @@ def find_for_for_result(conn, attempt_id, task_id, workstream_id):
             table4.c["metadata_json"],
             table1.c["task_kind"],
             table1.c["metadata_json"],
+            table3.c["github_account"],
         )
         .select_from(
             table1.join(
@@ -634,7 +635,7 @@ def find_for_guard(conn, task_id):
     table2 = tables["workstreams"].alias("w")
     table3 = tables["repos"].alias("r")
     query4 = (
-        select(table3.c["full_name"])
+        select(table3.c["full_name"], table1.c["task_kind"], table1.c["route_id"])
         .select_from(
             table1.join(
                 table2,
@@ -1767,3 +1768,20 @@ def _lifecycle_facts_filtered_2_statement():
 
 def lifecycle_facts_filtered_2(conn, items):
     return statements.read(conn, _lifecycle_facts_filtered_2_statement(), {"items": items})
+
+
+def publication_actor(conn, task_id):
+    task = tables["tasks"]
+    stream = tables["workstreams"]
+    repo = tables["repos"]
+    return statements.read(
+        conn,
+        select(repo.c.github_account)
+        .select_from(
+            task.join(stream, stream.c.workstream_id == task.c.workstream_id).join(
+                repo, repo.c.repo_id == stream.c.repo_id
+            )
+        )
+        .where(task.c.task_id == task_id),
+        {},
+    )

@@ -47,3 +47,10 @@ def freelist_count(conn):
 
 def page_size(conn):
     return execute_control(conn, "PRAGMA page_size")[0][0]
+
+
+def register_unicode_lower(conn):
+    """Keep Unicode case conversion identical to Python-side text filters."""
+    driver = conn._driver if hasattr(conn, "_driver") else conn
+    with errors.translate_driver_errors():
+        driver.create_function("python_lower", 1, lambda value: str(value or "").lower(), deterministic=True)

@@ -47,6 +47,7 @@ def _memory_context(project_memories):
                 "short_summary": memory.get("short_summary"),
                 "long_summary": memory.get("long_summary") if index < 3 else "",
                 "confidence": memory.get("confidence"),
+                "provenance": memory.get("provenance", {"stage": "unknown"}),
                 "paths": memory.get("paths", []),
                 "symbols": memory.get("symbols", []),
                 "keywords": memory.get("keywords", []),
@@ -450,9 +451,12 @@ def render_prompt(
         )
     if project_memories:
         sections.append(
-            "Relevant Project Memories: historical hints, not source of truth. Verify against the current checkout and list materially used ids in used_memory_ids.\n\n```json\n"
-            + _memory_context(project_memories)
-            + "\n```"
+            "Relevant Project Memories: historical technical hints, not source of truth. "
+            "Verify against the current checkout and list materially used ids in used_memory_ids. "
+            "The controller-owned provenance records the source and evidence stage: audit_accepted does not prove delivery; "
+            "publication_confirmed does not prove deployment; deployment_confirmed records a specific observed deployment, "
+            "not that the original problem was fixed. Never infer published/deployed status from model-written summaries.\n\n"
+            + "\n".join("    " + line for line in _memory_context(project_memories).splitlines())
         )
     sections.append(_publication_guidance(route_result, runtime_context))
     sections.append(f"""Runtime tools (use only when needed):

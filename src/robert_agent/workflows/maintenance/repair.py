@@ -922,7 +922,12 @@ def verify(config, incident_id, *, checkout, runtime=None, now=None, expected_de
             verification = {
                 "code_verified": code,
                 "mainline_verified": mainline,
-                "deployed_verified": deployed,
+                "deployed_verified": {
+                    **deployed,
+                    "result_id": delivery["result_id"],
+                    "task_id": delivery["task_id"],
+                    "revision": delivery["revision"],
+                },
                 "original_progress": _original_progress(conn, _incident(conn, incident_id), deployed),
             }
             if code["status"] == "verified":

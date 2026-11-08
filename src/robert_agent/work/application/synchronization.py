@@ -142,7 +142,7 @@ def scan_repo(config, repo, session, hints):
             if remote_states.get((source_type, number)) is None:
                 continue
             raw = {"number": number, "source_type": source_type, "event_type": "notification"}
-            enriched, state = discover._source_metadata(raw, repo, session)
+            enriched, state = discover.refresh_source_metadata(raw, repo, session)
             if (state or "").lower() != "open":
                 continue
             enriched = discover._enrich_pull_request_metadata(enriched, repo, session)

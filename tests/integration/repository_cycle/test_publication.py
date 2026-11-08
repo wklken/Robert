@@ -80,7 +80,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
         calls = []
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
             calls.append((str(db_path), dry_run))
             return {
                 "ok": True,
@@ -215,7 +215,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """
@@ -312,7 +312,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None):
+        def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None, config=None):
             return {
                 "ok": False,
                 "status": "publish_failed",

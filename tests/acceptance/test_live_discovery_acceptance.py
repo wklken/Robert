@@ -94,7 +94,11 @@ repos:
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["raw_event_count"], 1)
         self.assertEqual(result["normalized_event_count"], 1)
-        self.assertEqual(result["sample_events"][0]["event_fingerprint"], "mention:issue-77")
+        self.assertTrue(
+            result["sample_events"][0]["event_fingerprint"].startswith(
+                "mention:https://github.com/example/repo/issues/77:body:"
+            )
+        )
         self.assertEqual(result["sample_events"][0]["mentions_dd"], True)
         self.assertTrue(any("--assignee" in call for call in calls))
         self.assertTrue(any("--mentions" in call for call in calls))
