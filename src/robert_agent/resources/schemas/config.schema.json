@@ -720,6 +720,11 @@
           "default": false
         },
         "dispatch_enabled": {"type": "boolean", "default": false},
+        "send_after": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Only externally deliver notifications created after this timezone-aware ISO timestamp. Required when enabled; retain on service restarts."
+        },
         "provider": {
           "type": "string",
           "enum": [

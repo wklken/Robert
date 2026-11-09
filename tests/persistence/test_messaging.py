@@ -12,6 +12,57 @@ from tests.support.work_items import WorkItemCommandFixture
 
 
 class MessagingPersistenceTests(WorkItemCommandFixture):
+    def test_delivery_cutoff_excludes_backlog_before_limit_without_hiding_inbox(self):
+        settings = {"enabled": True, "send_after": "2026-11-07T12:00:00Z"}
+        now = "2026-11-07T12:02:00Z"
+        with closing(database.connect(self.db_path)) as conn, conn:
+            for index in range(105):
+                notification_store.record_notification(
+                    conn,
+                    f"history-{index}",
+                    None,
+                    "worker_stale",
+                    "local",
+                    "recorded",
+                    "2026-07-17T09:58:43Z",
+                    "{}",
+                )
+            for identifier, created in (("boundary", "2026-11-07T20:00:00+08:00"), ("invalid", "invalid")):
+                notification_store.record_notification(
+                    conn,
+                    identifier,
+                    None,
+                    "worker_stale",
+                    "local",
+                    "recorded",
+                    created,
+                    "{}",
+                )
+            self.assertFalse(
+                notifications.has_pending_local_delivery_filtered(conn, (), now, messaging_settings=settings)
+            )
+            self.assertEqual(notifications.find_for_deliver_pending(conn, now, 1, messaging_settings=settings), [])
+            self.assertTrue(notifications.find_inbox(conn, messaging_repo_ids=None))
+            notification_store.record_notification(
+                conn,
+                "future",
+                None,
+                "worker_stale",
+                "local",
+                "recorded",
+                "2026-11-07T12:01:00Z",
+                "{}",
+            )
+            self.assertEqual(
+                [row[0] for row in notifications.find_for_deliver_pending(conn, now, 1, messaging_settings=settings)],
+                ["future"],
+            )
+            self.assertTrue(
+                notifications.has_pending_local_delivery_filtered(conn, (), now, messaging_settings=settings)
+            )
+            self.assertFalse(notifications.find_for_deliver_pending(conn, now, 1, messaging_settings={"enabled": True}))
+            self.assertEqual(notifications.find_metadata_json_by_notification_id(conn, "history-0")[0][0], "{}")
+
     def test_event_and_attention_roll_back_together_on_orm_connection(self):
         item = self._create()["item"]
         with closing(database.connect(self.db_path)) as conn:

@@ -112,3 +112,5 @@ repos: []
 messaging:
   enabled: false
   dispatch_enabled: false
+  # Before enabling, set send_after to the current time with an explicit timezone.
+  # Retain that value on normal restarts; only newer notifications are delivered.

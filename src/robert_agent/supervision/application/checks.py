@@ -186,6 +186,12 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
     # A stale single failure is not an outage: require a later failed observation.
     if health.get("consecutive_failures", 0) < 2 or not checked or not eligible or checked < eligible:
         return
+    settings = (config or {}).get("messaging", {})
+    if settings.get("enabled"):
+        start = timestamp(settings.get("send_after"))
+        occurred = timestamp(health.get("first_failed_at"))
+        if not start or not occurred or occurred <= start:
+            return
     identifier = health.get("delivery_id")
     if not identifier:
         return
@@ -211,7 +217,13 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
         supervision_health.atomic_json(state_path, state)
     except OSError:
         return
-    payload = {"type": "supervisor_unobservable", "delivery_id": delivery_id, **fields}
+    payload = {
+        "type": "supervisor_unobservable",
+        "delivery_id": delivery_id,
+        "occurred_at": health["first_failed_at"],
+        "summary": "连续检查无法读取 Robert 数据库，请在本地查看数据库和 Supervisor 健康状态。",
+        **fields,
+    }
     sent = message_transport.send(payload, config=config, runner=runner)
     state.update(status="sent" if sent else "failed")
     try:
