@@ -1,9 +1,9 @@
 """Validate v2 configuration and prepare runtime settings."""
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 import sys
+from robert_agent.foundation.timestamps import utc_timestamp
 
 import yaml
 
@@ -169,13 +169,10 @@ def _normalize(config, path, skip_external):
             resolve_route_config(result, repo, policy)
     messaging = result["messaging"]
     if "send_after" in messaging:
-        value = messaging["send_after"]
-        if value != value.strip() or "T" not in value:
+        start = utc_timestamp(messaging["send_after"])
+        if start is None:
             raise ValueError("messaging.send_after must be an ISO timestamp with an explicit timezone")
-        start = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if start.tzinfo is None:
-            raise ValueError("messaging.send_after must include an explicit timezone")
-        messaging["send_after"] = start.astimezone(timezone.utc).isoformat()
+        messaging["send_after"] = start.isoformat()
     if messaging.get("dispatch_enabled") and not messaging["enabled"]:
         raise ValueError("messaging.dispatch_enabled requires messaging.enabled")
     if messaging["enabled"]:

@@ -69,6 +69,10 @@ robert_agent/
 数据库写入和 JSON/YAML 等序列化边界使用 `.value`，保留原有字符串编码。
 数据库 CHECK、模型映射与协议 Schema 继续声明各自边界约束，合同测试校验共享值的一致性。
 
+[`foundation/timestamps.py`](../src/robert_agent/foundation/timestamps.py) 只使用标准库，
+供配置校验、SQLite 方言函数与监督告警共用 UTC 时间解析和微秒比较。
+它不执行 I/O，也不依赖领域或用例；通知的启用时间边界在各条投递路径保持一致。
+
 稳定领域能力、纯策略、适配器和读模型不依赖应用用例、具体 workflow、runtime 或接口。
 领域 `application/` 与具体 workflow 属于应用层，按明确的模块依赖组合能力；跨领域
 调度放在外层组合入口。公共函数/类型/常量归实际 owner；不靠延迟 import、动态查找、

@@ -1,6 +1,7 @@
 """SQLite connection settings and catalog operations, never business policy."""
 
 from robert_agent.persistence import errors
+from robert_agent.foundation.timestamps import timestamp_after
 
 
 def execute_control(conn, sql):
@@ -54,3 +55,10 @@ def register_unicode_lower(conn):
     driver = conn._driver if hasattr(conn, "_driver") else conn
     with errors.translate_driver_errors():
         driver.create_function("python_lower", 1, lambda value: str(value or "").lower(), deterministic=True)
+
+
+def register_timestamp_after(conn):
+    """Retain exact timezone and microsecond comparison for delivery boundaries."""
+    driver = conn._driver if hasattr(conn, "_driver") else conn
+    with errors.translate_driver_errors():
+        driver.create_function("python_timestamp_after", 2, timestamp_after, deterministic=True)

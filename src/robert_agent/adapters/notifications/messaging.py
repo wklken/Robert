@@ -11,6 +11,7 @@ EVENT_LABELS = {
     "worker_stale": "执行进程心跳异常",
     "worker_timeout": "任务执行超时",
     "worker_process_exited": "执行进程退出",
+    "worker_cleanup_pending": "无法确认执行进程已停止",
     "worker_failed": "任务执行失败",
     "worker_startup_failed": "执行进程启动失败",
     "worker_authentication_required": "需要修复登录凭据",

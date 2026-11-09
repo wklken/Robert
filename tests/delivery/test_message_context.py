@@ -7,7 +7,7 @@ import subprocess
 from unittest.mock import Mock, patch
 
 from robert_agent.adapters.notifications.messaging import render_message
-from robert_agent.delivery import messages
+from robert_agent.delivery import messages, notifications as publication_notifications
 from robert_agent.delivery.application import notifications
 from robert_agent.persistence import database
 from robert_agent.persistence.stores import notifications as notification_store
@@ -15,6 +15,48 @@ from tests.support.work_items import WorkItemCommandFixture
 
 
 class MessageContextTests(WorkItemCommandFixture):
+    def test_command_transport_and_readiness_honor_explicit_cutoff(self):
+        self.notice("history", "2026-07-17T09:58:43+00:00")
+        config = {"messaging": {"enabled": False, "send_after": "2026-11-09T00:00:00Z"}}
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        with patch.dict("os.environ", {"ROBERT_NOTIFICATION_COMMAND": "local-notifier"}, clear=True):
+            self.assertEqual(notifications.deliver_pending(self.db_path, config=config, runner=runner)["sent"], 0)
+            from robert_agent.execution.notifications import has_pending_local_delivery
+
+            with closing(database.connect(self.db_path)) as conn:
+                self.assertFalse(has_pending_local_delivery(conn, (), "2026-11-09T00:01:00Z", config=config))
+            self.notice("future", "2026-11-09T00:00:01Z")
+            self.assertEqual(notifications.deliver_pending(self.db_path, config=config, runner=runner)["sent"], 1)
+        self.assertEqual(runner.call_count, 1)
+
+    def test_publication_retry_preserves_initial_notification_time(self):
+        task_id = self._failed_github_task()
+        action = {"task_id": task_id, "action_id": "action-cutoff", "action_type": "comment"}
+        original_time = "2026-11-08T23:59:59Z"
+        result = {"reason_code": "retry_scheduled", "safe_error": "network unavailable"}
+        with closing(database.connect(self.db_path)) as conn, conn:
+            publication_notifications.insert_notification(conn, action, "github_publish_failed", result, original_time)
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', ""))
+        with patch.dict("os.environ", {}, clear=True):
+            for resolve_first in (False, True):
+                with self.subTest(resolve_first=resolve_first):
+                    with closing(database.connect(self.db_path)) as conn, conn:
+                        if resolve_first:
+                            publication_notifications.resolve_action_notification(
+                                conn, action, "github_publish_failed", {"status": "published"}, "2026-11-09T00:01:00Z"
+                            )
+                        publication_notifications.insert_notification(
+                            conn, action, "github_publish_failed", result, "2026-11-09T00:02:00Z"
+                        )
+                    self.assertEqual(
+                        notifications.deliver_pending(self.db_path, config=self.config, runner=runner)["sent"], 0
+                    )
+                    with closing(sqlite3.connect(self.db_path)) as conn:
+                        self.assertEqual(
+                            conn.execute("SELECT created_at FROM notifications").fetchall(), [(original_time,)]
+                        )
+        runner.assert_not_called()
+
     def setUp(self):
         super().setUp()
         self.config = {
@@ -135,6 +177,15 @@ class MessageContextTests(WorkItemCommandFixture):
         self.assertEqual(payload["repository"], "example/repo")
         self.assertEqual(payload["task_status"], "waiting_for_user")
         self.assertEqual(payload["summary"], "Question 1?")
+
+    def test_cleanup_notice_explains_unverified_stop(self):
+        self.notice("cleanup", "2026-11-09T00:00:01Z", kind="worker_cleanup_pending")
+        with closing(database.connect(self.db_path)) as conn:
+            payload = messages.envelope(conn, "cleanup")
+        body = render_message({**payload, "delivery_id": "cleanup:receipt"})
+        self.assertIn("无法确认执行进程已停止", body)
+        self.assertIn("检查执行进程", payload["summary"])
+        self.assertNotIn("worker_cleanup_pending", body)
 
     def test_sensitive_context_withholds_details_and_mutating_actions(self):
         item = self._create(start=True)["item"]

@@ -94,34 +94,32 @@ def insert_notification(conn, value_1, task_id, notification_type, now, value_5)
     )
 
 
-def update_for_resolve_action_notification(conn, now, value_2, notification_id):
+def update_for_resolve_action_notification(conn, value_2, notification_id):
     stmt = (
         update(tables["notifications"])
         .values(
             {
                 "status": sql_constant("resolved"),
-                "created_at": bindparam("p0"),
-                "metadata_json": bindparam("p1"),
+                "metadata_json": bindparam("p0"),
             }
         )
-        .where((tables["notifications"].c["notification_id"] == bindparam("p2")))
+        .where((tables["notifications"].c["notification_id"] == bindparam("p1")))
     )
-    return statements.write(conn, stmt, {"p0": now, "p1": value_2, "p2": notification_id})
+    return statements.write(conn, stmt, {"p0": value_2, "p1": notification_id})
 
 
-def insert_notification_2(conn, now, value_2, notification_id):
+def insert_notification_2(conn, value_2, notification_id):
     stmt = (
         update(tables["notifications"])
         .values(
             {
                 "status": sql_constant("recorded"),
-                "created_at": bindparam("p0"),
-                "metadata_json": bindparam("p1"),
+                "metadata_json": bindparam("p0"),
             }
         )
-        .where((tables["notifications"].c["notification_id"] == bindparam("p2")))
+        .where((tables["notifications"].c["notification_id"] == bindparam("p1")))
     )
-    return statements.write(conn, stmt, {"p0": now, "p1": value_2, "p2": notification_id})
+    return statements.write(conn, stmt, {"p0": value_2, "p1": notification_id})
 
 
 def insert_for_prepare(conn, value_1, task_id, now, value_4):

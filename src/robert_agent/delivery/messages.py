@@ -115,6 +115,7 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
             "worker_stale": "Worker 心跳超过等待阈值，需要查看当前任务和执行记录。",
             "worker_timeout": "Worker 执行超时，需要查看失败原因和恢复状态。",
             "worker_process_exited": "Worker 进程已退出，需要查看执行结果和失败记录。",
+            "worker_cleanup_pending": "无法确认执行进程已停止，请检查执行进程和停止记录；确认停止前会继续保留任务占用。",
         }.get(kind, "Robert 记录了一条新通知，请结合当前状态和原因查看详情。")
     if not payload.get("required_action"):
         actions = payload["actions"]

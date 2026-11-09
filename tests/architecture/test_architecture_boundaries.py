@@ -67,6 +67,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "robert_agent.resource_files",
             "robert_agent.worker_adapters",
             "robert_agent.foundation.commands",
+            "robert_agent.foundation.timestamps",
         )
         for name, dependencies in self.graph.items():
             if name.startswith("robert_agent.configuration."):
@@ -93,6 +94,15 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom):
                     self.assertEqual(node.module, "enum", (name, node.lineno))
                 self.assertNotIsInstance(node, (ast.Import, ast.FunctionDef, ast.AsyncFunctionDef))
+
+    def test_shared_timestamps_are_a_standard_library_leaf(self):
+        name = "robert_agent.foundation.timestamps"
+        self.assert_dependencies(name, ())
+        path = PACKAGE / "foundation/timestamps.py"
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                self.assertEqual(node.module, "datetime", (name, node.lineno))
+            self.assertNotIsInstance(node, ast.Import)
 
     def test_leaf_capabilities_do_not_import_their_callers(self):
         lower = (
@@ -151,7 +161,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             else:
                 continue
             for dependency in dependencies - {"robert_agent"}:
-                if name.startswith("robert_agent.persistence.") and dependency in VALUE_CONTRACTS:
+                if name.startswith("robert_agent.persistence.") and (
+                    dependency in VALUE_CONTRACTS or dependency == "robert_agent.foundation.timestamps"
+                ):
                     continue
                 self.assertIn(dependency.split(".")[1], allowed, (name, dependency))
 

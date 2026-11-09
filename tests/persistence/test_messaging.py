@@ -12,6 +12,33 @@ from tests.support.work_items import WorkItemCommandFixture
 
 
 class MessagingPersistenceTests(WorkItemCommandFixture):
+    def test_delivery_window_preserves_microseconds_and_timezone_equivalence(self):
+        boundary = "2026-11-09T00:00:00.000500Z"
+        settings = {"enabled": True, "send_after": boundary}
+        with closing(database.connect(self.db_path)) as conn, conn:
+            for identifier, created in (
+                ("equal", "2026-11-09T08:00:00.000500+08:00"),
+                ("before", "2026-11-09T00:00:00.000499Z"),
+                ("after", "2026-11-09T08:00:00.000501+08:00"),
+                ("invalid", "0001-01-01T00:00:00+01:00"),
+            ):
+                notification_store.record_notification(
+                    conn, identifier, None, "worker_stale", "local", "recorded", created, "{}"
+                )
+            self.assertEqual(
+                [r[0] for r in notifications.find_for_deliver_pending(conn, boundary, 1, messaging_settings=settings)],
+                ["after"],
+            )
+            self.assertTrue(
+                notifications.has_pending_local_delivery_filtered(conn, (), boundary, messaging_settings=settings)
+            )
+            for cutoff in ("invalid", "0001-01-01T00:00:00+01:00", "2026-11-09T00:00:01Z"):
+                self.assertFalse(
+                    notifications.has_pending_local_delivery_filtered(
+                        conn, (), boundary, messaging_settings={"enabled": True, "send_after": cutoff}
+                    )
+                )
+
     def test_delivery_cutoff_excludes_backlog_before_limit_without_hiding_inbox(self):
         settings = {"enabled": True, "send_after": "2026-11-07T12:00:00Z"}
         now = "2026-11-07T12:02:00Z"

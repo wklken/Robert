@@ -1,6 +1,7 @@
 """application supervision checks responsibilities."""
 
 from robert_agent.persistence import errors as db_errors
+from robert_agent.foundation.timestamps import timestamp_after
 from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence.stores import notifications as db_write_notifications
@@ -187,11 +188,10 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
     if health.get("consecutive_failures", 0) < 2 or not checked or not eligible or checked < eligible:
         return
     settings = (config or {}).get("messaging", {})
-    if settings.get("enabled"):
-        start = timestamp(settings.get("send_after"))
-        occurred = timestamp(health.get("first_failed_at"))
-        if not start or not occurred or occurred <= start:
-            return
+    if (settings.get("enabled") or "send_after" in settings) and not timestamp_after(
+        health.get("first_failed_at"), settings.get("send_after")
+    ):
+        return
     identifier = health.get("delivery_id")
     if not identifier:
         return

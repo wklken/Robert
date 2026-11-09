@@ -1,6 +1,7 @@
 """Shared queries operations for notifications."""
 
 from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.dialects import sqlite
 
 from sqlalchemy import (
     select,
@@ -216,6 +217,7 @@ def find_for_notify_exhausted_episode(conn, notification_type, episode_id):
 
 
 def find_for_deliver_pending(conn, now, limit, repo_ids=(), *, messaging_repo_ids=None, messaging_settings=None):
+    sqlite.register_timestamp_after(conn)
     notification = tables["notifications"]
     stmt = (
         select(notification.c.notification_id)
@@ -264,6 +266,7 @@ def update_failure(conn, kind, key):
 
 
 def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None):
+    sqlite.register_timestamp_after(conn)
     stmt = (
         select(sql_constant(1))
         .select_from(tables["notifications"])
@@ -281,11 +284,12 @@ def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_i
 
 def _delivery_window(settings):
     """External activation never consumes history; inbox visibility is unchanged."""
-    if not (settings or {}).get("enabled"):
+    settings = settings or {}
+    if not settings.get("enabled") and "send_after" not in settings:
         return sql_constant(1) == sql_constant(1)
     # A missing or invalid boundary withholds delivery even for unvalidated callers.
     created = tables["notifications"].c.created_at
-    return func.julianday(created) > func.julianday(settings.get("send_after"))
+    return func.python_timestamp_after(created, settings.get("send_after")) == sql_constant(1)
 
 
 def find_message_context(conn, notification_id):

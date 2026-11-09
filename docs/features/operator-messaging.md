@@ -101,6 +101,11 @@ notifications can retry. Older notices remain in the local timeline and scoped
 inbox; they are neither acknowledged nor marked delivered by this filter.
 The same boundary suppresses a filesystem outage notice whose failure episode
 started before activation. Missing or invalid delivery boundaries withhold sending.
+An explicit `send_after` also applies to custom `ROBERT_NOTIFICATION_COMMAND`
+delivery, readiness checks and filesystem outage notices when OpenClaw messaging
+is disabled. Legacy command-only configurations without a boundary retain their
+existing behavior. Timestamp comparisons retain microsecond precision, and
+publication retries preserve a notice's first creation time.
 
 The adapter uses the documented [OpenClaw message CLI](https://docs.openclaw.ai/cli/message).
 Plugin context is based on the upstream
