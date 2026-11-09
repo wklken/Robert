@@ -94,9 +94,9 @@ class SchedulerRemediationTests(SchedulerRemediationFixture):
         with self.connect() as conn:
             conn.execute(
                 "UPDATE attempts SET started_at=?",
-                ((self.now - timedelta(minutes=50)).isoformat(),),
+                ((self.now - timedelta(minutes=70)).isoformat(),),
             )
-        self.assertTrue(self.runnable())  # The default global limit is 45 minutes.
+        self.assertTrue(self.runnable())  # The default global limit is one hour.
         outcome = loop_engine.run_loop(self.config, dry_run=False, skip_external=True, skip_publish=True)
         self.assertEqual(outcome["cycles"], 0)  # This config deliberately permits 90 minutes.
 

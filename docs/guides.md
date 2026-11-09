@@ -99,11 +99,11 @@ workers:
     # Optional: use a model identifier supported by your configured CLI.
     # fallback_model: YOUR_SUPPORTED_FALLBACK_MODEL
     effort: high
-    timeout_seconds: 5400
+    timeout_seconds: 3600
     environment_allowlist: []
 ```
 
-The global hard worker timeout defaults to 45 minutes. If the two immediately
+The global hard worker timeout defaults to one hour. If the two immediately
 preceding terminal attempts in one workstream both end in `failed_timeout`, the
 next run uses `fallback_model`. Other failure types and successful attempts
 reset the sequence. The configured effort is unchanged.

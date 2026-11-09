@@ -42,7 +42,7 @@ supervision:
   repair: null
   build_manifest: null
   heartbeat_stale_seconds: 1200
-  hard_timeout_seconds: 2700
+  hard_timeout_seconds: 3600
   startup_grace_seconds: 300
 
 daemon:
@@ -70,14 +70,14 @@ workers:
     effort: default
     # 可选；如已有配置应保留实际值，不要照抄未验证模型名。
     # fallback_model: YOUR_SUPPORTED_FALLBACK_MODEL
-    timeout_seconds: 5400
+    timeout_seconds: 3600
     environment_allowlist: []
   reviewer:
     adapter: claude
     command: claude
     model: default
     effort: default
-    timeout_seconds: 5400
+    timeout_seconds: 3600
     environment_allowlist: []
 
 skills:
