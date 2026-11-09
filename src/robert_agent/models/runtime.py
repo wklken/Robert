@@ -31,6 +31,14 @@ class AgentRun(Base):
         CheckConstraint("dry_run IN (0, 1)"),
         Index("idx_agent_runs_retention", "status", text("julianday(finished_at)")),
         Index("idx_agent_runs_started", text("started_at DESC"), text("run_id DESC")),
+        Index(
+            "idx_agent_runs_detail_compaction",
+            "status",
+            text(
+                "json_extract(CASE WHEN json_valid(summary_json) THEN summary_json ELSE '{}' END, '$.diagnostics.detail_status')"
+            ),
+            text("julianday(finished_at)"),
+        ),
     )
 
 
@@ -68,6 +76,7 @@ class RunRepoStep(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'running', 'succeeded', 'failed', 'skipped')"),
         UniqueConstraint("run_id", "repo_id", "step_key"),
+        Index("idx_run_repo_steps_consumer_completed", "repo_id", "step_key", "status", "finished_at"),
     )
 
 

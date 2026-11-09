@@ -304,6 +304,26 @@ class ObservationTests(unittest.TestCase):
         second = {**config["repos"][0], "full_name": "example/second"}
         config["repos"].append(second)
         fixture.config_path.write_text(yaml.safe_dump(config))
+        from robert_agent.runtime import loop
+        from robert_agent.work import wakeup
+        import sqlite3
+
+        db_path, _ = loop.load_config_scope(fixture.config_path, skip_external=True)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            from robert_agent.work import repositories
+
+            for repo in config["repos"]:
+                repo_id = repositories.upsert_repo(
+                    conn,
+                    {
+                        "full_name": repo["full_name"],
+                        "github_account": repo["github_account"],
+                        "repo_root": repo["checkout"],
+                        "worktree_root": repo["worktrees"],
+                        "default_base_branch": repo["default_branch"],
+                    },
+                )
+                wakeup.request_wakeup(conn, repo_id=repo_id, reason="manual_operator_request", dedupe_key="ordering")
         original = repository_cycle.run_repo_pipeline
         order = []
 

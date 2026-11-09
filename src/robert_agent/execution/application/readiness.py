@@ -80,7 +80,7 @@ def _published_result_needs_finalization(conn, repo_ids):
     return any(results.result_actions_all_published(conn, row[0]) for row in rows)
 
 
-def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publication=True):
+def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publication=True, capacity_repo_ids=None):
     now = now or wakeup.utc_now()
     if not isinstance(now, str):
         now = now.isoformat()
@@ -112,6 +112,7 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
         return True
     scoped_repos = repo_ids or work_repositories.list_ids(conn)
+    capacity_scope = scoped_repos if capacity_repo_ids is None else capacity_repo_ids
     if pending_handoff.ready_rows(conn, scoped_repos, now, config=config_result):
         return True
     if completion.has_orphaned_classification_result(conn, scoped_repos, now):
@@ -125,7 +126,7 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     if pending_dispatch:
         global_limit = config_result.get("max_concurrency", 1)
         limits = {repo["full_name"]: repo.get("max_concurrency", global_limit) for repo in config_result["repos"]}
-        if capacity.running_attempt_count_for_repos(conn, scoped_repos) < global_limit and any(
+        if capacity.running_attempt_count_for_repos(conn, capacity_scope) < global_limit and any(
             capacity.running_attempt_count(conn, row["repo_id"]) < limits[row["repo_id"].removeprefix("repo:")]
             for row in pending_dispatch
         ):
@@ -139,7 +140,7 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
         global_limit = config_result.get("max_concurrency", 1)
         if any(resumable for _, _, resumable in prepared):
             return True
-        if capacity.running_attempt_count_for_repos(conn, scoped_repos) < global_limit:
+        if capacity.running_attempt_count_for_repos(conn, capacity_scope) < global_limit:
             limits = {
                 repo["full_name"]: repo.get("max_concurrency", global_limit) for repo in config_result.get("repos", [])
             }

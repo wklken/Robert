@@ -9,6 +9,7 @@ from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 from robert_agent.persistence.queries import agent_runs as db_read_agent_runs
+from robert_agent.persistence.queries import diagnostics as diagnostic_queries
 from robert_agent.persistence.queries import daemon_events as db_read_daemon_events
 from robert_agent.persistence.queries import leases as db_read_leases
 
@@ -49,7 +50,11 @@ def _prune_batch(conn, cutoffs, batch_size, apply):
     db_transactions.begin(conn, immediate=apply)
     try:
         runs, events, leases = _select_batch(conn, *cutoffs, batch_size)
+        compactable = diagnostic_queries.compactable_runs(conn, batch_size, excluded_run_ids=runs)
         counts = diagnostic_store.prune_rows(conn, runs, events, leases, apply=apply)
+        compacted = diagnostic_store.compact_run_details(conn, compactable, apply=apply, excluded_lease_ids=leases)
+        for table, count in compacted.items():
+            counts[table] += count
         conn.commit()
         return counts
     except Exception:
@@ -74,6 +79,8 @@ def prune_database(
     Each transaction selects at most batch_size runs, events and leases. Steps
     belonging to a selected run are removed atomically with that run. No VACUUM
     or schema migration is performed here. A missing database is never created.
+    Successful no-action details outside the newest 200 runs are compacted,
+    retaining summaries, referenced runs and latest repository route progress.
     """
     _positive_int(batch_size, "batch_size", maximum=500)
     _positive_int(max_batches, "max_batches", maximum=1000)
@@ -116,7 +123,7 @@ def prune_database(
                 if result["batches"] and max_seconds is not None and time.monotonic() - started >= max_seconds:
                     break
                 counts = _prune_batch(conn, cutoffs, batch_size, apply)
-                result["more_work"] = any(counts[t] >= batch_size for t in ("agent_runs", "daemon_events", "leases"))
+                result["more_work"] = any(counts[t] >= batch_size for t in COUNT_TABLES)
                 result["batches"] += 1
                 for table, count in counts.items():
                     result["counts"][table] += count

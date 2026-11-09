@@ -58,6 +58,8 @@ def health(config, result, now):
         "last_complete_check_at": (now if result.get("coverage_complete") else previous.get("last_complete_check_at")),
         "notification_delivery": "configured" if message_transport.configured(config) else "not_configured",
         "error_class": result.get("error_class"),
+        "reason_code": result.get("reason_code"),
+        "safe_error": result.get("safe_error"),
         "pid": os.getpid(),
     }
     if not result["ok"]:

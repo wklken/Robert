@@ -6,6 +6,7 @@ from robert_agent.work.application import synchronization as synchronization
 from robert_agent.work import scan_batches as scan_batches
 from contextlib import closing
 from robert_agent.execution.application import dispatch as dispatcher
+from robert_agent.execution.application import readiness
 from pathlib import Path
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.adapters.processes import identity as worker_identity
@@ -65,6 +66,33 @@ def run_once(
 
     if not dry_run:
         replay_pending_results(db_path, config=config_result)
+    # A daemon drain can lose its work to another consumer before this child
+    # starts. Check again before creating any diagnostic run or step records.
+    if consume_observations and not fixture_path:
+        with closing(db_database.connect(db_path)) as conn, conn:
+            runnable = False
+            capacity_repo_ids = [work_repositories.upsert_repo(conn, repo) for repo in config_result["repos"]]
+            for repo_id, repo in zip(capacity_repo_ids, config_result["repos"], strict=True):
+                context = synchronization.context_digest(
+                    repo, work_queries.load_known_workstreams(conn, repo_id), config=config_result
+                )
+                if scan_batches.has_pending(conn, [repo_id], contexts={repo_id: context}) or readiness.has_local_work(
+                    conn,
+                    [repo_id],
+                    config_result=config_result,
+                    include_publication=not skip_publish,
+                    capacity_repo_ids=capacity_repo_ids,
+                ):
+                    runnable = True
+            if not runnable:
+                return {
+                    "ok": True,
+                    "status": "no_runnable_work",
+                    "db_path": str(db_path),
+                    "prompt_paths": [],
+                    "dispatch_count": 0,
+                    "repo_summaries": [],
+                }
     run_id = values.new_id("run")
     try:
         executor_identity = worker_identity.capture_process_identity(os.getpid())
@@ -116,7 +144,6 @@ def run_once(
             repo_id = work_repositories.upsert_repo(conn, repo)
             repos.append((repo_id, repo))
             repo_ids.append(repo_id)
-            run_journal.init_repo_steps(conn, run_id, repo_id)
 
         notification_buckets = {}
         if not fixture_path and not skip_external:
@@ -206,6 +233,15 @@ def run_once(
                     conn.commit()
                 if observation is not None:
                     repo_discovery_runner = github_recording.ReplayRunner(observation["responses"])
+                elif not fixture_path and not readiness.has_local_work(
+                    conn,
+                    [repo_id],
+                    config_result=config_result,
+                    include_publication=not skip_publish,
+                    capacity_repo_ids=repo_ids,
+                ):
+                    continue
+            run_journal.init_repo_steps(conn, run_id, repo_id)
             summary = repository_cycle.run_repo_pipeline(
                 conn,
                 data_dir=data_dir,

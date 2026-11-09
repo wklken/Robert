@@ -75,7 +75,7 @@ def _object(value):
     return decoded if isinstance(decoded, dict) else {}
 
 
-def _database_error(exc):
+def database_error_reason(exc):
     name = getattr(exc, "sqlite_errorname", "")
     message = str(exc)
     if not name:
@@ -693,7 +693,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
                 for kind, row in _mix_pages(pages, positions["next"], limit)
             ]
     except db_errors.Error as exc:
-        raise ObservationUnavailable(_database_error(exc)) from exc
+        raise ObservationUnavailable(database_error_reason(exc)) from exc
     except (ValueError, RecursionError) as exc:
         raise ObservationUnavailable("database_evidence_invalid") from exc
 

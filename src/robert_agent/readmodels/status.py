@@ -31,7 +31,7 @@ from robert_agent.persistence.queries.readviews import run_history, task_history
 from robert_agent.persistence.queries.readviews import sources as source_history
 from robert_agent.readmodels import dashboard as web
 from robert_agent.readmodels import execution_metrics
-from robert_agent.readmodels.history import step_output
+from robert_agent.readmodels.history import diagnostic_detail, step_output
 
 DEFAULT_DB = "~/.local/share/robert/robert.sqlite3"
 
@@ -364,7 +364,9 @@ def _compact_run(row, step_counts=None):
     if not run:
         return None
     run["dry_run"] = bool(run["dry_run"])
-    run["summary"] = _compact_json(_decode_json(run.pop("summary_json"), {}) or {})
+    summary = _decode_json(run.pop("summary_json"), {}) or {}
+    run["summary"] = _compact_json(summary)
+    run["diagnostics"] = diagnostic_detail(summary)
     run["error"] = _compact_json(_decode_json(run.pop("error_json"), {}) or {})
     run["step_status_counts"] = dict(sorted((step_counts or {}).items()))
     return run
@@ -391,6 +393,7 @@ def build_run(conn, run_id):
     run["dry_run"] = bool(run["dry_run"])
     summary = _decode_json(run.pop("summary_json"), {}) or {}
     run["summary"] = _compact_json(summary)
+    run["diagnostics"] = diagnostic_detail(summary)
     run["error"] = _compact_json(_decode_json(run.pop("error_json"), {}) or {})
     run["steps"] = [
         {

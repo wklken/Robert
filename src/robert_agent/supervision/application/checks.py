@@ -112,12 +112,23 @@ def check(config, *, record=False, now=None):
             "coverage_complete": sampled.get("coverage_complete", False),
         }
     except (OSError, db_errors.Error, ValueError) as exc:
+        if isinstance(exc, supervision_observe.ObservationUnavailable):
+            reason = exc.reason_code
+        elif str(exc) == "supervision_schema_missing":
+            reason = "database_schema_incompatible"
+        elif isinstance(exc, db_errors.Error):
+            reason = supervision_observe.database_error_reason(exc)
+        else:
+            reason = "database_unavailable"
+        explanation, action = observation_failure_message(reason)
         result = {
             "ok": False,
             "status": "unobservable",
             "checked_at": now,
             "error_class": type(exc).__name__,
-            "safe_error": "Observation unavailable; inspect the database and supervision schema.",
+            "reason_code": reason,
+            "safe_error": explanation,
+            "required_action": action,
         }
     if record:
         try:
@@ -126,6 +137,34 @@ def check(config, *, record=False, now=None):
             result["health_persisted"] = False
             print("Robert supervision: observation health cannot be persisted", file=sys.stderr)
     return result
+
+
+def observation_failure_message(reason):
+    messages = {
+        "database_observation_deadline": (
+            "监督服务读取数据库超时，查询超过观察时间预算，当前无法确认任务进展。",
+            "检查监督查询的索引、数据库大小和磁盘负载；查看 Supervisor 健康状态。",
+        ),
+        "database_busy": (
+            "数据库持续被占用，监督服务暂时无法完成读写，当前无法确认任务进展。",
+            "检查数据库锁和长事务，查看 Supervisor 健康状态。",
+        ),
+        "database_corrupt": (
+            "数据库格式或完整性检查失败，监督服务无法确认任务进展。",
+            "备份数据库并检查完整性，查看 Supervisor 健康状态。",
+        ),
+        "database_schema_incompatible": (
+            "数据库结构与监督服务不兼容，当前无法确认任务进展。",
+            "检查数据库升级状态和运行版本，查看 Supervisor 健康状态。",
+        ),
+    }
+    return messages.get(
+        reason,
+        (
+            "监督服务无法访问数据库，当前无法确认任务进展。",
+            "检查数据库路径、访问权限和 Supervisor 健康状态。",
+        ),
+    )
 
 
 def status(config):
@@ -195,14 +234,18 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
     identifier = health.get("delivery_id")
     if not identifier:
         return
+    reason = health.get("reason_code", "database_unavailable")
+    explanation, action = observation_failure_message(reason)
     fields = {
-        "reason_code": "observation_unavailable",
-        "required_action": "Inspect the Robert database and supervisor health.",
+        "reason_code": reason,
+        "safe_error": explanation,
+        "required_action": action,
         "retryable": False,
     }
-    digest = hashlib.sha256(json.dumps(["supervisor_unobservable", fields], sort_keys=True).encode()).hexdigest()[:16]
+    # The outage, not a changing error classification, owns the retry budget.
+    digest = hashlib.sha256(identifier.encode()).hexdigest()[:16]
     delivery_id = identifier + ":" + digest
-    if state.get("delivery_id") != delivery_id:
+    if state.get("notification_id") != identifier:
         state = {
             "notification_id": identifier,
             "delivery_id": delivery_id,
@@ -221,7 +264,7 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
         "type": "supervisor_unobservable",
         "delivery_id": delivery_id,
         "occurred_at": health["first_failed_at"],
-        "summary": "连续检查无法读取 Robert 数据库，请在本地查看数据库和 Supervisor 健康状态。",
+        "summary": explanation,
         **fields,
     }
     sent = message_transport.send(payload, config=config, runner=runner)

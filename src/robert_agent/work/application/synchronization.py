@@ -178,9 +178,16 @@ def scan_repo(config, repo, session, hints):
         events = source_policy.refresh_pending_events(
             events, [raw for (encoded,) in pending for raw in json.loads(encoded)], covered, repo
         )
-        identifier = scan_batches.save_batch(
-            db_path, repo_id, context, events, recorded.responses, complete_sources=covered
-        )
+        # Empty polling is not local work. Tracked or pending sources still
+        # need a batch for closure, remediation and current-authority checks.
+        if events or sources or pending_rows:
+            identifier = scan_batches.save_batch(
+                db_path, repo_id, context, events, recorded.responses, complete_sources=covered
+            )
+        else:
+            identifier = None
+            with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
+                scan_batches.save_reads(conn, repo_id, recorded.responses, time.time())
     except Exception:
         # A later discovery/search failure must not resurrect an older successful
         # safety read. Publish both fresh state and explicit failed-read markers.
@@ -240,14 +247,14 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
         if repo["github_account"] not in buckets:
             continue
         try:
-            batches.append(
-                scan_repo(
-                    config,
-                    repo,
-                    sessions[repo["github_account"]],
-                    buckets[repo["github_account"]].get(repo["full_name"], []),
-                )
+            identifier = scan_repo(
+                config,
+                repo,
+                sessions[repo["github_account"]],
+                buckets[repo["github_account"]].get(repo["full_name"], []),
             )
+            if identifier is not None:
+                batches.append(identifier)
         except ControlDeadlineExceeded:
             raise
         except (subprocess.SubprocessError, OSError, ValueError, db_errors.Error):

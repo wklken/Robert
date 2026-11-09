@@ -66,7 +66,7 @@ _MAX_EXPECTED_PROGRESS = 1000
 _MAX_BUNDLE = 49152
 _RUNNER = ("diagnostic", "installation", "runner")
 _IN_PROGRESS = ("open", "needs_attention", "diagnosing")
-_JOBS = {}
+_JOBS: dict[str, "_Job"] = {}
 _JOBS_LOCK = threading.Lock()
 
 
