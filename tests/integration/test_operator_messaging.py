@@ -21,6 +21,7 @@ class OperatorMessagingTests(WorkItemCommandFixture):
             "repos": [{"full_name": "example/repo"}],
             "messaging": {
                 "enabled": True,
+                "send_after": "2026-07-18T00:00:00+00:00",
                 "provider": "openclaw",
                 "channel": "telegram",
                 "account": "personal",
@@ -202,7 +203,7 @@ class OperatorMessagingTests(WorkItemCommandFixture):
             result = notifications.deliver_pending(self.db_path, config=self.config, runner=runner, limit=1)
         self.assertEqual(result["sent"], 1)
         argv = runner.call_args.args[0]
-        self.assertIn("supervision_incident", argv[argv.index("--message") + 1])
+        self.assertIn("监督服务发现异常", argv[argv.index("--message") + 1])
         inbox = messaging.inbox(self.config, self.identity)["messages"]
         self.assertEqual(len(inbox), 1)
         self.assertEqual(inbox[0]["type"], "supervision_incident")

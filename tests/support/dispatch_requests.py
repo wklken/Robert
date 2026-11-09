@@ -11,6 +11,7 @@ class DispatchFixture(BoardControlIntegrationFixture):
         raw = json.loads(self.config_path.read_text())
         raw["messaging"] = {
             "enabled": True,
+            "send_after": "2026-01-01T00:00:00+00:00",
             "dispatch_enabled": True,
             "provider": "openclaw",
             "channel": "telegram",

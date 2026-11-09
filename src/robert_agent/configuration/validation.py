@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import sys
+from robert_agent.foundation.timestamps import utc_timestamp
 
 import yaml
 
@@ -169,10 +170,15 @@ def _normalize(config, path, skip_external):
         for policy in known_routes.values():
             resolve_route_config(result, repo, policy)
     messaging = result["messaging"]
+    if "send_after" in messaging:
+        start = utc_timestamp(messaging["send_after"])
+        if start is None:
+            raise ValueError("messaging.send_after must be an ISO timestamp with an explicit timezone")
+        messaging["send_after"] = start.isoformat()
     if messaging.get("dispatch_enabled") and not messaging["enabled"]:
         raise ValueError("messaging.dispatch_enabled requires messaging.enabled")
     if messaging["enabled"]:
-        for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos"):
+        for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos", "send_after"):
             if not messaging.get(field):
                 raise ValueError(f"messaging.{field} is required when enabled")
         for field in ("channel", "account", "target", "conversation"):

@@ -1,11 +1,25 @@
 """Strict opt-in messaging settings cannot silently grant another repository."""
 
 import json
+from pathlib import Path
+import yaml
 from robert_agent.configuration.validation import validate_config
 from tests.support.board_control_integration import BoardControlIntegrationFixture
 
 
 class MessagingConfigTests(BoardControlIntegrationFixture):
+    def test_extreme_timezone_cutoffs_fail_validation_without_exception(self):
+        for value in ("0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"):
+            with self.subTest(value=value):
+                self.assertFalse(self.configure({**self.settings(), "send_after": value})["ok"])
+
+    def test_issue_dispatch_document_example_validates(self):
+        path = Path(__file__).resolve().parents[2] / "docs/features/issue-dispatch.md"
+        example = yaml.safe_load(path.read_text().split("```yaml\n", 1)[1].split("```", 1)[0])["messaging"]
+        example["repos"] = ["example/repo"]
+        result = self.configure(example)
+        self.assertTrue(result["ok"], result)
+
     def configure(self, messaging):
         raw = json.loads(self.config_path.read_text())
         raw["messaging"] = messaging
@@ -15,6 +29,7 @@ class MessagingConfigTests(BoardControlIntegrationFixture):
     def settings(self):
         return {
             "enabled": True,
+            "send_after": "2026-11-07T00:00:00+00:00",
             "provider": "openclaw",
             "channel": "telegram",
             "account": "personal",
@@ -51,3 +66,15 @@ class MessagingConfigTests(BoardControlIntegrationFixture):
         self.assertTrue(self.configure({**self.settings(), "dispatch_enabled": True})["ok"])
         self.assertFalse(self.configure({**self.settings(), "enabled": False, "dispatch_enabled": True})["ok"])
         self.assertFalse(self.configure({**self.settings(), "dispatch_enabled": "true"})["ok"])
+
+    def test_send_after_requires_an_explicit_timezone_and_survives_reload(self):
+        settings = self.settings()
+        del settings["send_after"]
+        self.assertFalse(self.configure(settings)["ok"])
+        for value in (None, "", "yesterday", "2026-11-07", "2026-11-07T00:00:00", " 2026-11-07T00:00:00Z"):
+            with self.subTest(value=value):
+                self.assertFalse(self.configure({**self.settings(), "send_after": value})["ok"])
+        configured = self.configure({**self.settings(), "send_after": "2026-11-07T08:00:00+08:00"})
+        self.assertTrue(configured["ok"], configured)
+        self.assertEqual(configured["messaging"]["send_after"], "2026-11-07T00:00:00+00:00")
+        self.assertEqual(validate_config(self.config_path, skip_external=True)["messaging"], configured["messaging"])

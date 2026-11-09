@@ -221,7 +221,8 @@ class OpenClawDispatchTests(DispatchFixture):
 
         notifications.deliver_pending(self.db_path, config=self.config, runner=send)
         notifications.deliver_pending(self.db_path, config=self.config, runner=send)
-        self.assertEqual(sum("dispatch_completed" in item for item in sent), 1)
+        self.assertEqual(sum("请求已完成，结果已发布" in item for item in sent), 1)
+        self.assertTrue(all("dispatch_completed" not in item for item in sent))
         self.assertTrue(any("issuecomment-987" in item for item in sent))
 
     def test_implementation_is_selected_without_user_specifying_pr(self):

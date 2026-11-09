@@ -1,6 +1,7 @@
 """Shared queries operations for notifications."""
 
 from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.dialects import sqlite
 
 from sqlalchemy import (
     select,
@@ -216,6 +217,7 @@ def find_for_notify_exhausted_episode(conn, notification_type, episode_id):
 
 
 def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None):
+    sqlite.register_timestamp_after(conn)
     notification = tables["notifications"]
     stmt = (
         select(notification.c.notification_id)
@@ -223,6 +225,7 @@ def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_
             _pending_delivery(now, repo_ids),
             _pending_attention(messaging_repo_ids),
             _dispatch_identity(messaging_settings),
+            _delivery_window(messaging_settings),
         )
         .order_by(notification.c.created_at, notification.c.notification_id)
         .limit(limit)
@@ -263,6 +266,7 @@ def update_failure(conn, kind, key):
 
 
 def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None):
+    sqlite.register_timestamp_after(conn)
     stmt = (
         select(sql_constant(1))
         .select_from(tables["notifications"])
@@ -270,9 +274,66 @@ def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_i
             _pending_delivery(now, repo_ids),
             _pending_attention(messaging_repo_ids),
             _dispatch_identity(messaging_settings),
+            _delivery_window(messaging_settings),
         )
     )
     return statements.read(conn, stmt.limit(1))
+
+
+def _delivery_window(settings):
+    """External activation never consumes history; inbox visibility is unchanged."""
+    settings = settings or {}
+    if not settings.get("enabled") and "send_after" not in settings:
+        return sql_constant(1) == sql_constant(1)
+    # A missing or invalid boundary withholds delivery even for unvalidated callers.
+    created = tables["notifications"].c.created_at
+    return func.python_timestamp_after(created, settings.get("send_after")) == sql_constant(1)
+
+
+def find_message_context(conn, notification_id):
+    """Read current business facts without changing notification or task state."""
+    notice, task, stream = tables["notifications"], tables["tasks"], tables["workstreams"]
+    item, repo, source, attempt = (tables[name] for name in ("work_items", "repos", "github_sources", "attempts"))
+    item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
+    attempt_id = func.json_extract(notice.c.metadata_json, "$.attempt_id")
+    joins = (
+        notice.outerjoin(task, task.c.task_id == notice.c.task_id)
+        .outerjoin(
+            item,
+            or_(item.c.work_item_id == item_id, and_(item_id.is_(None), item.c.workstream_id == task.c.workstream_id)),
+        )
+        .outerjoin(
+            stream,
+            stream.c.workstream_id
+            == func.coalesce(
+                task.c.workstream_id, item.c.workstream_id, func.json_extract(notice.c.metadata_json, "$.workstream_id")
+            ),
+        )
+        .outerjoin(
+            repo,
+            repo.c.repo_id
+            == func.coalesce(item.c.repo_id, stream.c.repo_id, func.json_extract(notice.c.metadata_json, "$.repo_id")),
+        )
+        .outerjoin(source, source.c.source_id == func.coalesce(stream.c.primary_source_id, item.c.origin_source_id))
+        .outerjoin(attempt, and_(attempt.c.attempt_id == attempt_id, attempt.c.task_id == task.c.task_id))
+    )
+    return statements.read(
+        conn,
+        select(
+            notice.c.created_at.label("occurred_at"),
+            repo.c.full_name.label("repository"),
+            func.coalesce(item.c.title, source.c.title).label("title"),
+            task.c.lifecycle.label("task_status"),
+            task.c.route_id,
+            stream.c.workstream_id,
+            stream.c.lifecycle.label("workstream_status"),
+            source.c.source_type,
+            source.c.html_url,
+            attempt.c.failure_json,
+        )
+        .select_from(joins)
+        .where(notice.c.notification_id == notification_id),
+    )
 
 
 def _pending_delivery(now, repo_ids):
