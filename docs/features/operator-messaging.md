@@ -67,6 +67,7 @@ identity metadata fails closed; do not substitute user-provided command text.
 ```yaml
 messaging:
   enabled: true
+  send_after: "2026-11-09T08:00:00+00:00" # Set to the actual activation time.
   provider: openclaw
   channel: telegram
   account: personal
@@ -92,6 +93,20 @@ the Robert daemon and supervisor so they load the new settings. Ensure `openclaw
 is on the service account's PATH and that account can send through the selected
 channel. Configuration checks and mocked tests do not prove live channel access.
 
+`send_after` is required when messaging is enabled. Use a quoted ISO timestamp
+with an explicit timezone, set to the time you intentionally enable or re-enable
+messaging. External delivery includes only notifications created strictly after
+this time. Retain the value across ordinary service restarts so pending newer
+notifications can retry. Older notices remain in the local timeline and scoped
+inbox; they are neither acknowledged nor marked delivered by this filter.
+The same boundary suppresses a filesystem outage notice whose failure episode
+started before activation. Missing or invalid delivery boundaries withhold sending.
+An explicit `send_after` also applies to custom `ROBERT_NOTIFICATION_COMMAND`
+delivery, readiness checks and filesystem outage notices when OpenClaw messaging
+is disabled. Legacy command-only configurations without a boundary retain their
+existing behavior. Timestamp comparisons retain microsecond precision, and
+publication retries preserve a notice's first creation time.
+
 The adapter uses the documented [OpenClaw message CLI](https://docs.openclaw.ai/cli/message).
 Plugin context is based on the upstream
 [command types](https://github.com/openclaw/openclaw/blob/main/src/plugins/plugin-command.types.ts).
@@ -102,6 +117,15 @@ before relying on unattended delivery.
 
 Messages show complete response commands. `/robert-inbox` retrieves pending
 questions and notices, including the current version after an unrelated edit.
+Messages also show the stored creation time and available repository, task title,
+Issue/PR links, current task/workstream status, reason, recovery state and required
+action. Sparse worker notices read these facts from the current stored task/source
+and bound attempt; they do not gain new response authority. All context passes
+through the existing redaction boundary. An `ack` command records receipt only.
+Outbound chat explains event types, reasons, recovery states, lifecycle states
+and task routes in Chinese. Internal codes remain in the JSON protocol and local
+diagnostic records. An unrecognized code is shown as unclassified with a request
+to inspect task details; it does not imply a cause or successful recovery.
 For example:
 
 ```text

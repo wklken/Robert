@@ -67,6 +67,10 @@ Paths below are relative to `src/robert_agent/`.
   importing another domain's implementation. Keep distinct state machines in
   separate enum classes; use `.value` at database and serialization boundaries.
   Stored strings, schema constraints and protocol values must stay aligned.
+- `foundation/timestamps.py` is a standard-library-only leaf for timezone-aware
+  UTC parsing and exact comparisons. Configuration, persistence and supervision
+  share it for notification activation boundaries; it must not acquire I/O or
+  domain dependencies.
 - Group by domain first, then split a domain into responsibility/layer submodules.
   Reuse the domain's existing input types, errors, policies, facts and public
   capabilities. Do not scatter another implementation of the same concept into

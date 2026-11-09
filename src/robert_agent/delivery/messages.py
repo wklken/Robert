@@ -61,6 +61,28 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "actions": ["ack"],
         "status": status,
     }
+    context = records.first(notifications.find_message_context(conn, notification_id))
+    if context:
+        for key in (
+            "occurred_at",
+            "repository",
+            "title",
+            "task_status",
+            "route_id",
+            "workstream_id",
+            "workstream_status",
+        ):
+            if context[key]:
+                payload[key] = context[key]
+        if context["html_url"]:
+            payload["pr_url" if context["source_type"] == "pull_request" else "issue_url"] = context["html_url"]
+        failure = json.loads(context["failure_json"] or "{}")
+        recovery = failure.get("recovery") or {}
+        payload["reason_code"] = failure.get("reason_code") or failure.get("original_status") or failure.get("status")
+        if recovery.get("status"):
+            payload["recovery_status"] = recovery["status"]
+        if failure.get("safe_error"):
+            payload["safe_error"] = str(failure["safe_error"])[:2000]
     for key in (
         "request_id",
         "summary",
@@ -77,7 +99,8 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
     ):
         if key in metadata:
             payload[key] = metadata[key]
-    payload["safe_error"] = str(metadata.get("safe_error", ""))[:2000]
+    if metadata.get("safe_error"):
+        payload["safe_error"] = str(metadata["safe_error"])[:2000]
     if metadata.get("request_id"):
         payload["actions"] = []
     if metadata.get("attention_event_id"):
@@ -86,6 +109,24 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
             return None
         payload.update(attention)
         payload["actions"] = messaging.actions_for(attention["event_type"], attention["kind"])
+    if not payload.get("summary"):
+        payload["summary"] = {
+            "worker_resume_prepared": "已准备恢复执行；这条通知表示准备完成，后续进展请查看任务详情。",
+            "worker_stale": "Worker 心跳超过等待阈值，需要查看当前任务和执行记录。",
+            "worker_timeout": "Worker 执行超时，需要查看失败原因和恢复状态。",
+            "worker_process_exited": "Worker 进程已退出，需要查看执行结果和失败记录。",
+            "worker_cleanup_pending": "无法确认执行进程已停止，请检查执行进程和停止记录；确认停止前会继续保留任务占用。",
+        }.get(kind, "Robert 记录了一条新通知，请结合当前状态和原因查看详情。")
+    if not payload.get("required_action"):
+        actions = payload["actions"]
+        if actions == ["ack"]:
+            payload["required_action"] = "查看详情后可确认收到；ack 仅记录收悉，不会解决故障、重试任务或批准修复。"
+        elif "reply" in actions:
+            payload["required_action"] = "请使用 reply 命令回答上面的问题，或使用 cancel 取消任务。"
+        elif "approve" in actions:
+            payload["required_action"] = "请阅读请求后使用 approve 批准，或使用 cancel 取消。"
+        elif actions:
+            payload["required_action"] = "请查看详情，并按下面列出的命令处理。"
     try:
         return _redact_values(payload)
     except ValueError:
