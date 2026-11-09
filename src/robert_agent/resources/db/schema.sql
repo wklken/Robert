@@ -348,6 +348,19 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   error_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS diagnostic_run_summaries (
+  summary_id TEXT PRIMARY KEY NOT NULL,
+  summary_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_run_summary_refs (
+  run_id TEXT PRIMARY KEY NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+  summary_id TEXT NOT NULL REFERENCES diagnostic_run_summaries(summary_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_summary_refs_summary
+ON agent_run_summary_refs(summary_id);
+
 CREATE TABLE IF NOT EXISTS run_steps (
   step_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
@@ -537,6 +550,11 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_detail_compaction
 ON agent_runs(status,
   json_extract(CASE WHEN json_valid(summary_json) THEN summary_json ELSE '{}' END, '$.diagnostics.detail_status'),
   julianday(finished_at));
+CREATE INDEX IF NOT EXISTS idx_run_steps_summary_references
+ON run_steps(step_key,
+  json_type(CASE WHEN json_valid(output_json) THEN output_json ELSE '{}' END, '$.summary_ref'),
+  json_type(CASE WHEN json_valid(output_json) THEN output_json ELSE '{}' END, '$.repo_summaries_ref'),
+  status);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_retention
 ON daemon_events(julianday(created_at));
 CREATE INDEX IF NOT EXISTS idx_leases_released_retention

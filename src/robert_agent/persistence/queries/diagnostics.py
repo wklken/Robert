@@ -5,6 +5,7 @@ from sqlalchemy import select, func, or_, case
 from robert_agent.persistence import statements
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
+from robert_agent.persistence.queries.run_summaries import resolved_summary
 
 
 RUN_ACTION_COUNTERS = (
@@ -127,6 +128,84 @@ def compactable_runs(conn, batch_size, *, excluded_run_ids=()):
         select(runs.c.run_id)
         .where(*predicates)
         .order_by(func.julianday(runs.c.finished_at), runs.c.run_id)
+        .limit(batch_size)
+    )
+    return [row[0] for row in statements.read(conn, query)]
+
+
+def summary_deduplication_candidates(conn, batch_size, excluded_run_ids):
+    runs, refs = tables["agent_runs"], tables["agent_run_summary_refs"]
+    summary = valid_json_or_empty(runs.c.summary_json)
+    query = (
+        select(runs.c.run_id, runs.c.summary_json)
+        .where(
+            runs.c.status == "completed",
+            runs.c.finished_at.is_not(None),
+            runs.c.error_json.is_(None),
+            ~runs.c.run_id.in_(excluded_run_ids),
+            func.json_extract(summary, sql_constant("$.diagnostics.detail_status")) == "compacted_no_actions",
+            func.json_extract(summary, sql_constant("$.summary_ref")).is_(None),
+            ~select(1).select_from(refs).where(refs.c.run_id == runs.c.run_id).correlate(runs).exists(),
+        )
+        .order_by(func.julianday(runs.c.finished_at), runs.c.run_id)
+        .limit(batch_size)
+    )
+    return statements.read(conn, query)
+
+
+def matching_step_runs(conn, batch_size, excluded_run_ids):
+    runs, steps = tables["agent_runs"], tables["run_steps"]
+    raw_summary = resolved_summary(conn, runs)
+    summary = valid_json_or_empty(raw_summary)
+    output = valid_json_or_empty(steps.c.output_json)
+    matching = or_(
+        (steps.c.step_key == "summarize")
+        & func.json_type(output, sql_constant("$.summary_ref")).is_(None)
+        & (func.json(output) == func.json(summary)),
+        (steps.c.step_key == "repo_pipelines")
+        & func.json_type(output, sql_constant("$.repo_summaries_ref")).is_(None)
+        & (func.json_type(output, sql_constant("$.repo_summaries")) == "array")
+        & (
+            func.json_extract(output, sql_constant("$.repo_summaries"))
+            == func.json_extract(summary, sql_constant("$.repo_summaries"))
+        ),
+    )
+    unreferenced = or_(
+        (steps.c.step_key == "summarize") & func.json_type(output, sql_constant("$.summary_ref")).is_(None),
+        (steps.c.step_key == "repo_pipelines") & func.json_type(output, sql_constant("$.repo_summaries_ref")).is_(None),
+    )
+    query = (
+        select(steps.c.run_id)
+        .select_from(steps.join(runs, steps.c.run_id == runs.c.run_id))
+        .where(
+            runs.c.status.in_(("completed", "failed", "skipped")),
+            runs.c.finished_at.is_not(None),
+            ~runs.c.run_id.in_(excluded_run_ids),
+            func.json_valid(steps.c.output_json),
+            func.json_valid(raw_summary),
+            func.json_type(output) == "object",
+            func.json_type(summary) == "object",
+            steps.c.status.in_(("succeeded", "failed", "skipped")),
+            unreferenced,
+            matching,
+        )
+        .distinct()
+        .limit(batch_size)
+    )
+    return [row[0] for row in statements.read(conn, query)]
+
+
+def unused_shared_summaries(conn, batch_size, excluded_run_ids):
+    refs, summaries = tables["agent_run_summary_refs"], tables["diagnostic_run_summaries"]
+    query = (
+        select(summaries.c.summary_id)
+        .where(
+            ~select(1)
+            .select_from(refs)
+            .where(refs.c.summary_id == summaries.c.summary_id, ~refs.c.run_id.in_(excluded_run_ids))
+            .correlate(summaries)
+            .exists()
+        )
         .limit(batch_size)
     )
     return [row[0] for row in statements.read(conn, query)]

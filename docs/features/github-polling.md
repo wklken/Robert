@@ -33,9 +33,20 @@ alone does not require retaining every no-action step. Missing counters, malform
 summaries and recorded step failures retain their detail. CLI and Web projections
 explain when a run's details were compacted.
 
+Identical compacted summaries share one diagnostic record, with a foreign-key
+reference from each run. CLI and Web queries resolve the complete summary in
+the same database statement. Maintenance also replaces historical summarize
+and pipeline outputs with references when their content exactly matches the
+run summary. Other output fields, step timing and errors remain intact.
+Malformed, differing or unfinished outputs are retained. Shared summaries are
+removed only after their last run reference disappears. JSON whitespace and
+object key order may change; decoded values remain the same.
+
 Configured run and failure retention periods still govern whole-history removal.
 `robert maintenance prune` previews the affected row counts; `--apply` performs
 bounded transactions. Maintenance does not automatically vacuum the database.
+The result also reports `deduplicated_summaries`, `referenced_step_outputs` and
+`pruned_shared_summaries`, separately from deleted row counts.
 
 ## Read reuse and polling
 

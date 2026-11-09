@@ -624,7 +624,13 @@ def _maybe_prune(context, *, now):
         except db_errors.OperationalError:
             context.next_health_at = current + context.daemon_config["local_poll_seconds"]
             context.next_maintenance_at = min(context.next_maintenance_at, context.next_health_at)
-    if any(result["counts"].values()) or (not result["ok"] and result["status"] != "busy"):
+    if (
+        any(result["counts"].values())
+        or result.get("deduplicated_summaries")
+        or result.get("referenced_step_outputs")
+        or result.get("pruned_shared_summaries")
+        or (not result["ok"] and result["status"] != "busy")
+    ):
         try:
             with closing(daemon_state.connect(context.db_path, busy_timeout_ms=100)) as conn, conn:
                 daemon_state.record_event(

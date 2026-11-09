@@ -12,6 +12,7 @@ from robert_agent.persistence.queries import agent_runs as db_read_agent_runs
 from robert_agent.persistence.queries import diagnostics as diagnostic_queries
 from robert_agent.persistence.queries import daemon_events as db_read_daemon_events
 from robert_agent.persistence.queries import leases as db_read_leases
+from robert_agent.persistence.queries.run_summaries import shared_schema_available
 
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -51,12 +52,21 @@ def _prune_batch(conn, cutoffs, batch_size, apply):
     try:
         runs, events, leases = _select_batch(conn, *cutoffs, batch_size)
         compactable = diagnostic_queries.compactable_runs(conn, batch_size, excluded_run_ids=runs)
+        excluded = [*runs, *compactable]
+        shared = shared_schema_available(conn)
+        summaries = diagnostic_queries.summary_deduplication_candidates(conn, batch_size, excluded) if shared else []
+        historical_steps = diagnostic_queries.matching_step_runs(conn, batch_size, excluded)
+        unused = diagnostic_queries.unused_shared_summaries(conn, batch_size, runs) if shared else []
         counts = diagnostic_store.prune_rows(conn, runs, events, leases, apply=apply)
         compacted = diagnostic_store.compact_run_details(conn, compactable, apply=apply, excluded_lease_ids=leases)
         for table, count in compacted.items():
             counts[table] += count
+        shared_ids = diagnostic_store.deduplicate_summaries(conn, summaries, apply=apply)
+        unused = [identifier for identifier in unused if identifier not in shared_ids]
+        step_count = diagnostic_store.reference_historical_steps(conn, historical_steps, apply=apply)
+        diagnostic_store.prune_shared_summaries(conn, unused, apply=apply)
         conn.commit()
-        return counts
+        return counts, len(summaries), step_count, len(unused)
     except Exception:
         conn.rollback()
         raise
@@ -81,6 +91,8 @@ def prune_database(
     or schema migration is performed here. A missing database is never created.
     Successful no-action details outside the newest 200 runs are compacted,
     retaining summaries, referenced runs and latest repository route progress.
+    Identical compacted summaries share storage; matching historical step
+    outputs reference their run summary without losing decoded content.
     """
     _positive_int(batch_size, "batch_size", maximum=500)
     _positive_int(max_batches, "max_batches", maximum=1000)
@@ -110,6 +122,9 @@ def prune_database(
         "counts": dict.fromkeys(COUNT_TABLES, 0),
         "cutoffs": dict(zip(("successful_runs", "failed_runs", "daemon_events"), cutoffs)),
         "more_work": False,
+        "deduplicated_summaries": 0,
+        "referenced_step_outputs": 0,
+        "pruned_shared_summaries": 0,
     }
     path = Path(db_path).expanduser().resolve()
     try:
@@ -122,12 +137,17 @@ def prune_database(
             for _ in range(max_batches if apply else 1):
                 if result["batches"] and max_seconds is not None and time.monotonic() - started >= max_seconds:
                     break
-                counts = _prune_batch(conn, cutoffs, batch_size, apply)
-                result["more_work"] = any(counts[t] >= batch_size for t in COUNT_TABLES)
+                counts, summaries, steps, unused = _prune_batch(conn, cutoffs, batch_size, apply)
+                result["more_work"] = any(counts[t] >= batch_size for t in COUNT_TABLES) or any(
+                    count >= batch_size for count in (summaries, steps, unused)
+                )
+                result["deduplicated_summaries"] += summaries
+                result["referenced_step_outputs"] += steps
+                result["pruned_shared_summaries"] += unused
                 result["batches"] += 1
                 for table, count in counts.items():
                     result["counts"][table] += count
-                if not any(counts.values()):
+                if not any(counts.values()) and not (summaries or steps or unused):
                     break
     except db_errors.Error as exc:
         # Python 3.10 does not expose sqlite_errorcode. Only lock contention is
