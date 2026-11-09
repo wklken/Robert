@@ -530,6 +530,7 @@ def create_task_attempt_and_prompt(
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         round_store = vote_store if route_result.get("native_vote_workers") else review_store
         workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
+        reusable_round = None
         if retrigger_wakeup_id and parent_task_id:
             parent = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
             previous_round = round_store.session(conn, task_id=parent_task_id)
@@ -539,10 +540,13 @@ def create_task_attempt_and_prompt(
                 == "result_contract_cutover"
             ):
                 recovery_key = retrigger_wakeup_id
+            else:
+                reusable_round = previous_round
         entry = (
             round_store.session(conn, round_id=native_round_id)
             if native_round_id
-            else round_store.enqueue(
+            else reusable_round
+            or round_store.enqueue(
                 conn,
                 repo,
                 {**event, supervision_lineage.LINEAGE_FIELD: lineage_key},

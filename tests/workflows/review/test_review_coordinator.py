@@ -126,6 +126,64 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
             self.assertEqual(original["manifest"], old_manifest)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
 
+    def test_retrigger_failed_recovery_round_reuses_completed_review_stages(self):
+        def fail_task(driver):
+            with fixture_database.connect(self.db) as conn:
+                now = review_store.now()
+                work_application_lifecycle.finalize_failed_task(
+                    conn,
+                    driver.task_id,
+                    driver.session["workstream_id"],
+                    now,
+                    {"status": "failed_worker_process_exited"},
+                )
+                conn.execute(
+                    "UPDATE attempts SET status='failed',finished_at=?,metadata_json=json_remove(metadata_json,'$.dispatch') "
+                    "WHERE attempt_id=?",
+                    (now, driver.attempt_id),
+                )
+                repo_id = conn.execute(
+                    "SELECT repo_id FROM workstreams WHERE workstream_id=?", (driver.session["workstream_id"],)
+                ).fetchone()[0]
+            return work_items.CommandContext("operator", "maintainer", frozenset({repo_id}), frozenset())
+
+        self.cycle([self.event()])
+        original = self.coordinator()
+        original.prepare()
+        original_manifest = dict(original.manifest)
+        self.git_fixture.commit("value = 3\n")
+        with self.assertRaises(review_coordinator.StageSuperseded):
+            original.run()
+        context = fail_task(original)
+        work_items.retrigger_failed_github_task(
+            self.db, original.task_id, context=context, idempotency_key="retry-superseded-revision"
+        )
+        self.cycle([])
+        recovered = self.coordinator()
+        with patch.object(recovered, "synthesize", side_effect=RuntimeError("test synthesis interrupted")):
+            with self.assertRaisesRegex(RuntimeError, "test synthesis interrupted"):
+                recovered.run()
+        counts = Counter((call[0], call[1]) for call in self.calls)
+        manifest = dict(recovered.manifest)
+        context = fail_task(recovered)
+        work_items.retrigger_failed_github_task(
+            self.db, recovered.task_id, context=context, idempotency_key="retry-interrupted-recovery-round"
+        )
+        self.cycle([])
+        retried = self.coordinator()
+        self.assertNotEqual(retried.task_id, recovered.task_id)
+        self.assertEqual(retried.round_id, recovered.round_id)
+        self.assertTrue(retried.run().is_file())
+        self.assertEqual(retried.manifest, manifest)
+        counts[("synthesis", "codex")] += 1
+        self.assertEqual(Counter((call[0], call[1]) for call in self.calls), counts)
+        with fixture_database.connect(self.db) as conn:
+            saved_original = review_store.session(conn, round_id=original.round_id)
+            self.assertEqual(saved_original["status"], "superseded")
+            self.assertEqual(saved_original["task_id"], original.task_id)
+            self.assertEqual(saved_original["manifest"], original_manifest)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
+
     def test_report_is_normalized_before_hash_registration_and_submission(self):
         self.cycle([self.event()])
         driver = self.coordinator()
