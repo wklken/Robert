@@ -68,6 +68,7 @@ class RunRepoStep(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'running', 'succeeded', 'failed', 'skipped')"),
         UniqueConstraint("run_id", "repo_id", "step_key"),
+        Index("idx_run_repo_steps_consumer_completed", "repo_id", "step_key", "status", "finished_at"),
     )
 
 

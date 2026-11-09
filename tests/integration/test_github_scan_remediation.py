@@ -115,11 +115,11 @@ class GitHubScanRemediationTests(unittest.TestCase):
         ):
             result = synchronization.scan(fixture.config_path, runner=runner)
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["batch_count"], 3)
+        self.assertEqual(result["batch_count"], 1)
         self.assertEqual(observed, [item["full_name"] for item in config["repos"]])
         health.assert_called_once_with(repo["full_name"], 42, runner=mock.ANY)
         with closing(sqlite3.connect(config["db_path"])) as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM github_scan_batches").fetchone()[0], 3)
+            self.assertEqual(conn.execute("SELECT count(*) FROM github_scan_batches").fetchone()[0], 1)
 
     def test_child_attention_is_reported_once_without_detaching_the_child(self):
         from robert_agent.runtime.control import ControlLane

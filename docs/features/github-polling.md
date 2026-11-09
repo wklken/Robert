@@ -4,13 +4,19 @@
 
 The resident daemon runs three independently supervised lanes:
 
-- **Scanner:** reads GitHub through `gh`, commits observations and a wakeup per repository, then continues scanning. Remote I/O does not hold the repository's task-processing lease.
+- **Scanner:** reads GitHub through `gh`, commits observations and a wakeup for repositories with events or tracked/pending sources, then continues scanning. Empty scans still refresh read caches without waking local execution. Remote I/O does not hold the repository's task-processing lease.
 - **Local drain:** authorizes and routes observations against current local state, supervises workers, audits results, and finalizes published results. Each repository's prepared tasks can dispatch immediately after its transaction commits, within the existing global and repository capacity limits.
 - **Publisher:** performs audited GitHub actions and configured operator notification delivery. It retains the existing task publication locks, fresh remote validation, retry policy, and idempotency checks. A slow publish does not block unrelated local dispatch.
 
 The daemon owns scanner and publisher subprocesses. Their startup identity is persisted before they execute remote work. Stop/restart checks process identity and process-group cleanup; unproven cleanup is reported as attention rather than treated as successful termination. Recovery is limited to expired/released prior owners of the same daemon scope.
 
 `robert daemon run --once` and standalone `run once` retain the synchronous diagnostic path. The three lanes apply to the resident service.
+
+The resident local drain checks readiness again before creating run diagnostics
+and before entering each repository pipeline. Idle repositories create no step
+or lease records. A pending operator notification schedules the publisher
+independently; it does not start repository pipelines. Empty event lists still
+reach local processing when tracked sources need closure or PR health checks.
 
 ## Read reuse and polling
 

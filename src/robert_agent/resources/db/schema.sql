@@ -373,6 +373,9 @@ CREATE TABLE IF NOT EXISTS run_repo_steps (
   UNIQUE(run_id, repo_id, step_key)
 );
 
+CREATE INDEX IF NOT EXISTS idx_run_repo_steps_consumer_completed
+ON run_repo_steps(repo_id, step_key, status, finished_at);
+
 CREATE TABLE IF NOT EXISTS leases (
   lease_id TEXT PRIMARY KEY,
   resource_type TEXT NOT NULL,

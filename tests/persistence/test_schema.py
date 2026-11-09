@@ -9,6 +9,22 @@ WORKER_MODULE = PACKAGE_ROOT / "worker"
 
 
 class ConfigAndSchemaTests(unittest.TestCase):
+    def test_route_completion_uses_covering_index_after_existing_database_upgrade(self):
+        from robert_agent.persistence.schema import database as storage
+
+        db_path = self.root / "upgrade.sqlite3"
+        storage.init_database(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("DROP INDEX IF EXISTS idx_run_repo_steps_consumer_completed")
+        storage.init_database(db_path)
+        with closing(sqlite3.connect(db_path)) as conn:
+            plan = conn.execute(
+                "EXPLAIN QUERY PLAN SELECT max(finished_at) FROM run_repo_steps "
+                "WHERE repo_id=? AND step_key='route' AND status='succeeded'",
+                ("repo",),
+            ).fetchall()
+        self.assertIn("COVERING INDEX idx_run_repo_steps_consumer_completed", str(plan))
+
     expected_tables = {
         "schema_migrations",
         "repos",
