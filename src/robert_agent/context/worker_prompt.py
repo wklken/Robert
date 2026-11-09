@@ -294,7 +294,7 @@ def worker_prompt_input(
     if route_result.get("routing_block_reason"):
         identity["routing_block_reason"] = route_result["routing_block_reason"]
 
-    authority = {"allowed_github_actions": allowed}
+    authority: dict[str, object] = {"allowed_github_actions": allowed}
     items = list(
         _web_items(context, events, attempt_id, restricted=restricted)
         if web

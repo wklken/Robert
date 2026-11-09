@@ -34,7 +34,7 @@ from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.queries.readviews import run_history, task_history
 from robert_agent.readmodels import summarize, usage
-from robert_agent.readmodels.history import step_output
+from robert_agent.readmodels.history import diagnostic_detail, step_output
 from robert_agent.work import wakeup
 
 RUN_STEP_ORDER = [
@@ -850,6 +850,7 @@ def build_dashboard_data(db_path, history_limit=20):
         repo_order = {step: index for index, step in enumerate(REPO_STEP_ORDER)}
         for run in recent_runs:
             run["summary"] = _decode_json(run.pop("summary_json"))
+            run["diagnostics"] = diagnostic_detail(run["summary"])
             run["error"] = _decode_json(run.pop("error_json"))
             run["steps"] = sorted(
                 steps_by_run[run["run_id"]],

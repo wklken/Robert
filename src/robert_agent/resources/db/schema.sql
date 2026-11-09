@@ -533,6 +533,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_retention
 ON agent_runs(status, julianday(finished_at));
 CREATE INDEX IF NOT EXISTS idx_agent_runs_started
 ON agent_runs(started_at DESC, run_id DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_detail_compaction
+ON agent_runs(status,
+  json_extract(CASE WHEN json_valid(summary_json) THEN summary_json ELSE '{}' END, '$.diagnostics.detail_status'),
+  julianday(finished_at));
 CREATE INDEX IF NOT EXISTS idx_daemon_events_retention
 ON daemon_events(julianday(created_at));
 CREATE INDEX IF NOT EXISTS idx_leases_released_retention

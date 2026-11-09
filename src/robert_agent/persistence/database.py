@@ -3,6 +3,7 @@
 import os
 import sqlite3
 from functools import lru_cache
+from typing import cast
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection, Engine
@@ -21,7 +22,7 @@ class DatabaseConnection:
 
     @property
     def _driver(self) -> sqlite3.Connection:
-        return self._connection.connection.driver_connection
+        return cast(sqlite3.Connection, self._connection.connection.driver_connection)
 
     @property
     def in_transaction(self) -> bool:

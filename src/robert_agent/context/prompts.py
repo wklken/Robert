@@ -120,7 +120,7 @@ def render_prompt(request: PromptInput) -> RenderedPrompt:
         return loaded[path]
 
     template_values = dict(request.values)
-    sections = {name: [] for name in _SECTIONS}
+    sections: dict[str, list[str]] = {name: [] for name in _SECTIONS}
     stage = _split_sections(load(f"stages/{request.stage.replace('.', '-').replace('_', '-')}.md"))
     if not {"Task", "Work"} <= stage.keys() or stage.keys() - set(_SECTIONS[1:]):
         raise ValueError(f"invalid stage resource: {request.stage}")

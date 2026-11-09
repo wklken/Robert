@@ -232,11 +232,13 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_parser = subparsers.add_parser("maintenance", help="Manage diagnostic history.")
     prune_parser = maintenance_parser.add_subparsers(dest="maintenance_command", required=True).add_parser(
         "prune",
-        help="Preview one retention batch; --apply deletes expired diagnostics.",
+        help="Preview expired diagnostics and older no-action detail; --apply performs cleanup.",
     )
     _add_config_argument(prune_parser)
     _add_output_argument(prune_parser)
-    prune_parser.add_argument("--apply", action="store_true", help="Apply retention (default: read-only preview).")
+    prune_parser.add_argument(
+        "--apply", action="store_true", help="Delete expired history and compact no-action detail (default: preview)."
+    )
     prune_parser.add_argument("--batch-size", type=int, help="Runs, events and leases per transaction (1-500).")
     prune_parser.add_argument(
         "--batches", type=int, default=1, help="Maximum apply transactions (1-1000); preview always shows one batch."

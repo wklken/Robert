@@ -18,6 +18,25 @@ or lease records. A pending operator notification schedules the publisher
 independently; it does not start repository pipelines. Empty event lists still
 reach local processing when tracked sources need closure or PR health checks.
 
+## Diagnostic history
+
+Run summaries and business events remain separate from detailed controller steps.
+The pipeline step references its completed run's repository summaries
+instead of storing the same list twice. Existing full outputs remain readable.
+
+Maintenance keeps full detail for the newest 200 runs, running/failed runs, runs
+referenced by wakeups or active leases, and each repository's latest successful
+route completion. Older successful runs with every execution, publication and
+reconciliation counter explicitly zero retain their summary while step rows and
+released repository leases are compacted. Reading events or authorizing inputs
+alone does not require retaining every no-action step. Missing counters, malformed
+summaries and recorded step failures retain their detail. CLI and Web projections
+explain when a run's details were compacted.
+
+Configured run and failure retention periods still govern whole-history removal.
+`robert maintenance prune` previews the affected row counts; `--apply` performs
+bounded transactions. Maintenance does not automatically vacuum the database.
+
 ## Read reuse and polling
 
 | Read | Behavior |
