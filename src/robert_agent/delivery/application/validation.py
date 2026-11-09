@@ -23,7 +23,7 @@ from robert_agent.workflows import routes as route
 from robert_agent.delivery import contract as result_contract
 
 
-def context(conn, task_id, attempt_id, *, include_scope=True):
+def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=True):
     row = db_records.first(db_read_tasks.find_for_context(conn, task_id, attempt_id))
     if not row:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
@@ -44,6 +44,8 @@ def context(conn, task_id, attempt_id, *, include_scope=True):
         AttemptStatus.STALE.value,
         AttemptStatus.COMPLETED.value,
     }:
+        return None, {"ok": False, "status": "rejected_by_supervisor"}
+    if not allow_completed and row[4] == AttemptStatus.COMPLETED.value:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     if json.loads(row[5] or "{}").get("result_validation"):
         return None, {"ok": False, "status": "rejected_by_supervisor"}

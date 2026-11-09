@@ -204,9 +204,8 @@ def run_child_json(command, *, timeout_seconds, runner=subprocess.run):
             if _STOP_REQUESTED:
                 # Members that outlived the leader's TERM must not survive the daemon.
                 _signal_child_group(process.pid, signal.SIGKILL)
-                if process.returncode is not None and process.returncode < 0:
-                    group_stopped = attempt_process.group_stopped(process.pid)
-                    return _child_stopped_result(command, timeout_seconds, executor_id, group_stopped)
+                group_stopped = attempt_process.group_stopped(process.pid)
+                return _child_stopped_result(command, timeout_seconds, executor_id, group_stopped)
             completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
             group_stopped = attempt_process.group_stopped(process.pid)
         else:

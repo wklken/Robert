@@ -308,9 +308,21 @@ def terminal_board_page(
         page = page.where(tuple_(filtered.c.updated_at, filtered.c.work_item_id) < tuple_(*before))
     if column:
         page = page.where(filtered.c.column == column)
-    filtered_page = page.subquery("terminal_page_filter")
-    agents = [row[0] for row in statements.read(conn, select(filtered_page.c.agent).distinct())]
+    agents = [row[0] for row in statements.read(conn, select(filtered.c.agent).distinct())]
     rows = statements.read(
         conn, page.order_by(filtered.c.updated_at.desc(), filtered.c.work_item_id.desc()).limit(limit)
     )
     return {"counts": counts, "rows": rows, "agents": agents}
+
+
+def canceled_workstream_ids(conn):
+    item = tables["work_items"].c
+    return [
+        row[0]
+        for row in statements.read(
+            conn,
+            select(item.workstream_id).where(
+                item.workstream_id.is_not(None), item.canceled_at.is_not(None), item.canceled_at != ""
+            ),
+        )
+    ]

@@ -8,7 +8,7 @@ from functools import lru_cache
 
 from functools import cache
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
 from robert_agent.persistence.predicates import occupied_attempt, runnable_task
 
@@ -276,7 +276,7 @@ def find_for_summarize_database(conn):
         .select_from(tables["worker_results"])
         .where(
             func.json_extract(
-                tables["worker_results"].c["metadata_json"],
+                valid_json_or_empty(tables["worker_results"].c["metadata_json"]),
                 sql_constant("$.audit.status"),
             ).in_([sql_constant("failed"), sql_constant("policy_violation")])
         )
@@ -303,7 +303,7 @@ def find_for_result_counts(conn):
         .where(
             (
                 func.json_extract(
-                    tables["worker_results"].c["metadata_json"],
+                    valid_json_or_empty(tables["worker_results"].c["metadata_json"]),
                     sql_constant("$.audit.status"),
                 )
                 == sql_constant("accepted")

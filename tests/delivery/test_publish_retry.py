@@ -222,3 +222,55 @@ class PublishRetryTests(PublicationFixture):
         self.assertEqual(metadata["safe_error"], "network unavailable")
         self.assertIn("resolved_at", metadata)
         self.assertEqual(metadata["resolved_publish_status"], "published")
+
+    def test_malformed_begin_is_isolated_before_remote_effect(self):
+        from robert_agent.delivery.application import publish
+
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE github_actions SET metadata_json=? WHERE action_id='action-1'",
+                (json.dumps({"publish": {"attempt_count": "corrupt", "first_failed_at": "invalid"}}),),
+            )
+        with (
+            mock.patch.object(publish.supervision_publication, "begin", side_effect=ValueError("invalid task state")),
+            mock.patch.object(publish.publication_effects, "publish_action") as effect,
+        ):
+            result = publish.publish_ready_actions(db_path, dry_run=False)
+        self.assertEqual(result["failed_count"], 1)
+        effect.assert_not_called()
+        with closing(sqlite3.connect(db_path)) as conn:
+            saved = json.loads(
+                conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
+            )
+            self.assertFalse(saved["publish"]["retryable"])
+
+    def test_corrupt_executing_intent_and_retry_metadata_fail_without_effect(self):
+        from robert_agent.delivery.application import publish
+
+        db_path = self.root / "corrupt.sqlite3"
+        self._init_summary_db(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE github_actions SET metadata_json=? WHERE action_id='action-1'",
+                (json.dumps({"publish": {"attempt_count": "corrupt", "attempt_charged": True}}),),
+            )
+            conn.execute(
+                "INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,status,remote_evidence_json,created_at,updated_at) VALUES ('corrupt-intent','action-1','corrupt-intent','f','executing','{bad','2026-11-08T00:00:00+00:00','2026-11-08T00:00:00+00:00')"
+            )
+        with mock.patch.object(publish.publication_effects, "publish_action") as effect:
+            result = publish.publish_ready_actions(db_path, dry_run=False)
+        self.assertEqual(result["failed_count"], 1)
+        effect.assert_not_called()
+        with closing(sqlite3.connect(db_path)) as conn:
+            metadata = json.loads(
+                conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
+            )
+            self.assertFalse(metadata["publish"]["retryable"])
+            self.assertEqual(
+                conn.execute("SELECT status FROM publication_intents WHERE publication_id='corrupt-intent'").fetchone()[
+                    0
+                ],
+                "attention",
+            )

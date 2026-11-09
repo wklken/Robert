@@ -7,6 +7,7 @@ untrusted data; no field here grants publication or execution authority.
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import tempfile
 
@@ -80,6 +81,8 @@ def _text(value, label):
 
 def _source_path(value):
     _text(value, "source path")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("source location contains control characters")
     path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts or "\\" in value or value in (".", ""):
         raise ValueError("source location must be a relative repository path")
@@ -143,6 +146,13 @@ def read_result(path, manifest):
     return document
 
 
+def _code_span(text):
+    # CommonMark closes a code span only with a run matching its opener.
+    fence = "`" * (1 + max((len(run) for run in re.findall(r"`+", text)), default=0))
+    content = f" {text} " if "`" in text else text
+    return f"{fence}{content}{fence}"
+
+
 def _location(finding):
     location = finding["location"]
     return f"{location['path']}:{location['line']}"
@@ -150,7 +160,7 @@ def _location(finding):
 
 def _finding_lines(finding):
     return [
-        f"- **[{finding['severity'].upper()}] {finding['title']}** — `{_location(finding)}`",
+        f"- **[{finding['severity'].upper()}] {finding['title']}** — {_code_span(_location(finding))}",
         f"  - 触发：{finding['trigger']}",
         f"  - 影响：{finding['impact']}",
         f"  - 证据：{finding['evidence']}",
@@ -175,12 +185,17 @@ def render_individual(result, worker_id, model):
     if not result["dismissed_findings"]:
         lines.append("无")
     coverage = result["coverage"]
+    coverage_lines = [json.dumps(coverage, ensure_ascii=False)]
+    # Existing reports are byte-checked during resume. Fence only paths that
+    # the previous validator could not accept, preserving all older artifacts.
+    if any("`" in path for key in ("reviewed_paths", "unreviewed_paths") for path in coverage[key]):
+        coverage_lines = ["```json", *coverage_lines, "```"]
     lines.extend(
         [
             "",
             "## Coverage",
             "",
-            json.dumps(coverage, ensure_ascii=False),
+            *coverage_lines,
             "",
             f"**合并建议**：{result['merge_recommendation']}",
             "",
@@ -314,7 +329,7 @@ def render_merged(manifest, records, evaluation):
     dismissed = [item for item in evaluation["items"] if item["disposition"] != "confirmed"]
     for finding in dismissed:
         label = "误报" if finding["disposition"] == "dismissed" else "需人工确认"
-        lines.append(f"- **{label}：{finding['title']}** — `{_location(finding)}`：{finding['reason']}")
+        lines.append(f"- **{label}：{finding['title']}** — {_code_span(_location(finding))}：{finding['reason']}")
     if not dismissed:
         lines.append("无")
     lines.extend(
@@ -328,8 +343,8 @@ def render_merged(manifest, records, evaluation):
     )
     for record in records:
         coverage = result_lookup[record["worker_id"]]["coverage"]
-        reviewed = ", ".join(f"`{path}`" for path in coverage["reviewed_paths"]) or "未列出"
-        unreviewed = ", ".join(f"`{path}`" for path in coverage["unreviewed_paths"]) or "未列出（不表示完整覆盖）"
+        reviewed = ", ".join(_code_span(path) for path in coverage["reviewed_paths"]) or "未列出"
+        unreviewed = ", ".join(_code_span(path) for path in coverage["unreviewed_paths"]) or "未列出（不表示完整覆盖）"
         lines.extend(
             [
                 f"#### {record['worker_id']} ({record['model']})",

@@ -223,6 +223,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assert_dependencies(
             "robert_agent.delivery.contract",
             {
+                "robert_agent.context.memory_policy",
                 "robert_agent.delivery",
                 "robert_agent.delivery.policies",
                 "robert_agent.foundation.contracts.delivery",

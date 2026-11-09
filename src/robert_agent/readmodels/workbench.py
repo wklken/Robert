@@ -15,9 +15,9 @@ import json
 import shlex
 from collections import Counter, defaultdict
 from contextlib import closing
-from pathlib import Path
 
 from robert_agent.persistence import database as db_database
+from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
@@ -29,6 +29,7 @@ from robert_agent.persistence.queries import (
 from robert_agent.persistence.queries.readviews import task_history
 from robert_agent.persistence.queries.readviews import work_items as work_item_queries
 from robert_agent.readmodels import board, execution_metrics
+from robert_agent.readmodels.artifacts import read_artifact_content
 from robert_agent.readmodels.execution import safe_text
 
 BUCKETS = {"needs_attention", "working", "waiting", "history"}
@@ -74,27 +75,23 @@ def _connect(db_path):
     return conn
 
 
-def _encode_cursor(updated_at, workstream_id):
-    raw = json.dumps([updated_at, workstream_id], separators=(",", ":")).encode()
+def _encode_cursor(item, sort):
+    raw = json.dumps([sort, _sort_key(item, sort)], separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _decode_cursor(value):
+def _decode_cursor(value, sort):
     try:
         padded = value + "=" * (-len(value) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode()).decode()
-        updated_at, workstream_id = json.loads(decoded)
-    except (
-        ValueError,
-        TypeError,
-        UnicodeDecodeError,
-        binascii.Error,
-        json.JSONDecodeError,
-    ) as exc:
+        cursor_sort, key = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        if cursor_sort != sort or not isinstance(key, list):
+            raise ValueError("cursor sort mismatch")
+        expected = (int, int, str, str) if sort == "priority" else (str, str)
+        if len(key) != len(expected) or any(type(part) is not kind for part, kind in zip(key, expected)):
+            raise ValueError("invalid sort key")
+    except (ValueError, TypeError, UnicodeDecodeError, binascii.Error) as exc:
         raise WorkItemQueryError("invalid cursor") from exc
-    if not isinstance(updated_at, str) or not isinstance(workstream_id, str):
-        raise WorkItemQueryError("invalid cursor")
-    return updated_at, workstream_id
+    return tuple(key)
 
 
 def _group_by(rows, key):
@@ -104,21 +101,35 @@ def _group_by(rows, key):
     return grouped
 
 
-def _load_state(conn, workstream_id=None):
+def _load_state(conn, workstream_id=None, *, list_only=False):
     # Ancestors provide the owning board item for a derived PR workstream.
     workstream_ids = None if workstream_id is None else work_item_queries.ancestor_workstream_ids(conn, workstream_id)
     workstreams = [dict(row) for row in work_item_queries.workstream_sources(conn, workstream_ids)]
-    tasks = _group_by(task_history.tasks_for_workstreams(conn, workstream_ids), "workstream_id")
+    tasks = _group_by(
+        task_history.tasks_for_workstreams(conn, workstream_ids, compact_metadata=list_only), "workstream_id"
+    )
     task_ids = None if workstream_ids is None else [task["task_id"] for rows in tasks.values() for task in rows]
-    attempts = _group_by(task_history.attempts_for_tasks(conn, task_ids), "task_id")
+    if list_only:
+        task_ids = [
+            current["task_id"]
+            for stream in workstreams
+            if (current := _current_task(stream, tasks.get(stream["workstream_id"], [])))
+        ]
+    attempts = _group_by(task_history.attempts_for_tasks(conn, task_ids, latest_only=list_only), "task_id")
     attempt_ids = (
         None if task_ids is None else [attempt["attempt_id"] for rows in attempts.values() for attempt in rows]
     )
-    phases = _group_by(task_history.phases_for_attempts(conn, attempt_ids), "attempt_id")
-    results = _group_by(task_history.results_for_tasks(conn, task_ids), "task_id")
+    phases = _group_by(task_history.phases_for_attempts(conn, attempt_ids, latest_only=list_only), "attempt_id")
+    results = _group_by(task_history.results_for_tasks(conn, task_ids, latest_only=list_only), "task_id")
     actions = _group_by(task_history.actions_for_tasks(conn, task_ids), "task_id")
-    artifacts = _group_by(task_history.artifacts_for_tasks(conn, task_ids), "task_id")
-    notifications = _group_by(task_history.notifications_for_tasks(conn, task_ids), "task_id")
+    if list_only:
+        current_ids = set(task_ids)
+        for row in task_history.pending_actions_for_workstreams(conn, workstream_ids):
+            if row["task_id"] not in current_ids:
+                actions.setdefault(row["task_id"], []).append(dict(row))
+    artifacts = {} if list_only else _group_by(task_history.artifacts_for_tasks(conn, task_ids), "task_id")
+    notifications = {} if list_only else _group_by(task_history.notifications_for_tasks(conn, task_ids), "task_id")
+    resume_counts = task_history.resume_counts_for_tasks(conn, task_ids) if list_only else {}
     remediation_episodes = _group_by(task_history.remediation_for_workstreams(conn, workstream_ids), "workstream_id")
     attention = {}
     from robert_agent.persistence import execution_control as execution_store
@@ -151,7 +162,9 @@ def _load_state(conn, workstream_id=None):
         "workstreams": workstreams,
         "workstreams_by_id": {row["workstream_id"]: row for row in workstreams},
         "board_items": board.workstream_projections(
-            conn, workstream_ids=workstream_ids, controls=controls if workstream_ids is None else None
+            conn,
+            workstream_ids=work_item_queries.canceled_workstream_ids(conn) if list_only else workstream_ids,
+            controls=controls if workstream_ids is None else None,
         )
         if db_read_sqlite_master.table_exists(conn, "work_items")
         else {},
@@ -162,6 +175,7 @@ def _load_state(conn, workstream_id=None):
         "actions": actions,
         "artifacts": artifacts,
         "notifications": notifications,
+        "resume_counts": resume_counts,
         "remediation_episodes": remediation_episodes,
     }
 
@@ -454,8 +468,11 @@ def _item_from_workstream(state, workstream):
                 and action["publish_status"] == PublishStatus.NOT_PUBLISHED
             ),
             "failed_publish_actions": failed_publish_actions,
-            "worker_resume_count": sum(
-                1 for notification in notifications if notification["notification_type"] == "worker_resume_prepared"
+            "worker_resume_count": state.get("resume_counts", {}).get(
+                task_id,
+                sum(
+                    1 for notification in notifications if notification["notification_type"] == "worker_resume_prepared"
+                ),
             ),
             "remediation_status": (remediation_episodes[0]["status"] if remediation_episodes else None),
         },
@@ -523,27 +540,15 @@ def _matches_query(item, qualifiers, terms):
     )
 
 
+def _sort_key(item, sort):
+    updated = (item["updated_at"] or "", item["id"])
+    if sort == "priority":
+        return (-BUCKET_ORDER[item["bucket"]], -PRIORITY_ORDER.get(item["priority"], 99), *updated)
+    return updated
+
+
 def _sort_items(items, sort):
-    if sort == "updated-asc":
-        return sorted(items, key=lambda item: (item["updated_at"] or "", item["id"]))
-    if sort == "updated-desc":
-        return sorted(
-            items,
-            key=lambda item: (item["updated_at"] or "", item["id"]),
-            reverse=True,
-        )
-    newest_first = sorted(
-        items,
-        key=lambda item: (item["updated_at"] or "", item["id"]),
-        reverse=True,
-    )
-    return sorted(
-        newest_first,
-        key=lambda item: (
-            BUCKET_ORDER[item["bucket"]],
-            PRIORITY_ORDER.get(item["priority"], 99),
-        ),
-    )
+    return sorted(items, key=lambda item: _sort_key(item, sort), reverse=sort != "updated-asc")
 
 
 def list_work_items(
@@ -567,55 +572,60 @@ def list_work_items(
         raise WorkItemQueryError("limit must be between 1 and 100")
     qualifiers, terms = _parse_query(query)
     with closing(_connect(db_path)) as conn:
-        state = _load_state(conn)
-    items = [_item_from_workstream(state, workstream) for workstream in state["workstreams"]]
-    repositories = sorted(
-        {
-            (item["source"]["repo_id"], item["source"]["repo_full_name"])
+        db_transactions.begin(conn)
+        state = _load_state(conn, list_only=True)
+        items = [_item_from_workstream(state, workstream) for workstream in state["workstreams"]]
+        repositories = sorted(
+            {
+                (item["source"]["repo_id"], item["source"]["repo_full_name"])
+                for item in items
+                if item["source"]["repo_id"] and item["source"]["repo_full_name"]
+            },
+            key=lambda value: (value[1].lower(), value[0]),
+        )
+        actors = sorted(
+            {item["source"]["author_login"] for item in items if item["source"]["author_login"]},
+            key=str.lower,
+        )
+        items = [
+            item
             for item in items
-            if item["source"]["repo_id"] and item["source"]["repo_full_name"]
-        },
-        key=lambda value: (value[1].lower(), value[0]),
-    )
-    actors = sorted(
-        {item["source"]["author_login"] for item in items if item["source"]["author_login"]},
-        key=str.lower,
-    )
-    items = [
-        item
-        for item in items
-        if (not repo or repo in {item["source"]["repo_id"], item["source"]["repo_full_name"]})
-        and (not actor or actor == item["source"]["author_login"])
-        and _matches_query(item, qualifiers, terms)
-    ]
-    counts = Counter(item["bucket"] for item in items)
-    if bucket:
-        items = [item for item in items if item["bucket"] == bucket]
-    elif not qualifiers["is"]:
-        items = [item for item in items if item["bucket"] != "history"]
-    items = _sort_items(items, sort)
-    if cursor:
-        cursor_pair = _decode_cursor(cursor)
-        try:
-            cursor_index = next(
-                index for index, item in enumerate(items) if (item["updated_at"] or "", item["id"]) == cursor_pair
-            )
-        except StopIteration as exc:
-            raise WorkItemQueryError("invalid cursor") from exc
-        items = items[cursor_index + 1 :]
-    page = items[:limit]
-    next_cursor = None
-    if len(items) > limit and page:
-        next_cursor = _encode_cursor(page[-1]["updated_at"] or "", page[-1]["id"])
-    for item in page:
-        item.pop("task_ids", None)
-    return {
-        "items": page,
-        "counts": {name: counts.get(name, 0) for name in BUCKET_ORDER},
-        "repositories": [{"repo_id": repo_id, "full_name": full_name} for repo_id, full_name in repositories],
-        "actors": actors,
-        "next_cursor": next_cursor,
-    }
+            if (not repo or repo in {item["source"]["repo_id"], item["source"]["repo_full_name"]})
+            and (not actor or actor == item["source"]["author_login"])
+            and _matches_query(item, qualifiers, terms)
+        ]
+        counts = Counter(item["bucket"] for item in items)
+        if bucket:
+            items = [item for item in items if item["bucket"] == bucket]
+        elif not qualifiers["is"]:
+            items = [item for item in items if item["bucket"] != "history"]
+        items = _sort_items(items, sort)
+        if cursor:
+            key = _decode_cursor(cursor, sort)
+            items = [
+                item
+                for item in items
+                if (_sort_key(item, sort) > key if sort == "updated-asc" else _sort_key(item, sort) < key)
+            ]
+        page = items[:limit]
+        next_cursor = None
+        if len(items) > limit and page:
+            next_cursor = _encode_cursor(page[-1], sort)
+        if page and db_read_sqlite_master.table_exists(conn, "work_items"):
+            ids = set()
+            for item in page:
+                ids.update(work_item_queries.ancestor_workstream_ids(conn, item["id"]))
+            state["board_items"].update(board.workstream_projections(conn, workstream_ids=ids))
+            page = [_item_from_workstream(state, state["workstreams_by_id"][item["id"]]) for item in page]
+        for item in page:
+            item.pop("task_ids", None)
+        return {
+            "items": page,
+            "counts": {name: counts.get(name, 0) for name in BUCKET_ORDER},
+            "repositories": [{"repo_id": repo_id, "full_name": full_name} for repo_id, full_name in repositories],
+            "actors": actors,
+            "next_cursor": next_cursor,
+        }
 
 
 def _safe_failure(value):
@@ -810,7 +820,7 @@ def get_work_item(db_path, workstream_id):
                 "artifact_type": row["artifact_type"],
                 "bytes": row["bytes"],
                 "created_at": row["created_at"],
-                "preview_available": Path(row["path"]).expanduser().is_file(),
+                "preview_available": read_artifact_content(db_path, row["path"], 0) is not None,
             }
             for row in artifacts
         ],

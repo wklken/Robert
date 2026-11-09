@@ -243,6 +243,10 @@ recheck_seconds=300, message=''), sys.stdout)
                 output["message"] = "Repeated failures need attention"
                 decisions.approve(conn, self.config, request, output, self.now)
             self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 1)
+            from robert_agent.supervision import store
+
+            record = store.get_checkpoint(conn, "decision_record", "w", request["bundle_id"])
+            self.assertIsNotNone(record)
 
     def test_model_cannot_finish_an_unverified_goal(self):
         with self.connect() as conn:

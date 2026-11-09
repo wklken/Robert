@@ -140,7 +140,7 @@ def _command_process_status(pid, identity):
     current_identity = command_heartbeat.process_identity(pid)
     if identity and current_identity and identity != current_identity:
         return "not_found"
-    return "alive" if current_identity else "unknown"
+    return "alive" if identity and current_identity else "unknown"
 
 
 def attempt_command_records(conn, attempt_id, task_id, *, persist=True):

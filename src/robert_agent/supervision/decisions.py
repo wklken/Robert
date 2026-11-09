@@ -366,6 +366,7 @@ def approve(conn, config, request, output, now):
         if unchanged_notice:
             state["notification_id"] = previous["notification_id"]
             write(conn, root_id, state, now)
+            store.update_checkpoint(conn, "decision_record", root_id, request["bundle_id"], now=now, metadata=state)
             return True
         notifications.insert_notification(
             conn,

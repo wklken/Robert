@@ -92,6 +92,10 @@ robert_agent/
 - 包根目录只保留 `__init__.py`、`paths.py` 和 `resource_files.py`。可执行入口位于所属模块，
   例如 `robert_agent.runtime.scan` 和 `robert_agent.worker.result`。安装检查使用
   [入口清单](../src/robert_agent/resources/entrypoints.json)。
+- `readmodels.artifacts` 统一工件预览和可预览提示的路径约束，按目录描述符打开文件。
+- workbench 列表读取当前任务的最新尝试、阶段和结果，在分页后补充看板生命周期。
+  列表仍扫描轻量任务标识以保留全库搜索、计数和筛选项；完整尝试与工件历史由详情页读取。
+- `context.memory_policy` 定义项目记忆的大小和脱敏约束，供提交、审计和入库共用。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和
 全部业务调用方的 SQL 边界。 [pyproject.toml](../pyproject.toml) 统一配置 Ruff 和 import-linter，

@@ -221,7 +221,9 @@ def _lookup(db_path, envelope, digest):
 
 def _prepare(db_path, envelope):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
-        settings, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"])
+        settings, rejection = result_validation.context(
+            conn, envelope["task_id"], envelope["attempt_id"], allow_completed=False
+        )
         if rejection:
             return None, rejection
         try:

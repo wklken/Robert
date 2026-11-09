@@ -16,7 +16,7 @@ class Element {
 function load(name, search = '') {
   const nodes = new Map();
   const get = key => { if (!nodes.has(key)) nodes.set(key, new Element(key)); return nodes.get(key); };
-  const context = vm.createContext({ URLSearchParams, location: { search }, localStorage: { getItem: () => null },
+  const context = vm.createContext({ URL, URLSearchParams, window: {location:{href:"http://localhost/work"}}, location: { search }, localStorage: { getItem: () => null },
     document: { body:new Element("body"), getElementById: key => get(`#${key}`), createElement: tag => new Element(tag), addEventListener() {}, querySelectorAll: () => [],
       querySelector: key => { if (!nodes.has(key)) nodes.set(key, new Element(key)); return nodes.get(key); } },
   });

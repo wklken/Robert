@@ -85,6 +85,10 @@ def plan_worktree(
         "start_point": start_point,
         "commands": commands,
     }
+    if existing_worktree_path:
+        error = check_worktree_reuse(repo_root, worktree_root, worktree_path, dry_run=dry_run)
+        if error:
+            return {**result, "ok": False, "status": error}
     if dry_run:
         return result
 
@@ -307,6 +311,49 @@ def _workspace_reuse_error(worktree_path, worktree_root, dry_run):
         ).stdout
         if status.strip():
             return "blocked_dirty_worktree"
+    return None
+
+
+def check_worktree_reuse(
+    repo_root, worktree_root, worktree_path, *, dry_run=False, branch_name=None, allow_dirty=False
+):
+    """Validate checkout identity; only a proven owned resume may retain edits."""
+    error = _workspace_reuse_error(worktree_path, worktree_root, True)
+    if error:
+        return error
+    if not _registered_worktree(repo_root, worktree_path):
+        return "blocked_unregistered_worktree"
+    try:
+        expected_common = run_command(
+            ["git", "rev-parse", "--git-common-dir"], cwd=repo_root, check=True, text=True, capture_output=True
+        ).stdout.strip()
+        identity = run_command(
+            ["git", "rev-parse", "--git-common-dir", "--show-toplevel"],
+            cwd=worktree_path,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.splitlines()
+        if (
+            len(identity) != 2
+            or (Path(worktree_path) / identity[0]).resolve() != (Path(repo_root) / expected_common).resolve()
+            or Path(identity[1]).resolve() != Path(worktree_path).resolve()
+        ):
+            return "blocked_changed_repository"
+        if branch_name:
+            actual = run_command(
+                ["git", "symbolic-ref", "--quiet", "HEAD"],
+                cwd=worktree_path,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            if actual != f"refs/heads/{branch_name}":
+                return "blocked_changed_branch"
+        if not allow_dirty:
+            return _workspace_reuse_error(worktree_path, worktree_root, dry_run)
+    except (subprocess.CalledProcessError, OSError):
+        return "blocked_unavailable_worktree"
     return None
 
 

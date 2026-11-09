@@ -4,8 +4,8 @@ from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatu
 from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskLifecycle, WorkstreamLifecycle
 
 import json
-import os
-import stat
+from robert_agent.foundation.values import json_object
+from robert_agent.readmodels.artifacts import read_artifact_content
 from collections import Counter
 from contextlib import closing
 from pathlib import Path
@@ -71,7 +71,7 @@ def _decode_json(value):
     try:
         return json.loads(value)
     except (TypeError, ValueError):
-        return value
+        return None
 
 
 def _load_latest_loop(db_path):
@@ -161,7 +161,7 @@ def _attach_task_operator_state(conn, recent_tasks):
                 }
         if row["audit_status"] in {AuditStatus.FAILED, AuditStatus.POLICY_VIOLATION}:
             action_state["failed_github_actions"] += 1
-        metadata = _decode_json(row["metadata_json"]) or {}
+        metadata = json_object(row["metadata_json"]) or {}
         publish = metadata.get("publish") if isinstance(metadata, dict) else {}
         if row["audit_status"] == AuditStatus.ACCEPTED and row["publish_status"] == PublishStatus.SKIPPED:
             action_state["skipped_publish_actions"] += 1
@@ -192,14 +192,14 @@ def _attach_task_operator_state(conn, recent_tasks):
     worker_resume_counts_by_task = {task_id: 0 for task_id in task_ids}
     for row in task_history.notifications_for_tasks(conn, task_ids):
         notification = dict(row)
-        notification["metadata"] = _decode_json(notification.pop("metadata_json"))
+        notification["metadata"] = json_object(notification.pop("metadata_json"))
         if notification["notification_type"] == "worker_resume_prepared":
             worker_resume_counts_by_task[row["task_id"]] += 1
         notifications_by_task.setdefault(row["task_id"], notification)
 
     result_pending_audit_by_task = {task_id: False for task_id in task_ids}
     for row in task_history.completed_attempt_results(conn, task_ids):
-        metadata = _decode_json(row["metadata_json"]) or {}
+        metadata = json_object(row["metadata_json"]) or {}
         if isinstance(metadata, dict) and not metadata.get("audit"):
             result_pending_audit_by_task[row["task_id"]] = True
 
@@ -221,7 +221,7 @@ def _attach_task_operator_state(conn, recent_tasks):
         )
 
     attention_by_task = {
-        row["task_id"]: (_decode_json(row["metadata_json"]) or {}).get("execution_attention")
+        row["task_id"]: (json_object(row["metadata_json"]) or {}).get("execution_attention")
         for row in task_history.metadata_for_tasks(conn, task_ids)
     }
     for task in recent_tasks:
@@ -747,7 +747,7 @@ def _load_priority_pending_events(conn, recent_events, history_limit):
     for event in rows:
         if event["event_id"] in recent_event_ids:
             continue
-        event["payload"] = _decode_json(event.pop("payload_json")) or {}
+        event["payload"] = json_object(event.pop("payload_json")) or {}
         priority_events.append(event)
     return priority_events
 
@@ -777,12 +777,12 @@ def build_dashboard_data(db_path, history_limit=20):
             dict(row) for row in db_read_github_actions.find_for_build_dashboard_data(conn, history_limit)
         ]
         for action in recent_actions:
-            action["metadata"] = _decode_json(action.pop("metadata_json"))
+            action["metadata"] = json_object(action.pop("metadata_json"))
         recent_notifications = [
             dict(row) for row in db_read_notifications.find_for_build_dashboard_data(conn, history_limit)
         ]
         for notification in recent_notifications:
-            notification["metadata"] = _decode_json(notification.pop("metadata_json"))
+            notification["metadata"] = json_object(notification.pop("metadata_json"))
         recent_worker_results = [
             dict(row) for row in db_read_worker_results.find_for_build_dashboard_data(conn, history_limit)
         ]
@@ -790,11 +790,11 @@ def build_dashboard_data(db_path, history_limit=20):
         for result in recent_worker_results:
             result["consumed_event_fingerprints"] = _decode_json(result.pop("consumed_event_fingerprints_json")) or []
             result["verification"] = _decode_json(result.pop("verification_json")) or []
-            result["metadata"] = _decode_json(result.pop("metadata_json")) or {}
+            result["metadata"] = json_object(result.pop("metadata_json")) or {}
             used_skill_counts.update(result["metadata"].get("used_skills") or [])
         recent_events = [dict(row) for row in db_read_github_events.find_for_build_dashboard_data(conn, history_limit)]
         for event in recent_events:
-            event["payload"] = _decode_json(event.pop("payload_json")) or {}
+            event["payload"] = json_object(event.pop("payload_json")) or {}
         priority_pending_events = _load_priority_pending_events(
             conn,
             recent_events,
@@ -987,30 +987,8 @@ def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, a
     if not row:
         return None
     registered_path = str(row["path"])
-    try:
-        root = Path(db_path).expanduser().resolve().parent
-        path = Path(registered_path).expanduser().resolve(strict=True)
-        relative = path.relative_to(root)
-        # Open every component relative to an already-open directory. A worker
-        # replacing a checked directory or file with a symlink cannot redirect I/O.
-        directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            for component in relative.parts[:-1]:
-                child_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
-                os.close(directory_fd)
-                directory_fd = child_fd
-            file_fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
-        finally:
-            os.close(directory_fd)
-        with os.fdopen(file_fd, "rb") as fh:
-            info = os.fstat(fh.fileno())
-            if not stat.S_ISREG(info.st_mode):
-                return None
-            truncated = info.st_size > max_bytes
-            if truncated:
-                fh.seek(-max_bytes, 2)
-            content = fh.read(max_bytes).decode("utf-8", errors="replace")
-    except (OSError, ValueError, RuntimeError):
+    preview = read_artifact_content(db_path, registered_path, max_bytes)
+    if preview is None:
         return {
             "task_id": task_id,
             "artifact_type": artifact_type,
@@ -1024,8 +1002,7 @@ def load_artifact_preview(db_path, task_id, artifact_type, max_bytes=65536, *, a
         "artifact_type": artifact_type,
         "path": registered_path,
         "bytes": row["bytes"],
-        "content": content,
-        "truncated": truncated,
+        **preview,
         "missing": False,
     }
 

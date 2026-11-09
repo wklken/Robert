@@ -176,6 +176,24 @@ def publish_ready_actions(
                     deferred_count += 1
                     busy_task_ids.add(action["task_id"])
                     continue
+                except ValueError:
+                    # Invalid task-local recovery state cannot authorize an effect.
+                    result = {
+                        "ok": False,
+                        "status": "publish_failed",
+                        "retryable": False,
+                        "safe_error": "Invalid publication recovery state; inspect the task before retrying.",
+                    }
+                    with closing(db_database.connect(db_path)) as conn, conn:
+                        publication_outcomes.record_failure(conn, action, result, now)
+                    failed_count += 1
+                    busy_task_ids.add(action["task_id"])
+                    if result_id:
+                        failed_result_ids.add(result_id)
+                    failures.append(
+                        {"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []}
+                    )
+                    continue
                 if supervision["status"] == "blocked":
                     if result_id:
                         failed_result_ids.add(result_id)

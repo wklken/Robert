@@ -44,8 +44,12 @@ def check_run(check_id, conclusion, *, app=None):
 class CIProducerIdentityTests(unittest.TestCase):
     def summarize(self, workflow_runs, check_runs):
         responses = {
-            ("gh", "api", f"repos/{REPO}/actions/runs?head_sha={HEAD}&per_page=100"): {"workflow_runs": workflow_runs},
-            ("gh", "api", f"repos/{REPO}/commits/{HEAD}/check-runs?per_page=100"): {"check_runs": check_runs},
+            ("gh", "api", f"repos/{REPO}/actions/runs?head_sha={HEAD}&per_page=100", "--paginate", "--slurp"): {
+                "workflow_runs": workflow_runs
+            },
+            ("gh", "api", f"repos/{REPO}/commits/{HEAD}/check-runs?per_page=100", "--paginate", "--slurp"): {
+                "check_runs": check_runs
+            },
         }
         for run in workflow_runs:
             if run["conclusion"] == "failure":

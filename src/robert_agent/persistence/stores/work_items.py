@@ -331,7 +331,6 @@ def edit_fields(conn, work_item_id, fields, now):
         "title",
         "description",
         "priority",
-        "route_id",
         "requested_worker",
         "routing_mode",
     }

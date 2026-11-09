@@ -22,7 +22,7 @@ SECRET_PATTERNS = [
 
 # Match credential assignments, not names such as max_tokens or comparisons.
 SECRET_ASSIGNMENT = re.compile(
-    r"\b(?P<name>(?:[A-Za-z0-9]+_)*(?:token|password|passwd|api_key|secret))\b"
+    r"(?<![A-Za-z0-9_])(?<![A-Za-z0-9]-)\b(?P<name>(?:[A-Za-z0-9]+[_-])*(?:token|password|passwd|api[_-]?key|secret(?:[_-](?:access[_-])?key)?|private[_-]key|accessToken|refreshToken))\b[\"']?"
     r"\s*[:=](?!=)\s*(?:[\"'](?P<quoted>[^\"'\r\n]+)[\"']|(?P<bare>[A-Za-z0-9_./+=$-]+))",
     re.I,
 )
@@ -59,7 +59,7 @@ LOCAL_PATH = re.compile(r"(?<![\w.-])(?:/Users|/home|/root|/data|/tmp|/var/folde
 INTERNAL_IP = re.compile(
     r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"
 )
-INTERNAL_DOMAIN = re.compile(r"\b[A-Za-z0-9.-]+\.(?:woa\.com|corp|internal|local)\b")
+INTERNAL_DOMAIN = re.compile(r"(?<![A-Za-z0-9.-])\b[A-Za-z0-9.-]+\.(?:woa\.com|corp|internal|local)\b")
 
 
 def redact_text(text):

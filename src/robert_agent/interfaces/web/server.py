@@ -6,6 +6,10 @@ from robert_agent.readmodels import dashboard
 
 #!/usr/bin/env python3
 import argparse
+from contextlib import closing
+from pathlib import Path
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence.queries import sqlite_master
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -456,7 +460,12 @@ def handle_dashboard_post(path, body, db_path, control_context=None, request_hea
                 },
                 503,
             )
-    form = parse_qs(body.decode("utf-8"))
+    try:
+        form = parse_qs(body.decode("utf-8"), errors="strict")
+    except UnicodeError:
+        return _json_response(
+            {"ok": False, "status": "failed_validation", "safe_error": "Form must be valid UTF-8."}, 422
+        )
 
     def field(name):
         return (form.get(name) or [""])[0]
@@ -527,11 +536,19 @@ def make_handler(db_path, control_context=None):
             self.send_response(status)
             for name, value in headers.items():
                 self.send_header(name, value)
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             self.send_header("content-length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
 
         def do_GET(self):
+            context = control_context or build_read_only_control_context(
+                db_path, host=self.server.server_address[0], port=self.server.server_address[1]
+            )
+            if self.headers.get("Host") not in {urlsplit(origin).netloc for origin in context.allowed_origins}:
+                self._send(*_json_response({"ok": False, "status": "forbidden", "safe_error": "invalid Host"}, 403))
+                return
             try:
                 response = build_http_response(
                     self.path,
@@ -617,7 +634,7 @@ def make_handler(db_path, control_context=None):
 
 def _allowed_web_origins(host, port, public_origin=None):
     bind_host = f"[{host}]" if ":" in host else host
-    origins = {f"http://{bind_host}:{port}"}
+    origins = {f"http://{bind_host}" if port == 80 else f"http://{bind_host}:{port}"}
     if public_origin is not None:
         error = "--public-origin must be an HTTP(S) origin without credentials, path, query or fragment"
         try:
@@ -782,6 +799,22 @@ def main(argv=None):
             },
             3,
         )
+    if not args.writable:
+        try:
+            with closing(
+                db_database.connect(Path(db_path).expanduser().resolve().as_uri() + "?mode=ro", uri=True)
+            ) as conn:
+                if workbench.REQUIRED_TABLES - sqlite_master.table_names(conn):
+                    raise ValueError("Database schema is incomplete; initialize Robert first.")
+        except (db_errors.Error, OSError, ValueError):
+            return emit(
+                {
+                    "ok": False,
+                    "status": "failed_input",
+                    "safe_error": "Database is missing, unreadable, or incomplete; initialize Robert first.",
+                },
+                3,
+            )
     if args.json:
         return emit({"ok": True, "status": "ready", "data": dashboard.build_dashboard_data(db_path)})
     serve(db_path, args.host, args.port, control_context=control_context)
