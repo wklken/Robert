@@ -2,12 +2,19 @@
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import update, bindparam, and_
+from sqlalchemy import update, delete, bindparam, and_
 from sqlalchemy.dialects.sqlite import insert
 
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+from robert_agent.persistence.queries.run_summaries import shared_schema_available
+
+
+def _release_summary_ref(conn, run_id):
+    if shared_schema_available(conn):
+        refs = tables["agent_run_summary_refs"]
+        statements.write(conn, delete(refs).where(refs.c.run_id == run_id))
 
 
 def insert_for_start_run(conn, run_id, started_at, value_3, value_4, summary_json):
@@ -55,6 +62,7 @@ def update_for_interrupt_run(conn, now, error_json, run_id):
 
 
 def update_for_finish_run(conn, status, finished_at, summary_json, run_id):
+    _release_summary_ref(conn, run_id)
     stmt = (
         update(tables["agent_runs"])
         .values(
@@ -70,6 +78,7 @@ def update_for_finish_run(conn, status, finished_at, summary_json, run_id):
 
 
 def update_for_finish_run_2(conn, status, finished_at, summary_json, value_4, run_id):
+    _release_summary_ref(conn, run_id)
     stmt = (
         update(tables["agent_runs"])
         .values(

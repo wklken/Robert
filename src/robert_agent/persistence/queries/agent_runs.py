@@ -15,6 +15,7 @@ from sqlalchemy import (
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+from robert_agent.persistence.queries.run_summaries import resolved_summary
 
 
 def find_for_finish_stopped_executor(conn, executor_id):
@@ -69,7 +70,7 @@ def find_for_running_executors(conn):
 
 def find_summary_json_by_run_id(conn, value_1):
     query1 = (
-        select(tables["agent_runs"].c["summary_json"])
+        select(resolved_summary(conn, tables["agent_runs"]).label("summary_json"))
         .select_from(tables["agent_runs"])
         .where((tables["agent_runs"].c["run_id"] == bindparam("p0")))
         .correlate_except(tables["agent_runs"])
@@ -181,7 +182,7 @@ def find_for_build_dashboard_data(conn, history_limit):
             tables["agent_runs"].c["finished_at"],
             tables["agent_runs"].c["config_path"],
             tables["agent_runs"].c["dry_run"],
-            tables["agent_runs"].c["summary_json"],
+            resolved_summary(conn, tables["agent_runs"]).label("summary_json"),
             tables["agent_runs"].c["error_json"],
         )
         .select_from(tables["agent_runs"])
@@ -220,7 +221,7 @@ def find_for_build_run(conn, run_id):
             tables["agent_runs"].c["finished_at"],
             tables["agent_runs"].c["config_path"],
             tables["agent_runs"].c["dry_run"],
-            tables["agent_runs"].c["summary_json"],
+            resolved_summary(conn, tables["agent_runs"]).label("summary_json"),
             tables["agent_runs"].c["error_json"],
         )
         .select_from(tables["agent_runs"])
