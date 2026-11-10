@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.workflows.review import workspace as review_workspace
@@ -7,6 +8,29 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class ReviewWorkspaceTests(ReviewWorkspaceFixture):
+    def test_nested_runtime_scan_does_not_follow_a_link_replacing_deleted_source(self):
+        external = self.root / "external-runtime"
+        external.mkdir()
+        (external / ".python-version").write_text("3.11.6\n")
+        (self.repo / "component").symlink_to(external, target_is_directory=True)
+        runtime = review_workspace._runtime_info(self.repo, ["component/deleted.py"])
+        self.assertNotIn("component/.python-version", runtime["python"]["declarations"])
+
+    def test_runtime_preserves_nested_declarations_for_changed_components(self):
+        dashboard = self.upstream / "src" / "dashboard"
+        dashboard.mkdir(parents=True)
+        (dashboard / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11,<3.12"\n')
+        (dashboard / ".python-version").write_text("3.11.6\n")
+        (dashboard / "app.py").write_text("value = 1\n")
+        self.git(self.upstream, "add", ".")
+        self.commit("value = 3\n")
+        with patch.object(review_workspace.shutil, "which", return_value=None):
+            manifest = self.prepare("nested-runtime")
+        runtime = json.loads(Path(manifest["context_dir"], "runtime-info.json").read_text())["python"]
+        self.assertEqual(runtime["declarations"]["src/dashboard/.python-version"], "3.11.6")
+        self.assertEqual(runtime["declarations"]["src/dashboard/pyproject.toml"], ['">=3.11,<3.12"'])
+        self.assertEqual(runtime["status"], "UNRESOLVED")
+
     def test_two_rounds_use_detached_independent_sources_and_frozen_context(self):
         first = self.freeze(self.prepare("round-1"))
         self.commit("value = 3\n")

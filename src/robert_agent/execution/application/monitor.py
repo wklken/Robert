@@ -179,7 +179,7 @@ def supervise_running_attempts(
                 started_at=started_at,
                 now=now_dt,
                 heartbeat_stale_seconds=config_result.get("heartbeat_stale_seconds", 1200),
-                global_timeout_seconds=config_result.get("hard_timeout_seconds", 2700),
+                global_timeout_seconds=config_result.get("hard_timeout_seconds", 3600),
                 hard_timeout_seconds=worker_timeout_seconds,
             )
         process_status = {"status": "not_checked"}
@@ -288,7 +288,10 @@ def supervise_running_attempts(
                 and db_path is not None
                 and repo is not None
             ):
-                if supervision_decisions.enabled(config_result):
+                if (
+                    supervision_decisions.enabled(config_result)
+                    or recovery.get("reason_code") == "review_revision_changed"
+                ):
                     conn.commit()
                     stopped = native_rounds.terminate_children(conn, task_id) != "attention"
                     if not _supervision_observation_current(
@@ -323,6 +326,7 @@ def supervise_running_attempts(
                             "task_id": task_id,
                             "attempt_id": attempt_id,
                             "recovery_status": recovery["status"],
+                            "reason_code": recovery.get("reason_code"),
                             "identity_status": "dead",
                             "failure": recovery.get("error_class"),
                         },
@@ -392,6 +396,7 @@ def supervise_running_attempts(
                         attempt_id,
                         run_now,
                         recovery,
+                        config_result=config_result,
                     )
                     if resume:
                         supervision_decisions.executed(conn, config_result, workstream_id, {"resume": resume}, run_now)
@@ -666,6 +671,7 @@ def recover_failed_timeout_attempts(
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "recovery_status": recovery["status"],
+                "reason_code": recovery.get("reason_code"),
                 "identity_status": "dead",
                 "failure": recovery.get("error_class"),
             },
@@ -715,6 +721,7 @@ def recover_failed_timeout_attempts(
             attempt_id,
             run_now,
             recovery,
+            config_result=config_result,
         )
         if not resume:
             _record_recovery_creation_attention(

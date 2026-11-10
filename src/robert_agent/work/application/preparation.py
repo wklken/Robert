@@ -41,6 +41,7 @@ from robert_agent.execution import rounds as native_rounds
 from robert_agent.foundation import values
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import queries as work_queries
+from robert_agent.work import source_policy
 from robert_agent.work import streams as workstream
 from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
@@ -307,6 +308,7 @@ def create_task_attempt_and_prompt(
     existing_task_id=None,
     new_request_event=None,
     native_round_id=None,
+    recovery_key=None,
 ):
     if not conn.in_transaction:
         db_transactions.begin(conn, immediate=True)
@@ -528,7 +530,7 @@ def create_task_attempt_and_prompt(
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         round_store = vote_store if route_result.get("native_vote_workers") else review_store
         workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
-        recovery_key = None
+        reusable_round = None
         if retrigger_wakeup_id and parent_task_id:
             parent = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
             previous_round = round_store.session(conn, task_id=parent_task_id)
@@ -538,10 +540,13 @@ def create_task_attempt_and_prompt(
                 == "result_contract_cutover"
             ):
                 recovery_key = retrigger_wakeup_id
+            else:
+                reusable_round = previous_round
         entry = (
             round_store.session(conn, round_id=native_round_id)
             if native_round_id
-            else round_store.enqueue(
+            else reusable_round
+            or round_store.enqueue(
                 conn,
                 repo,
                 {**event, supervision_lineage.LINEAGE_FIELD: lineage_key},
@@ -672,7 +677,23 @@ def create_resume_attempt_and_prompt(
     previous_attempt_id,
     run_now,
     recovery_context,
+    *,
+    config_result=None,
 ):
+    if recovery_context.get("reason_code") == "review_revision_changed":
+        return _restart_changed_review(
+            conn,
+            data_dir,
+            db_path,
+            repo,
+            repo_id,
+            task_id,
+            workstream_id,
+            previous_attempt_id,
+            run_now,
+            recovery_context,
+            config_result,
+        )
     previous = db_records.first(
         db_read_attempts.find_attempt_no_and_worktree_path_and_branch_name_and_metadata_json_by_attempt_id(
             conn, previous_attempt_id
@@ -803,5 +824,81 @@ def create_resume_attempt_and_prompt(
         "attempt_id": attempt_id,
         "attempt_no": attempt_no,
         "prompt_path": str(prompt_path),
+        "recovery_artifact_path": str(recovery_path),
+    }
+
+
+def _restart_changed_review(
+    conn,
+    data_dir,
+    db_path,
+    repo,
+    repo_id,
+    task_id,
+    workstream_id,
+    previous_attempt_id,
+    run_now,
+    recovery_context,
+    config_result,
+):
+    previous_round = review_store.session(conn, task_id=task_id)
+    if (
+        not previous_round
+        or previous_round["round_id"] != recovery_context.get("round_id")
+        or previous_round["status"] != RoundStatus.SUPERSEDED
+        or previous_round.get("error") != "PR head/base changed after context preparation"
+        or not execution_ownership.claim_task(conn, task_id, run_now)
+        or config_result is None
+    ):
+        return None
+    event = source_policy.reauthorize_saved_request(previous_round["request"]["event"], repo)
+    route_result = workflow_routing.effective_route(config_result, repo, event, route_id="review-pr")
+    if not event.get("drives_execution") or not route_result.get("native_review_workers"):
+        return None
+    # A fresh round preserves the old snapshot and accepted request. The unique
+    # recovery key prevents enqueue from rebinding the superseded round.
+    db_transactions.savepoint(conn, "restart_changed_review")
+    try:
+        # The workstream permits one live task. Release the parent's lifecycle
+        # inside this transaction while retaining its binding for child admission.
+        db_write_tasks.update_for_supervise_running_attempts(conn, run_now, task_id)
+        result = create_task_attempt_and_prompt(
+            conn,
+            data_dir,
+            db_path,
+            repo,
+            repo_id,
+            event,
+            route_result,
+            {"workstream_id": workstream_id},
+            run_now,
+            parent_task_id=task_id,
+            recovery_key=previous_attempt_id,
+        )
+        if not result or result.get("blocked"):
+            db_transactions.rollback_to(conn, "restart_changed_review")
+            return None
+        execution_ownership.inherit_recovery_budget(conn, task_id, result["task_id"], run_now)
+        execution_ownership.close_terminal_task(conn, task_id, run_now)
+    except BaseException:
+        db_transactions.rollback_to(conn, "restart_changed_review")
+        raise
+    finally:
+        db_transactions.release(conn, "restart_changed_review")
+    recovery_path = data_dir / "artifacts" / result["task_id"] / f"{result['attempt_id']}.recovery.json"
+    recovery_path.write_text(
+        json.dumps(
+            {**recovery_context, "strategy": "restart_changed_review", "new_task_id": result["task_id"]},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    insert_file_artifact(conn, result["task_id"], result["attempt_id"], "recovery_context", recovery_path, run_now)
+    return {
+        **result,
+        "prompt_path": str(result["prompt_path"]),
+        "attempt_no": 1,
         "recovery_artifact_path": str(recovery_path),
     }

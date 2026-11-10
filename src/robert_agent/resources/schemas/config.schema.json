@@ -327,7 +327,7 @@
           "timeout_seconds": {
             "type": "integer",
             "minimum": 1,
-            "default": 5400
+            "default": 3600
           },
           "environment_allowlist": {
             "type": "array",
@@ -452,7 +452,7 @@
         "hard_timeout_seconds": {
           "type": "integer",
           "minimum": 1,
-          "default": 2700
+          "default": 3600
         },
         "startup_grace_seconds": {
           "type": "integer",

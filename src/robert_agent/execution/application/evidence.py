@@ -258,13 +258,18 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
 
     review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
     if review:
+        revision_changed = (
+            review["status"] == RoundStatus.SUPERSEDED
+            and review.get("error") == "PR head/base changed after context preparation"
+        )
         row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
         diagnostic = values.json_object(row[0] if row else None).get("submission_validation", {})
         return {
             "status": "recoverable_progress"
-            if review["status"] not in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}
+            if revision_changed
+            or review["status"] not in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}
             else "unrecoverable",
-            "reason_code": "native_review_checkpoint",
+            "reason_code": "review_revision_changed" if revision_changed else "native_review_checkpoint",
             "round_id": review["round_id"],
             "task_id": task_id,
             "previous_attempt_id": attempt_id,

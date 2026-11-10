@@ -14,7 +14,7 @@ class WorkerLaunch:
     stdin_path: str
     stdout_format: str
     environment_allowlist: tuple[str, ...] = ()
-    timeout_seconds: int = 5400
+    timeout_seconds: int = 3600
 
     def metadata(self):
         return {
@@ -82,7 +82,7 @@ def normalize_worker_agent_config(config):
         raise ValueError("command adapter requires command to be a YAML sequence")
     command_argv = _split_command(command)
     prompt_transport = str(config.get("prompt_transport", "stdin")).strip()
-    timeout_seconds = int(config.get("timeout_seconds", 5400))
+    timeout_seconds = int(config.get("timeout_seconds", 3600))
     if timeout_seconds < 1:
         raise ValueError("timeout_seconds must be at least 1")
     environment_allowlist = config.get("environment_allowlist", [])
@@ -126,5 +126,5 @@ def build_worker_launch(
         reasoning_effort=reasoning_effort,
         prompt_transport=config.get("prompt_transport", "stdin"),
         environment_allowlist=config.get("environment_allowlist", []),
-        timeout_seconds=config.get("timeout_seconds", 5400),
+        timeout_seconds=config.get("timeout_seconds", 3600),
     )

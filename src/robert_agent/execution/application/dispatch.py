@@ -580,7 +580,7 @@ def dispatch_queued_locked(
                     )
         if native_review:
             configured = native_review["request"]["workers"]
-            timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
+            timeout = (config_result or {}).get("hard_timeout_seconds", 3600)
             environment_names = sorted(
                 {"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
                 | {name for w in configured for name in w["environment_allowlist"]}

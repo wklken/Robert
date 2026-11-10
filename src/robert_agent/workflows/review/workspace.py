@@ -55,13 +55,24 @@ def _source_hashes(tree):
     return result
 
 
-def _runtime_info(tree):
+def _runtime_info(tree, changed_paths=()):
     declarations = {}
-    for name in (".python-version", "pyproject.toml", "setup.cfg", "Pipfile"):
-        path = tree / name
+    directories = {Path(".")}
+    for name in changed_paths:
+        directories.update(Path(name).parents)
+    names = (
+        (directory / name).as_posix()
+        for directory in sorted(directories)
+        for name in (".python-version", "pyproject.toml", "setup.cfg", "Pipfile")
+    )
+    for name in names:
+        try:
+            path = review_files.safe_path(tree / name, tree)
+        except ValueError:
+            continue
         if path.is_file() and not path.is_symlink():
             text = path.read_text(encoding="utf-8", errors="replace")
-            if name == ".python-version":
+            if path.name == ".python-version":
                 declarations[name] = text.strip()
             else:
                 matches = re.findall(
@@ -181,14 +192,16 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
         head_sha,
         "--",
     )
+    changed_paths = _git(tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--")
     content = {
         "pr-info.json": json.dumps(pr_info, ensure_ascii=False, indent=2) + "\n",
         "github-context.json": json.dumps(github_context, ensure_ascii=False, indent=2) + "\n",
-        "changed-files.txt": _git(tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--"),
+        "changed-files.txt": changed_paths,
         "diff.patch": diff,
         "diff-stat.txt": _git(tree, "diff", "--no-ext-diff", "--stat", merge_base, head_sha, "--"),
         "diff-linecount.txt": str(len(diff.splitlines())) + "\n",
-        "runtime-info.json": json.dumps(_runtime_info(tree), ensure_ascii=False, indent=2) + "\n",
+        "runtime-info.json": json.dumps(_runtime_info(tree, changed_paths.splitlines()), ensure_ascii=False, indent=2)
+        + "\n",
     }
     for name, text in content.items():
         (context / name).write_text(text, encoding="utf-8")

@@ -79,7 +79,7 @@ PR-author eligibility are checked independently of worker selection.
 Repository max_concurrency cannot exceed scheduler.max_concurrency. Trusted
 actors must be nonempty; these remain repository-scoped authorization settings.
 
-The default hard worker timeout is 45 minutes. When a worker defines
+The default hard worker timeout is one hour. When a worker defines
 `fallback_model`, Robert uses it on the third run after the two immediately
 preceding terminal attempts in the same workstream both end in
 `failed_timeout`. A successful attempt or any other failure type resets the
@@ -108,7 +108,7 @@ only after the current remote PR head and base match the audited snapshot.
 | `scheduler.local_poll_seconds` | 5 | Local polling and supervision cadence. |
 | `scheduler.lease_ttl_seconds` | 540 | Task lease. |
 | `supervision.heartbeat_stale_seconds` | 1200 | Heartbeat staleness. |
-| `supervision.hard_timeout_seconds` | 2700 | Global supervision wall-time ceiling. |
+| `supervision.hard_timeout_seconds` | 3600 | Global supervision wall-time ceiling. |
 | `supervision.startup_grace_seconds` | 300 | Starting worker grace. |
 | `github.polling.fallback_seconds` | 300 | Startup/error fallback; normal synchronous interval. |
 | `github.polling.synchronous.full_capacity_seconds` | 600 | Synchronous full-capacity interval only. |

@@ -48,7 +48,7 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             started_at,
             now=now_dt,
             heartbeat_stale_seconds=config.get("heartbeat_stale_seconds", 1200),
-            global_timeout_seconds=config.get("hard_timeout_seconds", 2700),
+            global_timeout_seconds=config.get("hard_timeout_seconds", 3600),
             hard_timeout_seconds=timeout,
         )
         process = attempt_process.dispatch_status(metadata)

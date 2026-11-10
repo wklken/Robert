@@ -15,7 +15,7 @@ def build_launch(
     reasoning_effort,
     prompt_transport="stdin",
     environment_allowlist=(),
-    timeout_seconds=5400,
+    timeout_seconds=3600,
 ):
     if prompt_transport != "stdin":
         raise ValueError("command adapter supports prompt_transport=stdin only")

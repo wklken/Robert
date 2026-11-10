@@ -34,7 +34,7 @@ def build_launch(
     reasoning_effort,
     prompt_transport="stdin",
     environment_allowlist=(),
-    timeout_seconds=5400,
+    timeout_seconds=3600,
 ):
     command = [*command_argv, "-p"]
     if model != "default":
