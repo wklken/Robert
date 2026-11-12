@@ -1,0 +1,10 @@
+[
+  {"name": "plain", "userinfo": "alice:synthetic-review-value"},
+  {"name": "percent_encoded", "userinfo": "al%69ce:synthetic%2Dreview%2Dvalue%40%3A%2F%3F%23"},
+  {"name": "delimiters", "userinfo": "alice:synthetic:review;value,with=delimiters!$&'()*+"},
+  {"name": "embedded_at", "userinfo": "alice:synthetic@review@value"},
+  {"name": "encoded_separator", "userinfo": "alice%3Asynthetic%2Dreview%2Dvalue"},
+  {"name": "username_only", "userinfo": "synthetic-review-user"},
+  {"name": "password_only", "userinfo": ":synthetic-review-value"},
+  {"name": "short", "userinfo": "a:b"}
+]

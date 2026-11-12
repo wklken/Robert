@@ -1,10 +1,11 @@
 """Decision command failures retain bounded diagnostics without blocking pipes."""
 
+import json
 import sys
 import threading
 import unittest
 
-from tests.support import PACKAGE_ROOT  # noqa: F401
+from tests.support import TEST_ROOT
 from robert_agent.adapters.processes import model_command
 
 
@@ -33,6 +34,19 @@ class ModelCommandTests(unittest.TestCase):
         self.assertEqual(result["status"], "exited")
         self.assertNotIn("opaque-credential-value", str(result))
         self.assertIn("withheld", result.get("safe_error", ""))
+
+    def test_url_userinfo_is_withheld_from_real_command_result(self):
+        cases = json.loads((TEST_ROOT / "fixtures" / "url_userinfo.json").read_text())
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                error = f"Connection failed: https://{case['userinfo']}@proxy.example.org/path"
+                result = self.run_command(f"import sys; sys.stderr.write({error!r}); sys.exit(7)")
+                self.assertEqual(result["status"], "exited")
+                self.assertEqual(result["exit_code"], 7)
+                self.assertTrue(result["stopped"])
+                self.assertFalse(result["stderr_truncated"])
+                self.assertNotIn(case["userinfo"], str(result))
+                self.assertEqual(result["safe_error"], "Model stderr contained sensitive text; details withheld.")
 
     def test_large_stderr_is_drained_and_withheld_without_losing_stdout(self):
         result = self.run_command("import sys; sys.stderr.write('x' * 200000); print('{}'); sys.exit(2)")

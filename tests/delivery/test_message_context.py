@@ -12,9 +12,26 @@ from robert_agent.delivery.application import notifications
 from robert_agent.persistence import database
 from robert_agent.persistence.stores import notifications as notification_store
 from tests.support.work_items import WorkItemCommandFixture
+from tests.support import TEST_ROOT
 
 
 class MessageContextTests(WorkItemCommandFixture):
+    def test_stored_url_userinfo_is_withheld_from_notification_envelope(self):
+        cases = json.loads((TEST_ROOT / "fixtures" / "url_userinfo.json").read_text())
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                self.notice(
+                    case["name"],
+                    "2026-11-12T06:55:01Z",
+                    kind="supervision_decision_unavailable",
+                    metadata={"safe_error": f"https://{case['userinfo']}@proxy.example.org/path"},
+                )
+                with closing(database.connect(self.db_path)) as conn:
+                    payload = messages.envelope(conn, case["name"], config=self.config)
+                self.assertNotIn(case["userinfo"], json.dumps(payload))
+                self.assertEqual(payload["summary"], "Details require local inspection.")
+                self.assertEqual(payload["actions"], ["ack"])
+
     def test_sparse_global_decision_alert_explains_service_inspection_and_ack(self):
         self.notice(
             "service-alert",

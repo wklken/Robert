@@ -93,7 +93,8 @@ receipt only; decisions continue according to the configured cooldown and call
 budget. Known failure codes have human-readable explanations. Failed calls retain
 the exact decision/workstream identity, time, exit code and bounded, redacted
 stderr in supervisor status and the work item's task-supervision details. Oversized,
-non-UTF-8 or sensitive stderr is withheld. Raw stderr is never persisted.
+non-UTF-8 or sensitive stderr is withheld. URLs containing userinfo are treated
+as sensitive, including percent-encoded credentials. Raw stderr is never persisted.
 
 After a validated model response and confirmed process stop, the unavailable
 alerts become resolved history, preserving their delivery and acknowledgement
