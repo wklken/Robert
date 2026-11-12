@@ -82,6 +82,31 @@ class MessagePresentationTests(unittest.TestCase):
         self.assertTrue(send(payload, command=["local-notifier"], runner=runner))
         self.assertEqual(json.loads(runner.call_args.kwargs["input"]), payload)
 
+    def test_known_decision_failure_codes_explain_service_failure(self):
+        for code in (
+            "exited",
+            "invalid_output",
+            "timed_out",
+            "stopped",
+            "launch_failed",
+            "process_attention",
+            "provider_rate_limited",
+        ):
+            with self.subTest(code=code):
+                text = render_message(
+                    self.payload(
+                        type="supervision_decision_unavailable",
+                        reason_code=code,
+                        decision_id="decision-example",
+                        workstream_id="stream-example",
+                        exit_code=7,
+                    )
+                )
+                self.assertNotIn("原因暂未归类", text)
+                self.assertIn("决策记录: decision-example", text)
+                self.assertIn("工作流: stream-example", text)
+                self.assertIn("退出码: 7", text)
+
     def test_builtin_transport_uses_the_human_readable_body(self):
         runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', ""))
         config = {

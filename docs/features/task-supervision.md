@@ -87,7 +87,20 @@ Malformed model output, timeouts and transport failures cannot grant actions.
 The wrapper may report the same bound `rate_limited` transport envelope as the
 diagnosis wrapper below; the greater of its Retry-After delay and configured
 cooldown applies across targets and restarts. Repeated model failures create an
-operator health notice. An unresolved process identity retains the claim and is
+operator health notice. This is a global service alert in `/operations`' notification
+center, rather than a Kanban approval or reply event. Its `ack` action records
+receipt only; decisions continue according to the configured cooldown and call
+budget. Known failure codes have human-readable explanations. Failed calls retain
+the exact decision/workstream identity, time, exit code and bounded, redacted
+stderr in supervisor status and the work item's task-supervision details. Oversized,
+non-UTF-8 or sensitive stderr is withheld. Raw stderr is never persisted.
+
+After a validated model response and confirmed process stop, the unavailable
+alerts become resolved history, preserving their delivery and acknowledgement
+records. This establishes that the service can answer again; it does not prove
+that every previously failed workstream has retried or completed. An invalid
+response, process-start failure or unresolved process does not clear the alert.
+An unresolved process identity retains the claim and is
 visible as `decision_runner.claim` in status; service restart does not authorize
 duplicate launches. Stop the supervisor service and its model processes, then
 release that exact stranded claim through the local operator command:

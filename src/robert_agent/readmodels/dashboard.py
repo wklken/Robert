@@ -569,15 +569,21 @@ def _build_notification_center(
             or notification.get("channel")
             or ""
         )
+        if notification.get("notification_type") == "supervision_decision_unavailable":
+            severity = "ok" if notification.get("status") == "resolved" else "warning"
+            if notification.get("status") == "resolved":
+                summary = "自动决策服务已恢复；这条告警保留为历史记录。"
+        else:
+            severity = _status_severity(
+                notification.get("notification_type"),
+                notification.get("status"),
+                metadata.get("safe_error") if isinstance(metadata, dict) else None,
+            )
         items.append(
             _notification_item(
                 item_id=f"notification:{notification.get('notification_id')}",
                 kind="notification",
-                severity=_status_severity(
-                    notification.get("notification_type"),
-                    notification.get("status"),
-                    metadata.get("safe_error") if isinstance(metadata, dict) else None,
-                ),
+                severity=severity,
                 title=notification.get("notification_type") or "notification",
                 summary=summary,
                 created_at=notification.get("created_at"),

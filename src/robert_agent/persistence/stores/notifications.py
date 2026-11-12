@@ -186,6 +186,32 @@ def update_for_resolve_control_failure(conn, lane):
     return statements.write(conn, stmt, {"p0": lane})
 
 
+def resolve_decision_unavailable(conn, now, decision_id):
+    """Resolve global service alerts while retaining delivery and operator receipts."""
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .values(
+            status="resolved",
+            metadata_json=func.json_set(
+                notice.c.metadata_json,
+                "$.resolved_at",
+                bindparam("now"),
+                "$.resolution_decision_id",
+                bindparam("decision_id"),
+                "$.resolution_reason",
+                "validated_model_call",
+            ),
+        )
+        .where(
+            notice.c.notification_type == "supervision_decision_unavailable",
+            notice.c.task_id.is_(None),
+            notice.c.status != "resolved",
+        )
+    )
+    return statements.write(conn, stmt, {"now": now, "decision_id": decision_id})
+
+
 def record_control_stop(conn, value_1, now, value_3):
     stmt = (
         insert(tables["notifications"])

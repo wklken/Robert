@@ -15,6 +15,37 @@ from tests.support.work_items import WorkItemCommandFixture
 
 
 class MessageContextTests(WorkItemCommandFixture):
+    def test_sparse_global_decision_alert_explains_service_inspection_and_ack(self):
+        self.notice(
+            "service-alert",
+            "2026-11-12T06:55:01Z",
+            kind="supervision_decision_unavailable",
+            metadata={
+                "reason_code": "exited",
+                "required_action": "Inspect the supervisor decision service; automatic decisions are waiting.",
+            },
+        )
+        with closing(database.connect(self.db_path)) as conn:
+            payload = messages.envelope(conn, "service-alert", config=self.config)
+        text = render_message({**payload, "delivery_id": "service-alert:receipt"})
+        self.assertIsNone(payload["task_id"])
+        self.assertEqual(payload["actions"], ["ack"])
+        self.assertIn("全局", text)
+        self.assertIn("/operations", text)
+        self.assertIn("robert supervisor status", text)
+        self.assertIn("非零", text)
+        self.assertIn("仅记录收悉", text)
+        self.assertNotIn("原因暂未归类", text)
+        self.assertNotIn("请查看任务详情", text)
+        self.assertNotIn("Inspect the supervisor", text)
+
+        with closing(database.connect(self.db_path)) as conn, conn:
+            notification_store.update_for_persist_control_failure_alerts(conn, "service-alert")
+        with closing(database.connect(self.db_path)) as conn:
+            recovered = messages.envelope(conn, "service-alert", config=self.config, include_closed=True)
+        self.assertIn("已恢复", recovered["summary"])
+        self.assertNotIn("检查决策服务", recovered["required_action"])
+
     def test_command_transport_and_readiness_honor_explicit_cutoff(self):
         self.notice("history", "2026-07-17T09:58:43+00:00")
         config = {"messaging": {"enabled": False, "send_after": "2026-11-09T00:00:00Z"}}
