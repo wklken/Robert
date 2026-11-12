@@ -20,7 +20,7 @@ def completed(stdout=""):
 
 def save_audited_scope(conn, scope):
     conn.executescript("""
-        CREATE TABLE worker_results(result_id TEXT, task_id TEXT, attempt_id TEXT, metadata_json TEXT);
+        CREATE TABLE worker_results(result_id TEXT, task_id TEXT, attempt_id TEXT, metadata_json TEXT, output_type TEXT);
         CREATE TABLE tasks(task_id TEXT, metadata_json TEXT);
         CREATE TABLE attempts(attempt_id TEXT, task_id TEXT, metadata_json TEXT);
     """)
@@ -31,6 +31,19 @@ def save_audited_scope(conn, scope):
 
 
 class PublicationRecoveryTests(unittest.TestCase):
+    def test_push_route_comes_from_the_accepted_result_not_scope_metadata(self):
+        from robert_agent.delivery.application import scope as publication_scope
+
+        for output_type, proposed_type in (("new_pr", "update_existing_pr"), ("update_existing_pr", "new_pr")):
+            with self.subTest(output_type=output_type), closing(sqlite3.connect(":memory:")) as conn:
+                save_audited_scope(conn, {"repo": "x/y", "output_type": proposed_type})
+                conn.execute("UPDATE worker_results SET output_type = ?", (output_type,))
+                trusted = publication_scope.trusted_action_scope(conn, {"result_id": "r"}, include_output_type=True)
+                self.assertEqual(trusted["output_type"], output_type)
+                self.assertEqual(
+                    publication_scope.trusted_action_scope(conn, {"result_id": "r"})["output_type"], proposed_type
+                )
+
     def test_new_branch_push_uses_fully_qualified_destination_ref(self):
         scope = {
             "result_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

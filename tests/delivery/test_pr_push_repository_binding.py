@@ -193,6 +193,74 @@ class PRPushRepositoryBindingTests(TemporaryWorkspace):
         self.assertEqual(self.push_count, 1)
         self.assert_tips(self.head, self.candidate)
 
+    def test_new_pr_from_another_authors_pr_pushes_its_own_branch(self):
+        branch = "codex/new-pr"
+        self.git("switch", "-c", branch)
+        self.git("remote", "add", "origin", str(self.bare[BASE_REPO]))
+        self.audited_scope.update(output_type="new_pr", branch_name=branch, head_owner="example")
+        self.audited_scope.pop("existing_pr_head_sha")
+        self.action.update(
+            target_url=None,
+            metadata_json=json.dumps(
+                {
+                    "worktree_path": str(self.checkout),
+                    "remote": "origin",
+                    "branch": branch,
+                }
+            ),
+        )
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            if command[:2] == ["gh", "api"]:
+                self.fail("The source PR is context, not the new PR's push destination")
+            return self.runner(command, **kwargs)
+
+        absent = reconcile.classify_remote_state(self.action, self.audited_scope, runner)
+        self.assertEqual(absent["status"], "confirmed_absent", absent)
+        with patch.object(scope, "trusted_action_scope", return_value=self.audited_scope):
+            outcome = effects.publish_push_existing_pr(self.action, runner)
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertEqual(self.tip(BASE_REPO, branch), self.candidate)
+        self.assert_tips(self.head, self.head)
+        self.assertEqual(self.push_count, 1)
+        self.assertEqual(
+            reconcile.classify_remote_state(self.action, self.audited_scope, runner)["status"], "confirmed_effect"
+        )
+        self.assertTrue(any(command[-1] == f"{self.candidate}:refs/heads/{branch}" for command in calls))
+
+    def test_new_pr_push_rejects_destination_outside_audited_head_repository(self):
+        self.git("remote", "add", "origin", str(self.bare[FORK_REPO]))
+        self.audited_scope.update(output_type="new_pr", head_owner="example")
+        self.audited_scope.pop("existing_pr_head_sha")
+        outcome = self.publish()
+        self.assertFalse(outcome["ok"], outcome)
+        self.assertEqual(self.push_count, 0)
+        self.assert_tips(self.head, self.head)
+        self.assertEqual(
+            reconcile.classify_remote_state(self.action, self.audited_scope, self.runner)["status"], "unknown"
+        )
+
+    def test_existing_pr_authorship_check_is_preserved(self):
+        self.git("remote", "add", "origin", str(self.bare[FORK_REPO]))
+        self.audited_scope.update(output_type="update_existing_pr", github_account="another-bot")
+        self.assertFalse(self.publish()["ok"])
+        self.assertEqual(self.push_count, 0)
+        self.assert_tips(self.head, self.head)
+
+    def test_new_pr_can_push_to_its_audited_fork(self):
+        self.git("remote", "add", "origin", str(self.bare[BASE_REPO]))
+        self.git("config", "remote.origin.pushurl", str(self.bare[FORK_REPO]))
+        self.audited_scope.update(output_type="new_pr", head_owner="contributor")
+        self.audited_scope.pop("existing_pr_head_sha")
+        outcome = self.publish()
+        self.assertTrue(outcome["ok"], outcome)
+        self.assert_tips(self.head, self.candidate)
+        self.assertEqual(
+            reconcile.classify_remote_state(self.action, self.audited_scope, self.runner)["status"], "confirmed_effect"
+        )
+
     def test_credential_bearing_raw_or_expanded_destination_is_rejected(self):
         safe = f"https://github.com/{FORK_REPO}.git"
         secret = f"https://fixture-user:fixture-secret@github.com/{FORK_REPO}.git"
@@ -207,7 +275,7 @@ class PRPushRepositoryBindingTests(TemporaryWorkspace):
                     value = raw if command[:3] == ["git", "remote", "get-url"] else expanded
                     return subprocess.CompletedProcess(command, 0, value + "\n", "")
 
-                result = guards.existing_pr_push_target(self.audited_scope, runner)
+                result = guards.push_target(self.audited_scope, runner)
                 self.assertFalse(result["ok"], result)
                 self.assertNotIn("fixture-secret", json.dumps(result))
                 self.assertFalse(any(call[:2] == ["git", "push"] for call in calls))

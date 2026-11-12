@@ -45,6 +45,10 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.error = "connection reset by peer"
 
     def runner(self, command, **kwargs):
+        if command[:3] == ["git", "remote", "get-url"]:
+            return SimpleNamespace(returncode=0, stdout="https://github.com/x/y.git\n", stderr="")
+        if command[:3] == ["git", "ls-remote", "--get-url"]:
+            return SimpleNamespace(returncode=0, stdout=command[-1] + "\n", stderr="")
         self.commands.append(command[:2])
         if command[:2] == ["git", "ls-remote"]:
             return SimpleNamespace(returncode=0, stdout=self.remote, stderr="")
