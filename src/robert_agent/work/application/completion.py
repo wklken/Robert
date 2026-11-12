@@ -613,21 +613,20 @@ def finalize_accepted_result(
                 decision = db_records.first(
                     db_read_work_item_events.find_for_finalize_accepted_result(conn, work_item_row[0])
                 )
-                if decision:
-                    work_items.record_system_event(
-                        conn,
-                        work_item_row[0],
-                        event_type="routing_selected",
-                        idempotency_key=f"classification-routing:{payload['result_id']}",
-                        resolves_event_id=decision[0],
-                        metadata={
-                            "result_id": payload["result_id"],
-                            "task_id": child_task["task_id"],
-                            "route_id": child_task["route_id"],
-                        },
-                        now=run_now,
-                    )
-                    db_write_work_items.update_for_execute_command_4(conn, run_now, run_now, work_item_row[0])
+                work_items.record_system_event(
+                    conn,
+                    work_item_row[0],
+                    event_type="routing_selected",
+                    idempotency_key=f"classification-routing:{payload['result_id']}",
+                    resolves_event_id=decision[0] if decision else None,
+                    metadata={
+                        "result_id": payload["result_id"],
+                        "task_id": child_task["task_id"],
+                        "route_id": child_task["route_id"],
+                    },
+                    now=run_now,
+                )
+                db_write_work_items.update_for_execute_command_4(conn, run_now, run_now, work_item_row[0])
             execution_ownership.close_terminal_task(conn, payload["task_id"], run_now)
             return True
     _create_child_task_for_pending_events(
