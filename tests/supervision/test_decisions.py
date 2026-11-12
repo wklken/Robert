@@ -234,6 +234,136 @@ recheck_seconds=300, message=''), sys.stdout)
             conn.commit()
         self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
 
+    def stranded_claim(self):
+        from robert_agent.supervision import store
+
+        claim = {
+            "bundle_id": "stranded",
+            "root_id": "w",
+            "claimed_at": self.now,
+            "owner_identity": {"pid": 123},
+        }
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            store.update_checkpoint(conn, *decisions.RUNNER_KEY, now=self.now, metadata={"claim": claim})
+            conn.commit()
+        return claim
+
+    def test_dead_owner_missing_model_identity_does_not_starve_other_workstreams(self):
+        from robert_agent.adapters.processes import identity
+        from robert_agent.persistence import database, transactions
+
+        claim = self.stranded_claim()
+        self.config["supervision"]["batch_size"] = 1
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id,repo_id,created_at,updated_at) VALUES ('z','r',?,?)",
+                [self.now] * 2,
+            )
+            conn.execute(
+                "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('tz','z','running',?,?)",
+                [self.now] * 2,
+            )
+            decisions.write(conn, "z", {"status": "reply_received"}, self.now)
+            decisions.offer(
+                conn,
+                self.config,
+                workstream_id="z",
+                action="retry_worker",
+                target_id="attempt-z",
+                facts={"task_id": "tz", "identity_status": "dead"},
+                now=self.now,
+            )
+            conn.commit()
+        with patch.object(identity, "inspect_recorded_identity", return_value="dead"):
+            self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
+            # A restart must keep fencing w while the bounded cursor reaches z.
+            loop = DecisionLoop()
+
+            def complete(_config, _profile, request):
+                loop.result = (request, {"status": "read", "stopped": True}, self.output(request))
+
+            with patch.object(loop, "_run", side_effect=complete):
+                first = loop.poll(self.config)
+                second = loop.poll(self.config)
+                if loop.thread:
+                    loop.thread.join()
+            self.assertEqual(first["status"], "process_attention")
+            self.assertEqual(second, {"status": "launched", "workstream_id": "z"})
+        runner = decision_control.runner_status(self.config)
+        self.assertEqual(runner["attention_claims"]["w"], claim)
+        self.assertEqual(runner["claim"]["root_id"], "z")
+        with self.connect() as conn:
+            self.assertEqual(decisions.read(conn, "w")["status"], "process_attention")
+        self.assertEqual(loop.poll(self.config)["status"], "decided")
+        with closing(database.connect(self.db)) as conn, conn:
+            transactions.begin(conn, immediate=True)
+            self.assertTrue(
+                decisions.permit(
+                    conn,
+                    self.config,
+                    workstream_id="z",
+                    action="retry_worker",
+                    target_id="attempt-z",
+                    facts={"task_id": "tz", "identity_status": "dead"},
+                    now=self.now,
+                )
+            )
+
+    def test_missing_model_identity_with_live_or_unknown_owner_keeps_global_fence(self):
+        from robert_agent.adapters.processes import identity
+
+        for owner_status in ("alive_same", "unknown"):
+            with self.subTest(owner_status=owner_status):
+                claim = self.stranded_claim()
+                with patch.object(identity, "inspect_recorded_identity", return_value=owner_status):
+                    self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
+                self.assertEqual(decision_control.runner_status(self.config)["claim"], claim)
+
+    def test_attention_claim_retains_shared_cooldown_and_call_budget(self):
+        from robert_agent.supervision import store
+        from robert_agent.adapters.processes import identity
+
+        claim = self.stranded_claim()
+        for field, value, expected in (
+            ("next_check_at", "2999-01-01T00:00:00+00:00", "cooldown"),
+            ("calls", [self.now] * 6, "call_budget_exhausted"),
+        ):
+            with self.subTest(field=field):
+                with self.connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    store.update_checkpoint(
+                        conn, *decisions.RUNNER_KEY, now=self.now, metadata={"claim": claim, field: value}
+                    )
+                    conn.commit()
+                with patch.object(identity, "inspect_recorded_identity", return_value="dead"):
+                    self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
+                    self.assertEqual(DecisionLoop().poll(self.config)["status"], expected)
+
+    def test_operator_resolves_attention_claim_without_releasing_another_claim(self):
+        from robert_agent.supervision import store
+        from robert_agent.adapters.processes import identity
+
+        claim = self.stranded_claim()
+        active = {"bundle_id": "new", "root_id": "z"}
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            store.update_checkpoint(
+                conn,
+                *decisions.RUNNER_KEY,
+                now=self.now,
+                metadata={"claim": active, "attention_claims": {"w": claim}, "next_check_at": self.now},
+            )
+            conn.commit()
+        with patch.object(identity, "inspect_recorded_identity", return_value="dead"):
+            with self.assertRaises(ValueError):
+                decision_control.resolve_runner(self.config, "different", confirm_process_stopped=True)
+            decision_control.resolve_runner(self.config, "stranded", confirm_process_stopped=True)
+        runner = decision_control.runner_status(self.config)
+        self.assertEqual(runner["claim"], active)
+        self.assertEqual(runner["attention_claims"], {})
+        self.assertEqual(runner["next_check_at"], self.now)
+
     def test_notification_rechecks_do_not_repeat_an_unchanged_notice(self):
         with self.connect() as conn:
             self.offer(conn)

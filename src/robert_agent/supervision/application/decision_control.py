@@ -69,6 +69,12 @@ def resolve_runner(config, decision_id, *, confirm_process_stopped=False):
         raise ValueError("Stop the supervisor and its model processes before confirming recovery")
     state = runner_status(config)
     claim = state.get("claim") or {}
+    attention_root = None
+    if claim.get("bundle_id") != decision_id:
+        for root_id, recorded in state.get("attention_claims", {}).items():
+            if recorded.get("bundle_id") == decision_id:
+                attention_root, claim = root_id, recorded
+                break
     if claim.get("bundle_id") != decision_id:
         raise ValueError("runner claim changed or is no longer waiting")
     # Process inspection is outside the writer. Unknown identity requires the
@@ -85,7 +91,10 @@ def resolve_runner(config, decision_id, *, confirm_process_stopped=False):
     with closing(database.connect(f"{Path(config['db_path']).resolve().as_uri()}?mode=rw", uri=True)) as conn, conn:
         transactions.begin(conn, immediate=True)
         current = (store.get_checkpoint(conn, *decisions.RUNNER_KEY) or {}).get("metadata", {})
-        if current.get("claim") != claim:
+        current_claim = (
+            current.get("attention_claims", {}).get(attention_root) if attention_root else current.get("claim")
+        )
+        if current_claim != claim:
             raise ValueError("runner claim changed during inspection")
         resolution = {
             "decision_id": decision_id,
@@ -94,15 +103,24 @@ def resolve_runner(config, decision_id, *, confirm_process_stopped=False):
             "process_stop_confirmed": True,
         }
         store.update_checkpoint(conn, "decision_resolution", "installation", decision_id, now=now, metadata=resolution)
+        if attention_root:
+            recovered = {
+                "attention_claims": {
+                    root_id: recorded
+                    for root_id, recorded in current.get("attention_claims", {}).items()
+                    if root_id != attention_root
+                }
+            }
+        else:
+            recovered = {"claim": None, "next_check_at": now}
         store.update_checkpoint(
             conn,
             *decisions.RUNNER_KEY,
             now=now,
             metadata={
                 **current,
-                "claim": None,
+                **recovered,
                 "last_status": DecisionRunStatus.OPERATOR_RESOLVED.value,
-                "next_check_at": now,
                 "resolution": resolution,
             },
         )

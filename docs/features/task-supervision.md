@@ -89,7 +89,14 @@ diagnosis wrapper below; the greater of its Retry-After delay and configured
 cooldown applies across targets and restarts. Repeated model failures create an
 operator health notice. An unresolved process identity retains the claim and is
 visible as `decision_runner.claim` in status; service restart does not authorize
-duplicate launches. Stop the supervisor service and its model processes, then
+duplicate launches. When the recorded owner is proven dead and no model identity
+was checkpointed, the claim moves to `decision_runner.attention_claims`, keyed by
+its root workstream. That workstream remains fenced until operator recovery;
+unrelated workstreams can continue decisions under the same shared cooldown and
+hourly call budget. A live or unknown owner, or a recorded model identity, keeps
+the existing installation-wide process reconciliation fence.
+
+Stop the supervisor service and its model processes, then
 release that exact stranded claim through the local operator command:
 
 ```sh

@@ -143,10 +143,63 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
             process.wait(timeout=5)
 
         self.addCleanup(cleanup)
-        identity = worker_identity.capture_process_identity(process.pid)
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                identity = worker_identity.capture_process_identity(process.pid)
+                break
+            except worker_identity.EmptyCommandline:
+                # A newly exec'd Linux process can briefly expose an empty cmdline.
+                # Retry only this fixture's startup observation, not other identity failures.
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
         if stopped:
             cleanup()
         return identity
+
+    def test_process_fixture_recovers_from_transient_empty_cmdline_before_stopping(self):
+        capture = worker_identity.capture_process_identity
+        first_read = True
+
+        def read_identity(pid):
+            nonlocal first_read
+            if first_read:
+                first_read = False
+                raise worker_identity.EmptyCommandline("process cmdline is empty")
+            return capture(pid)
+
+        with patch.object(worker_identity, "capture_process_identity", side_effect=read_identity):
+            identity = self.process_identity(stopped=True)
+        self.assertEqual(worker_identity.inspect_recorded_identity(identity), "dead")
+
+    def test_process_fixture_does_not_retry_other_identity_errors(self):
+        for error in (worker_identity.ZombieProcess, worker_identity.ProcessIdentityMissing):
+            with self.subTest(error=error.__name__):
+                with patch.object(
+                    worker_identity,
+                    "capture_process_identity",
+                    side_effect=(error("not live"), AssertionError("must not retry other identity errors")),
+                ):
+                    with self.assertRaises(error):
+                        self.process_identity()
+
+    def test_process_fixture_bounds_empty_cmdline_retries(self):
+        with (
+            patch.object(
+                worker_identity,
+                "capture_process_identity",
+                side_effect=(
+                    worker_identity.EmptyCommandline(),
+                    worker_identity.EmptyCommandline(),
+                    AssertionError("must stop retrying at the deadline"),
+                ),
+            ),
+            patch.object(time, "monotonic", side_effect=(0, 0, 5)),
+            patch.object(time, "sleep"),
+        ):
+            with self.assertRaises(worker_identity.EmptyCommandline):
+                self.process_identity()
 
     def test_releases_only_proven_stopped_slots_while_unknown_child_retains_parent(self):
         for store in native_rounds.STORES:

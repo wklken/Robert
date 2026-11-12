@@ -145,6 +145,35 @@ class DecisionLoop:
     def _recover_previous(self, config, claim, now):
         recorded = claim.get("process_identity")
         if not recorded:
+            owner = claim.get("owner_identity")
+            if claim.get("root_id") and owner and identity.inspect_recorded_identity(owner) == "dead":
+                # The owner cannot checkpoint a late spawn any more. Retain
+                # unknown children and fence this root, rather than every root.
+                with closing(_connect(config)) as conn, conn:
+                    transactions.begin(conn, immediate=True)
+                    runner = _read_runner(conn)
+                    if runner.get("claim") != claim:
+                        return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
+                    attention = runner.get("attention_claims", {})
+                    if claim["root_id"] in attention:
+                        return {"status": DecisionRunStatus.PROCESS_ATTENTION.value}
+                    _write_runner(
+                        conn,
+                        {
+                            **runner,
+                            "claim": None,
+                            "attention_claims": {**attention, claim["root_id"]: claim},
+                            "last_status": DecisionRunStatus.PROCESS_ATTENTION.value,
+                        },
+                        now,
+                    )
+                    previous = decisions.read(conn, claim["root_id"])
+                    decisions.write(
+                        conn,
+                        claim["root_id"],
+                        {**previous, "status": DecisionRunStatus.PROCESS_ATTENTION.value},
+                        now,
+                    )
             return {"status": DecisionRunStatus.PROCESS_ATTENTION.value}
         state = identity.inspect_recorded_identity(recorded)
         if state == "alive_same" and timestamp(now) >= timestamp(claim["deadline_at"]):
@@ -211,6 +240,8 @@ class DecisionLoop:
                 for target in targets:
                     root_id = target["workstream_id"]
                     runner["cursor"] = root_id
+                    if root_id in runner.get("attention_claims", {}):
+                        continue
                     previous = decisions.read(conn, root_id)
                     if previous.get("status") == DecisionStatus.ASK_USER:
                         continue
@@ -262,7 +293,11 @@ class DecisionLoop:
                     self.thread.start()
                     return {"status": DecisionRunStatus.LAUNCHED.value, "workstream_id": root_id}
                 _write_runner(conn, runner, now)
-                return {"status": DecisionRunStatus.IDLE.value}
+                return {
+                    "status": DecisionRunStatus.PROCESS_ATTENTION.value
+                    if runner.get("attention_claims")
+                    else DecisionRunStatus.IDLE.value
+                }
         except (OSError, errors.Error, ValueError, RecursionError, identity.IdentityReadError):
             return {"status": DecisionRunStatus.UNAVAILABLE.value}
 
