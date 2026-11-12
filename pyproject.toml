@@ -13,7 +13,7 @@ authors = [{name = "Robert contributors"}]
 dependencies = [
   "PyYAML>=6.0,<7",
   # Shared model mappings and parameterized persistence expressions replace handwritten SQL.
-  "SQLAlchemy>=2.0.47,<2.1",
+  "SQLAlchemy>=2.1.0,<2.2",
   # Supervisor provides restart/status control when Linux user systemd is unavailable.
   "supervisor>=4.2,<5",
 ]

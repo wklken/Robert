@@ -213,7 +213,7 @@ and atomic conditional updates through one persistence layer. The standard-libra
 module and the existing dependencies do not provide these mapping and query-building
 capabilities. The synchronous API supports the project's supported Python matrix; the
 runtime keeps sqlite3's existing transaction behavior and uses no ORM session identity map.
-The dependency range stays on the maintained 2.0 line. Its MIT license is compatible with
+The dependency range requires the maintained 2.1 line and excludes 2.2. Its MIT license is compatible with
 this project; release CI dependency audits include SQLAlchemy and its resolved dependencies.
 No additional database service, migration tool, or asynchronous driver is required.
 
