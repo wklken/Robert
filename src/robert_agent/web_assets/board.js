@@ -1174,6 +1174,13 @@ function renderSupervision(detail) {
     entry.append(node("p", "", `${supervision.status} · ${decision.action || ""}`));
     [decision.reason, decision.message, decision.expected_progress, supervision.next_check_at]
       .filter(Boolean).forEach(text => entry.append(node("p", "", text)));
+    const failure = supervision.last_failure;
+    if (failure) {
+      [failure.decision_id, failure.failed_at, failure.safe_error]
+        .filter(Boolean).forEach(text => entry.append(node("p", "", text)));
+      if (failure.exit_code !== null && failure.exit_code !== undefined)
+        entry.append(node("p", "", `Exit: ${failure.exit_code}`));
+    }
     panel.append(entry);
   }
   if (!incidents.length && !supervision) panel.append(node("p", "", t("noIncidents")));

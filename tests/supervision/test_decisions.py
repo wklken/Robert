@@ -175,6 +175,144 @@ recheck_seconds=300, message=''), sys.stdout)
             with self.assertRaises(ValueError):
                 decisions.validate(json.dumps(value), request)
 
+    def finish_model_call(self, *, status="exited", failures=0, output=None, stopped=True, request=None):
+        from robert_agent.supervision import store
+        from robert_agent.persistence import database
+
+        if request is None:
+            with closing(database.connect(self.db)) as conn:
+                request = self.request(conn)
+
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            runner = (store.get_checkpoint(conn, *decisions.RUNNER_KEY) or {}).get("metadata", {})
+            store.update_checkpoint(
+                conn,
+                *decisions.RUNNER_KEY,
+                now=self.now,
+                metadata={
+                    **runner,
+                    "failures": failures,
+                    "claim": {"bundle_id": request["bundle_id"], "cooldown_seconds": 120},
+                },
+            )
+            conn.commit()
+        loop = DecisionLoop()
+        loop.result = (
+            request,
+            {"status": status, "stopped": stopped, "exit_code": 7, "safe_error": "gateway unavailable"},
+            self.output(request, "wait") if output else None,
+        )
+        result = loop._finish(self.config, self.now)
+        return request, result
+
+    def test_failed_decision_and_global_notice_retain_diagnostics_without_task_approval(self):
+        from robert_agent.readmodels import board
+        from robert_agent.supervision import store
+
+        request, result = self.finish_model_call(failures=1)
+        self.assertEqual(result["status"], "exited")
+        with self.connect() as conn:
+            state = decisions.read(conn, "w")
+            failure = state.get("last_failure", {})
+            self.assertEqual(failure.get("decision_id"), request["bundle_id"])
+            self.assertEqual(failure.get("exit_code"), 7)
+            self.assertEqual(failure.get("safe_error"), "gateway unavailable")
+            record = store.get_checkpoint(conn, "decision_record", "w", request["bundle_id"])
+            self.assertIsNotNone(record)
+            notice = conn.execute("SELECT task_id,metadata_json FROM notifications").fetchone()
+            self.assertIsNone(notice[0])
+            metadata = json.loads(notice[1])
+            self.assertEqual(metadata.get("workstream_id"), "w")
+            self.assertEqual(metadata.get("decision_id"), request["bundle_id"])
+            self.assertEqual(metadata.get("safe_error"), "gateway unavailable")
+            self.assertIn("/operations", metadata["required_action"])
+            self.assertEqual(conn.execute("SELECT count(*) FROM work_item_events").fetchone()[0], 0)
+        detail = board.get_work_item_detail(self.db, "i")
+        self.assertEqual(detail["supervision_decision"].get("last_failure"), failure)
+
+    def test_recovery_resolves_legacy_and_current_global_alerts_preserving_receipts(self):
+        request, _ = self.finish_model_call(failures=1)
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO notifications(notification_id,notification_type,status,created_at,metadata_json) "
+                "VALUES ('legacy','supervision_decision_unavailable','recorded',?,?)",
+                (self.now, json.dumps({"delivery": {"status": "sent"}, "operator_response": {"action": "ack"}})),
+            )
+            conn.execute(
+                "INSERT INTO notifications(notification_id,notification_type,status,created_at) "
+                "VALUES ('unrelated','worker_stale','recorded',?)",
+                (self.now,),
+            )
+            conn.commit()
+        recovered, result = self.finish_model_call(status="read", failures=2, output=True)
+        self.assertEqual(result["status"], "decided")
+        with self.connect() as conn:
+            rows = conn.execute("SELECT notification_id,status,metadata_json FROM notifications").fetchall()
+        values = {row[0]: (row[1], json.loads(row[2])) for row in rows}
+        for identifier in ("legacy", "decision-unavailable-" + request["bundle_id"]):
+            self.assertEqual(values[identifier][0], "resolved")
+            self.assertEqual(values[identifier][1].get("resolved_at"), self.now)
+            self.assertEqual(values[identifier][1].get("resolution_decision_id"), recovered["bundle_id"])
+        self.assertEqual(values["legacy"][1]["delivery"], {"status": "sent"})
+        self.assertEqual(values["legacy"][1]["operator_response"], {"action": "ack"})
+        self.assertEqual(values["unrelated"][0], "recorded")
+
+    def test_invalid_or_unstopped_call_does_not_resolve_global_alert(self):
+        request, _ = self.finish_model_call(failures=1)
+        for status, output, stopped in (("invalid_output", None, True), ("read", True, False)):
+            with self.subTest(status=status, stopped=stopped):
+                self.finish_model_call(status=status, output=output, stopped=stopped, failures=2)
+                with self.connect() as conn:
+                    self.assertEqual(
+                        conn.execute(
+                            "SELECT status FROM notifications WHERE notification_id=?",
+                            ("decision-unavailable-" + request["bundle_id"],),
+                        ).fetchone()[0],
+                        "recorded",
+                    )
+
+    def test_stale_valid_response_resolves_service_alert_without_granting_action(self):
+        self.finish_model_call(failures=1)
+        from robert_agent.persistence import database
+
+        with closing(database.connect(self.db)) as conn:
+            request = self.request(conn)
+        with self.connect() as conn:
+            conn.execute("UPDATE work_items SET description='Changed requirements',version=2")
+            conn.commit()
+        _request, result = self.finish_model_call(status="read", failures=2, output=True, request=request)
+        self.assertEqual(result["status"], "stale_evidence")
+        with self.connect() as conn:
+            self.assertIsNone(decisions.read(conn, "w").get("decision"))
+            self.assertEqual(conn.execute("SELECT status FROM notifications").fetchone()[0], "resolved")
+
+    def test_real_failed_model_persists_error_in_status_after_restart(self):
+        self.config["supervision"]["decision"]["command"] = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.write('local gateway unavailable'); sys.exit(7)",
+        ]
+        with self.connect() as conn:
+            self.offer(conn)
+            conn.commit()
+        loop = DecisionLoop()
+        self.addCleanup(loop.shutdown, self.config)
+        deadline = time.monotonic() + 8
+        result = {}
+        while time.monotonic() < deadline:
+            result = loop.poll(self.config)
+            if result["status"] == "exited":
+                break
+            time.sleep(0.02)
+        self.assertEqual(result["status"], "exited", result)
+        state = decision_control.status(self.config)[0]
+        self.assertEqual(state["last_failure"]["exit_code"], 7)
+        self.assertEqual(state["last_failure"]["safe_error"], "local gateway unavailable")
+        runner = decision_control.runner_status(self.config)
+        self.assertEqual(runner["last_failure"], state["last_failure"])
+        self.assertIsNone(runner["claim"])
+
     def test_cli_reply_resolves_the_board_question_without_starting_work(self):
         with self.connect() as conn:
             self.offer(conn)

@@ -1,10 +1,29 @@
 from robert_agent.readmodels import dashboard
 from contextlib import closing
+import json
 import sqlite3
 from tests.support.dashboard import DashboardFixture
 
 
 class DashboardTests(DashboardFixture):
+    def test_global_decision_alert_warning_becomes_resolved_history(self):
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO notifications(notification_id,notification_type,status,created_at,metadata_json) "
+                "VALUES ('decision-alert','supervision_decision_unavailable','recorded','2030-01-01T00:00:00Z',?)",
+                (json.dumps({"summary": "Decision service unavailable", "safe_error": "gateway error"}),),
+            )
+        for status, severity in (("recorded", "warning"), ("resolved", "ok")):
+            with self.subTest(status=status):
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.execute("UPDATE notifications SET status=? WHERE notification_id='decision-alert'", (status,))
+                items = dashboard.build_dashboard_data(db_path)["notification_center"]
+                notice = next(item for item in items if item["id"] == "notification:decision-alert")
+                self.assertEqual(notice["severity"], severity)
+                self.assertIsNone(notice["task_id"])
+
     def test_web_builds_dashboard_data(self):
         db_path = self.root / "dd.sqlite3"
         self._init_summary_db(db_path)
