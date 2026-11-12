@@ -44,7 +44,7 @@ Issues = "https://github.com/wklken/robert/issues"
 dev = [
   "build",
   # Keep the same contract engine across the CI matrix.
-  "import-linter>=2.15,<2.16",
+  "import-linter>=2.15,<2.17",
   "mypy",
   "pip-audit",
   # Pin the formatter so local runs and CI produce the same style.

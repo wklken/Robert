@@ -652,6 +652,12 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         waiting = board.get_work_item_detail(self.db_path, item["work_item_id"])
         self.assertEqual(waiting["column"], "waiting")
         self.assertEqual(waiting["valid_commands"], ["approve", "cancel"])
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            notification_id, kind, status = conn.execute(
+                "SELECT notification_id,notification_type,status FROM notifications"
+            ).fetchone()
+        self.assertEqual(kind, "operator_decision_required")
+        self.assertEqual(status, "recorded")
 
         approved = work_items.execute_command(
             self.db_path,
@@ -670,6 +676,12 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         self.assertIsNotNone(detail["activated_at"])
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute("SELECT status FROM notifications WHERE notification_id=?", (notification_id,)).fetchone()[
+                    0
+                ],
+                "resolved",
+            )
 
     def test_cancel_is_terminal_for_start_and_reply(self):
         from robert_agent.readmodels import board

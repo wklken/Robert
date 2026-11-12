@@ -442,6 +442,7 @@ def create_task_attempt_and_prompt(
         workstream_id=workstream_id,
         actor_identity=event.get("actor_login") or "github",
         route_confidence=route_result.get("confidence", "low"),
+        route_id=route_result["route_id"],
         now=run_now,
     )
     if item["origin_type"] == "github" and item["canceled_at"] and new_request_event is not None:

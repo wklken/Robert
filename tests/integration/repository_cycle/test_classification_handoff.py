@@ -3,6 +3,7 @@ import json
 import sqlite3
 import yaml
 from pathlib import Path
+from unittest.mock import Mock
 from tests.support import PACKAGE_ROOT
 from tests.support.repository_cycle import (
     RepositoryCycleFixture,
@@ -10,6 +11,74 @@ from tests.support.repository_cycle import (
 
 
 class ClassificationHandoffTests(RepositoryCycleFixture):
+    def test_automatic_classification_and_handoff_do_not_request_approval(self):
+        from robert_agent.delivery.application import notifications, submission
+        from robert_agent.readmodels import board
+        from robert_agent.runtime import cycle
+
+        assignment = {
+            "id": "assign-analysis",
+            "number": 154,
+            "source_type": "issue",
+            "event_type": "assigned",
+            "actor_login": "wklken",
+            "body": "@robert-bot confirm why plugin metadata cannot be configured.",
+            "intent": "unclear",
+            "url": "https://github.com/example/backend/issues/154",
+            "state": "open",
+        }
+        self.fixture_path.write_text(json.dumps({"events": [assignment]}), encoding="utf-8")
+        first = cycle.run_once(self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True)
+        self.assertTrue(first["ok"], first)
+        db_path = self.data_dir / "dd.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn:
+            item_id = conn.execute("SELECT work_item_id FROM work_items").fetchone()[0]
+            task_id, attempt_id = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
+        runner = Mock()
+        for status, column in (("prepared", "todo"), ("running", "doing")):
+            with self.subTest(status=status):
+                with closing(sqlite3.connect(db_path)) as conn, conn:
+                    conn.execute("UPDATE attempts SET status=? WHERE attempt_id=?", (status, attempt_id))
+                detail = board.get_work_item_detail(db_path, item_id)
+                self.assertEqual(detail["column"], column)
+                self.assertEqual(detail["attention_signals"], [])
+                self.assertEqual(detail["valid_commands"], ["cancel"])
+                self.assertIsNotNone(detail["activated_at"])
+                delivered = notifications.deliver_pending(db_path, command=["test-notifier"], runner=runner)
+                self.assertEqual(delivered["sent"], 0)
+        runner.assert_not_called()
+        receipt = submission.record_result(
+            db_path,
+            submission.build_result(
+                task_id=task_id,
+                attempt_id=attempt_id,
+                output_type="classification_result",
+                consumed_event_fingerprints=["assigned:assign-analysis"],
+                verification=[],
+                handoff="Analyze the configuration path; no additional decision is needed.",
+                recommended_route="comment-analysis",
+            ),
+        )
+        self.assertTrue(receipt["ok"], receipt)
+        finalized = cycle.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertTrue(finalized["ok"], finalized)
+        detail = board.get_work_item_detail(db_path, item_id)
+        self.assertEqual(detail["attention_signals"], [])
+        self.assertEqual(detail["valid_commands"], ["cancel"])
+        routing = [event for event in detail["events"] if event["event_type"] == "routing_selected"]
+        self.assertEqual(len(routing), 1)
+        self.assertEqual(routing[0]["metadata"]["task_id"], detail["task_id"])
+        self.assertIsNone(routing[0]["resolves_event_id"])
+        repeated = cycle.run_once(self.config_path, dry_run=True, skip_external=True)
+        self.assertTrue(repeated["ok"], repeated)
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM work_item_events WHERE event_type='routing_selected'").fetchone()[0],
+                1,
+            )
+
     def test_default_waiting_route_preserves_new_trusted_request(self):
         from robert_agent.delivery.application import submission as result
         from robert_agent.runtime import cycle
@@ -66,7 +135,9 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
             )
 
     def test_classification_without_route_creates_one_question_task(self):
+        from robert_agent.delivery import messages
         from robert_agent.delivery.application import submission as result
+        from robert_agent.persistence import database
         from robert_agent.runtime import cycle as run_once
 
         self.fixture_path.write_text(
@@ -179,6 +250,13 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
                 ],
                 1,
             )
+            notices = conn.execute("SELECT notification_id,notification_type FROM notifications").fetchall()
+            self.assertEqual(len(notices), 1)
+            self.assertEqual(notices[0][1], "operator_question")
+        with closing(database.connect(db_path)) as conn:
+            envelope = messages.envelope(conn, notices[0][0])
+        self.assertEqual(envelope["summary"], "Do you want analysis or implementation?")
+        self.assertEqual(envelope["actions"], ["reply", "cancel"])
 
         self.fixture_path.write_text(
             json.dumps(
