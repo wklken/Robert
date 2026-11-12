@@ -261,6 +261,7 @@ def ensure_github_work_item(
     actor_identity,
     route_confidence,
     now,
+    route_id=None,
 ):
     existing = resolve_work_item_for_workstream(conn, workstream_id)
     if existing:
@@ -286,7 +287,8 @@ def ensure_github_work_item(
     title = (root[2] if root else None) or f"Workstream {root_workstream_id}"
     created_by = actor_identity or (root[3] if root else None) or "system"
     created_at = (root[1] if root else None) or now
-    activated_at = now if route_confidence == "high" else None
+    decision_required = route_confidence != "high" and route_id != "classification-result"
+    activated_at = None if decision_required else now
     db_write_work_items.insert_for_ensure_github_work_item(
         conn,
         work_item_id,
@@ -306,7 +308,7 @@ def ensure_github_work_item(
     if not item:
         raise WorkItemConflictError("GitHub work item identity conflicts with existing data")
     item_payload = _item_from_row(item)
-    event_type = "github_intake" if route_confidence == "high" else "operator_decision_required"
+    event_type = "operator_decision_required" if decision_required else "github_intake"
     _insert_event(
         conn,
         item_payload["work_item_id"],
