@@ -29,7 +29,7 @@ class MessageContextTests(WorkItemCommandFixture):
                 with closing(database.connect(self.db_path)) as conn:
                     payload = messages.envelope(conn, case["name"], config=self.config)
                 self.assertNotIn(case["userinfo"], json.dumps(payload))
-                self.assertEqual(payload["summary"], "Details require local inspection.")
+                self.assertIn("全局监督服务告警", payload["summary"])
                 self.assertEqual(payload["actions"], ["ack"])
 
     def test_sparse_global_decision_alert_explains_service_inspection_and_ack(self):

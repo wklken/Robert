@@ -95,6 +95,10 @@ the exact decision/workstream identity, time, exit code and bounded, redacted
 stderr in supervisor status and the work item's task-supervision details. Oversized,
 non-UTF-8 or sensitive stderr is withheld. URLs containing userinfo are treated
 as sensitive, including percent-encoded credentials. Raw stderr is never persisted.
+Explicit credential assignments are withheld regardless of value length.
+Global service alerts contain only service health information, not workstream,
+repository or stderr details. This also applies to older alerts waiting for
+delivery; inspect the local supervisor status or task details for diagnostics.
 
 After a validated model response and confirmed process stop, the unavailable
 alerts become resolved history, preserving their delivery and acknowledgement

@@ -156,10 +156,10 @@ class DecisionLoop:
                     decisions.encode(
                         {
                             "reason_code": status,
-                            "workstream_id": request["root_id"],
                             "decision_id": request["bundle_id"],
                             "exit_code": outcome.get("exit_code"),
-                            "safe_error": safe_text(outcome.get("safe_error"), 2000),
+                            # Repository diagnostics stay in the checkpoints above;
+                            # this service health alert is delivered globally.
                             "summary": "自动决策调用连续失败。这是全局监督服务告警，Kanban 不会生成任务确认项。",
                             "required_action": "在 /operations 通知中心或 robert supervisor status 中检查决策服务；ack 仅记录收悉，后续有效模型调用会自动解除告警。",
                             "retryable": False,
