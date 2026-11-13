@@ -170,9 +170,11 @@ class ReviewFilesTests(unittest.TestCase):
         ):
             self.assertIn(heading, report)
         self.assertIn(
-            "| Issue | codex (codex) | claude (claude) | third (third) | Verdict |",
+            "| Issue | codex | claude | third | Verdict |",
             report,
         )
+        self.assertIn("| Missing guard | 发现 | 发现 | 发现 | high |", report)
+        self.assertIn("codex (codex) + claude (claude) + third (third)", report)
         self.assertIn("[from Robert]", report)
         prompt = self.reviewer_prompt()
         self.assertIn("ROBERT_REVIEW_OUTPUT_DIR", prompt)
@@ -195,9 +197,7 @@ class ReviewFilesTests(unittest.TestCase):
             self.assertIn("<redacted>", prompt)
             self.assertIn("local absolute paths", prompt)
 
-    def test_merged_report_preserves_each_reviewers_coverage_even_without_findings(
-        self,
-    ):
+    def test_merged_report_omits_reviewer_coverage_even_without_findings(self):
         self.result["findings"] = []
         self.result["merge_recommendation"] = "ready to merge"
         self.result["coverage"] = {
@@ -221,18 +221,17 @@ class ReviewFilesTests(unittest.TestCase):
                 "merge_reason": "已检查范围未发现缺陷",
             },
         )
-        coverage = report.split("### Review Coverage and Limitations\n", 1)[1].split("### Agent Agreement Summary", 1)[
-            0
-        ]
-        first_section, second_section = coverage.split("#### claude (claude)", 1)
-        self.assertIn("#### codex (codex)", first_section)
-        self.assertIn("已审查：`src/main.py`", first_section)
-        self.assertIn("未审查：`src/retry.py`", first_section)
-        self.assertIn("默认重试次数需产品确认", first_section)
-        self.assertIn("已审查：`src/retry.py`", second_section)
-        self.assertIn("未审查：`src/main.py`", second_section)
-        self.assertIn("未验证真实 GitHub 发布", second_section)
-        self.assertIn("不代表验证全部行为", coverage)
+        self.assertNotIn("Review Coverage and Limitations", report)
+        for record in (first, second):
+            result = json.loads(Path(record["result_path"]).read_text(encoding="utf-8"))
+            self.assertNotIn(result["coverage"]["notes"], report)
+            individual = Path(record["report_path"]).read_text(encoding="utf-8")
+            self.assertIn("## Coverage", individual)
+            self.assertIn(result["coverage"]["notes"], individual)
+        self.assertNotIn("src/main.py", report)
+        self.assertNotIn("src/retry.py", report)
+        self.assertIn("| Issue | codex | claude | Verdict |", report)
+        self.assertIn("**合并建议**：ready to merge。已检查范围未发现缺陷", report)
 
     def test_empty_coverage_does_not_imply_complete_review(self):
         self.result["coverage"] = {
@@ -240,10 +239,47 @@ class ReviewFilesTests(unittest.TestCase):
             "unreviewed_paths": [],
             "notes": "未检查源码",
         }
-        report = review_files.render_merged(self.manifest, [self.record()], self.evaluation())
-        self.assertIn("已审查：未列出", report)
-        self.assertIn("未审查：未列出（不表示完整覆盖）", report)
-        self.assertIn("未检查源码", report)
+        evaluation = self.evaluation() | {"merge_reason": "源码尚未检查，需验证崩溃路径后再合并。"}
+        report = review_files.render_merged(self.manifest, [self.record()], evaluation)
+        self.assertNotIn("Review Coverage and Limitations", report)
+        self.assertNotIn("已审查：", report)
+        self.assertNotIn("未审查：", report)
+        self.assertIn(evaluation["merge_reason"], report)
+
+    def test_agreement_table_distinguishes_unreported_and_refuted_findings(self):
+        first = self.record("codex")
+        dismissed = self.result["findings"][0] | {"reason": "guard exists"}
+        self.result["findings"] = []
+        self.result["dismissed_findings"] = [dismissed]
+        second = self.record("claude")
+        self.result["dismissed_findings"] = []
+        third = self.record("third")
+        evaluation = {
+            "items": [
+                dismissed
+                | {
+                    "disposition": "dismissed",
+                    "sources": [
+                        {"worker_id": "codex", "finding_id": "F1"},
+                        {"worker_id": "claude", "finding_id": "F1"},
+                    ],
+                }
+            ],
+            "merge_recommendation": "ready to merge",
+            "merge_reason": "现有检查已排除崩溃路径。",
+        }
+        report = review_files.render_merged(self.manifest, [first, second, third], evaluation)
+        self.assertIn("| Missing guard | 发现 | 反驳 | 未报告 | 误报 |", report)
+
+    def test_synthesis_prompt_requires_concise_public_explanation(self):
+        prompt = self.synthesis_prompt()
+        self.assertIn("at most three short Chinese sentences", prompt)
+        self.assertIn("one short bullet per unresolved decision", prompt)
+        self.assertIn("Do not repeat", prompt)
+        self.assertIn("reviewed-file lists", prompt)
+        self.assertIn("command logs", prompt)
+        self.assertIn("report's pinned revision", prompt)
+        self.assertIn("material verification gaps", prompt)
 
     def test_native_review_keeps_human_decisions_and_evidence_limits_visible(self):
         prepare = render_prompt(native_prompts.review_prepare_input(self.manifest)).text
@@ -366,6 +402,6 @@ class ReviewFilesTests(unittest.TestCase):
                 evaluation = self.evaluation()
                 merged = review_files.render_merged(self.manifest, [record], evaluation)
                 self.assertIn(displayed, merged)
-                self.assertIn("已审查：" + displayed.replace(":10", ""), merged)
+                self.assertNotIn("已审查：", merged)
                 evaluation["items"][0]["disposition"] = "dismissed"
                 self.assertIn(displayed, review_files.render_merged(self.manifest, [record], evaluation))

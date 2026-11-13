@@ -14,7 +14,7 @@ ${review_policy}
 
 Apply the judgment policy only to verifying supplied claims and their merge implications. Reviewer confidence and prior verdicts are not evidence. Separate nonblocking improvements from blockers in `reason`, `suggestion`, and `merge_reason`.
 
-Use `pr-info.json` `user.login` for the PR author identity. Preserve unresolved decision requests from selected reviewers' `coverage.notes` in `merge_reason` even when items is empty. Verify their evidence without inventing findings. Include the decision-owner mention, revision, evidence, options, and recommendation in `merge_reason` and relevant existing item reasons. Do not recommend ready to merge while a material risk awaits a decision.
+Use `pr-info.json` `user.login` for the PR author identity. Preserve unresolved decision requests from selected reviewers' `coverage.notes` in `merge_reason` even when items is empty. Verify their evidence without inventing findings. Use one short bullet per unresolved decision with the decision-owner mention, exact question, options, and recommendation. Refer to the report's pinned revision and relevant item for evidence instead of restating them; include brief evidence in the bullet when no item exists. Do not recommend ready to merge while a material risk awaits a decision.
 
 ## Verification
 
@@ -25,5 +25,7 @@ Cover every finding and dismissed finding exactly once by `worker_id` and `findi
 ## Delivery
 
 Write `evaluation.json` for the controller. Use an empty `items` array only when every selected reviewer has neither findings nor dismissed findings.
+
+Keep the public report concise. Write `merge_reason` as at most three short Chinese sentences explaining the merge recommendation, blockers or nonblocking status, and material verification gaps, followed only by necessary decision bullets. Do not repeat finding details, agreement-table contents, reviewed-file lists, command logs, hashes, audit steps, or boilerplate about model agreement and human approval. Keep detailed verification evidence in item fields and reviewer artifacts. Keep each item's `reason` to one or two short Chinese sentences stating the decisive evidence or counterevidence; do not repeat its trigger, impact, or suggestion.
 
 `severity` must be one of ${severities}. `disposition` must be one of ${dispositions}. `merge_recommendation` must be one of ${recommendations}.

@@ -335,31 +335,9 @@ def render_merged(manifest, records, evaluation):
     lines.extend(
         [
             "",
-            "### Review Coverage and Limitations",
-            "",
-            "以下为各 reviewer 声明的审查范围；未发现缺陷不代表验证全部行为，模型一致也不替代验证证据。",
-            "",
-        ]
-    )
-    for record in records:
-        coverage = result_lookup[record["worker_id"]]["coverage"]
-        reviewed = ", ".join(_code_span(path) for path in coverage["reviewed_paths"]) or "未列出"
-        unreviewed = ", ".join(_code_span(path) for path in coverage["unreviewed_paths"]) or "未列出（不表示完整覆盖）"
-        lines.extend(
-            [
-                f"#### {record['worker_id']} ({record['model']})",
-                "",
-                f"- 已审查：{reviewed}",
-                f"- 未审查：{unreviewed}",
-                f"- 检查、局限与待确认事项：{coverage['notes']}",
-                "",
-            ]
-        )
-    lines.extend(
-        [
             "### Agent Agreement Summary",
             "",
-            "| Issue | " + " | ".join(_table(label) for label in labels) + " | Verdict |",
+            "| Issue | " + " | ".join(_table(record["worker_id"]) for record in records) + " | Verdict |",
             "|-------|" + "|".join("----------" for _ in records) + "|---------|",
         ]
     )
