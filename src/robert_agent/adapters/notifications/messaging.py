@@ -7,6 +7,7 @@ import subprocess
 
 
 EVENT_LABELS = {
+    "execution_delayed": "任务进度延迟",
     "worker_resume_prepared": "已准备恢复执行",
     "worker_stale": "执行进程心跳异常",
     "worker_timeout": "任务执行超时",
@@ -65,6 +66,8 @@ ROUTE_LABELS = {
 }
 
 REASON_LABELS = {
+    "queue_delayed": "任务排队超过 5 分钟，尚未记录正在执行的 Worker。",
+    "publication_delayed": "已审核通过的操作超过 2 分钟仍未发布。",
     "exited": "模型命令以非零退出码结束，未取得有效决策；请查看监督状态中的错误详情。",
     "invalid_output": "模型输出未通过决策格式校验，不能执行自动操作。",
     "timed_out": "模型调用超过允许的时长，未取得有效决策。",

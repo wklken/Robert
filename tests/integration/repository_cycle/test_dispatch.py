@@ -87,7 +87,9 @@ class CycleDispatchTests(RepositoryCycleFixture):
             attempt_status, started_at, heartbeat_at = conn.execute(
                 "SELECT status, started_at, heartbeat_at FROM attempts"
             ).fetchone()
+            task_lifecycle = conn.execute("SELECT lifecycle FROM tasks").fetchone()[0]
         self.assertEqual(attempt_status, "running")
+        self.assertEqual(task_lifecycle, "running")
         self.assertGreater(datetime.fromisoformat(started_at), datetime.fromisoformat(old))
         self.assertGreater(datetime.fromisoformat(heartbeat_at), datetime.fromisoformat(old))
 

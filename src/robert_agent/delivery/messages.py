@@ -120,6 +120,20 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         if status == "resolved":
             payload["summary"] = "自动决策服务已恢复；这条告警保留为历史记录。"
             payload["required_action"] = "无需确认或批准操作；ack 仅记录收悉，不会重试任务。"
+    if kind == "execution_delayed":
+        delay_details = {
+            "queue_delayed": (
+                "任务排队超过 5 分钟，尚未记录正在执行的 Worker。",
+                "请检查队列容量和 Worker 调度记录；ack 仅记录收悉，不会重试任务。",
+            ),
+            "publication_delayed": (
+                "已审核通过的操作超过 2 分钟仍未发布。",
+                "请检查 GitHub 发布记录和失败详情；ack 仅记录收悉，不会重试发布。",
+            ),
+        }.get(payload.get("reason_code"))
+        if delay_details:
+            payload["summary"] = payload.get("summary") or delay_details[0]
+            payload["required_action"] = delay_details[1]
     if not payload.get("summary"):
         payload["summary"] = {
             "worker_resume_prepared": "已准备恢复执行；这条通知表示准备完成，后续进展请查看任务详情。",

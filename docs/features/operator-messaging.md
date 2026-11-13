@@ -26,6 +26,14 @@ An incident notice without an actionable work-item event supports acknowledgemen
 only. Acknowledging it records who received it and their note; it does not dismiss
 the incident, retry execution, release a process or approve a repair.
 
+Fallback health checks report queue delays only when a queued task is older
+than five minutes and has no occupied attempt, including a launch in progress,
+a running or stale Worker, or a recorded process awaiting exit confirmation.
+A successful Worker launch updates the queued task to running in the same transaction as the
+attempt record. Accepted operations still unpublished after two minutes use
+a separate publication-delay reason. Both notices explain the specific wait
+and support acknowledgement only.
+
 | Owner | Responsibility |
 | --- | --- |
 | `work/messaging.py` | Attention event/outbox correlation and response action policy |

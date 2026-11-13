@@ -76,6 +76,18 @@ class MessagePresentationTests(unittest.TestCase):
         self.assertIn("取消任务", text)
         self.assertIn("/robert-respond notice-example 0 reply <answer>", text)
 
+    def test_execution_delay_reasons_are_explained(self):
+        for reason, explanation in (("queue_delayed", "排队"), ("publication_delayed", "发布")):
+            with self.subTest(reason=reason):
+                payload = self.payload(type="execution_delayed", reason_code=reason)
+                original = copy.deepcopy(payload)
+                text = render_message(payload)
+                self.assertIn("任务进度延迟", text)
+                self.assertIn(explanation, text)
+                self.assertNotIn("新通知", text)
+                self.assertNotIn("原因暂未归类", text)
+                self.assertEqual(payload, original)
+
     def test_command_transport_retains_the_raw_protocol_values(self):
         payload = self.payload()
         runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
