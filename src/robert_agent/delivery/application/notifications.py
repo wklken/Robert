@@ -137,9 +137,21 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
             processed += 1
             state = retry_policy.failure_state(previous, "delivery unavailable", now)
             state.update(delivery_id=delivery_id, status="sending")
+            if not command and (config or {}).get("messaging", {}).get("enabled"):
+                settings = config["messaging"]
+                state.update(
+                    version=payload["version"],
+                    endpoint={
+                        field: settings.get(field, "")
+                        for field in ("provider", "channel", "account", "conversation", "thread")
+                    },
+                )
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
-            sent = transport.send(payload, config=config, command=command, runner=runner)
+            receipt = {}
+            sent = transport.send(payload, config=config, command=command, runner=runner, receipt=receipt)
+            if sent:
+                state.update(receipt)
             state.update(
                 status="sent" if sent else ("failed" if state["retryable"] else "exhausted"),
                 sent_at=now if sent else None,

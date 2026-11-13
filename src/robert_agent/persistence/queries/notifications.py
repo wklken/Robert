@@ -450,6 +450,44 @@ def find_local_response(conn, notification_id):
     )
 
 
+def find_chat_question(conn, *, messaging_repo_ids, messaging_settings, notification_id=None, message_id=None):
+    """Match only delivered questions from the currently authorized endpoint."""
+    notice = tables["notifications"]
+    predicates = [
+        notice.c.channel == "local",
+        notice.c.notification_type == "operator_question",
+        func.json_extract(notice.c.metadata_json, "$.delivery.status") == "sent",
+        _dispatch_identity(messaging_settings),
+    ]
+    for field in ("provider", "channel", "account", "conversation", "thread"):
+        predicates.append(
+            func.json_extract(notice.c.metadata_json, "$.delivery.endpoint." + field)
+            == messaging_settings.get(field, "")
+        )
+    item = tables["work_items"]
+    item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
+    predicates.append(
+        select(1).where(item.c.work_item_id == item_id, item.c.repo_id.in_(sorted(messaging_repo_ids))).exists()
+    )
+    if notification_id is not None:
+        predicates.append(notice.c.notification_id == notification_id)
+    if message_id is not None:
+        predicates.append(func.json_extract(notice.c.metadata_json, "$.delivery.message_id") == message_id)
+    if notification_id is None and message_id is None:
+        predicates.extend([notice.c.status != "resolved", _pending_attention(messaging_repo_ids)])
+    return statements.read(
+        conn,
+        select(notice.c.notification_id, notice.c.metadata_json, notice.c.status)
+        .where(*predicates)
+        .order_by(
+            func.julianday(func.json_extract(notice.c.metadata_json, "$.delivery.sent_at")).desc(),
+            func.julianday(notice.c.created_at).desc(),
+            notice.c.notification_id.desc(),
+        )
+        .limit(2 if notification_id is not None or message_id is not None else 1),
+    )
+
+
 def find_scope(conn, *, work_item_id, task_id):
     if work_item_id:
         item = tables["work_items"]

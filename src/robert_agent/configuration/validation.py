@@ -177,6 +177,8 @@ def _normalize(config, path, skip_external):
         messaging["send_after"] = start.isoformat()
     if messaging.get("dispatch_enabled") and not messaging["enabled"]:
         raise ValueError("messaging.dispatch_enabled requires messaging.enabled")
+    if messaging.get("contextual_replies") and not messaging["enabled"]:
+        raise ValueError("messaging.contextual_replies requires messaging.enabled")
     if messaging["enabled"]:
         for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos", "send_after"):
             if not messaging.get(field):

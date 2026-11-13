@@ -145,7 +145,7 @@ def configured(config=None):
     return bool(os.environ.get("ROBERT_NOTIFICATION_COMMAND") or (config or {}).get("messaging", {}).get("enabled"))
 
 
-def render_message(payload):
+def render_message(payload, *, contextual_replies=False):
     lines = ["Robert: " + EVENT_LABELS.get(payload["type"], "新通知，请查看任务详情")]
     descriptions = {
         "task_status": LIFECYCLE_LABELS.get(payload.get("task_status"), "状态暂未归类，请查看任务详情"),
@@ -181,6 +181,8 @@ def render_message(payload):
         lines.append("查看任务: /robert-task " + payload["task_id"])
     if payload.get("request_id"):
         lines.append("/robert-inbox status " + payload["request_id"])
+    if contextual_replies and "reply" in payload.get("actions", []):
+        lines.append("可在本会话直接回复。引用消息时回复该问题；没有引用时回复最近送达的待回复问题。")
     if payload.get("notification_id") and payload.get("actions", ["ack"]):
         lines.append("可执行命令:")
         for action in payload.get("actions", ["ack"]):
@@ -191,7 +193,7 @@ def render_message(payload):
     return "\n".join(lines)
 
 
-def send(payload, *, config=None, command=None, runner=subprocess.run):
+def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=None):
     command = command or os.environ.get("ROBERT_NOTIFICATION_COMMAND")
     if command:
         argv = shlex.split(command) if isinstance(command, str) else list(command)
@@ -211,7 +213,7 @@ def send(payload, *, config=None, command=None, runner=subprocess.run):
             "--target",
             settings["target"],
             "--message",
-            render_message(payload),
+            render_message(payload, contextual_replies=settings.get("contextual_replies", False)),
             "--json",
         ]
         if settings.get("thread"):
@@ -227,6 +229,11 @@ def send(payload, *, config=None, command=None, runner=subprocess.run):
             response = json.loads(result.stdout)
             if not isinstance(response, dict) or response.get("ok") is False:
                 return False
+            result_payload = response.get("payload", response)
+            if receipt is not None and isinstance(result_payload, dict):
+                message_id = result_payload.get("messageId")
+                if isinstance(message_id, str) and 0 < len(message_id) <= 256:
+                    receipt["message_id"] = message_id
         return True
     except (OSError, subprocess.SubprocessError, ValueError):
         return False
