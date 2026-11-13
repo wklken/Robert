@@ -111,6 +111,68 @@ class WorktreeSafetyTests(unittest.TestCase):
         )
         self.assertEqual((tree / "data").read_text(), "uncommitted")
 
+    def test_existing_pr_fetches_head_missing_from_local_checkout(self):
+        from robert_agent.adapters.git.workspace import plan_worktree
+
+        self.git(self.upstream, "checkout", "-b", "codex/pr-fix")
+        (self.upstream / "data").write_text("PR fix")
+        self.git(self.upstream, "commit", "-am", "PR fix")
+        self.git(self.upstream, "update-ref", "refs/pull/42/head", "HEAD")
+        expected_head = self.git(self.upstream, "rev-parse", "HEAD")
+
+        result = plan_worktree(
+            self.repo, self.managed, 42, "fix", "main", existing_pr_head_branch="codex/pr-fix", dry_run=False
+        )
+
+        self.assertTrue(result["ok"])
+        tree = Path(result["worktree_path"])
+        self.assertEqual(self.git(tree, "rev-parse", "HEAD"), expected_head)
+        self.assertEqual(self.git(tree, "branch", "--show-current"), "codex/pr-fix")
+        self.assertEqual((tree / "data").read_text(), "PR fix")
+
+    def test_existing_pr_fetch_advances_unchecked_local_branch(self):
+        from robert_agent.adapters.git.workspace import plan_worktree
+
+        self.git(self.repo, "branch", "codex/pr-fix", "HEAD")
+        (self.upstream / "data").write_text("new PR head")
+        self.git(self.upstream, "commit", "-am", "advance PR")
+        self.git(self.upstream, "update-ref", "refs/pull/42/head", "HEAD")
+        expected_head = self.git(self.upstream, "rev-parse", "HEAD")
+
+        result = plan_worktree(
+            self.repo, self.managed, 42, "fix", "main", existing_pr_head_branch="codex/pr-fix", dry_run=False
+        )
+
+        self.assertEqual(self.git(result["worktree_path"], "rev-parse", "HEAD"), expected_head)
+
+    def test_existing_pr_fetch_failure_preserves_local_branch_and_creates_no_worktree(self):
+        from robert_agent.adapters.git.workspace import plan_worktree
+
+        self.git(self.repo, "branch", "codex/pr-fix", "HEAD")
+        self.git(self.repo, "config", "user.email", "test@example.invalid")
+        self.git(self.repo, "config", "user.name", "Test")
+        local_head = self.git(self.repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "local work")
+        self.git(self.repo, "update-ref", "refs/heads/codex/pr-fix", local_head)
+        (self.upstream / "data").write_text("remote work")
+        self.git(self.upstream, "commit", "-am", "remote work")
+        self.git(self.upstream, "update-ref", "refs/pull/42/head", "HEAD")
+
+        for number in (42, 404):
+            with self.subTest(number=number):
+                with self.assertRaises(subprocess.CalledProcessError) as raised:
+                    plan_worktree(
+                        self.repo,
+                        self.managed,
+                        number,
+                        "fix",
+                        "main",
+                        existing_pr_head_branch="codex/pr-fix",
+                        dry_run=False,
+                    )
+                self.assertEqual(raised.exception.cmd[:3], ["git", "fetch", "upstream"])
+                self.assertEqual(self.git(self.repo, "rev-parse", "codex/pr-fix"), local_head)
+                self.assertFalse((self.managed / "codex__pr-fix").exists())
+
     def test_existing_dispatch_workspace_is_checked_before_reuse(self):
         from robert_agent.execution.application.dispatch import ensure_dispatch_worktree
         from robert_agent.adapters.git.workspace import plan_worktree
