@@ -65,6 +65,13 @@ ROUTE_LABELS = {
 }
 
 REASON_LABELS = {
+    "exited": "模型命令以非零退出码结束，未取得有效决策；请查看监督状态中的错误详情。",
+    "invalid_output": "模型输出未通过决策格式校验，不能执行自动操作。",
+    "timed_out": "模型调用超过允许的时长，未取得有效决策。",
+    "stopped": "模型调用已停止，未取得有效决策。",
+    "launch_failed": "模型命令无法启动，请检查命令和监督配置。",
+    "process_attention": "模型进程身份或停止状态无法确认，需要检查监督状态。",
+    "provider_rate_limited": "模型服务触发请求频率限制，将按冷却时间和调用预算等待。",
     "failed_worker_process_exited": "执行进程意外退出；具体退出原因请查看执行日志。",
     "failed_timeout": "任务执行超过允许的时长，已中断本次执行。",
     "failed_worker_startup": "执行进程启动后未在规定时间内报告进展。",
@@ -161,6 +168,9 @@ def render_message(payload):
         ("reason_code", "原因"),
         ("recovery_status", "恢复状态"),
         ("safe_error", "错误详情"),
+        ("exit_code", "退出码"),
+        ("workstream_id", "工作流"),
+        ("decision_id", "决策记录"),
         ("required_action", "需要你处理"),
     ):
         if payload.get(key):

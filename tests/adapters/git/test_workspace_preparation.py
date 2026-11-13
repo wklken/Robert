@@ -36,6 +36,11 @@ class WorkspacePreparationTests(TemporaryWorkspace):
 
         self.assertEqual(result["branch_name"], "codex/dd-123-fix-timeout")
         self.assertEqual(result["mode"], "reuse_existing_pr")
+        self.assertEqual(
+            result["commands"][0],
+            "git fetch upstream pull/456/head:refs/heads/codex/dd-123-fix-timeout",
+        )
+        self.assertIn("git worktree add", result["commands"][1])
 
     def test_worktree_reuses_existing_worktree_when_branch_already_checked_out(self):
         from robert_agent.adapters.git import workspace as worktree

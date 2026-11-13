@@ -60,6 +60,9 @@ INTERNAL_IP = re.compile(
     r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"
 )
 INTERNAL_DOMAIN = re.compile(r"(?<![A-Za-z0-9.-])\b[A-Za-z0-9.-]+\.(?:woa\.com|corp|internal|local)\b")
+# Userinfo is sensitive regardless of credential length or percent encoding.
+# Stop at authority boundaries, but allow punctuation and embedded @ in credentials.
+URL_USERINFO = re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s/?#]*@")
 
 
 def redact_text(text):
@@ -77,6 +80,7 @@ def redact_text(text):
             findings.append(_finding(text, match, "credential_assignment"))
     for pattern in SECRET_PATTERNS:
         findings.extend(_finding(text, match, "high_risk_secret") for match in pattern.finditer(text))
+    findings.extend(_finding(text, match, "url_userinfo") for match in URL_USERINFO.finditer(text))
     if findings:
         return {
             "ok": False,

@@ -615,6 +615,17 @@ def _supervision_decision(conn, workstream_id):
                 for key in ("status", "decision", "next_check_at", "receipt", "notification_id")
                 if key in state
             },
+            **(
+                {
+                    "last_failure": {
+                        key: safe_text(value, 2000) if isinstance(value, str) else value
+                        for key, value in state["last_failure"].items()
+                        if key in {"decision_id", "status", "failed_at", "safe_error", "exit_code", "stderr_truncated"}
+                    }
+                }
+                if isinstance(state.get("last_failure"), dict)
+                else {}
+            ),
         }
         if state
         else None

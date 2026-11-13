@@ -71,6 +71,7 @@ def plan_worktree(
     elif mode == "reuse_existing_worktree":
         commands.append(f"reuse existing worktree {worktree_path}")
     else:
+        commands.append(f"git fetch upstream pull/{source_number}/head:refs/heads/{branch_name}")
         commands.append(f"git worktree add {worktree_path} {branch_name}")
 
     result = {
@@ -120,6 +121,13 @@ def plan_worktree(
             capture_output=True,
         )
     else:
+        run_command(
+            ["git", "fetch", "upstream", f"pull/{source_number}/head:refs/heads/{branch_name}"],
+            cwd=repo_root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
         run_command(
             ["git", "worktree", "add", str(worktree_path), branch_name],
             cwd=repo_root,

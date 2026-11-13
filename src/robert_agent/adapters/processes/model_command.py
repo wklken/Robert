@@ -10,36 +10,47 @@ import tempfile
 import time
 
 from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.security.redaction import redact_and_truncate
 from robert_agent.worker_adapters import build_worker_launch
 
 MAX_STDOUT = 8192
+MAX_STDERR = 8192
 
 
-def read_output(proc, deadline, stop):
+def read_output(proc, deadline, stop, *, diagnostics=None):
     output = bytearray()
-    eof = False
     with selectors.DefaultSelector() as selector:
         descriptor = proc.stdout.fileno()
         os.set_blocking(descriptor, False)
         selector.register(descriptor, selectors.EVENT_READ)
+        if diagnostics is not None and proc.stderr is not None:
+            os.set_blocking(proc.stderr.fileno(), False)
+            selector.register(proc.stderr.fileno(), selectors.EVENT_READ, "stderr")
         while not stop.is_set():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return ModelCommandStatus.TIMED_OUT.value, b""
-            if eof:
+            if not selector.get_map():
                 if proc.poll() is not None:
                     return (
                         ModelCommandStatus.EXITED.value if proc.returncode else ModelCommandStatus.READ.value
                     ), bytes(output)
                 stop.wait(min(remaining, 0.05))
-            elif selector.select(min(remaining, 0.05)):
-                chunk = os.read(descriptor, min(4096, MAX_STDOUT + 1 - len(output)))
-                if chunk:
-                    output.extend(chunk)
-                    if len(output) > MAX_STDOUT:
-                        return ModelCommandStatus.INVALID_OUTPUT.value, b""
-                else:
-                    eof = True
+            else:
+                for key, _events in selector.select(min(remaining, 0.05)):
+                    chunk = os.read(key.fd, 4096 if key.data == "stderr" else min(4096, MAX_STDOUT + 1 - len(output)))
+                    if not chunk:
+                        selector.unregister(key.fd)
+                        continue
+                    if key.data == "stderr":
+                        remaining_bytes = MAX_STDERR - len(diagnostics["stderr"])
+                        diagnostics["stderr"].extend(chunk[:remaining_bytes])
+                        if len(chunk) > remaining_bytes:
+                            diagnostics["stderr_truncated"] = True
+                    else:
+                        output.extend(chunk)
+                        if len(output) > MAX_STDOUT:
+                            return ModelCommandStatus.INVALID_OUTPUT.value, b""
     return ModelCommandStatus.STOPPED.value, b""
 
 
@@ -67,6 +78,7 @@ def stable_identity(proc, stop):
 def run(profile, payload, stop, on_started):
     """Return bounded output after the process group exits; persist identity at spawn."""
     proc, stopped, output, status = None, True, b"", ModelCommandStatus.STOPPED.value
+    diagnostics = {"stderr": bytearray(), "stderr_truncated": False}
     try:
         with tempfile.TemporaryDirectory(prefix="robert-model-", ignore_cleanup_errors=True) as root:
             cwd = Path(root).resolve()
@@ -85,17 +97,20 @@ def run(profile, payload, stop, on_started):
                         env=environment,
                         stdin=input_stream,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
                         start_new_session=True,
                     )
                 identity = stable_identity(proc, stop)
                 if identity:
                     if identity["process_group_id"] != proc.pid or not on_started(identity):
                         raise ValueError("model process identity or claim changed")
-                status, output = read_output(proc, time.monotonic() + launch.timeout_seconds, stop)
+                status, output = read_output(
+                    proc, time.monotonic() + launch.timeout_seconds, stop, diagnostics=diagnostics
+                )
             finally:
                 if proc is not None:
                     proc.stdout.close()
+                    proc.stderr.close()
                     try:
                         stopped = proc.poll() is not None and not worker_identity.live_process_group(proc.pid)
                     except (OSError, subprocess.TimeoutExpired):
@@ -106,4 +121,22 @@ def run(profile, payload, stop, on_started):
         status = ModelCommandStatus.LAUNCH_FAILED.value if proc is None else ModelCommandStatus.PROCESS_ATTENTION.value
     if not stopped:
         status, output = ModelCommandStatus.PROCESS_ATTENTION.value, b""
-    return {"status": status, "output": output, "stopped": stopped}
+    safe_error = ""
+    if diagnostics["stderr_truncated"]:
+        safe_error = "Model stderr exceeded the diagnostic limit; details withheld."
+    elif diagnostics["stderr"]:
+        try:
+            safe = redact_and_truncate(diagnostics["stderr"].decode("utf-8"), 2000)
+            safe_error = (
+                safe["text"].strip() if safe["ok"] else "Model stderr contained sensitive text; details withheld."
+            )
+        except UnicodeError:
+            safe_error = "Model stderr was not valid UTF-8; details withheld."
+    return {
+        "status": status,
+        "output": output,
+        "stopped": stopped,
+        "exit_code": proc.returncode if proc is not None else None,
+        "safe_error": safe_error,
+        "stderr_truncated": diagnostics["stderr_truncated"],
+    }
