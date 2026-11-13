@@ -1,4 +1,4 @@
-"""Model diagnostics cannot carry URL credentials into durable state or messages."""
+"""Model diagnostics cannot carry credentials into durable state or messages."""
 
 from contextlib import closing
 from datetime import datetime, timezone
@@ -21,6 +21,23 @@ from robert_agent.supervision.application.decision_loop import DecisionLoop
 class DecisionDiagnosticRedactionTests(unittest.TestCase):
     def test_real_url_credentials_are_withheld_before_persistence_and_notification(self):
         cases = json.loads((TEST_ROOT / "fixtures" / "url_userinfo.json").read_text())
+        for case in cases:
+            case["error"] = f"Connection failed: https://{case['userinfo']}@proxy.example.org/path"
+        self._assert_diagnostics_withheld(cases)
+
+    def test_short_credentials_are_withheld_before_persistence_and_notification(self):
+        self._assert_diagnostics_withheld(
+            [
+                {"name": "short-password", "userinfo": "abcde", "error": "Proxy rejected password=abcde"},
+                {"name": "quoted-key", "userinfo": "z!", "error": 'API_KEY="z!" rejected'},
+                {"name": "leading-punctuation", "userinfo": "!abc", "error": "Proxy rejected password=!abc"},
+                {"name": "placeholder-suffix", "userinfo": "none!", "error": "Proxy rejected password=none!"},
+                {"name": "unicode", "userinfo": "短密钥", "error": "Proxy rejected password=短密钥"},
+                {"name": "env-prefix", "userinfo": "!abc", "error": "token=$TOKEN|password=!abc"},
+            ]
+        )
+
+    def _assert_diagnostics_withheld(self, cases):
         for case in cases:
             with self.subTest(case=case["name"]), tempfile.TemporaryDirectory() as directory:
                 db = Path(directory) / "state.db"
@@ -56,7 +73,7 @@ class DecisionDiagnosticRedactionTests(unittest.TestCase):
                             "claim": {"bundle_id": request["bundle_id"], "claimed_at": now, "cooldown_seconds": 120},
                         },
                     )
-                error = f"Connection failed: https://{case['userinfo']}@proxy.example.org/path"
+                error = case["error"]
                 profile = {
                     "command": [sys.executable, "-c", f"import sys; sys.stderr.write({error!r}); sys.exit(7)"],
                     "timeout_seconds": 3,
@@ -97,7 +114,7 @@ class DecisionDiagnosticRedactionTests(unittest.TestCase):
                 self.assertEqual(state["last_failure"]["safe_error"], expected)
                 self.assertEqual(record["metadata"]["last_failure"]["safe_error"], expected)
                 self.assertEqual(runner["metadata"]["last_failure"]["safe_error"], expected)
-                self.assertEqual(json.loads(notice[0])["safe_error"], expected)
-                self.assertEqual(payload["safe_error"], expected)
+                self.assertNotIn("safe_error", json.loads(notice[0]))
+                self.assertNotIn("safe_error", payload)
                 self.assertEqual(payload["actions"], ["ack"])
                 self.assertIsNone(runner["metadata"]["claim"])

@@ -20,6 +20,64 @@ class RedactionTests(unittest.TestCase):
                     self.assertEqual(result["findings"], [{"rule": "url_userinfo", "line": 2, "column": 1}])
                     self.assertFalse(redaction.redact_and_truncate("x" * 2000 + text, 2000)["ok"])
 
+    def test_short_credential_assignments_are_blocked_before_truncation(self):
+        from robert_agent.security import redaction
+
+        for name in ("password", "passwd", "api_key", "ACCESS_TOKEN"):
+            for value in ("a", "ab", "abc", "abcd", "abcde", "!abc", "@z", "!", "短密钥", "none!", "]ab"):
+                for assignment in (f"{name}={value}", f'{name}: "{value}"', f"{name}='{value}!'"):
+                    with self.subTest(assignment=assignment):
+                        result = redaction.redact_text(assignment, strict_assignments=True)
+                        self.assertFalse(result["ok"])
+                        self.assertNotIn(assignment, json.dumps(result))
+                        self.assertFalse(
+                            redaction.redact_and_truncate("x" * 2000 + " " + assignment, 2000, strict_assignments=True)[
+                                "ok"
+                            ]
+                        )
+
+    def test_strict_diagnostics_cannot_hide_credentials_after_environment_references(self):
+        from robert_agent.security import redaction
+
+        for text in (
+            "token=$TOKEN|password=longsecret",
+            "token=$TOKEN:password=!abc",
+            "TOKEN=os.environ.example?password=longsecret",
+            "token=$TOKEN/password=abcde",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(redaction.redact_and_truncate(text, 2000, strict_assignments=True)["ok"])
+
+    def test_strict_diagnostics_preserve_placeholders_and_environment_references(self):
+        from robert_agent.security import redaction
+
+        for text in (
+            "max_tokens = 10",
+            "if token == x:",
+            "api_key=...",
+            "password=None;",
+            "password=<redacted>",
+            "TOKEN = os.environ['TOKEN']",
+            "token=$TOKEN",
+            "redis://localhost:6379/0?password=secret&db=1",
+            "example (password=secret)",
+        ):
+            with self.subTest(text=text):
+                result = redaction.redact_and_truncate(text, 2000, strict_assignments=True)
+                self.assertTrue(result["ok"], result)
+
+    def test_source_annotations_are_not_credentials_in_general_text(self):
+        from robert_agent.security import redaction
+
+        for text in (
+            "def verify(token: str) -> bool:",
+            "password: str | None = None",
+            "token: dict[str, str]",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(redaction.redact_text(text)["ok"])
+                self.assertEqual(redaction.redact_and_truncate(text, 2000)["text"], text)
+
     def test_urls_without_userinfo_preserve_paths_queries_and_fragments(self):
         from robert_agent.security import redaction
 

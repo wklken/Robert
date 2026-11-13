@@ -126,7 +126,7 @@ def run(profile, payload, stop, on_started):
         safe_error = "Model stderr exceeded the diagnostic limit; details withheld."
     elif diagnostics["stderr"]:
         try:
-            safe = redact_and_truncate(diagnostics["stderr"].decode("utf-8"), 2000)
+            safe = redact_and_truncate(diagnostics["stderr"].decode("utf-8"), 2000, strict_assignments=True)
             safe_error = (
                 safe["text"].strip() if safe["ok"] else "Model stderr contained sensitive text; details withheld."
             )

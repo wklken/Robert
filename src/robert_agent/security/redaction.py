@@ -21,9 +21,16 @@ SECRET_PATTERNS = [
 ]
 
 # Match credential assignments, not names such as max_tokens or comparisons.
-SECRET_ASSIGNMENT = re.compile(
+_SECRET_ASSIGNMENT_PREFIX = (
     r"(?<![A-Za-z0-9_])(?<![A-Za-z0-9]-)\b(?P<name>(?:[A-Za-z0-9]+[_-])*(?:token|password|passwd|api[_-]?key|secret(?:[_-](?:access[_-])?key)?|private[_-]key|accessToken|refreshToken))\b[\"']?"
-    r"\s*[:=](?!=)\s*(?:[\"'](?P<quoted>[^\"'\r\n]+)[\"']|(?P<bare>[A-Za-z0-9_./+=$-]+))",
+    r"\s*[:=](?!=)\s*(?:[\"'](?P<quoted>[^\"'\r\n]+)[\"']|"
+)
+SECRET_ASSIGNMENT = re.compile(_SECRET_ASSIGNMENT_PREFIX + r"(?P<bare>[A-Za-z0-9_./+=$-]+))", re.I)
+# Diagnostics are not source snippets: accept punctuation/Unicode in bare
+# values, stopping at surrounding prose/URL delimiters rather than matching
+# a harmless-looking prefix such as `none` in `password=none!`.
+DIAGNOSTIC_SECRET_ASSIGNMENT = re.compile(
+    _SECRET_ASSIGNMENT_PREFIX + r"(?P<bare>[^\s\"'`,;&][^\s\"'`,;&)\]}]*))",
     re.I,
 )
 PLACEHOLDER_VALUES = {
@@ -55,6 +62,18 @@ def _synthetic_password(text, match):
     return bool(match["quoted"] or match.end() == len(text) or text[match.end()] in " \t\r\n&,;`)]}")
 
 
+def _environment_reference(match, strict_assignments):
+    value = match["bare"]
+    if not value:
+        return False
+    if not strict_assignments:
+        return value.startswith(("$", "os.environ", "os.getenv"))
+    # Broad diagnostic values must not exempt appended credentials merely
+    # because they begin with an environment reference. Function/index forms
+    # stop at the quoted variable name; shell forms must be a single variable.
+    return re.fullmatch(r"\$[A-Za-z_][A-Za-z0-9_]*|os\.environ(?:\[|\.get\()|os\.getenv\(", value) is not None
+
+
 LOCAL_PATH = re.compile(r"(?<![\w.-])(?:/Users|/home|/root|/data|/tmp|/var/folders)/[^\s:;,)]+")
 INTERNAL_IP = re.compile(
     r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"
@@ -65,17 +84,18 @@ INTERNAL_DOMAIN = re.compile(r"(?<![A-Za-z0-9.-])\b[A-Za-z0-9.-]+\.(?:woa\.com|c
 URL_USERINFO = re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s/?#]*@")
 
 
-def redact_text(text):
+def redact_text(text, *, strict_assignments=False):
     findings = []
     replacements = []
-    for match in SECRET_ASSIGNMENT.finditer(text):
+    assignment_pattern = DIAGNOSTIC_SECRET_ASSIGNMENT if strict_assignments else SECRET_ASSIGNMENT
+    for match in assignment_pattern.finditer(text):
         value = match["quoted"] or match["bare"]
         if _synthetic_password(text, match):
             replacements.append(match.span("quoted" if match["quoted"] else "bare"))
         elif (
             value.lower() not in PLACEHOLDER_VALUES
-            and not (match["bare"] and value.startswith(("$", "os.environ", "os.getenv")))
-            and len(value) >= 6
+            and not _environment_reference(match, strict_assignments)
+            and (strict_assignments or len(value) >= 6)
         ):
             findings.append(_finding(text, match, "credential_assignment"))
     for pattern in SECRET_PATTERNS:
@@ -102,8 +122,8 @@ def redact_text(text):
     }
 
 
-def redact_and_truncate(text, max_chars):
-    result = redact_text(text)
+def redact_and_truncate(text, max_chars, *, strict_assignments=False):
+    result = redact_text(text, strict_assignments=strict_assignments)
     if not result["ok"]:
         return result
     redacted = result["text"]

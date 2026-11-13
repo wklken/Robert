@@ -62,6 +62,15 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "status": status,
     }
     context = records.first(notifications.find_message_context(conn, notification_id))
+    if kind == "supervision_decision_unavailable":
+        # Older pending alerts contain workstream context and stderr. A global
+        # service alert must stay generic even when replaying those records.
+        metadata = {
+            key: metadata[key] for key in ("reason_code", "decision_id", "exit_code", "retryable") if key in metadata
+        }
+        if context and context["occurred_at"]:
+            payload["occurred_at"] = context["occurred_at"]
+        context = None
     if context:
         for key in (
             "occurred_at",

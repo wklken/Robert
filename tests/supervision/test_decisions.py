@@ -206,7 +206,7 @@ recheck_seconds=300, message=''), sys.stdout)
         result = loop._finish(self.config, self.now)
         return request, result
 
-    def test_failed_decision_and_global_notice_retain_diagnostics_without_task_approval(self):
+    def test_failed_decision_keeps_diagnostics_local_and_global_notice_has_no_task_context(self):
         from robert_agent.readmodels import board
         from robert_agent.supervision import store
 
@@ -223,9 +223,9 @@ recheck_seconds=300, message=''), sys.stdout)
             notice = conn.execute("SELECT task_id,metadata_json FROM notifications").fetchone()
             self.assertIsNone(notice[0])
             metadata = json.loads(notice[1])
-            self.assertEqual(metadata.get("workstream_id"), "w")
+            self.assertNotIn("workstream_id", metadata)
             self.assertEqual(metadata.get("decision_id"), request["bundle_id"])
-            self.assertEqual(metadata.get("safe_error"), "gateway unavailable")
+            self.assertNotIn("safe_error", metadata)
             self.assertIn("/operations", metadata["required_action"])
             self.assertEqual(conn.execute("SELECT count(*) FROM work_item_events").fetchone()[0], 0)
         detail = board.get_work_item_detail(self.db, "i")
