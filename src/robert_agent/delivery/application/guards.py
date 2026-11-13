@@ -8,6 +8,7 @@ from robert_agent.supervision import git as supervision_git
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import values as publication_values
+from robert_agent.foundation.contracts.delivery import OutputType
 
 
 def publish_scope_violation(conn, action):
@@ -63,15 +64,16 @@ def publication_scope_guard(conn, action, recovery_guard=None):
     }
 
 
-def existing_pr_push_target(scope, run_command, *, reconcile=False):
-    """Validate and pin the PR push destination for both reads and the write."""
+def push_target(scope, run_command, *, reconcile=False):
+    """Validate the output's push destination for both reads and the write."""
     from robert_agent.adapters.github import client
     from robert_agent.adapters.git.remotes import github_repository
     from robert_agent.foundation.commands import ControlDeadlineExceeded
     import subprocess
 
     sources = [source for source in scope.get("sources", ()) if source.get("source_type") == "pull_request"]
-    if not sources or scope.get("supervision_repair"):
+    new_pr = scope.get("output_type") == OutputType.NEW_PR
+    if scope.get("supervision_repair") or (not new_pr and not sources):
         return None
     error = {
         "ok": False,
@@ -79,21 +81,28 @@ def existing_pr_push_target(scope, run_command, *, reconcile=False):
         "retryable": False,
         "safe_error": "PR head repository, publisher or push destination does not match the audited task.",
     }
-    if len(sources) != 1 or not scope.get("repo") or not scope.get("github_account"):
+    if not scope.get("repo") or (not new_pr and (len(sources) != 1 or not scope.get("github_account"))):
         return error
     try:
-        details = client.try_read_json(
-            ["gh", "api", f"repos/{scope['repo']}/pulls/{sources[0]['number']}"], runner=run_command
-        )
-        head = (details or {}).get("head") or {}
-        head_repo = (head.get("repo") or {}).get("full_name")
-        if (
-            not head_repo
-            or (not reconcile and (details.get("state") != "open" or details.get("merged") or details.get("merged_at")))
-            or ((details.get("user") or {}).get("login") or "").casefold() != scope["github_account"].casefold()
-            or head.get("ref") != scope.get("branch_name")
-        ):
-            return error
+        if new_pr:
+            owner, repository = scope["repo"].split("/", 1)
+            head_repo = f"{scope.get('head_owner') or owner}/{repository}"
+        else:
+            details = client.try_read_json(
+                ["gh", "api", f"repos/{scope['repo']}/pulls/{sources[0]['number']}"], runner=run_command
+            )
+            head = (details or {}).get("head") or {}
+            head_repo = (head.get("repo") or {}).get("full_name")
+            if (
+                not head_repo
+                or (
+                    not reconcile
+                    and (details.get("state") != "open" or details.get("merged") or details.get("merged_at"))
+                )
+                or ((details.get("user") or {}).get("login") or "").casefold() != scope["github_account"].casefold()
+                or head.get("ref") != scope.get("branch_name")
+            ):
+                return error
         remote = run_command(
             ["git", "remote", "get-url", "--push", "--all", scope.get("remote") or "origin"],
             cwd=scope.get("worktree_path"),

@@ -175,7 +175,8 @@ def observe_worktree_status(scope, *, command_runner=None):
     return "dirty" if inspected.stdout.strip() else "clean"
 
 
-def trusted_action_scope(conn, action):
+def trusted_action_scope(conn, action, *, include_output_type=False):
+    """Keep stored receipt scope stable; expose the accepted output for push validation."""
     if not conn or not action.get("result_id"):
         return None
     row = db_records.first(db_read_worker_results.find_for_trusted_action_scope(conn, action["result_id"]))
@@ -184,6 +185,8 @@ def trusted_action_scope(conn, action):
     if not isinstance(audit, dict) or audit.get("status") != "accepted":
         return None
     scope = audit.get("action_scope")
+    if isinstance(scope, dict) and include_output_type:
+        scope = {**scope, "output_type": row[3]}
     if isinstance(scope, dict) and row and "supervision_repair" in publication_values.decode_json(row[1]):
         attempt = publication_values.decode_json(row[2])
         if scope.get("repair_git") != attempt.get("repair_git"):
