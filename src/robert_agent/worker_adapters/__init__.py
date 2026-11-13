@@ -15,6 +15,7 @@ class WorkerLaunch:
     stdout_format: str
     environment_allowlist: tuple[str, ...] = ()
     timeout_seconds: int = 3600
+    environment: tuple[tuple[str, str], ...] = ()
 
     def metadata(self):
         return {
@@ -24,6 +25,7 @@ class WorkerLaunch:
             "stdout_format": self.stdout_format,
             "environment_allowlist": list(self.environment_allowlist),
             "timeout_seconds": self.timeout_seconds,
+            **({"environment": dict(self.environment)} if self.environment else {}),
         }
 
 

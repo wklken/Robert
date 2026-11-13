@@ -142,6 +142,10 @@ workers:
 
 ### Claude workers as root in a restricted container
 
+The `tclaude` adapter sets `TCLAUDE_SKIP_UPDATE=1` for unattended worker launches.
+This prevents the wrapper from updating and exiting before the model writes its
+result. Update the wrapper separately when workers are idle.
+
 The `claude` and `tclaude` adapters append `--permission-mode bypassPermissions`.
 Claude Code normally refuses that mode when its process runs as root. Check
 the account running the Robert service, which may differ from your login shell.

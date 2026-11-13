@@ -152,6 +152,7 @@ def dispatch_worker(
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     environment = _worker_environment(launch.environment_allowlist)
     environment.update(trusted_environment or {})
+    environment.update(launch.environment)
     try:
         with ExitStack() as stack:
             prompt_file = stack.enter_context(prompt_path.open("r", encoding="utf-8"))
